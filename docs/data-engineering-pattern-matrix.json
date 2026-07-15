@@ -359,7 +359,7 @@
       "riskTier": "P0",
       "owner": "ingest-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S51 now has bounded worker loops for stream archive and CDC object indexing. The stream archive worker repeatedly calls the existing archive_stream_events transaction boundary, stops after configured empty polls, a stop callback, max batches, or lease_lost, and reports loop summary counts. Workflow-run lease owner/token/expiry evidence fences an old worker from archiving the next batch after another worker takes the lease. A pre-commit partition-assignment guard now stops a revoked stream archive worker before the dataset version and cursor are committed, leaving failed sync evidence instead of a silent duplicate or lost-offset commit. The CDC object-indexer worker indexes committed CDC dataset versions in version order, persists lastIndexedVersionId/lastIndexedVersionNumber/lastIndexRunId in workflow output, resumes after the last indexed version, fences takeover workers with the same lease shape, and fails closed if a source version exceeds the configured row limit. Full broker rebalance callback integration, commit-unknown reconciliation, OS SIGTERM proof, and production daemon packaging remain future work.",
+      "reason": "S51 has bounded worker loops for stream archive and CDC object indexing plus a resident Source streaming supervisor. Kafka managed Sync partitionMode=all reloads topic metadata, stores independent partition cursors in streamCursors, and a live two-partition broker test proves independent resume without duplicate Dataset event ids. Workflow-run lease owner/token/expiry evidence fences standby workers until expiry and permits takeover afterward; a target Dataset branch single-active guard blocks a second active Streaming Sync. Data Connection exposes partition checkpoints and heartbeat/checkpoint/lag/throughput/failure health rules. The pre-commit assignment guard and CDC object-indexer version cursor remain active. Parallel broker-assigned consumer threads, durable assignment history, real rebalance callbacks, commit-unknown reconciliation, durable incident notification, OS SIGTERM proof, and production daemon packaging remain future work.",
       "activeInfraRefs": [
         "debezium-cdc"
       ],
@@ -373,6 +373,10 @@
         "test_stream_archive_worker_continuous_loop_counts_empty_polls_before_stop",
         "test_stream_archive_worker_main_prints_continuous_result",
         "test_stream_archive_worker_continuous_loop_broker_rebalance_revoked_worker_cannot_commit_current_batch",
+        "test_kafka_live_broker_all_partitions_keep_independent_checkpoints",
+        "test_streaming_standby_worker_takes_over_only_after_active_lease_expires",
+        "test_only_one_streaming_sync_can_own_a_dataset_branch",
+        "test_streaming_health_reports_checkpoint_lag_and_failure_rules",
         "test_runtime_repository_contract_workflow_run_lease_fences_stale_workers",
         "test_cdc_object_indexer_worker_once_resumes_after_last_indexed_version",
         "test_cdc_object_indexer_continuous_loop_indexes_until_empty_and_releases_lease",

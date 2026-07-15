@@ -295,12 +295,7 @@ def _ontology_registry(services: CoreServices) -> OntologyRegistry:
 
 
 def _source_workspace(services: CoreServices) -> SourceWorkspace:
-    return SourceWorkspace(
-        services.source_onboarding,
-        services.source_management,
-        services.source_scheduler,
-        services.source_cdc_object_index,
-    )
+    return SourceWorkspace(services)
 
 
 def _demo_provider_record(now: str) -> ModelProviderRecord:

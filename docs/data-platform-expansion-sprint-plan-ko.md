@@ -657,22 +657,22 @@ quality:iceberg-maintenance
 
 현재 one-shot proof를 실제 지속 실행 worker로 확장하고, rebalance/commit-unknown에서 데이터 유실과 중복 logical commit을 막는다.
 
-> S51 현재 구현 범위: bounded continuous stream archive loop가 추가되어 기존 `archive_stream_events` transaction/checkpoint 경계를 여러 batch에 반복 적용하고, configured empty poll 또는 stop callback에서 멈추며 loop summary를 반환한다. worker CLI는 env/schema/tenant 설정 실패를 stacktrace가 아닌 `CONFIGURATION_ERROR` JSON payload로 반환한다. PostgreSQL-backed live Kafka worker가 같은 offset을 동시에 읽어도 commit 직전 stream cursor CAS가 한쪽 commit을 막는 proof가 추가됐다. Continuous worker는 `workflow_runs`에 owner/token/expiry 기반 lease를 남기고, lease를 잃은 old worker가 다음 batch를 archive하지 않고 `lease_lost`로 멈추는 proof를 갖는다. Stream archive worker는 batch read 뒤 dataset commit 직전 partition assignment guard를 한 번 더 확인하며, revoke가 감지되면 output dataset version과 cursor를 만들지 않고 failed sync evidence와 `assignment_revoked` stop reason으로 닫는다. `worker:cdc-object-indexer`는 committed CDC dataset version을 version 순서로 읽고, `workflow_runs.output.cdcObjectIndexer.cursor`의 `lastIndexedVersionId`/`lastIndexedVersionNumber`/`lastIndexRunId`에서 재시작해 이미 index한 version을 다시 처리하지 않는다. 이 worker는 one-shot 또는 bounded/continuous loop로 실행되며 empty poll, max batch, stop callback, lease loss에서 멈추고, CDC version row count가 configured limit을 넘으면 일부만 읽고 cursor를 전진시키지 않도록 fail-closed 한다. `pnpm fault:local:stress`는 이 노트북에서 Spark executor kill, live Kafka/PostgreSQL 8-worker same-offset storm, continuous worker stop/restart replay overload를 한 번에 실행하고 `artifacts/operations/local_fault_lab.json`에 증거를 남긴다. Real broker rebalance revoke callback integration, broker commit-unknown reconciliation, OS SIGTERM finish-or-abort proof, production daemon packaging, managed Temporal failover는 아직 future scope다.
+> S51 현재 구현 범위: bounded continuous stream archive loop와 resident one-Sync Source supervisor가 기존 `archive_stream_events` transaction/checkpoint 경계를 반복 적용한다. Kafka managed Sync의 `partitionMode=all`은 실행 시 topic metadata를 다시 읽고, `dataset_transactions.metadata.streamCursors`에 partition별 cursor를 보존하며, 실제 2-partition Kafka broker test가 각 partition의 독립 resume와 무중복 Dataset 결과를 증명한다. 처리 자체는 아직 순차적이며 broker-assigned parallel consumer threads는 아니다. worker lease는 owner/token/expiry를 남기고 standby takeover를 fencing하며, 같은 Dataset branch의 두 Streaming Sync 동시 Start는 거절한다. Data Connection status는 heartbeat, checkpoint liveness/duration, total lag, output throughput, consecutive failure rule을 표시한다. 기존 pre-commit assignment guard, CDC object-indexer version cursor, local fault lab proof도 유지된다. Real broker rebalance revoke callback integration, commit-unknown reconciliation, 병렬 consumer group worker pool, durable incident/notification delivery, OS SIGTERM finish-or-abort proof, production daemon packaging, managed Temporal failover는 아직 future scope다.
 
 ## Worker 기능
 
 - [~] continuously running stream archive worker: bounded loop, CLI/env option, configuration-error JSON payload는 active, production daemon packaging은 future.
 - [~] continuously running CDC object-index worker: committed CDC dataset version cursor/lease 기반 one-shot 및 bounded/continuous loop는 active, production daemon packaging은 future.
 - [~] graceful shutdown: stop callback boundary와 lease-lost graceful stop은 active, OS signal/SIGTERM finish-or-abort proof는 future.
-- [~] heartbeat/lease: `workflow_runs` owner/token/expiry lease와 per-batch renewal proof는 active, Kubernetes/broker-group lease packaging은 future.
+- [~] heartbeat/lease: `workflow_runs` owner/token/expiry lease, per-batch renewal, expiry 전 standby fencing과 expiry 후 takeover proof는 active, Kubernetes/broker-group lease packaging은 future.
 - [~] partition assignment tracking: read 후 commit 직전 assignment guard는 active, durable assignment history와 broker callback 연결은 future.
 - [ ] backpressure
 - [ ] retry budget
-- [~] lag reporting: existing stream lag metric과 loop summary count는 active, Operations assignment/lag surface는 future.
+- [~] lag reporting: partition별 offset/lag, total lag, checkpoint/throughput health rule과 Data Connection surface는 active, durable incident/notification과 utilization은 future.
 
 ## Checkpoint protocol
 
-- [~] partition별 checkpoint: existing `streamCursor` partition/offset metadata를 continuous loop가 재사용하고, live Kafka/PostgreSQL same-offset parallel commit은 cursor CAS로 fencing한다. worker lease/fencing token proof는 active, broker rebalance fencing은 future.
+- [~] partition별 checkpoint: `streamCursors` cursor map과 `partitionMode=all` topic discovery가 모든 partition의 독립 offset을 보존하고 실제 2-partition Kafka 재시작을 증명한다. Dataset commit cursor CAS와 worker lease/fencing token proof는 active, broker rebalance callback fencing과 병렬 consumer threads는 future.
 - [~] CDC object-indexer version cursor: `lastIndexedVersionNumber`/`lastIndexedVersionId`/`lastIndexRunId`가 workflow run output에 남고 restart/takeover worker가 다음 committed CDC dataset version부터 처리한다.
 - [ ] batch transaction ID
 - [ ] source epoch/fencing token
@@ -1864,6 +1864,30 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
   `requiresIdempotencyKey` mutation required-key header wiring, missing-key fail-fast,
   `actionLockKey`, `createInFlightActionLock`가 유지된다. Retry UX는 한 사용자 intent에서 만든
   같은 idempotency key를 재사용해야 하며, 동일 click 중복 잠금 버튼 UX는 future다.
+- [x] Data Connection Source lifecycle: 관리형 database/REST onboarding이 Source와 Sync를
+  별도 durable resource로 만들고, `client.sources.updateStatus(...)`가 fingerprint CAS와
+  `Idempotency-Key`로 disable/re-enable한다. disabled Source는 이력을 보존하면서 수동·복구·예약
+  실행을 차단하고 audit/outbox 및 화면 안내를 남긴다. 외부 자격 증명 폐기와 원격 connector 종료는 future다.
+- [x] Data Connection Source live diagnostic: `client.sources.testConnection/listConnectionTests/listEgressAttempts(...)`,
+  `POST/GET /api/sources/{source_name}/connection-tests`, `GET /api/sources/{source_name}/egress-attempts`가
+  direct REST preview 또는 SQL `SELECT 1`을 실행하고, local Agent mode에서는 fresh daemon heartbeat,
+  proxy URL, host/port allowlist를 검증한 뒤 REST HTTP/TLS 요청과 PostgreSQL driver TCP bytes를 Agent CONNECT
+  터널로 전달한다. PostgreSQL은 ephemeral loopback bridge와 libpq `hostaddr`를 사용해 원래 database hostname의
+  인증/TLS 의미를 보존하면서 Agent 경로로 probe, table preview, managed sync를 실행한다.
+  Dataset commit 없이 endpoint/network/worker/credential/preview, redacted error, request ID, config fingerprint,
+  audit/outbox, connectionId/responseFlags/bytes/duration/port/origin/policy/agent를 durable history로 남기며 화면은
+  새로고침 뒤에도 진단과 egress 로그를 다시 읽는다. 관리형 REST/PostgreSQL Source sync는 실행 시점의 최신
+  Source/policy/Agent route를 다시 해석해 같은 CONNECT 터널로 Dataset snapshot을 커밋하고, transaction metadata의
+  `connectorNetworkEvidence` 또는 `sourceNetworkEvidence`에 connection ID, response flags, bytes, duration,
+  destination, policy, Agent를 남긴다.
+  Source run API/SDK의 typed `networkEvidence`와 실행 이력의 `실제 빌드 네트워크 경로` 카드는 그 영구 증거를
+  route/policy/Agent/destination/bytes/duration/flags/connection ID로 보여준다.
+  PostgreSQL Wizard는 `database_url`을 기본 credential contract로 사용하고 PostgreSQL URL 전용 vault 입력을
+  보여주며, Source 상세와 전역 동기화 상세가 같은 네트워크 증거 카드를 재사용한다. Database URL은 redacted
+  상태를 유지하되 연결된 policy allowlist를 네트워크 설정에 표시하고, 진단 5단계와 Source Explorer의
+  table/column/sample-row 미리보기도 Agent 경로를 사용한다.
+  production outbound-WebSocket Agent control, Source terminal, central egress aggregation, broader database-engine
+  packaging은 future다.
 - [x] TypeScript ObjectSet DSL: `osdk(Order).where({ status: { $eq: "PENDING" } })`,
   `orderBy({ amount: "desc" })`, `$pageSize`/`$pageToken` aliases가 현재 backend
   `filter`/`orderBy` request shape로 정규화된다. Unknown property, unsupported operator,
@@ -1913,7 +1937,7 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [x] SDK regeneration CI 유지
 - [~] frontend API compatibility test: `quality:frontend-backend-surface`,
   `quality:sdk-request-contract`, `quality:frontend-foundation`이 route/helper -> named SDK ->
-  proofClass -> proof test -> operator evidence matrix, 240개 browser SDK route surface
+  proofClass -> proof test -> operator evidence matrix, 250개 browser SDK route surface
   method/path/query/header/body, typed error metadata, 28개 SDK helper runtime behavior,
   Web Operations named-SDK-only 계약을 검증한다. Full browser compatibility matrix는 future다.
 
@@ -2251,7 +2275,7 @@ named SDK -> proofClass -> proof test -> operator evidence로 고정한다. `qua
 FastAPI route가 분류되지 않았거나, frontend-consumable route에 generated SDK method나
 request-contract proof가 없거나, SDK helper에 `sdkHelpers` row/export/operator-evidence/helper
 proof가 없거나, Web Operations가 다시 raw `/api/...` path를 직접 조립하면 실패한다.
-`quality:sdk-request-contract`는 실제 browser SDK를 import해 240개 frontend route surface의
+`quality:sdk-request-contract`는 실제 browser SDK를 import해 250개 frontend route surface의
 method/path/query/header/body, request-id/context header, idempotency header, typed error metadata를
 fake fetch로 검증하고, 28개 `SDK_CLIENT_SURFACE.helpers`의 런타임 동작도 함께 증명한다. 즉 S62-S64 화면을
 올리기 전, 현재 사용 가능한 backend surface는 named SDK-only와 request-contract로 잠긴다.

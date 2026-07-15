@@ -2436,6 +2436,46 @@ await expectSdkCall("sources.list", () => client.sources.list(), {
 await expectSdkCall("sources.get", () => client.sources.get("erp/source"), {
   path: "/api/sources/erp%2Fsource",
 });
+await expectSdkCall(
+  "sources.updateStatus",
+  () =>
+    client.sources.updateStatus(
+      "erp/source",
+      { status: "disabled", expectedConfigFingerprint: "sha256:source-active" },
+      { idempotencyKey: "source-disable-key" },
+    ),
+  {
+    path: "/api/sources/erp%2Fsource/status",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-disable-key" },
+    body: { status: "disabled", expectedConfigFingerprint: "sha256:source-active" },
+  },
+);
+await expectSdkCall(
+  "sources.testConnection",
+  () =>
+    client.sources.testConnection(
+      "erp/source",
+      { expectedConfigFingerprint: "sha256:source-active" },
+      { idempotencyKey: "source-connection-test-key" },
+    ),
+  {
+    path: "/api/sources/erp%2Fsource/connection-tests",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-connection-test-key" },
+    body: { expectedConfigFingerprint: "sha256:source-active" },
+  },
+);
+await expectSdkCall(
+  "sources.listConnectionTests",
+  () => client.sources.listConnectionTests("erp/source", { limit: 5 }),
+  { path: "/api/sources/erp%2Fsource/connection-tests?limit=5" },
+);
+await expectSdkCall(
+  "sources.listEgressAttempts",
+  () => client.sources.listEgressAttempts("erp/source", { limit: 5 }),
+  { path: "/api/sources/erp%2Fsource/egress-attempts?limit=5" },
+);
 await expectSdkCall("sources.templates.list", () => client.sources.templates.list(), {
   path: "/api/sources/templates",
 });
@@ -2613,6 +2653,57 @@ await expectSdkCall("sources.managedSyncs.get", () => client.sources.managedSync
   path: "/api/sources/managed-syncs/orders%2Fincremental",
 });
 await expectSdkCall(
+  "sources.managedSyncs.updateSchedule",
+  () =>
+    client.sources.managedSyncs.updateSchedule(
+      "orders/incremental",
+      {
+        schedule: { mode: "interval", everySeconds: 3600, batchLimit: 100 },
+        expectedConfigFingerprint: "sha256:sync-before",
+      },
+      { idempotencyKey: "sync-schedule-update-1" },
+    ),
+  {
+    path: "/api/sources/managed-syncs/orders%2Fincremental/schedule",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "sync-schedule-update-1" },
+    body: {
+      schedule: { mode: "interval", everySeconds: 3600, batchLimit: 100 },
+      expectedConfigFingerprint: "sha256:sync-before",
+    },
+  },
+);
+await expectSdkCall(
+  "sources.managedSyncs.pauseSchedule",
+  () =>
+    client.sources.managedSyncs.pauseSchedule(
+      "orders/incremental",
+      { expectedConfigFingerprint: "sha256:sync-active" },
+      { idempotencyKey: "sync-schedule-pause-1" },
+    ),
+  {
+    path: "/api/sources/managed-syncs/orders%2Fincremental/schedule/pause",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "sync-schedule-pause-1" },
+    body: { expectedConfigFingerprint: "sha256:sync-active" },
+  },
+);
+await expectSdkCall(
+  "sources.managedSyncs.resumeSchedule",
+  () =>
+    client.sources.managedSyncs.resumeSchedule(
+      "orders/incremental",
+      { expectedConfigFingerprint: "sha256:sync-paused" },
+      { idempotencyKey: "sync-schedule-resume-1" },
+    ),
+  {
+    path: "/api/sources/managed-syncs/orders%2Fincremental/schedule/resume",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "sync-schedule-resume-1" },
+    body: { expectedConfigFingerprint: "sha256:sync-paused" },
+  },
+);
+await expectSdkCall(
   "sources.managedSyncs.startRun",
   () =>
     client.sources.managedSyncs.startRun(
@@ -2633,6 +2724,41 @@ await expectSdkCall("sources.managedSyncs.listRuns", () => client.sources.manage
 await expectSdkCall("sources.managedSyncs.getRun", () => client.sources.managedSyncs.getRun("run/source/1"), {
   path: "/api/sources/managed-sync-runs/run%2Fsource%2F1",
 });
+await expectSdkCall(
+  "sources.managedSyncs.startStream",
+  () =>
+    client.sources.managedSyncs.startStream(
+      "kraken/live",
+      { expectedConfigFingerprint: "sha256:kraken-stream" },
+      { idempotencyKey: "source-stream-start-key" },
+    ),
+  {
+    path: "/api/sources/managed-syncs/kraken%2Flive/stream/start",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-stream-start-key" },
+    body: { expectedConfigFingerprint: "sha256:kraken-stream" },
+  },
+);
+await expectSdkCall(
+  "sources.managedSyncs.stopStream",
+  () =>
+    client.sources.managedSyncs.stopStream(
+      "kraken/live",
+      { expectedConfigFingerprint: "sha256:kraken-stream" },
+      { idempotencyKey: "source-stream-stop-key" },
+    ),
+  {
+    path: "/api/sources/managed-syncs/kraken%2Flive/stream/stop",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-stream-stop-key" },
+    body: { expectedConfigFingerprint: "sha256:kraken-stream" },
+  },
+);
+await expectSdkCall(
+  "sources.managedSyncs.streamStatus",
+  () => client.sources.managedSyncs.streamStatus("kraken/live"),
+  { path: "/api/sources/managed-syncs/kraken%2Flive/stream/status" },
+);
 await expectSdkCall("sources.scheduler.previewDue", () => client.sources.scheduler.previewDue({ maxRuns: 25 }), {
   path: "/api/sources/scheduler/due?maxRuns=25",
 });
@@ -2952,6 +3078,23 @@ assertMissingIdempotencyFailFast(
   "sources.networkPolicies.create",
 );
 assertMissingIdempotencyFailFast(
+  "sources.updateStatus",
+  () =>
+    client.sources.updateStatus("erp/source", {
+      status: "disabled",
+      expectedConfigFingerprint: "sha256:source-active",
+    }),
+  "sources.updateStatus",
+);
+assertMissingIdempotencyFailFast(
+  "sources.testConnection",
+  () =>
+    client.sources.testConnection("erp/source", {
+      expectedConfigFingerprint: "sha256:source-active",
+    }),
+  "sources.testConnection",
+);
+assertMissingIdempotencyFailFast(
   "sources.managedSyncs.create",
   () =>
     client.sources.managedSyncs.create({
@@ -2969,6 +3112,47 @@ assertMissingIdempotencyFailFast(
   "sources.managedSyncs.startRun",
   () => client.sources.managedSyncs.startRun("orders_incremental"),
   "sources.managedSyncs.startRun",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.startStream",
+  () =>
+    client.sources.managedSyncs.startStream("kraken_live", {
+      expectedConfigFingerprint: "sha256:kraken-stream",
+    }),
+  "sources.managedSyncs.startStream",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.stopStream",
+  () =>
+    client.sources.managedSyncs.stopStream("kraken_live", {
+      expectedConfigFingerprint: "sha256:kraken-stream",
+    }),
+  "sources.managedSyncs.stopStream",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.updateSchedule",
+  () =>
+    client.sources.managedSyncs.updateSchedule("orders_incremental", {
+      schedule: { mode: "manual" },
+      expectedConfigFingerprint: "sha256:sync-before",
+    }),
+  "sources.managedSyncs.updateSchedule",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.pauseSchedule",
+  () =>
+    client.sources.managedSyncs.pauseSchedule("orders_incremental", {
+      expectedConfigFingerprint: "sha256:sync-active",
+    }),
+  "sources.managedSyncs.pauseSchedule",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.resumeSchedule",
+  () =>
+    client.sources.managedSyncs.resumeSchedule("orders_incremental", {
+      expectedConfigFingerprint: "sha256:sync-paused",
+    }),
+  "sources.managedSyncs.resumeSchedule",
 );
 assertMissingIdempotencyFailFast(
   "sources.csv.upload",

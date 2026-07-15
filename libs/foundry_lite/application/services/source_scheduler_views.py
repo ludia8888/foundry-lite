@@ -21,6 +21,7 @@ def scheduler_tick_view(
         "status": "evaluated",
         "evaluatedAt": _iso(now),
         "evaluated": len(decisions),
+        "decisions": [decision.as_dict() for decision in decisions],
         "due": due,
         "started": [dict(row) for row in started],
         "skipped": [dict(row) for row in skipped],

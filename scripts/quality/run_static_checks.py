@@ -29,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
+SEMGREP_TOOL = ["uv", "tool", "run", "--from", "semgrep==1.169.0", "semgrep"]
 
 # Ordered heaviest-first so long-running tools overlap the cheap AST checks.
 HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
@@ -37,10 +38,7 @@ HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
     (
         "semgrep",
         [
-            "uv",
-            "run",
-            "--no-sync",
-            "semgrep",
+            *SEMGREP_TOOL,
             "--config",
             "scripts/quality/semgrep-rules/foundry-lite.yml",
             "--error",

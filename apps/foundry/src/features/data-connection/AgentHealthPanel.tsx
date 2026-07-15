@@ -1,9 +1,5 @@
 import type { SourceAgent } from "@foundry-lite/sdk";
-import {
-  useFoundryLiteClient,
-  useFoundryLiteMutation,
-} from "@foundry-lite/sdk/react";
-import { Activity, HeartPulse, Plus, Server } from "lucide-react";
+import { Activity, Plus, RefreshCw, Server, TerminalSquare } from "lucide-react";
 
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -18,7 +14,7 @@ interface AgentHealthPanelProps {
   onCreateSource: () => void;
 }
 
-/** 에이전트 탭: 등록된 에이전트 상태/하트비트 모니터링 (메트릭 시계열은 future). */
+/** 에이전트 탭: 실제 daemon heartbeat와 CONNECT endpoint 상태를 모니터링한다. */
 export function AgentHealthPanel({ onCreateSource }: AgentHealthPanelProps) {
   const agentsQuery = useSourceAgents();
 
@@ -55,36 +51,38 @@ export function AgentHealthPanel({ onCreateSource }: AgentHealthPanelProps) {
   }
 
   return (
-    <div className="grid gap-4 p-4 md:grid-cols-2">
-      {agents.map((agent) => (
-        <AgentCard
-          key={agent.agentId}
-          agent={agent}
-          onHeartbeat={() => void agentsQuery.reload()}
-        />
-      ))}
+    <div className="space-y-3 p-4">
+      <div className="flex items-start justify-between gap-3 rounded border bg-muted/20 p-3">
+        <div className="flex gap-2">
+          <TerminalSquare className="mt-0.5 size-4 text-primary" />
+          <div>
+            <div className="text-xs font-semibold">Source Agent daemon</div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Agent 프로세스가 스스로 등록하고 heartbeat를 전송합니다. 화면에서
+              상태를 임의로 online으로 바꾸지 않습니다.
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void agentsQuery.reload()}
+        >
+          <RefreshCw className="size-3.5" /> 새로고침
+        </Button>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        {agents.map((agent) => (
+          <AgentCard key={agent.agentId} agent={agent} />
+        ))}
+      </div>
     </div>
   );
 }
 
-function AgentCard({
-  agent,
-  onHeartbeat,
-}: {
-  agent: SourceAgent;
-  onHeartbeat: () => void;
-}) {
-  const client = useFoundryLiteClient();
-  const heartbeat = useFoundryLiteMutation(
-    (agentId: string) => client.sources.agents.heartbeat(agentId),
-    { lockKey: (agentId) => `sources:agents:heartbeat:${agentId}` },
-  );
-
-  const handleHeartbeat = async () => {
-    await heartbeat.execute(agent.agentId);
-    onHeartbeat();
-  };
-
+function AgentCard({ agent }: { agent: SourceAgent }) {
+  const proxyUrl = textValue(agent.networkSummary["proxyUrl"]);
+  const heartbeatMode = textValue(agent.networkSummary["heartbeatMode"]);
   return (
     <div className="rounded border bg-card">
       <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -109,31 +107,23 @@ function AgentCard({
           label="마지막 하트비트"
           value={formatTimestamp(agent.lastHeartbeatAt)}
         />
-        <AgentStat
-          label="기능"
-          value={`${Object.keys(agent.capabilities).length}개`}
-        />
-        <AgentStat label="등록" value={formatTimestamp(agent.createdAt)} />
+        <AgentStat label="CONNECT endpoint" value={proxyUrl ?? "미등록"} />
+        <AgentStat label="Heartbeat" value={heartbeatMode ?? "미등록"} />
+      </div>
+      <div className="flex items-center gap-1.5 border-t px-3 py-2 text-[11px] text-muted-foreground">
+        <Activity className="size-3" />
+        {agent.status.toLowerCase() === "online"
+          ? "daemon heartbeat가 90초 freshness 기준 안에 있습니다."
+          : "Agent daemon 또는 control-plane 연결을 확인하세요."}
       </div>
       <div className="flex items-center justify-between border-t px-3 py-2">
         <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Activity className="size-3" /> 메모리/디스크/부하 메트릭
-          <StatusPill intent="neutral">future</StatusPill>
+          기능 {Object.keys(agent.capabilities).length}개 · 등록 {formatTimestamp(agent.createdAt)}
         </span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={heartbeat.isRunning}
-          onClick={() => void handleHeartbeat()}
-        >
-          <HeartPulse className="size-3.5" /> 하트비트 기록
-        </Button>
+        <StatusPill intent={proxyUrl ? "success" : "danger"}>
+          {proxyUrl ? "터널 구성됨" : "proxy URL 없음"}
+        </StatusPill>
       </div>
-      {heartbeat.error ? (
-        <div className="border-t p-2">
-          <ErrorState error={heartbeat.error} />
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -145,4 +135,8 @@ function AgentStat({ label, value }: { label: string; value: string }) {
       <div className="mt-0.5 truncate font-mono text-[11px]">{value}</div>
     </div>
   );
+}
+
+function textValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }

@@ -1,3 +1,4 @@
+import { StatusPill } from "@/components/shared/StatusPill";
 import { cn } from "@/lib/utils";
 
 import type { MarketplaceProduct } from "./marketplace-model";
@@ -38,6 +39,15 @@ export function ProductCard({
             {product.subtitle}
           </div>
         </div>
+        {product.kind === "data-connection" ? (
+          <StatusPill
+            intent={
+              product.executionStatus === "active" ? "success" : "warning"
+            }
+          >
+            {product.executionStatus === "active" ? "실행 가능" : "정의만"}
+          </StatusPill>
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-1">
         {product.capabilities.map((capability) => (

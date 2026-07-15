@@ -63,7 +63,10 @@ export function SourceListPanel({
   }, [sources, search]);
 
   return (
-    <aside className="flex max-h-80 w-full shrink-0 flex-col border-b lg:max-h-none lg:w-72 lg:border-r lg:border-b-0">
+    <aside
+      data-testid="source-list"
+      className="flex max-h-80 w-full shrink-0 flex-col border-b lg:max-h-none lg:w-72 lg:border-r lg:border-b-0"
+    >
       <div className="flex items-center justify-between px-3 pt-3 pb-2">
         <span className="section-label">
           소스{sources ? ` (${sources.length})` : ""}

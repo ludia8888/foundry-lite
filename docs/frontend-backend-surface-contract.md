@@ -63,7 +63,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Operations | run list/detail, AI prompt artifact access, admin overview, lineage get, transform retry, index replay, bounded outbox publish, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan`/`run` |
 | Connectors | `client.connectors.connections.create/list/get/update(...)`, `client.connectors.resources.upsert/test/startSync(...)` |
-| Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/operationPlan/startSync/startObjectIndex(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
+| Sources | `client.sources.list/get/updateStatus(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/updateSchedule/pauseSchedule/resumeSchedule/startRun/listRuns/getRun/startStream/stopStream/streamStatus(...)` (`startRun`은 browser에서 `manual` 또는 auto-pause 해제용 `recovery`; streaming lifecycle mutation은 `Idempotency-Key` + current config fingerprint), `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/operationPlan/startSync/startObjectIndex(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
 | Resources | `client.resources.projects.list/create/get/listGrants/upsertGrant(...)`, `client.resources.folders.list/create/move/trash/restore(...)`, `client.resources.items.search/get/register/move/trash/restore(...)`, `client.resources.favorites.set/delete(...)`, `client.resources.trash.list/restore(...)`, `client.resources.admin.reconcile(...)` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
 | AIP | `client.aip.builder.validate(...)`, `client.aip.builder.run(...)`, `client.aip.agent.run(...)` |
@@ -187,6 +187,10 @@ runs, scheduled managed sync due preview/tick, browser CSV upload, browser batch
 upload/commit, and REST source wrappers. Existing `client.connectors` and `client.media` remain available for
 lower-level callers, but new frontend onboarding screens should start with `client.sources` and the source recipes.
 
+Managed database and REST onboarding now persists the Source independently from its Sync definitions. `client.sources.updateStatus(...)`
+uses a config-fingerprint CAS plus `Idempotency-Key` to disable or re-enable that Source without deleting Sync/run/commit history;
+while disabled, manual/recovery starts and scheduler ticks fail closed, and `source.disabled`/`source.enabled` audit and outbox evidence remain durable.
+
 ```tsx
 import { idempotencyKey } from "@foundry-lite/sdk";
 import { createSourceWizardRecipe } from "@foundry-lite/sdk/screen-recipes";
@@ -305,8 +309,20 @@ The recipe phases are `select_kind`, `configure_source`, `test_source`, `upload_
 uploads commit dataset versions through the dataset transaction path; media upload commits immutable media versions and
 returns the serving-truth `mediaItemVersionId`; Debezium starts a bounded CDC sync with fingerprint fail-closed
 behavior; REST source wrappers call the Generic REST connector onboarding surface without forcing screen code to use
-connector language first. Source schedule evaluation/tick is available through API/SDK, `worker:source-scheduler`, and the Data Connection Source scheduler UI; Transform schedule evaluation/tick is available through API/SDK, `worker:transform-scheduler`, and the Code Transform scheduler UI; remote directory crawling, production scheduler operations UI, managed Debezium Connect operations, cloud secret
-manager, OAuth authorization flow, and SAP/NetSuite packaged source wizards remain future scope.
+connector language first. SAP OData is an active packaged read path on that same transport: the Source Wizard defaults
+to Basic secretRef credentials, OData `value` rows, and same-origin `@odata.nextLink` pagination, then collects at most
+100 pages into one snapshot. Registered Source exploration, connection diagnostics, and managed sync all resolve the
+current Source network policy/Agent route; exploration persists evidence but does not create a Dataset version. The
+Source overview renders Batch sync, Source exploration, and Connection diagnostics as explicit capability cards, and
+the credential settings screen preserves and can replace the Wizard-created Basic secretRef instead of falling back to
+"no auth". Marketplace cards consume the same `executionStatus`: `definition_only` entries keep their metadata but do
+not expose an executable Source deep-link. Source
+schedule evaluation/tick, consecutive-failure auto-pause, durable failure evidence, and recovery-build-gated resume
+are available through API/SDK, `worker:source-scheduler`, and the Data Connection Source scheduler UI; Transform
+schedule evaluation/tick is available through API/SDK, `worker:transform-scheduler`, and the Code Transform scheduler
+UI. Remote directory crawling, production scheduler operations UI, managed Debezium Connect operations, cloud secret
+manager, OAuth authorization flow, NetSuite packaging, SAP RFC/BAPI/writeback, and executable SharePoint Graph remain
+future scope; the SharePoint catalog entry is explicitly `definition_only`.
 
 ### Connector onboarding
 
@@ -364,14 +380,21 @@ function ConnectorScreen() {
 }
 ```
 
-Connector auth is secretRef-only. SDK request types expose `tokenSecretRef` and `headerValueSecretRef`; raw `token` and
-raw `headerValue` are rejected before registry persistence. `testResource` reads the external source and returns
+Connector auth is secretRef-only. SDK request types expose `tokenSecretRef`, `headerValueSecretRef`, and
+`basicCredentialsSecretRef`; raw token/header/basic values are rejected before registry persistence. `testResource` reads the external source and returns
 schema/sample/error evidence without dataset commit. `startSync` starts the existing `ConnectorSyncWorkflow`, records
 `datasetRef`, `connectorName`, `resourceName`, `syncName`, and `configFingerprint`, and the activity fails closed if
 the saved registry fingerprint changed after workflow start. Source managed syncs can now be evaluated and ticked by
-the Source scheduler API/SDK/worker and the Data Connection Source scheduler UI; SAP/NetSuite adapter packaging,
+the Source scheduler API/SDK/worker and the Data Connection Source scheduler UI, including automatic failure pause and recovery-build resume. Source-level `testConnection/listConnectionTests/listEgressAttempts` API/SDK/UI persists redacted direct REST/database and local REST/PostgreSQL/SAP OData Agent CONNECT diagnostic evidence without a Dataset commit. PostgreSQL Source exploration and managed sync route driver TCP bytes through the same Agent tunnel, expose preview `networkEvidence`, and persist `sourceNetworkEvidence` on the committed Dataset transaction; managed REST/SAP OData sync persists the equivalent `connectorNetworkEvidence`. Registered REST/SAP Source Explorer uses `client.sources.exploration.run(...)` instead of bypassing the Source route through the lower-level connector test, so its visible `networkEvidence` is the route actually used. `SourceManagedSyncRun.networkEvidence` exposes either transaction-metadata provenance through the generated SDK, and the expanded run renders the actual route, policy, Agent, destination, byte counts, duration, response flags, and connection ID rather than only its configured network fields. NetSuite packaging, SAP RFC/BAPI/writeback, executable SharePoint Graph, production outbound-WebSocket Agent control, Source terminal tooling, broader database-engine packaging,
 OAuth authorization flow, connector-specific production scheduler operations UI, cloud/Vault secret manager and
 secret rotation, and CDC/Debezium onboarding remain future scope.
+
+For `postgres_jdbc`, the managed Source Wizard defaults the credential contract to `database_url` and labels the
+secret field as a PostgreSQL connection URL rather than exposing REST-only Bearer/API-key choices. Source detail and
+the global managed-sync panel both render the same `SyncNetworkEvidenceCard`, so typed
+`SourceManagedSyncRun.networkEvidence` cannot disappear when the operator changes Data Connection tabs. When the
+database URL remains redacted, network readiness renders the linked policy's allowlist instead of falsely reporting
+that the permitted host is unknown; connection diagnostics and Source Explorer still route through the Agent.
 
 ### Session-aware client
 
@@ -1701,7 +1724,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 240 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 250 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

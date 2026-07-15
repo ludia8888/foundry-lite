@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Foundry-lite MVP core: replayable data-to-ontology-to-action closed loop."
 requires-python = ">=3.12"
 dependencies = [
+  "click>=8.3.3",
   "duckdb>=1.0",
   "fastapi>=0.110",
   "fastembed>=0.8.0",
@@ -13,7 +14,7 @@ dependencies = [
   "opentelemetry-instrumentation-fastapi>=0.46b0",
   "opentelemetry-instrumentation-sqlalchemy>=0.46b0",
   "opentelemetry-sdk>=1.25",
-  "pillow>=12.2.0",
+  "pillow>=12.3.0",
   "prometheus-client>=0.20",
   "pydantic>=2.0",
   "pyjwt[crypto]>=2.13.0",
@@ -24,6 +25,7 @@ dependencies = [
   "PyYAML>=6.0",
   "SQLAlchemy>=2.0",
   "uvicorn>=0.29",
+  "websockets>=15.0",
 ]
 
 [project.optional-dependencies]
@@ -67,7 +69,6 @@ dev = [
   "ruff>=0.5",
   "types-PyYAML>=6.0",
   "xenon>=0.9",
-  "semgrep>=1.165.0",
   "import-linter>=2.11",
   "pytest-randomly>=4.1.0",
   "pytest-xdist>=3.8.0",

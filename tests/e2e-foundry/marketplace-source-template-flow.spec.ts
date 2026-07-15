@@ -49,6 +49,44 @@ async function getSyncRunDetail(page: Page, runId: string): Promise<RuntimeRunDe
   return (await response.json()) as RuntimeRunDetail;
 }
 
+test("Marketplace blocks definition-only connector execution", async ({
+  page,
+}) => {
+  await page.route("**/api/sources/templates", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          sourceType: "sharepoint_graph",
+          displayName: "SharePoint Graph",
+          category: "protocol",
+          description:
+            "SharePoint Online connector metadata without an execution adapter.",
+          isRecommended: false,
+          executionStatus: "definition_only",
+          capabilities: ["batch_file", "media", "exploration"],
+          credentialModes: ["credential_ref", "oauth_future"],
+          networkModes: ["direct", "agent_proxy"],
+          supportsExploration: true,
+          managedRunModes: ["definition_only"],
+        },
+      ]),
+    });
+  });
+
+  await page.goto("/marketplace");
+  await page.getByRole("button", { name: "데이터 연결 제품" }).click();
+  await page.getByRole("button", { name: /SharePoint Graph/ }).click();
+
+  await expect(page.getByText("정의만", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "실행 준비 중" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("실행형 adapter·탐색·sync가 연결되기 전에는"),
+  ).toBeVisible();
+});
+
 test("Marketplace CSV product deep-links into Data Connection and commits a backend dataset", async ({
   page,
 }) => {

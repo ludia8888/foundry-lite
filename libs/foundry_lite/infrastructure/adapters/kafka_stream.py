@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Protocol, cast
 
@@ -104,6 +104,10 @@ class KafkaStreamAdapterConfig:
     poll_timeout_seconds: float = 1.0
     max_empty_polls: int = 1
     producer_flush_timeout_seconds: float = 5.0
+    security_protocol: str | None = None
+    sasl_mechanism: str | None = None
+    sasl_username: str | None = None
+    sasl_password: str | None = field(default=None, repr=False)
 
 
 class KafkaStreamAdapter:
@@ -126,6 +130,7 @@ class KafkaStreamAdapter:
         self._subscriptions = {subscription.stream_name: subscription for subscription in config.subscriptions}
         self._consumer = consumer
         self._producer = producer
+        self._owned_producer: KafkaProducerLike | None = None
         self._topic_partition_factory = topic_partition_factory
         self._consumer_factory = consumer_factory
         self._producer_factory = producer_factory
@@ -169,7 +174,7 @@ class KafkaStreamAdapter:
     def publish_event(self, request: StreamPublishRequest) -> StreamEvent:
         """Publish one stream event through Kafka and return its broker offset."""
         subscription = self._subscription(request.stream_name)
-        producer = self._producer or self._build_producer()
+        producer = self._publish_producer()
         payload = json.dumps(dict(request.payload), sort_keys=True, separators=(",", ":")).encode("utf-8")
         offset = producer.produce(
             subscription.topic,
@@ -189,6 +194,13 @@ class KafkaStreamAdapter:
             key=request.key,
             payload=dict(request.payload),
         )
+
+    def _publish_producer(self) -> KafkaProducerLike:
+        if self._producer is not None:
+            return self._producer
+        if self._owned_producer is None:
+            self._owned_producer = self._build_producer()
+        return self._owned_producer
 
     def _read_assigned_events(
         self,
@@ -272,10 +284,20 @@ class KafkaStreamAdapter:
             "group.id": self.config.consumer_group,
             "enable.auto.commit": False,
             "auto.offset.reset": "earliest",
+            **self._security_config(),
         }
 
     def _producer_config(self) -> Mapping[str, object]:
-        return {"bootstrap.servers": self.config.bootstrap_servers}
+        return {"bootstrap.servers": self.config.bootstrap_servers, **self._security_config()}
+
+    def _security_config(self) -> Mapping[str, object]:
+        values = {
+            "security.protocol": self.config.security_protocol,
+            "sasl.mechanism": self.config.sasl_mechanism,
+            "sasl.username": self.config.sasl_username,
+            "sasl.password": self.config.sasl_password,
+        }
+        return {key: value for key, value in values.items() if value is not None}
 
     def _error(
         self,

@@ -1070,6 +1070,14 @@ def test_api_remaining_error_edges_and_approval_execution(monkeypatch) -> None:
         ),
         lambda: api_main.list_source_managed_syncs(request),
         lambda: api_main.get_source_managed_sync(request, "sync"),
+        lambda: api_main.update_source_managed_sync_schedule(
+            request,
+            "sync",
+            api_main.SourceManagedSyncScheduleUpdateRequest(
+                schedule={"mode": "manual"}, expectedConfigFingerprint="sha256:sync"
+            ),
+            idempotency_key="sync-schedule-1",
+        ),
         lambda: api_main.start_source_managed_sync_run(
             request,
             "sync",
@@ -1214,12 +1222,40 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
 
             return call
 
-    source = SourceWorkspace(FacadeDelegate(), FacadeDelegate(), FacadeDelegate(), FacadeDelegate())
+    class SourceServiceBundle:
+        source_onboarding = FacadeDelegate()
+        source_management = FacadeDelegate()
+        source_lifecycle = FacadeDelegate()
+        source_connection_test = FacadeDelegate()
+        source_scheduler = FacadeDelegate()
+        source_cdc_object_index = FacadeDelegate()
+
+    source = SourceWorkspace(SourceServiceBundle())
     assert source.list_credentials(ctx=ctx)["called"] == "list_credentials"
     assert source.list_agents(ctx=ctx)["called"] == "list_agents"
     assert source.list_network_policies(ctx=ctx)["called"] == "list_network_policies"
     assert source.list_managed_syncs(ctx=ctx)["called"] == "list_managed_syncs"
     assert source.get_managed_sync("sync", ctx=ctx)["called"] == "get_managed_sync"
+    assert (
+        source.update_source_status(
+            "source",
+            status="disabled",
+            expected_config_fingerprint="sha256:source",
+            idempotency_key="source-disable-1",
+            ctx=ctx,
+        )["called"]
+        == "update_source_status"
+    )
+    assert (
+        source.update_managed_sync_schedule(
+            "sync",
+            schedule={"mode": "manual"},
+            expected_config_fingerprint="sha256:sync",
+            idempotency_key="sync-schedule-1",
+            ctx=ctx,
+        )["called"]
+        == "update_managed_sync_schedule"
+    )
     assert source.preview_due_managed_syncs(ctx=ctx)["called"] == "preview_due_managed_syncs"
     assert source.run_due_managed_syncs(ctx=ctx, max_runs=2)["called"] == "run_due_managed_syncs"
     assert (
@@ -1850,6 +1886,14 @@ class _ConnectorAdapter:
 
 
 class _SourceDatabaseAdapter:
+    def test_connection(self, *_args, **_kwargs):
+        return SimpleNamespace(
+            adapter_profile="test-source-database",
+            database_kind="sqlite",
+            driver="pysqlite",
+            visible_resource_count=1,
+        )
+
     def list_tables(self, *_args, **_kwargs):
         return [{"name": "orders"}]
 
@@ -1988,6 +2032,8 @@ def _source_management_service() -> SourceManagementService:
     service.connector_adapter = _ConnectorAdapter()
     service.source_database_adapter = _SourceDatabaseAdapter()
     service.source_management_repository = _SourceManagementRepository()
+    service.source_registry_repository = _SourceRegistry()
+    service.resource_catalog_repository = _ResourceCatalogRepository()
     service.secret_vault = _SecretVault()
     service.connector_onboarding_service = _ConnectorOnboarding()
     service.dataset_ingest_service = _DatasetIngest()

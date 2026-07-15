@@ -58,6 +58,18 @@ def test_flat_compute_adapter_override_preserves_pipeline_repository(tmp_path: P
     assert replaced.pipeline_repository is dependencies.pipeline_repository
 
 
+def test_flat_connector_override_preserves_source_stream_adapter(tmp_path: Path) -> None:
+    dependencies = create_runtime_core_dependencies(
+        profile=RuntimeProfile.from_value("test"),
+        db_url="sqlite:///:memory:",
+        storage_root=tmp_path,
+    )
+
+    replaced = replace(dependencies, connector_adapter=dependencies.connector_adapter)
+
+    assert replaced.source_stream_adapter is dependencies.source_stream_adapter
+
+
 def test_production_dependencies_reject_local_profiles(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="production runtime requires production adapter profiles"):
         create_production_core_dependencies(

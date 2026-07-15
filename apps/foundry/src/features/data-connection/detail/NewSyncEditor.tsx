@@ -9,7 +9,7 @@ import {
   useFoundryLiteMutation,
   useFoundryLiteQuery,
 } from "@foundry-lite/sdk/react";
-import { CalendarClock, Database, FileSearch, X } from "lucide-react";
+import { Activity, CalendarClock, Database, FileSearch, Radio, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -37,7 +37,13 @@ import { TRANSACTION_MODES } from "./sync-config";
 type ScheduleMode = "manual" | "interval" | "cron";
 
 /** 백엔드 managed sync 실행 데이터플레인이 있는 소스 타입. */
-const RUNNABLE_SYNC_TYPES = new Set(["postgres_jdbc", "rest", "rest_api"]);
+const RUNNABLE_SYNC_TYPES = new Set([
+  "postgres_jdbc",
+  "rest",
+  "rest_api",
+  "sap_odata",
+  "kafka",
+]);
 
 interface NewSyncEditorProps {
   source: SourceConnection;
@@ -45,6 +51,8 @@ interface NewSyncEditorProps {
   onCancel: () => void;
   /** 탐색 탭에서 테이블 선택 후 진입한 경우의 초기값. */
   initialTableName?: string;
+  /** REST Source 탐색 탭에서 리소스 선택 후 진입한 경우의 초기값. */
+  initialResourceName?: string;
 }
 
 function readSourceSecretRef(source: SourceConnection): string {
@@ -55,6 +63,15 @@ function readSourceSecretRef(source: SourceConnection): string {
 function readSourceConfigText(source: SourceConnection, key: string): string {
   const value = source.configSummary?.[key];
   return typeof value === "string" ? value : "";
+}
+
+function readSourceConfigNumber(
+  source: SourceConnection,
+  key: string,
+  fallback: number,
+): number {
+  const value = source.configSummary?.[key];
+  return typeof value === "number" ? value : fallback;
 }
 
 function readInitialRestResourceName(source: SourceConnection): string {
@@ -85,16 +102,23 @@ export function NewSyncEditor({
   onCreated,
   onCancel,
   initialTableName,
+  initialResourceName,
 }: NewSyncEditorProps) {
   const client = useFoundryLiteClient();
-  const [displayName, setDisplayName] = useState(initialTableName ?? "");
+  const isKafka = source.kind === "kafka";
+  const initialKafkaTopic =
+    initialResourceName ?? readSourceConfigText(source, "topic");
+  const initialDisplayName =
+    initialTableName ?? initialResourceName ?? (isKafka ? initialKafkaTopic : "");
+  const [displayName, setDisplayName] = useState(initialDisplayName);
   const [datasetRef, setDatasetRef] = useState(
     initialTableName
       ? `sync.${sanitizeIdentifier(initialTableName)}`
-      : (source.targetDatasetRef ?? ""),
+      : (source.targetDatasetRef ??
+        (isKafka ? `live.${sanitizeIdentifier(source.sourceName)}_events` : "")),
   );
   const [isDatasetRefTouched, setIsDatasetRefTouched] = useState(false);
-  const [mode, setMode] = useState<string>("SNAPSHOT");
+  const [mode, setMode] = useState<string>(isKafka ? "APPEND" : "SNAPSHOT");
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("manual");
   const [everySecondsText, setEverySecondsText] = useState("3600");
   const [cronText, setCronText] = useState("0 * * * *");
@@ -103,16 +127,64 @@ export function NewSyncEditor({
   const [connectorName, setConnectorName] = useState(
     () => readSourceConfigText(source, "connectorName") || source.sourceName,
   );
-  const [resourceName, setResourceName] = useState(() =>
-    readInitialRestResourceName(source),
+  const [resourceName, setResourceName] = useState(
+    () => initialResourceName ?? readInitialRestResourceName(source),
   );
   const [isIncremental, setIsIncremental] = useState(false);
   const [incrementalColumn, setIncrementalColumn] = useState("");
+  const [kafkaTopic, setKafkaTopic] = useState(initialKafkaTopic);
+  const [kafkaConsumerGroup, setKafkaConsumerGroup] = useState(
+    () => readSourceConfigText(source, "consumerGroup") || "foundry-lite-archive",
+  );
+  const [kafkaStreamName, setKafkaStreamName] = useState(
+    () => readSourceConfigText(source, "streamName") || initialKafkaTopic.replace(/[^a-zA-Z0-9_-]/g, "-"),
+  );
+  const [kafkaPartitionText, setKafkaPartitionText] = useState(() =>
+    String(source.configSummary?.partition ?? 0),
+  );
+  const [kafkaPartitionMode, setKafkaPartitionMode] = useState<"all" | "single">(
+    () =>
+      readSourceConfigText(source, "partitionMode") === "single" ||
+      typeof source.configSummary?.partition === "number"
+        ? "single"
+        : "all",
+  );
+  const [kafkaBatchLimitText, setKafkaBatchLimitText] = useState(() =>
+    String(source.configSummary?.batchLimit ?? 100),
+  );
+  const [checkpointLivenessText, setCheckpointLivenessText] = useState(() =>
+    String(readSourceConfigNumber(source, "checkpointLivenessSeconds", 60)),
+  );
+  const [maxCheckpointDurationText, setMaxCheckpointDurationText] = useState(() =>
+    String(readSourceConfigNumber(source, "maxCheckpointDurationMs", 30_000)),
+  );
+  const [maxBrokerLagText, setMaxBrokerLagText] = useState(() =>
+    String(readSourceConfigNumber(source, "maxBrokerLag", 10_000)),
+  );
+  const [kafkaUpstreamMode, setKafkaUpstreamMode] = useState<"external" | "kraken">(
+    () =>
+      readSourceConfigText(source, "upstreamProvider") ===
+      "kraken_websocket_v2"
+        ? "kraken"
+        : "external",
+  );
+  const [krakenSymbol, setKrakenSymbol] = useState(
+    () => readSourceConfigText(source, "upstreamSymbol") || "BTC/USD",
+  );
+  const kafkaBootstrapServers = readSourceConfigText(
+    source,
+    "bootstrapServers",
+  );
+  const kafkaConnectionMode =
+    readSourceConfigText(source, "connectionMode") || "direct";
 
   const isPostgres = source.kind === "postgres_jdbc";
-  const isRest = source.kind === "rest_api" || source.kind === "rest";
+  const isRest =
+    source.kind === "rest_api" ||
+    source.kind === "rest" ||
+    source.kind === "sap_odata";
   const isRunnableType = RUNNABLE_SYNC_TYPES.has(source.kind);
-  const sourceType = isRest ? "rest_api" : source.kind;
+  const sourceType = source.kind === "rest" ? "rest_api" : source.kind;
   const restConnectorQuery = useFoundryLiteQuery(
     ["data-connection", "rest-connector", connectorName.trim()],
     () =>
@@ -175,13 +247,36 @@ export function NewSyncEditor({
         configSummary.connectorName = connectorName.trim();
         configSummary.resourceName = resourceName.trim();
       }
+      if (isKafka) {
+        configSummary.bootstrapServers = kafkaBootstrapServers;
+        configSummary.connectionMode = kafkaConnectionMode;
+        configSummary.topic = kafkaTopic.trim();
+        configSummary.consumerGroup = kafkaConsumerGroup.trim();
+        configSummary.streamName = kafkaStreamName.trim();
+        configSummary.partitionMode = kafkaPartitionMode;
+        configSummary.deliveryGuarantee = "AT_LEAST_ONCE";
+        if (kafkaPartitionMode === "single") {
+          configSummary.partition = Number.parseInt(kafkaPartitionText, 10);
+        }
+        configSummary.batchLimit = Number.parseInt(kafkaBatchLimitText, 10);
+        configSummary.monitoring = {
+          checkpointLivenessSeconds: Number.parseInt(checkpointLivenessText, 10),
+          maxCheckpointDurationMs: Number.parseInt(maxCheckpointDurationText, 10),
+          maxBrokerLag: Number.parseInt(maxBrokerLagText, 10),
+        };
+        if (kafkaUpstreamMode === "kraken") {
+          configSummary.upstreamProvider = "kraken_websocket_v2";
+          configSummary.upstreamWebsocketUrl = "wss://ws.kraken.com/v2";
+          configSummary.upstreamSymbol = krakenSymbol.trim();
+        }
+      }
       return client.sources.managedSyncs.create(
         {
           syncName,
           sourceName: source.sourceName,
           displayName: displayName.trim(),
           sourceType,
-          capability: "batch",
+          capability: isKafka ? "streaming" : "batch",
           targetDatasetRef: datasetRef.trim(),
           mode,
           schedule,
@@ -199,9 +294,23 @@ export function NewSyncEditor({
       idempotencyRef,
       incrementalColumn,
       isIncremental,
+      isKafka,
       isPostgres,
       isRest,
       mode,
+      kafkaBatchLimitText,
+      kafkaBootstrapServers,
+      kafkaConnectionMode,
+      kafkaConsumerGroup,
+      kafkaPartitionMode,
+      kafkaPartitionText,
+      kafkaStreamName,
+      kafkaTopic,
+      kafkaUpstreamMode,
+      krakenSymbol,
+      checkpointLivenessText,
+      maxBrokerLagText,
+      maxCheckpointDurationText,
       resourceName,
       scheduleMode,
       secretRef,
@@ -229,6 +338,16 @@ export function NewSyncEditor({
         resourceName.trim().length > 0 &&
         !hasRestResourceMismatch &&
         !restConnectorQuery.error
+      : isKafka
+        ? kafkaTopic.trim().length > 0 &&
+          kafkaConsumerGroup.trim().length > 0 &&
+          kafkaStreamName.trim().length > 0 &&
+          (kafkaPartitionMode === "all" || Number.parseInt(kafkaPartitionText, 10) >= 0) &&
+          Number.parseInt(kafkaBatchLimitText, 10) > 0 &&
+          Number.parseInt(checkpointLivenessText, 10) > 0 &&
+          Number.parseInt(maxCheckpointDurationText, 10) > 0 &&
+          Number.parseInt(maxBrokerLagText, 10) >= 0 &&
+          (kafkaUpstreamMode !== "kraken" || krakenSymbol.trim().length > 0)
       : false;
   const canCreate =
     isNameValid && isDatasetValid && isScheduleValid && isSourceConfigValid;
@@ -262,7 +381,12 @@ export function NewSyncEditor({
             정의합니다.
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="동기화 편집기 닫기"
+          onClick={onCancel}
+        >
           <X className="size-3.5" /> 취소
         </Button>
       </div>
@@ -274,6 +398,7 @@ export function NewSyncEditor({
               <div className="space-y-1">
                 <Label className="text-[11px]">동기화 이름</Label>
                 <Input
+                  data-testid="new-sync-display-name"
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                   placeholder="예: 주문 테이블 동기화"
@@ -288,6 +413,7 @@ export function NewSyncEditor({
               <div className="space-y-1">
                 <Label className="text-[11px]">목적지 데이터셋</Label>
                 <Input
+                  data-testid="new-sync-dataset-ref"
                   value={datasetRef}
                   onChange={(event) => {
                     setIsDatasetRefTouched(true);
@@ -453,7 +579,11 @@ export function NewSyncEditor({
                         }
                       }}
                     >
-                      <SelectTrigger size="sm" className="w-full font-mono text-xs">
+                      <SelectTrigger
+                        size="sm"
+                        data-testid="new-sync-rest-resource"
+                        className="w-full font-mono text-xs"
+                      >
                         <SelectValue placeholder="리소스를 선택하세요" />
                       </SelectTrigger>
                       <SelectContent>
@@ -495,6 +625,155 @@ export function NewSyncEditor({
               </div>
             </EditorCard>
           ) : null}
+          {isKafka ? (
+            <EditorCard icon={Radio} title="소스별 구성 — Kafka topic">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1 md:col-span-2">
+                  <Label className="text-[11px]">Topic</Label>
+                  <Input
+                    value={kafkaTopic}
+                    onChange={(event) => {
+                      const topic = event.target.value;
+                      setKafkaTopic(topic);
+                      if (!kafkaStreamName) {
+                        setKafkaStreamName(topic.replace(/[^a-zA-Z0-9_-]/g, "-"));
+                      }
+                    }}
+                    placeholder="crypto.trades"
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Consumer group</Label>
+                  <Input
+                    value={kafkaConsumerGroup}
+                    onChange={(event) => setKafkaConsumerGroup(event.target.value)}
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Stream name</Label>
+                  <Input
+                    value={kafkaStreamName}
+                    onChange={(event) => setKafkaStreamName(event.target.value)}
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Partition strategy</Label>
+                  <Select
+                    value={kafkaPartitionMode}
+                    onValueChange={(value) =>
+                      setKafkaPartitionMode(value as "all" | "single")
+                    }
+                  >
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All partitions · 자동 발견</SelectItem>
+                      <SelectItem value="single">Single partition</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Micro-batch records</Label>
+                  <Input
+                    value={kafkaBatchLimitText}
+                    onChange={(event) => setKafkaBatchLimitText(event.target.value)}
+                    inputMode="numeric"
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+                {kafkaPartitionMode === "single" ? (
+                  <div className="space-y-1 md:col-span-2">
+                    <Label className="text-[11px]">Partition number</Label>
+                    <Input
+                      value={kafkaPartitionText}
+                      onChange={(event) => setKafkaPartitionText(event.target.value)}
+                      inputMode="numeric"
+                      className="h-7 font-mono text-xs"
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded border border-primary/20 bg-primary/5 px-2.5 py-2 text-[10px] text-muted-foreground md:col-span-2">
+                    실행할 때 topic metadata를 다시 읽고 모든 partition을 독립 offset으로
+                    체크포인트합니다. topic partition이 늘어나도 다음 micro-batch부터 자동 반영됩니다.
+                  </div>
+                )}
+                <div className="space-y-1 md:col-span-2">
+                  <Label className="text-[11px]">Upstream producer</Label>
+                  <Select
+                    value={kafkaUpstreamMode}
+                    onValueChange={(value) =>
+                      setKafkaUpstreamMode(value as "external" | "kraken")
+                    }
+                  >
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="external">외부 Kafka producer</SelectItem>
+                      <SelectItem value="kraken">Kraken WebSocket v2 · live trades</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="text-[10px] text-muted-foreground">
+                    Kraken을 선택하면 상시 worker가 공개 trade feed를 이 topic에 publish한 뒤 같은 checkpoint 경로로 Dataset에 보관합니다.
+                  </div>
+                </div>
+                {kafkaUpstreamMode === "kraken" ? (
+                  <div className="space-y-1 md:col-span-2">
+                    <Label className="text-[11px]">Kraken symbol</Label>
+                    <Input
+                      value={krakenSymbol}
+                      onChange={(event) => setKrakenSymbol(event.target.value)}
+                      placeholder="BTC/USD"
+                      className="h-7 font-mono text-xs"
+                    />
+                    <div className="font-mono text-[10px] text-muted-foreground">
+                      wss://ws.kraken.com/v2 · channel=trade · snapshot=false
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </EditorCard>
+          ) : null}
+          {isKafka ? (
+            <EditorCard icon={Activity} title="Production monitoring">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Checkpoint liveness · sec</Label>
+                  <Input
+                    value={checkpointLivenessText}
+                    onChange={(event) => setCheckpointLivenessText(event.target.value)}
+                    inputMode="numeric"
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Max checkpoint · ms</Label>
+                  <Input
+                    value={maxCheckpointDurationText}
+                    onChange={(event) => setMaxCheckpointDurationText(event.target.value)}
+                    inputMode="numeric"
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Max total lag · records</Label>
+                  <Input
+                    value={maxBrokerLagText}
+                    onChange={(event) => setMaxBrokerLagText(event.target.value)}
+                    inputMode="numeric"
+                    className="h-7 font-mono text-xs"
+                  />
+                </div>
+              </div>
+              <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+                Worker heartbeat, checkpoint liveness, duration, total lag, throughput를 매 상태 조회마다 판정합니다.
+              </p>
+            </EditorCard>
+          ) : null}
           {isPostgres ? (
             <EditorCard icon={FileSearch} title="SQL 쿼리">
               <pre className="overflow-x-auto rounded bg-muted/60 p-2.5 font-mono text-[11px] leading-5">
@@ -507,6 +786,15 @@ export function NewSyncEditor({
                 동기화에 포함된 테이블의 기본 쿼리는 SELECT * 입니다. 실행
                 쿼리는 위 구성에서 파생됩니다.
               </div>
+            </EditorCard>
+          ) : null}
+          {isKafka ? (
+            <EditorCard icon={Activity} title="Streaming checkpoint">
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                topic·partition·consumer group별 마지막 offset은 데이터셋 버전
+                커밋이 성공한 뒤에만 전진합니다. 재시작은 커밋된 offset 다음
+                레코드부터 이어집니다.
+              </p>
             </EditorCard>
           ) : null}
           <EditorCard
@@ -539,7 +827,9 @@ export function NewSyncEditor({
               <p className="text-[11px] text-muted-foreground">
                 {isPostgres
                   ? "비활성 — 매 실행마다 전체 데이터를 가져옵니다 (트랜잭션 유형에 따라 덮어쓰기/추가)."
-                  : "REST 동기화는 커넥터의 커서 설정을 따릅니다."}
+                  : isKafka
+                    ? "Kafka 동기화는 topic partition offset 체크포인트를 자동으로 사용합니다."
+                    : "REST 동기화는 커넥터의 커서 설정을 따릅니다."}
               </p>
             )}
           </EditorCard>

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+
+_AGENT_HEARTBEAT_MAX_AGE_SECONDS = 90
 
 
 def credential_view(row: Mapping[str, object]) -> dict[str, object]:
@@ -24,7 +27,7 @@ def agent_view(row: Mapping[str, object]) -> dict[str, object]:
         "agentId": row["agent_id"],
         "displayName": row["display_name"],
         "mode": row["mode"],
-        "status": row["status"],
+        "status": _agent_status(row),
         "capabilities": dict(_mapping(row["capabilities"])),
         "networkSummary": dict(_mapping(row["network_summary"])),
         "lastHeartbeatAt": row["last_heartbeat_at"],
@@ -32,6 +35,20 @@ def agent_view(row: Mapping[str, object]) -> dict[str, object]:
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
+
+
+def _agent_status(row: Mapping[str, object]) -> object:
+    if row.get("status") != "online":
+        return row.get("status")
+    heartbeat = row.get("last_heartbeat_at")
+    if not isinstance(heartbeat, str):
+        return "offline"
+    try:
+        timestamp = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
+    except ValueError:
+        return "offline"
+    age_seconds = (datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds()
+    return "online" if age_seconds <= _AGENT_HEARTBEAT_MAX_AGE_SECONDS else "offline"
 
 
 def network_policy_view(row: Mapping[str, object]) -> dict[str, object]:
@@ -99,6 +116,7 @@ def sync_run_view(row: Mapping[str, object]) -> dict[str, object]:
         "checkpointStart": dict(_mapping(row["checkpoint_start"])),
         "checkpointEnd": dict(_mapping(row["checkpoint_end"])),
         "resultSummary": result_summary,
+        "networkEvidence": _sync_run_network_evidence(result_summary),
         "error": dict(_mapping(row["error"])) if isinstance(row.get("error"), Mapping) else None,
         "operationsPath": _sync_run_operations_path(row, result_summary),
         "startedAt": row["started_at"],
@@ -113,6 +131,16 @@ def sync_run_list_view(rows: Sequence[Mapping[str, object]]) -> list[dict[str, o
 
 def _mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _sync_run_network_evidence(result_summary: Mapping[str, object]) -> dict[str, object] | None:
+    direct_evidence = _mapping(result_summary.get("networkEvidence"))
+    if direct_evidence:
+        return dict(direct_evidence)
+    workflow_run = _mapping(result_summary.get("workflowRun"))
+    output = _mapping(workflow_run.get("output"))
+    evidence = _mapping(output.get("networkEvidence"))
+    return dict(evidence) if evidence else None
 
 
 def _sync_run_operations_path(row: Mapping[str, object], result_summary: Mapping[str, object]) -> str | None:

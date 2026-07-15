@@ -36,6 +36,11 @@ test("Data Connection CSV wizard uploads a file and commits a previewable datase
   await page.getByRole("button", { name: "새 소스" }).first().click();
 
   await expect(page.getByText("소스 유형 선택")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "프로토콜 소스" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "연결하는 다른 방법" })).toBeVisible();
+  await expect(page.getByTestId("source-template-rest_api")).toContainText(
+    "REST endpoint에 요청을 보내고",
+  );
   await page.getByRole("button", { name: /CSV 업로드/ }).click();
   await expect(page.getByText("데이터 소스 연결 방식을 선택하세요")).toBeVisible();
   await page.getByRole("button", { name: "계속" }).click();

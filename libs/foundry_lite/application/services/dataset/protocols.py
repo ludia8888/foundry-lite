@@ -68,6 +68,24 @@ class DatasetTransactionManager(Protocol):
 
     def _version_file_path(self, version: DatasetVersionRow) -> Path: ...
 
+    def _version_file_paths(
+        self,
+        version: DatasetVersionRow,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]: ...
+
+    def _version_preview_file_paths(
+        self,
+        version: DatasetVersionRow,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]: ...
+
+    def _current_view_manifest(self, version: DatasetVersionRow) -> DatasetManifest: ...
+
+    def _current_view_version(self, version: DatasetVersionRow) -> DatasetVersionRow: ...
+
     def _load_manifest(self, manifest_uri: str) -> DatasetManifest: ...
 
     def _finalize_open_transaction(
@@ -109,6 +127,8 @@ class DatasetVersionLookup(Protocol):
         *,
         ctx: RequestContext,
     ) -> DatasetVersionRow: ...
+
+    def _version_by_id(self, conn: TransactionContext, version_id: str) -> DatasetVersionRow: ...
 
     @overload
     def _latest_version_by_dataset_id(

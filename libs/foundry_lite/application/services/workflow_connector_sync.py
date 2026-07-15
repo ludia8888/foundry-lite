@@ -17,21 +17,23 @@ def connector_sync_run_id(
     connector_name: str,
     resource_name: str,
     sync_name: str | None,
+    source_name: str | None,
     config_fingerprint: str | None,
     transaction_type: str,
 ) -> str:
-    digest = _json_hash(
-        {
-            "tenantId": tenant_id,
-            "idempotencyKey": idempotency_key,
-            "datasetRef": dataset_ref,
-            "connectorName": connector_name,
-            "resourceName": resource_name,
-            "syncName": sync_name,
-            "configFingerprint": config_fingerprint,
-            "transactionType": transaction_type,
-        }
-    )
+    identity = {
+        "tenantId": tenant_id,
+        "idempotencyKey": idempotency_key,
+        "datasetRef": dataset_ref,
+        "connectorName": connector_name,
+        "resourceName": resource_name,
+        "syncName": sync_name,
+        "configFingerprint": config_fingerprint,
+        "transactionType": transaction_type,
+    }
+    if source_name is not None:
+        identity["sourceName"] = source_name
+    digest = _json_hash(identity)
     return f"workflow_sync_{digest[:32]}"
 
 
@@ -43,6 +45,7 @@ def connector_sync_workflow_output(
 ) -> Mapping[str, object]:
     sync_run_id = _optional_text(payload, "syncRunId")
     cursor = connector_cursor_evidence(transaction_metadata)
+    network_evidence = connector_network_evidence(transaction_metadata)
     return {
         "workflowKind": "connector_sync",
         "workflowDefinitionVersion": _optional_text(payload, "workflowDefinitionVersion"),
@@ -55,7 +58,8 @@ def connector_sync_workflow_output(
         "committedVersionId": result.version_id,
         "versionNumber": result.version_number,
         "rowCount": result.row_count,
-        "dataPlane": _data_plane_payload(result, sync_run_id, cursor),
+        "networkEvidence": network_evidence,
+        "dataPlane": _data_plane_payload(result, sync_run_id, cursor, network_evidence),
     }
 
 
@@ -72,10 +76,18 @@ def connector_cursor_evidence(transaction_metadata: Mapping[str, object]) -> Map
     }
 
 
+def connector_network_evidence(transaction_metadata: Mapping[str, object]) -> Mapping[str, object]:
+    value = transaction_metadata.get("connectorNetworkEvidence")
+    if not isinstance(value, Mapping) or not value:
+        return {}
+    return {"source": "dataset_transaction.metadata", **dict(value)}
+
+
 def _data_plane_payload(
     result: CommitResult,
     sync_run_id: str | None,
     cursor: Mapping[str, object],
+    network_evidence: Mapping[str, object],
 ) -> Mapping[str, object]:
     return {
         "stages": [
@@ -87,6 +99,7 @@ def _data_plane_payload(
             _stage("eventEmit", eventType=CONNECTOR_SYNC_OUTBOX_EVENT_TYPE),
         ],
         "cursor": cursor,
+        "networkEvidence": network_evidence,
         "outboxEventType": CONNECTOR_SYNC_OUTBOX_EVENT_TYPE,
     }
 

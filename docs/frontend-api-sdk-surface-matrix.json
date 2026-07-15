@@ -2176,6 +2176,56 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "sources.updateStatus",
+      "route": "PATCH /api/sources/{source_name}/status",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.updateStatus",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Source lifecycle update requires Idempotency-Key and the current config fingerprint, keeps Source history intact, blocks new manual and scheduled sync runs while disabled, and records source.disabled or source.enabled audit and outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.testConnection",
+      "route": "POST /api/sources/{source_name}/connection-tests",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.testConnection",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Source connection test requires Idempotency-Key and the current config fingerprint, performs a live REST preview or SQL SELECT 1 without creating a Dataset commit, and persists redacted step, requestId, audit, and outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.listConnectionTests",
+      "route": "GET /api/sources/{source_name}/connection-tests",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.listConnectionTests",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Source connection-test history is tenant-scoped, survives browser refresh and backend service reconstruction, and returns only redacted diagnostic evidence with requestId correlation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.listEgressAttempts",
+      "route": "GET /api/sources/{source_name}/egress-attempts",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.listEgressAttempts",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Source egress history derives durable TCP route evidence from persisted connection tests and exposes connectionId, responseFlags, byte counts, duration, destination port, origin, network type, policy, Agent, and requestId without credential values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "sources.templates.list",
       "route": "GET /api/sources/templates",
       "productArea": "source-wizard",
@@ -2349,6 +2399,45 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "sources.managedSyncs.updateSchedule",
+      "route": "PATCH /api/sources/managed-syncs/{sync_name}/schedule",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.updateSchedule",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Schedule update requires Idempotency-Key, validates manual, disabled, interval, or cron configuration, rejects stale config fingerprints, and records before/after audit evidence with the idempotency correlation key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.pauseSchedule",
+      "route": "POST /api/sources/managed-syncs/{sync_name}/schedule/pause",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.pauseSchedule",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Pause requires Idempotency-Key and a current config fingerprint, preserves the recurring schedule, stops automatic triggers, and records before/after audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.resumeSchedule",
+      "route": "POST /api/sources/managed-syncs/{sync_name}/schedule/resume",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.resumeSchedule",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resume requires Idempotency-Key and a current config fingerprint, resets the recurring trigger anchor, preserves interval/cron configuration, and records before/after audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "sources.managedSyncs.listRuns",
       "route": "GET /api/sources/managed-syncs/{sync_name}/runs",
       "productArea": "source-wizard",
@@ -2367,6 +2456,44 @@
       "sdkSurface": "sources.managedSyncs.getRun",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Managed sync run get returns a durable run evidence row with request, checkpoint, commit/workflow, operationsPath, and redacted error details.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.startStream",
+      "route": "POST /api/sources/managed-syncs/{sync_name}/stream/start",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.startStream",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Streaming start requires Idempotency-Key and the current config fingerprint, records a durable SourceStreamingSyncWorkflow intent, links it from the sync, and preserves auditable desired-state evidence for a worker lease takeover.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.stopStream",
+      "route": "POST /api/sources/managed-syncs/{sync_name}/stream/stop",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.stopStream",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Streaming stop requires Idempotency-Key, records a durable cancellation request without advancing the Kafka checkpoint, keeps the last worker telemetry, and writes source.streaming_sync.stop_requested audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.streamStatus",
+      "route": "GET /api/sources/managed-syncs/{sync_name}/stream/status",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.streamStatus",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Streaming status returns desired and observed lifecycle state, lease freshness, heartbeat, checkpoint, Kafka lag, throughput, reconnect, upstream, Dataset version, and redacted error evidence without mutating runtime state.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

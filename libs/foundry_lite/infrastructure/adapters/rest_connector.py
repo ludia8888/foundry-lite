@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import socket
@@ -14,8 +15,8 @@ from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPMessage, HTTPResponse, HTTPSConnection
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import IO, Protocol, cast
-from urllib.error import HTTPError
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPHandler, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from foundry_lite.application.ports.adapter_failure import (
@@ -25,6 +26,7 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureMode,
 )
 from foundry_lite.application.ports.connector_adapter import (
+    ConnectorNetworkRoute,
     ConnectorRateLimitedError,
     ConnectorSnapshot,
     ConnectorSnapshotRequest,
@@ -34,6 +36,7 @@ from foundry_lite.application.ports.connector_adapter import (
 )
 from foundry_lite.application.ports.secret_provider import REDACTED_VALUE, SecretProvider
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure.adapters.source_agent_proxy_transport import connect_source_target
 
 REST_CONNECTOR_PROFILE = "rest-pull-connector"
 _TARGET_ATTR = "_foundry_lite_rest_target"
@@ -47,8 +50,21 @@ class _ValidatedHttpTarget:
     resolved_host: str
 
 
+@dataclass(frozen=True)
+class _HttpGetResult:
+    payload: bytes
+    network_evidence: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class _SnapshotPages:
+    rows: tuple[Mapping[str, object], ...]
+    cursor: Mapping[str, object] | None
+    network_evidence: Mapping[str, object]
+
+
 class RestPullConnectorAdapter:
-    """HTTP JSON REST connector that returns one cursor page as a snapshot."""
+    """HTTP JSON connector with bounded, replay-safe cursor page collection."""
 
     profile_name = REST_CONNECTOR_PROFILE
 
@@ -87,23 +103,19 @@ class RestPullConnectorAdapter:
     def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
         config = _required_rest_config(request.rest)
         self._enforce_rate_limit(request, config)
-        payload = _load_json(
-            _http_get(
-                _request_url(config, request.cursor),
-                _auth_headers(config.auth, self._secret_provider),
-                allow_private_network=config.allow_private_network,
-                max_response_bytes=config.max_response_bytes,
-            )
+        pages = _collect_snapshot_pages(
+            request,
+            config,
+            _auth_headers(config.auth, self._secret_provider),
         )
-        rows = _rows_from_payload(payload, config.pagination)
-        cursor = _next_cursor(payload, config.pagination)
         return ConnectorSnapshot(
             connector_name=request.connector_name,
             resource_name=request.resource_name,
-            rows=tuple(rows),
-            schema={"columns": _schema_columns(config, rows)},
-            cursor=cursor,
+            rows=pages.rows,
+            schema={"columns": _schema_columns(config, list(pages.rows))},
+            cursor=pages.cursor,
             source_watermark=request.request_id,
+            network_evidence=pages.network_evidence,
         )
 
     def _enforce_rate_limit(self, request: ConnectorSnapshotRequest, config: RestSourceConfig) -> None:
@@ -126,6 +138,69 @@ class RestPullConnectorAdapter:
             self._last_request_at[key] = now
 
 
+def _collect_snapshot_pages(
+    request: ConnectorSnapshotRequest,
+    config: RestSourceConfig,
+    headers: Mapping[str, str],
+) -> _SnapshotPages:
+    rows: list[Mapping[str, object]] = []
+    evidence: list[Mapping[str, object]] = []
+    cursor = request.cursor
+    seen = {_cursor_marker(cursor)} if cursor is not None else set()
+    for page_index in range(config.pagination.max_pages_per_snapshot):
+        response = _fetch_snapshot_page(request, config, headers, cursor, page_index)
+        payload = _load_json(response.payload)
+        rows.extend(_rows_from_payload(payload, config.pagination))
+        evidence.append(response.network_evidence)
+        cursor = _next_cursor(payload, config.pagination)
+        if cursor is None:
+            break
+        marker = _cursor_marker(cursor)
+        if marker in seen:
+            raise ValidationFailed("REST connector pagination cursor repeated")
+        seen.add(marker)
+    return _SnapshotPages(tuple(rows), cursor, _aggregate_network_evidence(evidence))
+
+
+def _fetch_snapshot_page(
+    request: ConnectorSnapshotRequest,
+    config: RestSourceConfig,
+    headers: Mapping[str, str],
+    cursor: Mapping[str, object] | None,
+    page_index: int,
+) -> _HttpGetResult:
+    return _http_get(
+        _request_url(config, cursor),
+        headers,
+        allow_private_network=config.allow_private_network,
+        max_response_bytes=config.max_response_bytes,
+        route=request.network_route,
+        connection_id=_connection_id(request, page_index),
+    )
+
+
+def _cursor_marker(cursor: Mapping[str, object]) -> str:
+    return json.dumps(dict(cursor), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _aggregate_network_evidence(items: list[Mapping[str, object]]) -> Mapping[str, object]:
+    if len(items) == 1:
+        return dict(items[0])
+    first = dict(items[0])
+    first["pageCount"] = len(items)
+    first["connectionCount"] = len(items)
+    first["bytesSent"] = sum(_evidence_int(item, "bytesSent") for item in items)
+    first["bytesReceived"] = sum(_evidence_int(item, "bytesReceived") for item in items)
+    first["durationMs"] = sum(_evidence_int(item, "durationMs") for item in items)
+    first["pageConnections"] = [item.get("connectionId") for item in items]
+    return first
+
+
+def _evidence_int(item: Mapping[str, object], key: str) -> int:
+    value = item.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def _required_rest_config(config: RestSourceConfig | None) -> RestSourceConfig:
     if config is None:
         raise ValidationFailed("REST connector requires source config")
@@ -136,13 +211,18 @@ def _required_rest_config(config: RestSourceConfig | None) -> RestSourceConfig:
             "REST connector maxResponseBytes must be positive",
             details={"maxResponseBytes": config.max_response_bytes},
         )
+    if not 1 <= config.pagination.max_pages_per_snapshot <= 100:
+        raise ValidationFailed(
+            "REST connector maxPagesPerSnapshot must be between 1 and 100",
+            details={"maxPagesPerSnapshot": config.pagination.max_pages_per_snapshot},
+        )
     _require_replayable_pagination(config.pagination)
     return config
 
 
 def _require_replayable_pagination(pagination: RestPaginationConfig) -> None:
     """Fail closed when a REST source cannot offer replay-safe cursor semantics."""
-    if pagination.strategy == "cursor":
+    if pagination.strategy in {"cursor", "next_link"}:
         return
     raise ValidationFailed(
         "REST connector page-number pagination is non-replayable; use a stable cursor source",
@@ -157,10 +237,34 @@ def _request_url(config: RestSourceConfig, cursor: Mapping[str, object] | None) 
     cursor_value = _cursor_value(cursor, config.pagination)
     if cursor_value is None:
         return url
+    if config.pagination.strategy == "next_link":
+        return _same_origin_next_link(url, cursor_value)
     split = urlsplit(url)
     query = dict(parse_qsl(split.query, keep_blank_values=True))
     query[config.pagination.cursor_query_param] = cursor_value
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+
+
+def _same_origin_next_link(initial_url: str, next_link: str) -> str:
+    resolved = urljoin(initial_url, next_link)
+    if _url_origin(initial_url) != _url_origin(resolved):
+        raise ValidationFailed(
+            "REST connector next link must keep the configured origin",
+            details={"nextLinkOrigin": _display_origin(resolved)},
+        )
+    return resolved
+
+
+def _url_origin(url: str) -> tuple[str, str, int]:
+    split = urlsplit(url)
+    host = (split.hostname or "").rstrip(".").lower()
+    port = split.port or (443 if split.scheme.lower() == "https" else 80)
+    return split.scheme.lower(), host, port
+
+
+def _display_origin(url: str) -> str:
+    scheme, host, port = _url_origin(url)
+    return f"{scheme}://{host}:{port}"
 
 
 def _cursor_value(cursor: Mapping[str, object] | None, pagination: RestPaginationConfig) -> str | None:
@@ -179,11 +283,29 @@ def _auth_headers(auth: RestAuthConfig, secret_provider: SecretProvider | None) 
         token = _secret_ref_or_value(auth.token, auth.token_secret_ref, secret_provider)
         if token:
             return {"Authorization": f"Bearer {token}"}
+    if auth.mode == "basic":
+        credentials = _secret_ref_or_value(
+            auth.basic_credentials,
+            auth.basic_credentials_secret_ref,
+            secret_provider,
+        )
+        if credentials and _is_basic_credentials(credentials):
+            encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
+            return {"Authorization": f"Basic {encoded}"}
     if auth.mode == "header" and auth.header_name:
         header_value = _secret_ref_or_value(auth.header_value, auth.header_value_secret_ref, secret_provider)
         if header_value:
             return {auth.header_name: header_value}
     raise ValidationFailed("REST connector auth config is incomplete")
+
+
+def _is_basic_credentials(value: str) -> bool:
+    if ":" in value and not value.startswith(":"):
+        return True
+    raise ValidationFailed(
+        "REST connector basic auth secret must use username:password format",
+        details={"secret_value": REDACTED_VALUE},
+    )
 
 
 def _secret_ref_or_value(
@@ -221,14 +343,38 @@ def _http_get(
     *,
     allow_private_network: bool = False,
     max_response_bytes: int,
-) -> bytes:
+    route: ConnectorNetworkRoute | None,
+    connection_id: str,
+) -> _HttpGetResult:
     target = _validated_http_target(url, allow_private_network=allow_private_network)
     request = Request(target.url, headers=dict(headers), method="GET")
     setattr(request, _TARGET_ATTR, target)
+    started_at = time.monotonic()
     try:
-        with _open_http_request(request, allow_private_network=allow_private_network) as response:
-            return _read_bounded_response(response, max_bytes=max_response_bytes)
+        with _open_http_request(request, allow_private_network=allow_private_network, route=route) as response:
+            payload = _read_bounded_response(response, max_bytes=max_response_bytes)
+        evidence = _network_evidence(
+            target,
+            route,
+            connection_id=connection_id,
+            duration_ms=_duration_ms(started_at),
+            response_flags="NONE",
+            bytes_sent=_estimated_request_bytes(request),
+            bytes_received=len(payload),
+            is_egress_succeeded=True,
+        )
+        return _HttpGetResult(payload, evidence)
     except HTTPError as exc:
+        evidence = _network_evidence(
+            target,
+            route,
+            connection_id=connection_id,
+            duration_ms=_duration_ms(started_at),
+            response_flags="HTTP_ERROR",
+            bytes_sent=_estimated_request_bytes(request),
+            bytes_received=0,
+            is_egress_succeeded=True,
+        )
         if exc.code == 429:
             retry_after = exc.headers.get("Retry-After")
             raise ConnectorRateLimitedError(
@@ -236,7 +382,117 @@ def _http_get(
                 adapter_profile=REST_CONNECTOR_PROFILE,
                 operation="snapshot",
             ) from exc
-        raise ValidationFailed("REST connector request failed", details={"status": exc.code, "url": url}) from exc
+        raise ValidationFailed(
+            "REST connector request failed",
+            details={"status": exc.code, "networkStage": "http", "networkEvidence": evidence},
+        ) from exc
+    except ValidationFailed as exc:
+        raise _enriched_transport_error(exc, target, route, connection_id, request, started_at) from exc
+    except URLError as exc:
+        raise _transport_error(target, route, connection_id, request, started_at, exc) from exc
+
+
+def _connection_id(request: ConnectorSnapshotRequest, page_index: int = 0) -> str:
+    base = f"{request.request_id}:{request.connector_name}:{request.resource_name}"
+    return base if page_index == 0 else f"{base}:page-{page_index + 1}"
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, round((time.monotonic() - started_at) * 1000))
+
+
+def _estimated_request_bytes(request: Request) -> int:
+    request_line = f"GET {request.selector} HTTP/1.1\r\n"
+    headers = sum(len(key) + len(value) + 4 for key, value in request.header_items())
+    return len(request_line.encode("utf-8")) + headers + 2
+
+
+def _network_evidence(
+    target: _ValidatedHttpTarget,
+    route: ConnectorNetworkRoute | None,
+    *,
+    connection_id: str,
+    duration_ms: int,
+    response_flags: str,
+    bytes_sent: int,
+    bytes_received: int,
+    is_egress_succeeded: bool,
+) -> dict[str, object]:
+    is_agent = route is not None and route.mode == "agent_proxy"
+    resources = {
+        "networkPolicy": route.policy_name if route is not None else None,
+        "agentId": route.agent_id if route is not None else None,
+    }
+    return {
+        "connectionId": connection_id,
+        "egressSucceeded": is_egress_succeeded,
+        "responseFlags": response_flags,
+        "bytesSent": bytes_sent,
+        "bytesReceived": bytes_received,
+        "durationMs": duration_ms,
+        "destinationPort": target.port,
+        "origin": "agent-proxy" if is_agent else "connectivity-sidecar",
+        "networkType": "agent_proxy" if is_agent else "direct",
+        "networkResources": resources,
+    }
+
+
+def _enriched_transport_error(
+    error: ValidationFailed,
+    target: _ValidatedHttpTarget,
+    route: ConnectorNetworkRoute | None,
+    connection_id: str,
+    request: Request,
+    started_at: float,
+) -> ValidationFailed:
+    details = dict(error.details)
+    existing = details.get("networkEvidence")
+    if isinstance(existing, Mapping):
+        evidence = dict(existing)
+        evidence.setdefault("connectionId", connection_id)
+        evidence.setdefault("bytesSent", _estimated_request_bytes(request))
+        evidence.setdefault("bytesReceived", 0)
+        evidence.setdefault("durationMs", _duration_ms(started_at))
+    else:
+        evidence = _network_evidence(
+            target,
+            route,
+            connection_id=connection_id,
+            duration_ms=_duration_ms(started_at),
+            response_flags="UPSTREAM_CONNECT_FAILURE",
+            bytes_sent=_estimated_request_bytes(request),
+            bytes_received=0,
+            is_egress_succeeded=False,
+        )
+    details["networkEvidence"] = evidence
+    return ValidationFailed(error.message, details=details)
+
+
+def _transport_error(
+    target: _ValidatedHttpTarget,
+    route: ConnectorNetworkRoute | None,
+    connection_id: str,
+    request: Request,
+    started_at: float,
+    error: URLError,
+) -> ValidationFailed:
+    reason = error.reason
+    is_tls_error = isinstance(reason, ssl.SSLError)
+    evidence = _network_evidence(
+        target,
+        route,
+        connection_id=connection_id,
+        duration_ms=_duration_ms(started_at),
+        response_flags="TLS_ERROR" if is_tls_error else "UPSTREAM_CONNECT_FAILURE",
+        bytes_sent=_estimated_request_bytes(request),
+        bytes_received=0,
+        is_egress_succeeded=is_tls_error,
+    )
+    message = "REST connector TLS handshake failed" if is_tls_error else "REST connector endpoint was unreachable"
+    return ValidationFailed(
+        message,
+        details={"networkStage": "tls" if is_tls_error else "tcp", "networkEvidence": evidence},
+    )
 
 
 class _ReadableHTTPResponse(AbstractContextManager["_ReadableHTTPResponse"], Protocol):
@@ -330,32 +586,47 @@ class _ValidatingRedirectHandler(HTTPRedirectHandler):
 
 
 class _PinnedHTTPHandler(HTTPHandler):
-    def __init__(self, allow_private_network: bool) -> None:
+    def __init__(
+        self,
+        allow_private_network: bool,
+        route: ConnectorNetworkRoute | None = None,
+    ) -> None:
         super().__init__()
         self._allow_private_network = allow_private_network
+        self._route = route
 
     def http_open(self, req: Request) -> HTTPResponse:
         target = _target_for_request(req, allow_private_network=self._allow_private_network)
-        return self.do_open(_pinned_http_connection(target), req)
+        return self.do_open(_pinned_http_connection(target, self._route), req)
 
 
 class _PinnedHTTPSHandler(HTTPSHandler):
-    def __init__(self, allow_private_network: bool) -> None:
+    def __init__(
+        self,
+        allow_private_network: bool,
+        route: ConnectorNetworkRoute | None = None,
+    ) -> None:
         super().__init__()
         self._allow_private_network = allow_private_network
+        self._route = route
 
     def https_open(self, req: Request) -> HTTPResponse:
         target = _target_for_request(req, allow_private_network=self._allow_private_network)
         handler = cast(_ContextHTTPSHandler, self)
-        return self.do_open(_pinned_https_connection(target), req, context=handler._context)
+        return self.do_open(_pinned_https_connection(target, self._route), req, context=handler._context)
 
 
-def _open_http_request(request: Request, *, allow_private_network: bool) -> _ReadableHTTPResponse:
+def _open_http_request(
+    request: Request,
+    *,
+    allow_private_network: bool,
+    route: ConnectorNetworkRoute | None,
+) -> _ReadableHTTPResponse:
     """Open a request with redirect validation and pinned-IP transport."""
     opener = build_opener(
         ProxyHandler({}),
-        _PinnedHTTPHandler(allow_private_network),
-        _PinnedHTTPSHandler(allow_private_network),
+        _PinnedHTTPHandler(allow_private_network, route),
+        _PinnedHTTPSHandler(allow_private_network, route),
         _ValidatingRedirectHandler(allow_private_network),
     )
     return cast(_ReadableHTTPResponse, opener.open(request, timeout=5))
@@ -368,14 +639,20 @@ def _target_for_request(req: Request, *, allow_private_network: bool) -> _Valida
     return _validated_http_target(req.full_url, allow_private_network=allow_private_network)
 
 
-def _pinned_http_connection(target: _ValidatedHttpTarget) -> type[HTTPConnection]:
+def _pinned_http_connection(
+    target: _ValidatedHttpTarget,
+    route: ConnectorNetworkRoute | None = None,
+) -> type[HTTPConnection]:
     class _PinnedHTTPConnection(HTTPConnection):
         def connect(self) -> None:
             connection = cast(_TunnelableHTTPConnection, self)
-            self.sock = socket.create_connection(
-                (target.resolved_host, target.port),
-                self.timeout,
-                connection.source_address,
+            self.sock = connect_source_target(
+                target_host=target.host,
+                resolved_host=target.resolved_host,
+                target_port=target.port,
+                timeout=self.timeout,
+                source_address=connection.source_address,
+                route=route,
             )
             if connection._tunnel_host:
                 connection._tunnel()
@@ -383,14 +660,20 @@ def _pinned_http_connection(target: _ValidatedHttpTarget) -> type[HTTPConnection
     return _PinnedHTTPConnection
 
 
-def _pinned_https_connection(target: _ValidatedHttpTarget) -> type[HTTPSConnection]:
+def _pinned_https_connection(
+    target: _ValidatedHttpTarget,
+    route: ConnectorNetworkRoute | None = None,
+) -> type[HTTPSConnection]:
     class _PinnedHTTPSConnection(HTTPSConnection):
         def connect(self) -> None:
             connection = cast(_TunnelableHTTPSConnection, self)
-            sock = socket.create_connection(
-                (target.resolved_host, target.port),
-                self.timeout,
-                connection.source_address,
+            sock = connect_source_target(
+                target_host=target.host,
+                resolved_host=target.resolved_host,
+                target_port=target.port,
+                timeout=self.timeout,
+                source_address=connection.source_address,
+                route=route,
             )
             tunnel_host = connection._tunnel_host
             if tunnel_host:
@@ -631,6 +914,8 @@ def _next_cursor(payload: Mapping[str, object], pagination: RestPaginationConfig
 
 
 def _json_path(payload: Mapping[str, object], path: str) -> object:
+    if path in payload:
+        return payload[path]
     current: object = payload
     for part in path.split("."):
         if not isinstance(current, dict):

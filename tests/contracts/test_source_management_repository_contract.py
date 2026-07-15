@@ -11,6 +11,7 @@ from foundry_lite.application.ports.source_management_repository import (
     SourceSyncRecord,
     SourceSyncRunRecord,
 )
+from foundry_lite.application.state_transitions import SOURCE_SYNC_SCHEDULE_PAUSED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemySourceManagementRepository
 from sqlalchemy import create_engine
@@ -68,6 +69,34 @@ def test_source_management_policy_and_sync_run_lifecycle(
     with engine.begin() as conn:
         repository.create_network_policy(transaction=conn, record=_network_policy("tenant-a", "private_proxy"))
         repository.create_sync(transaction=conn, record=_sync("tenant-a", "orders_sync"))
+        scheduled = repository.update_sync_schedule(
+            transaction=conn,
+            tenant_id="tenant-a",
+            sync_name="orders_sync",
+            schedule={"mode": "interval", "everySeconds": 3600},
+            config_fingerprint="sha256:tenant-a:scheduled-sync",
+            updated_at="2026-06-28T00:00:30Z",
+        )
+        stale_pause = repository.update_sync_schedule_state(
+            transaction=conn,
+            tenant_id="tenant-a",
+            sync_name="orders_sync",
+            transition=SOURCE_SYNC_SCHEDULE_PAUSED,
+            expected_config_fingerprint="sha256:tenant-a:stale-sync",
+            schedule={"mode": "interval", "everySeconds": 3600},
+            config_fingerprint="sha256:tenant-a:should-not-commit",
+            updated_at="2026-06-28T00:00:35Z",
+        )
+        paused = repository.update_sync_schedule_state(
+            transaction=conn,
+            tenant_id="tenant-a",
+            sync_name="orders_sync",
+            transition=SOURCE_SYNC_SCHEDULE_PAUSED,
+            expected_config_fingerprint="sha256:tenant-a:scheduled-sync",
+            schedule={"mode": "interval", "everySeconds": 3600},
+            config_fingerprint="sha256:tenant-a:paused-sync",
+            updated_at="2026-06-28T00:00:40Z",
+        )
         repository.create_sync_run(transaction=conn, record=_sync_run("tenant-a", "orders_sync", "run-1", "idem-1"))
         replay = repository.sync_run_by_idempotency_key(
             transaction=conn,
@@ -95,6 +124,22 @@ def test_source_management_policy_and_sync_run_lifecycle(
             checkpoint={"lastValue": 20},
             updated_at="2026-06-28T00:02:00Z",
         )
+        streaming = repository.update_sync_streaming_workflow(
+            transaction=conn,
+            tenant_id="tenant-a",
+            sync_name="orders_sync",
+            workflow_run_id="workflow-stream-1",
+            updated_at="2026-06-28T00:03:00Z",
+        )
+        after_microbatch = repository.update_sync_after_run(
+            transaction=conn,
+            tenant_id="tenant-a",
+            sync_name="orders_sync",
+            run_id="run-2",
+            workflow_run_id=None,
+            checkpoint={"lastValue": 30},
+            updated_at="2026-06-28T00:04:00Z",
+        )
         policy = repository.network_policy_by_name(
             transaction=conn,
             tenant_id="tenant-a",
@@ -102,6 +147,13 @@ def test_source_management_policy_and_sync_run_lifecycle(
         )
 
     assert replay is not None
+    assert scheduled is not None
+    assert stale_pause is None
+    assert scheduled["schedule"] == {"mode": "interval", "everySeconds": 3600}
+    assert scheduled["config_fingerprint"] == "sha256:tenant-a:scheduled-sync"
+    assert paused is not None
+    assert paused["status"] == "paused"
+    assert paused["schedule"] == {"mode": "interval", "everySeconds": 3600}
     assert replay["id"] == "run-1"
     assert completed is not None
     assert completed["status"] == "succeeded"
@@ -110,6 +162,11 @@ def test_source_management_policy_and_sync_run_lifecycle(
     assert sync_after is not None
     assert sync_after["last_run_id"] == "run-1"
     assert sync_after["checkpoint"] == {"lastValue": 20}
+    assert streaming is not None
+    assert streaming["last_workflow_run_id"] == "workflow-stream-1"
+    assert after_microbatch is not None
+    assert after_microbatch["last_workflow_run_id"] == "workflow-stream-1"
+    assert after_microbatch["checkpoint"] == {"lastValue": 30}
     assert policy is not None
     assert policy["agent_id"] == "agent-1"
     assert [row["id"] for row in repository.list_sync_runs(tenant_id="tenant-a", sync_name="orders_sync")] == ["run-1"]
@@ -178,7 +235,7 @@ def _sync(tenant_id: str, sync_name: str) -> SourceSyncRecord:
         target_dataset_ref="raw.orders",
         target_media_set_id=None,
         mode="APPEND",
-        schedule={"type": "manual"},
+        schedule={"mode": "manual"},
         config_summary={"tableName": "orders"},
         config_fingerprint=f"sha256:{tenant_id}:sync",
         status="active",

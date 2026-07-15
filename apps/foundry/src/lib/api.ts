@@ -4,10 +4,14 @@ import type {
 } from "@foundry-lite/sdk";
 
 /**
- * 백엔드는 `pnpm dev`(uvicorn 127.0.0.1:8000)로 기동한다.
- * CORS 허용 origin이 4173으로 하드코딩되어 있어 dev 서버는 반드시 4173 포트를 쓴다.
+ * 기본 백엔드는 `pnpm dev`(uvicorn 127.0.0.1:8000)로 기동한다.
+ * 병렬 검증 환경은 `VITE_FOUNDRY_LITE_API_URL`로 새 API runtime을 지정할 수 있다.
  */
-export const API_BASE_URL = "http://127.0.0.1:8000";
+const configuredApiBaseUrl = import.meta.env.VITE_FOUNDRY_LITE_API_URL?.trim();
+
+export const API_BASE_URL = configuredApiBaseUrl
+  ? configuredApiBaseUrl.replace(/\/+$/, "")
+  : "http://127.0.0.1:8000";
 
 /**
  * 기본 auth profile(header-trust)에서 신뢰되는 데모 컨텍스트.

@@ -63,11 +63,26 @@ __all__ = [
     "ensure_stream_cursor_not_superseded",
     "finalize_stream_archive_commit",
     "insert_stream_dead_letters",
+    "latest_committed_stream_transaction",
     "lock_stream_cursor_for_commit",
     "record_stream_pre_commit_failure",
     "record_stream_read_failure",
     "write_stream_archive_batch",
 ]
+
+
+def latest_committed_stream_transaction(
+    engine: TransactionManager,
+    repository: DatasetTransactionRepository,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+) -> DatasetTransactionRow | None:
+    with engine.begin() as conn:
+        return repository.latest_committed_transaction(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset["id"],
+        )
 
 
 class StreamArchiveCommitBoundary(Protocol):

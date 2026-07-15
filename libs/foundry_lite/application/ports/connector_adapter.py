@@ -12,9 +12,14 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureContract,
 )
 
-RestAuthMode = Literal["none", "bearer", "header"]
-RestPaginationStrategy = Literal["cursor", "page_number"]
+RestAuthMode = Literal["none", "bearer", "basic", "header"]
+RestPaginationStrategy = Literal["cursor", "next_link", "page_number"]
+ConnectorNetworkMode = Literal["direct", "agent_proxy"]
 DEFAULT_REST_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+
+def _empty_network_evidence() -> dict[str, object]:
+    return {}
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,8 @@ class RestAuthConfig:
     mode: RestAuthMode = "none"
     token: str | None = None
     token_secret_ref: str | None = None
+    basic_credentials: str | None = None
+    basic_credentials_secret_ref: str | None = None
     header_name: str | None = None
     header_value: str | None = None
     header_value_secret_ref: str | None = None
@@ -38,6 +45,7 @@ class RestPaginationConfig:
     cursor_query_param: str = "cursor"
     cursor_key: str = "cursor"
     strategy: RestPaginationStrategy = "cursor"
+    max_pages_per_snapshot: int = 1
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,17 @@ class RestSourceConfig:
     max_response_bytes: int = DEFAULT_REST_MAX_RESPONSE_BYTES
     schema_columns: tuple[str, ...] = ()
     allow_private_network: bool = False
+
+
+@dataclass(frozen=True)
+class ConnectorNetworkRoute:
+    """Policy-bound route used by a worker to reach one external endpoint."""
+
+    mode: ConnectorNetworkMode
+    policy_name: str | None = None
+    agent_id: str | None = None
+    proxy_url: str | None = None
+    allowed_destinations: tuple[str, ...] = ()
 
 
 class ConnectorRateLimitedError(AdapterError):
@@ -92,6 +111,7 @@ class ConnectorSnapshotRequest:
     request_id: str
     cursor: Mapping[str, object] | None = None
     rest: RestSourceConfig | None = None
+    network_route: ConnectorNetworkRoute | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +124,7 @@ class ConnectorSnapshot:
     schema: Mapping[str, object]
     cursor: Mapping[str, object] | None
     source_watermark: str
+    network_evidence: Mapping[str, object] = field(default_factory=_empty_network_evidence)
 
 
 class ConnectorAdapter(Protocol):

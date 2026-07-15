@@ -58,6 +58,7 @@ from foundry_lite.infrastructure.adapters import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
     ImageProcessorAdapter,
+    KafkaSourceStreamAdapter,
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
@@ -443,6 +444,7 @@ def _create_core_dependencies(
             source_registry_repository=SqlAlchemySourceRegistryRepository(engine),
             source_management_repository=SqlAlchemySourceManagementRepository(engine),
             source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
+            source_stream_adapter=KafkaSourceStreamAdapter(),
         ),
     )
 

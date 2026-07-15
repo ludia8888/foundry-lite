@@ -17,15 +17,20 @@ from foundry_lite_api.schemas import (
     JsonObject,
     SourceAgentRegisterRequest,
     SourceBatchFileManifest,
+    SourceConnectionTestRequest,
     SourceCredentialCreateRequest,
     SourceDebeziumCreateRequest,
     SourceDebeziumObjectIndexStartRequest,
     SourceDebeziumSyncStartRequest,
     SourceExploreRequest,
+    SourceManagedStreamingSyncStateRequest,
     SourceManagedSyncCreateRequest,
     SourceManagedSyncRunStartRequest,
+    SourceManagedSyncScheduleStateRequest,
+    SourceManagedSyncScheduleUpdateRequest,
     SourceNetworkPolicyCreateRequest,
     SourceSchedulerTickRequest,
+    SourceStatusUpdateRequest,
     SourceWebhookListenerCreateRequest,
 )
 from foundry_lite_api.serializers import _json_form_object, _json_form_string_list, _optional_json_form_object
@@ -212,6 +217,61 @@ def get_source_managed_sync(request: Request, sync_name: str) -> JsonObject:
         raise _handle_error(exc, request) from exc
 
 
+@router.patch("/api/sources/managed-syncs/{sync_name}/schedule")
+def update_source_managed_sync_schedule(
+    request: Request,
+    sync_name: str,
+    payload: SourceManagedSyncScheduleUpdateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.update_managed_sync_schedule(
+            sync_name,
+            schedule=payload.schedule,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/sources/managed-syncs/{sync_name}/schedule/pause")
+def pause_source_managed_sync_schedule(
+    request: Request,
+    sync_name: str,
+    payload: SourceManagedSyncScheduleStateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.pause_managed_sync_schedule(
+            sync_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/sources/managed-syncs/{sync_name}/schedule/resume")
+def resume_source_managed_sync_schedule(
+    request: Request,
+    sync_name: str,
+    payload: SourceManagedSyncScheduleStateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.resume_managed_sync_schedule(
+            sync_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @router.post("/api/sources/managed-syncs/{sync_name}/runs/start")
 def start_source_managed_sync_run(
     request: Request,
@@ -227,6 +287,50 @@ def start_source_managed_sync_run(
             idempotency_key=idempotency_key,
             ctx=_ctx(request),
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/sources/managed-syncs/{sync_name}/stream/start")
+def start_source_managed_streaming_sync(
+    request: Request,
+    sync_name: str,
+    payload: SourceManagedStreamingSyncStateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.start_managed_streaming_sync(
+            sync_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/sources/managed-syncs/{sync_name}/stream/stop")
+def stop_source_managed_streaming_sync(
+    request: Request,
+    sync_name: str,
+    payload: SourceManagedStreamingSyncStateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.stop_managed_streaming_sync(
+            sync_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/sources/managed-syncs/{sync_name}/stream/status")
+def get_source_managed_streaming_sync_status(request: Request, sync_name: str) -> JsonObject:
+    try:
+        return runtime.foundry.sources.get_managed_streaming_sync_status(sync_name, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -506,6 +610,67 @@ def upload_media_source(
 def get_source(request: Request, source_name: str) -> JsonObject:
     try:
         return runtime.foundry.sources.get_source(source_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/sources/{source_name}/connection-tests")
+def test_source_connection(
+    request: Request,
+    source_name: str,
+    payload: SourceConnectionTestRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.test_connection(
+            source_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/sources/{source_name}/connection-tests")
+def list_source_connection_tests(
+    request: Request,
+    source_name: str,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[JsonObject]:
+    try:
+        return runtime.foundry.sources.list_connection_tests(source_name, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/sources/{source_name}/egress-attempts")
+def list_source_egress_attempts(
+    request: Request,
+    source_name: str,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[JsonObject]:
+    try:
+        return runtime.foundry.sources.list_egress_attempts(source_name, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.patch("/api/sources/{source_name}/status")
+def update_source_status(
+    request: Request,
+    source_name: str,
+    payload: SourceStatusUpdateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.update_source_status(
+            source_name,
+            status=payload.status,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

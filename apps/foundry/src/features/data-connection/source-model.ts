@@ -9,6 +9,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   sharepoint_graph: "SharePoint Graph",
   webhook_listener: "인바운드 웹훅",
   debezium_cdc: "Debezium CDC",
+  kafka: "Apache Kafka",
   media_upload: "미디어 업로드",
   batch_file: "배치 파일 업로드",
   csv_upload: "CSV 업로드",
@@ -42,6 +43,7 @@ const STATUS_INTENTS: Record<string, StatusIntent> = {
   running: "info",
   pending: "info",
   scheduled: "info",
+  paused: "warning",
   failed: "danger",
   error: "danger",
   disabled: "neutral",
@@ -58,6 +60,7 @@ const STATUS_LABELS: Record<string, string> = {
   running: "실행 중",
   pending: "대기",
   failed: "실패",
+  paused: "일시정지",
   disabled: "비활성",
 };
 
@@ -116,6 +119,12 @@ export function formatTimestamp(iso: string | null | undefined): string {
     second: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+export function formatBytes(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (value < 1024) return `${value} B`;
+  return `${(value / 1024).toFixed(1)} KiB`;
 }
 
 /** JSON record에서 number 값을 안전하게 추출한다 (증거 표시에 사용). */

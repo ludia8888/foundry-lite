@@ -1149,6 +1149,14 @@ budget을 쓴다. `RequestContext`, domain error, primitive DTO, service base, p
 대부분의 application service가 공통으로 가져야 하는 기반 모듈은 업무 결합도 fan-out 계산에서 제외하고,
 service collaborator fan-out ≤10 게이트는 별도로 유지한다.
 
+2026-07-16에는
+`foundry_lite_worker.source_streaming -> foundry_lite.infrastructure.local_runtime` 한 경로만
+worker composition-root 예외로 추가했다.
+상시 Kraken/Kafka 프로세스가 다른 worker entrypoint와 동일하게 concrete local profile을 한 번
+조립하기 위한 경계이며, worker 패키지 전체나 infrastructure 전체를 허용하지 않는다. 이 좁은
+예외는 layered-core, `check_dependency_graph.py`, Tach DAG, 실제 broker 통합 테스트로 계속
+보완하고, `tests/unit/test_quality_ci_workflows.py`가 broad worker 예외의 재도입을 차단한다.
+
 ### Tier P2.5 — Tach module DAG (✅ 완료 2026-06-11)
 
 `tach.toml`은 import-linter보다 더 읽기 쉬운 **모듈 의존성 지도**를 제공한다.
@@ -1170,6 +1178,11 @@ import-linter가 "금지된 transitive import 경로"를 정밀 차단한다면,
 코드 모양 자체를 차단한다. 자체 self-test는 `tests/unit/test_quality_semgrep_rules.py`.
 G9 (test sleep)는 Semgrep의 default tests 제외 동작 때문에 Semgrep으로 흡수하지 않고
 `check_no_test_sleep.py` AST 게이트로 유지한다.
+
+Semgrep은 제품·테스트 Python 환경과 의존성 해석을 공유하지 않는다. `click`처럼
+정적 분석 도구의 상한 제약이 제품 런타임의 보안 업데이트를 막지 않도록
+`uv tool run --from semgrep==1.169.0 semgrep ...` 격리 환경에서 실행하며,
+게이트와 self-test가 같은 고정 버전 명령을 사용한다.
 
 | 흡수된 게이트                        | Semgrep rule                                                                                                          |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
@@ -1439,8 +1452,11 @@ limit 초과 source version을 일부 처리로 성공시키지 않고 fail-clos
 `quality:kafka-rebalance`는 stream archive worker가 batch를 읽은 뒤 commit 직전
 partition assignment guard를 다시 확인하고, revoke가 감지되면 dataset version/cursor를
 만들지 않은 채 failed sync evidence와 `assignment_revoked` stop reason을 남기는지 검증한다.
-Production daemon packaging, durable partition assignment history, real broker rebalance revoke
-callback integration, broker commit-unknown reconciliation, OS SIGTERM finish-or-abort proof는
+Source managed Sync의 all-partition discovery, partition별 durable cursor map, standby lease takeover,
+Dataset branch single-active guard, Data Connection health rule surface는 별도 product ratchet으로 active다.
+Production daemon packaging, durable partition assignment history, parallel broker consumer threads,
+real broker rebalance revoke callback integration, broker commit-unknown reconciliation,
+durable incident/notification delivery, OS SIGTERM finish-or-abort proof는
 다음 S51 slice로 남긴다.
 
 ### S52 — Temporal Engine Integration
@@ -2168,7 +2184,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 240개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 250개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

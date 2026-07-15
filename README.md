@@ -85,7 +85,7 @@ flowchart LR
 | 영역 | 현재 가능한 것 | 대표 입구 |
 | --- | --- | --- |
 | Dataset | CSV upload, versioned commit, preview, inspect, schema evolution warning/blocking, quality check definition and result history | `foundry.datasets`, FastAPI dataset endpoints, `client.datasets` |
-| Source onboarding | CSV, batch file, signed webhook listener, Debezium-shaped CDC start, media upload, Generic REST source wrapper, scheduled managed sync, credential/agent/network policy read models | `foundry.sources`, FastAPI source endpoints, `client.sources` |
+| Source onboarding | CSV, batch file, signed webhook listener, Debezium-shaped CDC start, direct Kafka Source broker test/topic exploration/streaming Sync, durable Start/Stop/status와 one-Sync resident supervisor, all-partition discovery와 partition별 durable checkpoint/lag, lease-expiry standby takeover, checkpoint/lag/throughput health rules, Kraken WebSocket v2 → Kafka → checkpointed Dataset 예제, media upload, Generic REST source wrapper, durable Source/Sync separation with audited disable/re-enable, Source-level live REST/database/Kafka connection test with persisted redacted history, scheduled managed sync with schedule edit/pause/resume, consecutive-failure auto-pause and recovery build, credential/agent/network policy read models | `foundry.sources`, FastAPI source endpoints, `client.sources` |
 | Connector onboarding | tenant-scoped REST connection/resource registry, resource test without commit, connector sync workflow start | `foundry.connectors`, FastAPI connector endpoints, `client.connectors` |
 | Projects and resources | Compass-style projects as permission boundaries, folders as organization, RID-backed resource rows, favorites, trash/restore, explicit admin reconcile | `foundry.resources`, `/api/projects`, `/api/resources`, `client.resources` |
 | Transform and lineage | SQL transform registration/run, input/output version lineage, failed transform retry, bounded snapshot scheduler preview/tick, `worker:transform-scheduler`, OpenLineage-compatible evidence | `foundry.transforms`, FastAPI transform endpoints, `client.transforms` |
@@ -94,7 +94,7 @@ flowchart LR
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight, artifact receipt, historical artifact dataset-head execution, and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| Frontend SDK | 240 frontend route surface request contracts, 28 SDK helper contracts, 59 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| Frontend SDK | 250 frontend route surface request contracts, 28 SDK helper contracts, 65 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -213,7 +213,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 240개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 250개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 
@@ -226,7 +226,7 @@ pnpm --silent quality:frontend-foundation
 | Compute | DuckDB | Spark via `FOUNDRY_LITE_COMPUTE_PROFILE=spark` |
 | Search | local/fake adapter | Elasticsearch via `FOUNDRY_LITE_SEARCH_PROFILE=elasticsearch` |
 | Workflow | local/fake workflow | Temporal via `FOUNDRY_LITE_WORKFLOW_PROFILE=temporal` |
-| Stream | local/fake stream | Kafka-compatible adapter and worker proof |
+| Stream | local/fake stream | Kafka-compatible adapter, resident one-Sync supervisor, all-partition cursor map, Kraken WebSocket v2 producer, worker lease/takeover/checkpoint/health telemetry proof |
 | Media storage | local filesystem | `FOUNDRY_LITE_MEDIA_STORAGE_PROFILE=s3-media` |
 | Auth | header trust demo profile | `FOUNDRY_LITE_AUTH_PROFILE=jwt` or `oidc` local verification |
 | Secrets | env-backed `SecretProvider` | cloud/Vault remains future |

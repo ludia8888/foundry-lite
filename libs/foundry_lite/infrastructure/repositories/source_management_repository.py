@@ -103,6 +103,54 @@ class SqlAlchemySourceManagementRepository:
     def list_syncs(self, *, tenant_id: str) -> list[SourceSyncRow]:
         return cast(list[SourceSyncRow], _list_by_tenant(self.engine, db.source_syncs, tenant_id, "sync_name"))
 
+    def update_sync_schedule(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        sync_name: str,
+        schedule: Mapping[str, object],
+        config_fingerprint: str,
+        updated_at: str,
+    ) -> SourceSyncRow | None:
+        transaction.execute(
+            update(db.source_syncs)
+            .where(and_(db.source_syncs.c.tenant_id == tenant_id, db.source_syncs.c.sync_name == sync_name))
+            .values(schedule=dict(schedule), config_fingerprint=config_fingerprint, updated_at=updated_at)
+        )
+        return self.sync_by_name(transaction=transaction, tenant_id=tenant_id, sync_name=sync_name)
+
+    def update_sync_schedule_state(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        sync_name: str,
+        transition: StatusTransition,
+        expected_config_fingerprint: str,
+        schedule: Mapping[str, object],
+        config_fingerprint: str,
+        updated_at: str,
+    ) -> SourceSyncRow | None:
+        updated = cas_status_update_many(
+            transaction,
+            db.source_syncs,
+            tenant_id=tenant_id,
+            transition=transition,
+            values={
+                "schedule": dict(schedule),
+                "config_fingerprint": config_fingerprint,
+                "updated_at": updated_at,
+            },
+            conditions=(
+                db.source_syncs.c.sync_name == sync_name,
+                db.source_syncs.c.config_fingerprint == expected_config_fingerprint,
+            ),
+        )
+        if updated != 1:
+            return None
+        return self.sync_by_name(transaction=transaction, tenant_id=tenant_id, sync_name=sync_name)
+
     def update_sync_after_run(
         self,
         *,
@@ -114,12 +162,33 @@ class SqlAlchemySourceManagementRepository:
         checkpoint: Mapping[str, object],
         updated_at: str,
     ) -> SourceSyncRow | None:
+        values: dict[str, object] = {
+            "last_run_id": run_id,
+            "checkpoint": dict(checkpoint),
+            "updated_at": updated_at,
+        }
+        if workflow_run_id is not None:
+            values["last_workflow_run_id"] = workflow_run_id
         transaction.execute(
             update(db.source_syncs)
             .where(and_(db.source_syncs.c.tenant_id == tenant_id, db.source_syncs.c.sync_name == sync_name))
-            .values(
-                last_run_id=run_id, last_workflow_run_id=workflow_run_id, checkpoint=checkpoint, updated_at=updated_at
-            )
+            .values(**values)
+        )
+        return self.sync_by_name(transaction=transaction, tenant_id=tenant_id, sync_name=sync_name)
+
+    def update_sync_streaming_workflow(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        sync_name: str,
+        workflow_run_id: str,
+        updated_at: str,
+    ) -> SourceSyncRow | None:
+        transaction.execute(
+            update(db.source_syncs)
+            .where(and_(db.source_syncs.c.tenant_id == tenant_id, db.source_syncs.c.sync_name == sync_name))
+            .values(last_workflow_run_id=workflow_run_id, updated_at=updated_at)
         )
         return self.sync_by_name(transaction=transaction, tenant_id=tenant_id, sync_name=sync_name)
 

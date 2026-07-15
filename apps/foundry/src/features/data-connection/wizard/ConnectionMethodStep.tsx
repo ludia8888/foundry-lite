@@ -1,13 +1,9 @@
-import { idempotencyKey } from "@foundry-lite/sdk";
-import { useFoundryLiteClient } from "@foundry-lite/sdk/react";
-import { Cloud, Globe, Server, ShieldCheck } from "lucide-react";
+import { Cloud, Globe, RefreshCw, Server, ShieldCheck, TerminalSquare } from "lucide-react";
 import type { ReactNode } from "react";
-import { useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -17,12 +13,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-import {
-  isValidIdentifier,
-  sanitizeIdentifier,
-  statusIntent,
-  statusLabel,
-} from "../source-model";
+import { statusIntent, statusLabel } from "../source-model";
 import { useSourceAgents } from "../use-source-queries";
 import { WizardField, WizardStepFooter } from "./WizardFields";
 
@@ -179,7 +170,7 @@ function ConnectionModeCard({
   );
 }
 
-/** 에이전트 선택 또는 신규 등록 (sources.agents.register). */
+/** 실제 daemon이 self-register한 Agent를 선택한다. */
 function AgentSection({
   selectedAgentId,
   onSelectedAgentIdChange,
@@ -187,44 +178,8 @@ function AgentSection({
   selectedAgentId: string | null;
   onSelectedAgentIdChange: (agentId: string | null) => void;
 }) {
-  const client = useFoundryLiteClient();
   const agentsQuery = useSourceAgents();
-  const [agentIdInput, setAgentIdInput] = useState("");
-  const [agentNameInput, setAgentNameInput] = useState("");
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [registerError, setRegisterError] = useState<unknown>(null);
-
   const agents = agentsQuery.data ?? [];
-  const agentIdError =
-    agentIdInput && !isValidIdentifier(agentIdInput)
-      ? "영문/숫자/밑줄만 사용할 수 있습니다 (숫자로 시작 불가)."
-      : null;
-  const canRegister =
-    agentIdInput.trim().length > 0 &&
-    !agentIdError &&
-    agentNameInput.trim().length > 0 &&
-    !isRegistering;
-
-  const handleRegisterAgent = async () => {
-    setIsRegistering(true);
-    setRegisterError(null);
-    try {
-      const agent = await client.sources.agents.register(
-        {
-          agentId: agentIdInput.trim(),
-          displayName: agentNameInput.trim(),
-          mode: "agent_proxy",
-        },
-        { idempotencyKey: idempotencyKey("source_agent", agentIdInput.trim()) },
-      );
-      onSelectedAgentIdChange(agent.agentId);
-      await agentsQuery.reload();
-    } catch (error) {
-      setRegisterError(error);
-    } finally {
-      setIsRegistering(false);
-    }
-  };
 
   return (
     <section className="space-y-3 rounded border bg-card p-4">
@@ -232,8 +187,8 @@ function AgentSection({
         <ShieldCheck className="size-3.5 text-success" /> 에이전트 연결
       </div>
       <p className="text-[11px] text-muted-foreground">
-        관리형 run 데이터 플레인은 직접 연결로 실행됩니다. 선택한 에이전트는
-        네트워크 정책에 연결되어 등록·heartbeat 증거로 사용됩니다.
+        Foundry worker가 프로토콜·TLS·인증을 실행하고, 선택한 Agent는 사설망까지
+        투명 TCP CONNECT 터널을 제공합니다.
       </p>
       {agentsQuery.error ? (
         <ErrorState
@@ -254,7 +209,11 @@ function AgentSection({
             </SelectTrigger>
             <SelectContent>
               {agents.map((agent) => (
-                <SelectItem key={agent.agentId} value={agent.agentId}>
+                <SelectItem
+                  key={agent.agentId}
+                  value={agent.agentId}
+                  disabled={agent.status.toLowerCase() !== "online"}
+                >
                   <span className="font-mono">{agent.agentId}</span>
                   <StatusPill intent={statusIntent(agent.status)}>
                     {statusLabel(agent.status)}
@@ -266,43 +225,28 @@ function AgentSection({
         </WizardField>
       ) : (
         <div className="rounded border border-dashed p-3 text-[11px] text-muted-foreground">
-          등록된 에이전트가 없습니다. 아래에서 에이전트를 등록하거나 직접 연결을
-          선택하세요.
+          online Agent가 없습니다. 아래 명령으로 Agent daemon을 먼저 실행한 뒤
+          새로고침하세요.
         </div>
       )}
-      <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-        <WizardField label="에이전트 ID" error={agentIdError}>
-          <Input
-            value={agentIdInput}
-            onChange={(event) =>
-              setAgentIdInput(
-                sanitizeIdentifier(event.target.value) || event.target.value,
-              )
-            }
-            placeholder="onprem_agent_01"
-            className="h-8 font-mono text-xs"
-          />
-        </WizardField>
-        <WizardField label="에이전트 표시 이름">
-          <Input
-            value={agentNameInput}
-            onChange={(event) => setAgentNameInput(event.target.value)}
-            placeholder="온프레미스 에이전트"
-            className="h-8 text-xs"
-          />
-        </WizardField>
-        <div className="flex items-end">
+      <div className="rounded border bg-muted/25 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium">
+            <TerminalSquare className="size-3.5" /> Agent 실행 예시
+          </span>
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
-            disabled={!canRegister}
-            onClick={() => void handleRegisterAgent()}
+            onClick={() => void agentsQuery.reload()}
           >
-            에이전트 등록
+            <RefreshCw className="size-3.5" /> 목록 새로고침
           </Button>
         </div>
+        <code className="mt-2 block overflow-x-auto rounded bg-background p-2 font-mono text-[10px] text-muted-foreground">
+          pnpm worker:source-agent --agent-id onprem_agent_01 --tenant-id tenant-demo --display-name
+          &quot;On-prem Agent&quot; --allow source.internal:443
+        </code>
       </div>
-      {registerError ? <ErrorState error={registerError} /> : null}
       {selectedAgentId ? (
         <div className="font-mono text-[11px] text-muted-foreground">
           선택된 에이전트: {selectedAgentId}

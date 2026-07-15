@@ -67,6 +67,26 @@ source_connections = Table(
 )
 
 
+source_connection_tests = Table(
+    "source_connection_tests",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("source_name", String, nullable=False),
+    Column("source_type", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("config_fingerprint", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("checks", JSON, nullable=False),
+    Column("error", JSON),
+    Column("operations_path", String, nullable=False),
+    Column("started_at", String, nullable=False),
+    Column("completed_at", String),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "source_name", "idempotency_key", name="uq_source_connection_test_key"),
+)
+
+
 source_credentials = Table(
     "source_credentials",
     metadata,

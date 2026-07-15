@@ -23,7 +23,6 @@ if not _os.path.exists(_os.path.join(_os.path.dirname(__file__), "..", "..", "sc
     )
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -31,15 +30,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RULES_FILE = REPO_ROOT / "scripts" / "quality" / "semgrep-rules" / "foundry-lite.yml"
+SEMGREP_TOOL = ["uv", "tool", "run", "--from", "semgrep==1.169.0", "semgrep"]
 
 
 @pytest.fixture
 def semgrep_available() -> None:
-    if shutil.which("semgrep") is None:
-        # The semgrep binary is installed as a dev dependency via uv. If a
-        # CI environment skips dev deps the gate is meaningless, so we fail
-        # loudly rather than silently skipping.
-        pytest.fail("semgrep CLI not on PATH; install via `uv sync` or `uv add --dev semgrep`")
+    result = subprocess.run([*SEMGREP_TOOL, "--version"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        pytest.fail(f"isolated Semgrep tool failed: {result.stderr}")
 
 
 def _semgrep_env() -> dict[str, str]:
@@ -55,7 +53,7 @@ def _semgrep_env() -> dict[str, str]:
 def _run_semgrep(tmp_path: Path) -> dict:
     result = subprocess.run(
         [
-            "semgrep",
+            *SEMGREP_TOOL,
             "--config",
             str(RULES_FILE),
             "--metrics",

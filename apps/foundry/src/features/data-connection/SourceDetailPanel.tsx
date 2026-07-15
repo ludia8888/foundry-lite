@@ -5,7 +5,10 @@ import type {
   SourceOperationResult,
 } from "@foundry-lite/sdk";
 import { idempotencyKey } from "@foundry-lite/sdk";
-import { useFoundryLiteClient } from "@foundry-lite/sdk/react";
+import {
+  useFoundryLiteClient,
+  useFoundryLiteMutation,
+} from "@foundry-lite/sdk/react";
 import {
   ChevronRight,
   Copy,
@@ -19,7 +22,7 @@ import {
   Terminal,
   Table2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -31,9 +34,12 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { SourceSyncsTab } from "./detail/SourceSyncsTab";
+import { CdcCaptureSemanticsCard } from "./detail/CdcCaptureSemanticsCard";
+import { SourceConnectionSettings } from "./detail/SourceConnectionSettings";
 import {
   formatTimestamp,
   readNumberField,
+  readSyncRunRowCount,
   readTextField,
   sourceTypeLabel,
   statusIntent,
@@ -42,16 +48,35 @@ import {
   toOperationsHref,
 } from "./source-model";
 import { SourceExploreTab } from "./SourceExploreTab";
-import { useDebeziumOperationPlan } from "./use-source-queries";
+import { useDebeziumOperationPlan, useSyncRuns } from "./use-source-queries";
 
 /** 탐색을 지원하는 소스 타입 (백엔드 exploration.run 구현 범위). */
-const EXPLORABLE_SOURCE_TYPES = new Set(["postgres_jdbc", "rest_api"]);
+const EXPLORABLE_SOURCE_TYPES = new Set([
+  "postgres_jdbc",
+  "rest_api",
+  "sap_odata",
+  "kafka",
+]);
+const MANAGED_SOURCE_TYPES = new Set([
+  "postgres_jdbc",
+  "rest_api",
+  "sap_odata",
+  "sharepoint_graph",
+  "kafka",
+]);
+const RUNNABLE_MANAGED_SOURCE_TYPES = new Set([
+  "postgres_jdbc",
+  "rest_api",
+  "sap_odata",
+  "kafka",
+]);
 
 type DetailTabId = "overview" | "settings" | "syncs" | "explore" | "cdcPlan";
 
 interface SourceDetailPanelProps {
   source: SourceConnection;
   onSyncCreated?: (syncName: string) => void;
+  onSourceUpdated?: () => void | Promise<void>;
 }
 
 /**
@@ -61,9 +86,13 @@ interface SourceDetailPanelProps {
 export function SourceDetailPanel({
   source,
   onSyncCreated,
+  onSourceUpdated,
 }: SourceDetailPanelProps) {
   const [activeTab, setActiveTab] = useState<DetailTabId>("overview");
   const [shouldStartCreatingSync, setShouldStartCreatingSync] = useState(false);
+  const [initialSyncResourceName, setInitialSyncResourceName] = useState<
+    string | null
+  >(null);
   const [currentSource, setCurrentSource] = useState(source);
   useEffect(() => setCurrentSource(source), [source]);
 
@@ -87,12 +116,22 @@ export function SourceDetailPanel({
       return;
     }
     setShouldStartCreatingSync(true);
+    setInitialSyncResourceName(null);
     setActiveTab("syncs");
   };
 
   const handleSelectTab = (tab: DetailTabId) => {
-    if (tab !== "syncs") setShouldStartCreatingSync(false);
+    if (tab !== "syncs") {
+      setShouldStartCreatingSync(false);
+      setInitialSyncResourceName(null);
+    }
     setActiveTab(tab);
+  };
+
+  const handleCreateSyncForResource = (resourceName: string) => {
+    setInitialSyncResourceName(resourceName);
+    setShouldStartCreatingSync(true);
+    setActiveTab("syncs");
   };
 
   return (
@@ -166,14 +205,35 @@ export function SourceDetailPanel({
             source={currentSource}
             datasetHref={datasetHref}
             operationsHref={operationsHref}
+            isManagedSource={MANAGED_SOURCE_TYPES.has(currentSource.kind)}
+            isRunnable={RUNNABLE_MANAGED_SOURCE_TYPES.has(currentSource.kind)}
+            isExplorable={isExplorable}
+            onCreateSync={() => {
+              setShouldStartCreatingSync(true);
+              setInitialSyncResourceName(null);
+              setActiveTab("syncs");
+            }}
+            onExplore={() => setActiveTab("explore")}
+            onOpenSettings={() => setActiveTab("settings")}
+            onSourceUpdated={(updated) => {
+              setCurrentSource(updated);
+              void onSourceUpdated?.();
+            }}
           />
         ) : null}
-        {effectiveActiveTab === "settings" ? <ConfigTab source={currentSource} /> : null}
+        {effectiveActiveTab === "settings" ? (
+          <SourceConnectionSettings
+            source={currentSource}
+            onSaved={onSourceUpdated}
+          />
+        ) : null}
         {effectiveActiveTab === "syncs" ? (
           <SourceSyncsTab
-            key={`${currentSource.sourceName}:${shouldStartCreatingSync}`}
+            key={`${currentSource.sourceName}:${shouldStartCreatingSync}:${initialSyncResourceName ?? ""}`}
             source={currentSource}
             shouldStartCreating={shouldStartCreatingSync}
+            initialResourceName={initialSyncResourceName}
+            onSyncStateChanged={onSourceUpdated}
           />
         ) : null}
         {effectiveActiveTab === "cdcPlan" && isCdcSource ? (
@@ -183,7 +243,11 @@ export function SourceDetailPanel({
           />
         ) : null}
         {effectiveActiveTab === "explore" && isExplorable ? (
-          <SourceExploreTab source={currentSource} onSyncCreated={onSyncCreated} />
+          <SourceExploreTab
+            source={currentSource}
+            onSyncCreated={onSyncCreated}
+            onCreateSync={handleCreateSyncForResource}
+          />
         ) : null}
       </div>
     </div>
@@ -287,6 +351,7 @@ function CdcOperationPlanView({
           </PropertyRow>
         </dl>
       </div>
+      <CdcCaptureSemanticsCard semantics={plan.captureSemantics} />
       <div className="rounded border bg-card">
         <div className="section-label border-b px-3 py-2">Worker commands</div>
         <div className="space-y-3 p-3">
@@ -721,13 +786,63 @@ function OverviewTab({
   source,
   datasetHref,
   operationsHref,
+  isManagedSource,
+  isRunnable,
+  isExplorable,
+  onCreateSync,
+  onExplore,
+  onOpenSettings,
+  onSourceUpdated,
 }: {
   source: SourceConnection;
   datasetHref: string | null;
   operationsHref: string | null;
+  isManagedSource: boolean;
+  isRunnable: boolean;
+  isExplorable: boolean;
+  onCreateSync: () => void;
+  onExplore: () => void;
+  onOpenSettings: () => void;
+  onSourceUpdated: (source: SourceConnection) => void;
 }) {
+  const client = useFoundryLiteClient();
   const commit = source.lastCommitRef;
   const hasCommit = commit && Object.keys(commit).length > 0;
+  const syncName = readTextField(source.configSummary, "syncName");
+  const runsQuery = useSyncRuns(syncName);
+  const latestRun =
+    (runsQuery.data ?? []).find((run) => run.runId === source.lastRunId) ??
+    runsQuery.data?.[0] ??
+    null;
+  const latestRunRowCount = readSyncRunRowCount(latestRun?.resultSummary);
+  const nextStatus = source.status === "disabled" ? "active" : "disabled";
+  const statusMutation = useFoundryLiteMutation(
+    useCallback(
+      () =>
+        client.sources.updateStatus(
+          source.sourceName,
+          {
+            status: nextStatus,
+            expectedConfigFingerprint: source.configFingerprint,
+          },
+          {
+            idempotencyKey: idempotencyKey(
+              "source-status",
+              crypto.randomUUID(),
+            ),
+          },
+        ),
+      [
+        client,
+        nextStatus,
+        source.configFingerprint,
+        source.sourceName,
+      ],
+    ),
+    { onSuccess: onSourceUpdated },
+  );
+  const resolvedOperationsHref =
+    operationsHref ?? toOperationsHref(latestRun?.operationsPath ?? null);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -743,6 +858,16 @@ function OverviewTab({
           </div>
         </div>
       </div>
+      {isManagedSource ? (
+        <SourceCapabilityCards
+          sourceKind={source.kind}
+          isRunnable={isRunnable}
+          isExplorable={isExplorable}
+          onCreateSync={onCreateSync}
+          onExplore={onExplore}
+          onOpenSettings={onOpenSettings}
+        />
+      ) : null}
       <div className="grid gap-4 md:grid-cols-[1fr_240px]">
         <div className="rounded border bg-card">
           <div className="border-b px-3 py-2 text-[13px] font-semibold">
@@ -770,9 +895,9 @@ function OverviewTab({
               <CopyableValue value={source.configFingerprint} />
             </PropertyRow>
             <PropertyRow label="마지막 run">
-              {operationsHref && source.lastRunId ? (
+              {resolvedOperationsHref && source.lastRunId ? (
                 <Link
-                  to={operationsHref}
+                  to={resolvedOperationsHref}
                   className="font-mono text-[11px] text-primary hover:underline"
                 >
                   {source.lastRunId}
@@ -807,26 +932,42 @@ function OverviewTab({
                 </Link>
               </Button>
             ) : null}
-            {operationsHref ? (
+            {resolvedOperationsHref ? (
               <Button asChild variant="outline" size="sm" className="w-full">
-                <Link to={operationsHref}>
+                <Link to={resolvedOperationsHref}>
                   <ExternalLink className="size-3.5" /> 운영 증거 보기
                 </Link>
               </Button>
             ) : null}
-            <div className="flex items-center justify-between">
-              <Button variant="outline" size="sm" disabled className="flex-1">
-                소스 비활성화
+            <div className="space-y-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={statusMutation.isRunning}
+                className="w-full"
+                onClick={() => void statusMutation.execute(undefined)}
+              >
+                {statusMutation.isRunning
+                  ? "상태 변경 중…"
+                  : source.status === "disabled"
+                    ? "소스 다시 활성화"
+                    : "소스 비활성화"}
               </Button>
-              <StatusPill intent="neutral" className="ml-2">
-                future
-              </StatusPill>
+              <p className="text-[10px] leading-4 text-muted-foreground">
+                {source.status === "disabled"
+                  ? "활성화하면 수동 빌드와 예약 실행이 다시 허용됩니다."
+                  : "비활성화하면 연결 기록은 보존하고 새 수동·예약 실행을 차단합니다."}
+              </p>
             </div>
+            {statusMutation.error ? <ErrorState error={statusMutation.error} /> : null}
           </div>
         </div>
       </div>
       {hasCommit ? (
-        <div className="rounded border bg-card">
+        <div
+          className="rounded border bg-card"
+          data-testid="source-latest-run-evidence"
+        >
           <div className="section-label border-b px-3 py-2">
             마지막 커밋 증거
           </div>
@@ -838,8 +979,12 @@ function OverviewTab({
             </PropertyRow>
             <PropertyRow label="버전">
               <span className="font-mono text-[11px]">
-                v{readNumberField(commit, "versionNumber") ?? "?"} ·{" "}
-                {readTextField(commit, "versionId") ?? "—"}
+                {readNumberField(commit, "versionNumber") !== null
+                  ? `v${readNumberField(commit, "versionNumber")} · `
+                  : ""}
+                {readTextField(commit, "versionId") ??
+                  readTextField(commit, "datasetVersionId") ??
+                  "—"}
               </span>
             </PropertyRow>
             <PropertyRow label="transaction">
@@ -854,7 +999,38 @@ function OverviewTab({
             </PropertyRow>
             <PropertyRow label="run id">
               <span className="font-mono text-[11px]">
-                {readTextField(commit, "runId") ?? "—"}
+                {readTextField(commit, "runId") ?? source.lastRunId ?? "—"}
+              </span>
+            </PropertyRow>
+          </dl>
+        </div>
+      ) : latestRun ? (
+        <div
+          className="rounded border bg-card"
+          data-testid="source-latest-run-evidence"
+        >
+          <div className="section-label border-b px-3 py-2">
+            최근 동기화 실행 증거
+          </div>
+          <dl className="divide-y divide-border/60 px-3 py-1">
+            <PropertyRow label="실행 상태">
+              <StatusPill intent={statusIntent(latestRun.status)}>
+                {statusLabel(latestRun.status)}
+              </StatusPill>
+            </PropertyRow>
+            <PropertyRow label="row count">
+              <span className="font-mono text-[11px]">
+                {latestRunRowCount ?? "—"}
+              </span>
+            </PropertyRow>
+            <PropertyRow label="데이터셋 버전">
+              <span className="font-mono text-[11px]">
+                {latestRun.datasetVersionId ?? "—"}
+              </span>
+            </PropertyRow>
+            <PropertyRow label="완료 시각">
+              <span className="font-mono text-[11px]">
+                {formatTimestamp(latestRun.completedAt)}
               </span>
             </PropertyRow>
           </dl>
@@ -864,21 +1040,102 @@ function OverviewTab({
   );
 }
 
-function ConfigTab({ source }: { source: SourceConnection }) {
+function SourceCapabilityCards({
+  sourceKind,
+  isRunnable,
+  isExplorable,
+  onCreateSync,
+  onExplore,
+  onOpenSettings,
+}: {
+  sourceKind: SourceConnection["kind"];
+  isRunnable: boolean;
+  isExplorable: boolean;
+  onCreateSync: () => void;
+  onExplore: () => void;
+  onOpenSettings: () => void;
+}) {
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="rounded border bg-card">
-        <div className="section-label border-b px-3 py-2">구성 요약</div>
-        <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-5">
-          {JSON.stringify(source.configSummary, null, 2)}
-        </pre>
+    <section className="rounded border bg-card" aria-label="사용 가능한 기능">
+      <div className="border-b px-3 py-2">
+        <div className="text-[13px] font-semibold">사용 가능한 기능</div>
+        <p className="mt-0.5 text-[10px] text-muted-foreground">
+          Source 연결 위에서 실행할 수 있는 Data Connection 기능입니다.
+        </p>
       </div>
-      <div className="rounded border bg-card">
-        <div className="section-label border-b px-3 py-2">구성 지문</div>
-        <div className="p-3">
-          <CopyableValue value={source.configFingerprint} />
-        </div>
+      <div className="grid gap-px bg-border md:grid-cols-3">
+        <CapabilityCard
+          icon={Table2}
+          title={sourceKind === "kafka" ? "Streaming sync" : "Batch sync"}
+          description={
+            sourceKind === "kafka"
+              ? "Kafka 이벤트를 checkpoint와 함께 Dataset version으로 보관합니다."
+              : "외부 데이터를 Dataset version으로 수집합니다."
+          }
+          isAvailable={isRunnable}
+          actionLabel="동기화 만들기"
+          onAction={onCreateSync}
+        />
+        <CapabilityCard
+          icon={FileSearch}
+          title="Source exploration"
+          description="테이블·엔터티와 최대 20개 샘플 행을 읽기 전용으로 확인합니다."
+          isAvailable={isExplorable}
+          actionLabel="소스 탐색"
+          onAction={onExplore}
+        />
+        <CapabilityCard
+          icon={Terminal}
+          title="Connection diagnostics"
+          description="실제 endpoint·egress·credential·preview 경로를 진단합니다."
+          isAvailable={isRunnable}
+          actionLabel="진단 열기"
+          onAction={onOpenSettings}
+        />
       </div>
+    </section>
+  );
+}
+
+function CapabilityCard({
+  icon: Icon,
+  title,
+  description,
+  isAvailable,
+  actionLabel,
+  onAction,
+}: {
+  icon: typeof Table2;
+  title: string;
+  description: string;
+  isAvailable: boolean;
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div className="flex min-h-40 flex-col bg-card p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex size-8 items-center justify-center rounded bg-primary/10">
+          <Icon className="size-4 text-primary" />
+        </span>
+        <StatusPill intent={isAvailable ? "success" : "warning"}>
+          {isAvailable ? "사용 가능" : "정의만"}
+        </StatusPill>
+      </div>
+      <div className="mt-3 text-xs font-semibold">{title}</div>
+      <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+        {description}
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="mt-auto w-full"
+        disabled={!isAvailable}
+        onClick={onAction}
+      >
+        {actionLabel}
+      </Button>
     </div>
   );
 }

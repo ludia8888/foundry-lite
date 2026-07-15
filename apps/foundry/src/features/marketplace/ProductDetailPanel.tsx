@@ -41,6 +41,19 @@ export function ProductDetailPanel({
                   ? "데이터 연결 제품"
                   : "플랫폼 앱"}
               </StatusPill>
+              {product.kind === "data-connection" ? (
+                <StatusPill
+                  intent={
+                    product.executionStatus === "active"
+                      ? "success"
+                      : "warning"
+                  }
+                >
+                  {product.executionStatus === "active"
+                    ? "실행 가능"
+                    : "정의만"}
+                </StatusPill>
+              ) : null}
             </div>
             <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
               {product.subtitle}
@@ -51,7 +64,12 @@ export function ProductDetailPanel({
         <p className="text-[13px] text-foreground/80">{product.description}</p>
 
         <div className="flex flex-wrap items-center gap-2">
-          {product.hasFutureInstall ? (
+          {product.kind === "data-connection" &&
+          product.executionStatus !== "active" ? (
+            <Button size="sm" variant="outline" disabled>
+              <ArrowUpRight className="size-3.5" /> {product.primaryLabel}
+            </Button>
+          ) : product.hasFutureInstall ? (
             <Button size="sm" variant="outline" disabled>
               <Download className="size-3.5" /> 설치
               <Badge variant="secondary" className="ml-1">
@@ -75,7 +93,14 @@ export function ProductDetailPanel({
           ) : null}
         </div>
 
-        {!product.hasFutureInstall ? (
+        {product.kind === "data-connection" &&
+        product.executionStatus !== "active" ? (
+          <p className="text-[11px] text-muted-foreground">
+            이 항목은 connector 메타데이터와 설계 경계만 제공합니다. 실행형
+            adapter·탐색·sync가 연결되기 전에는 새 Source 실행을 시작할 수
+            없습니다.
+          </p>
+        ) : !product.hasFutureInstall ? (
           <p className="text-[11px] text-muted-foreground">
             데이터 연결 제품은 Data Connection 위저드의 해당 소스 유형 flow로
             바로 이어집니다. 실제 marketplace 설치는 future로 분리되어 있습니다.

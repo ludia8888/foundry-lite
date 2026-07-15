@@ -12,37 +12,29 @@ import { Info, Loader2, Search } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
-import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 import type { ExploreTablePreview } from "./explore-model";
 import {
-  formatSampleCell,
   inferForeignKeyEdges,
   readExploreSampleRows,
   readExploreSchemaColumns,
   readExploreTables,
 } from "./explore-model";
 import { ExploreGraphView } from "./explore/ExploreGraphView";
+import { KafkaSourceExplorer } from "./explore/KafkaSourceExplorer";
 import { ExplorePreviewPane } from "./explore/ExplorePreviewPane";
+import { RestSourceExplorer } from "./explore/RestSourceExplorer";
 import { ExploreSourcePanel } from "./explore/ExploreSourcePanel";
 import { ExploreSyncPanel } from "./explore/ExploreSyncPanel";
 import { readTextField } from "./source-model";
 import { WizardField } from "./wizard/WizardFields";
 
-type ExploreType = "postgres_jdbc" | "rest_api";
-
 interface SourceExploreTabProps {
   source: SourceConnection;
   onSyncCreated?: (syncName: string) => void;
+  onCreateSync?: (resourceName: string) => void;
 }
 
 /**
@@ -53,19 +45,35 @@ interface SourceExploreTabProps {
 export function SourceExploreTab({
   source,
   onSyncCreated,
+  onCreateSync,
 }: SourceExploreTabProps) {
-  const client = useFoundryLiteClient();
-  const [exploreType, setExploreType] = useState<ExploreType>(
-    source.kind === "rest" || source.kind === "rest_api"
-      ? "rest_api"
-      : "postgres_jdbc",
+  if (source.kind === "kafka") {
+    return <KafkaSourceExplorer source={source} onCreateSync={onCreateSync} />;
+  }
+  if (
+    source.kind === "rest" ||
+    source.kind === "rest_api" ||
+    source.kind === "sap_odata"
+  ) {
+    return <RestSourceExplorer source={source} onCreateSync={onCreateSync} />;
+  }
+  return (
+    <DatabaseSourceExplorer
+      source={source}
+      onSyncCreated={onSyncCreated}
+    />
   );
+}
+
+function DatabaseSourceExplorer({
+  source,
+  onSyncCreated,
+}: Pick<SourceExploreTabProps, "source" | "onSyncCreated">) {
+  const client = useFoundryLiteClient();
   const [databaseUrlSecretRef, setDatabaseUrlSecretRef] = useState(
     () => readTextField(source.configSummary, "databaseUrlSecretRef") ?? "",
   );
   const [sampleLimitText, setSampleLimitText] = useState("20");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [resourcePath, setResourcePath] = useState("");
 
   const [openTables, setOpenTables] = useState<string[]>([]);
   const [activeTable, setActiveTable] = useState<string | null>(null);
@@ -78,40 +86,21 @@ export function SourceExploreTab({
     SourceExploreResult,
     SourceExploreRequest
   >((payload) => client.sources.exploration.run(payload));
-  const restPreviewMutation = useFoundryLiteMutation<
-    SourceExploreResult,
-    SourceExploreRequest
-  >((payload) => client.sources.exploration.run(payload));
 
   const sampleLimit = Number.parseInt(sampleLimitText, 10) || 20;
-  const canExplore =
-    exploreType === "postgres_jdbc"
-      ? databaseUrlSecretRef.trim().length > 0
-      : baseUrl.trim().length > 0 && resourcePath.trim().length > 0;
+  const canExplore = databaseUrlSecretRef.trim().length > 0;
 
   const handleExplore = async () => {
     setOpenTables([]);
     setActiveTable(null);
     setPreviewsByTable({});
     setSelectedTables([]);
-    if (exploreType === "postgres_jdbc") {
-      await treeMutation.execute({
-        sourceName: source.sourceName,
-        sourceType: "postgres_jdbc",
-        request: {
-          databaseUrlSecretRef: databaseUrlSecretRef.trim(),
-          sampleLimit,
-        },
-      });
-      return;
-    }
-    await restPreviewMutation.execute({
+    await treeMutation.execute({
       sourceName: source.sourceName,
-      sourceType: "rest_api",
+      sourceType: "postgres_jdbc",
       request: {
-        baseUrl: baseUrl.trim(),
-        resourcePath: resourcePath.trim(),
-        resourceName: "preview",
+        databaseUrlSecretRef: databaseUrlSecretRef.trim(),
+        sampleLimit,
       },
     });
   };
@@ -206,8 +195,7 @@ export function SourceExploreTab({
     [treeMutation.result],
   );
   const fkEdges = useMemo(() => inferForeignKeyEdges(tables), [tables]);
-  const hasTree =
-    exploreType === "postgres_jdbc" && treeMutation.result !== null;
+  const hasTree = treeMutation.result !== null;
 
   return (
     <div className="space-y-3">
@@ -220,19 +208,10 @@ export function SourceExploreTab({
         </p>
       </div>
       <ExploreConfigCard
-        exploreType={exploreType}
-        onExploreTypeChange={(type) => {
-          setExploreType(type);
-          setActiveTable(null);
-        }}
         databaseUrlSecretRef={databaseUrlSecretRef}
         onDatabaseUrlSecretRefChange={setDatabaseUrlSecretRef}
         sampleLimitText={sampleLimitText}
         onSampleLimitChange={setSampleLimitText}
-        baseUrl={baseUrl}
-        onBaseUrlChange={setBaseUrl}
-        resourcePath={resourcePath}
-        onResourcePathChange={setResourcePath}
         canExplore={canExplore}
         isRunning={treeMutation.isRunning}
         onExplore={() => void handleExplore()}
@@ -280,52 +259,23 @@ export function SourceExploreTab({
           />
         </div>
       ) : null}
-      {exploreType === "rest_api" &&
-      (restPreviewMutation.result !== null ||
-        restPreviewMutation.isRunning ||
-        restPreviewMutation.error) ? (
-        <div className="space-y-4">
-          <RestPreviewPanel
-            title={`${baseUrl}${resourcePath}`}
-            isRunning={restPreviewMutation.isRunning}
-            error={restPreviewMutation.error}
-            result={restPreviewMutation.result}
-          />
-          <p className="text-[11px] text-muted-foreground">
-            REST 소스의 managed sync는 커넥터 연결이 필요합니다 — 새 소스
-            위저드의 REST API 타입에서 생성하세요.
-          </p>
-        </div>
-      ) : null}
     </div>
   );
 }
 
 function ExploreConfigCard({
-  exploreType,
-  onExploreTypeChange,
   databaseUrlSecretRef,
   onDatabaseUrlSecretRefChange,
   sampleLimitText,
   onSampleLimitChange,
-  baseUrl,
-  onBaseUrlChange,
-  resourcePath,
-  onResourcePathChange,
   canExplore,
   isRunning,
   onExplore,
 }: {
-  exploreType: ExploreType;
-  onExploreTypeChange: (type: ExploreType) => void;
   databaseUrlSecretRef: string;
   onDatabaseUrlSecretRefChange: (value: string) => void;
   sampleLimitText: string;
   onSampleLimitChange: (value: string) => void;
-  baseUrl: string;
-  onBaseUrlChange: (value: string) => void;
-  resourcePath: string;
-  onResourcePathChange: (value: string) => void;
   canExplore: boolean;
   isRunning: boolean;
   onExplore: () => void;
@@ -335,66 +285,32 @@ function ExploreConfigCard({
       <div className="section-label border-b px-3 py-2">탐색 설정</div>
       <div className="flex flex-wrap items-end gap-3 p-3">
         <WizardField label="탐색 타입" className="w-48">
-          <Select
-            value={exploreType}
-            onValueChange={(value) => onExploreTypeChange(value as ExploreType)}
-          >
-            <SelectTrigger size="sm" className="w-full text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="postgres_jdbc">
-                데이터베이스 (Postgres)
-              </SelectItem>
-              <SelectItem value="rest_api">REST API</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex h-8 items-center rounded border bg-muted/20 px-2.5 text-xs">
+            데이터베이스 (Postgres)
+          </div>
         </WizardField>
-        {exploreType === "postgres_jdbc" ? (
-          <>
-            <WizardField
-              label="DB URL secret 참조"
-              helper="소스 구성에서 자동으로 채워집니다."
-              className="w-64"
-            >
-              <Input
-                value={databaseUrlSecretRef}
-                onChange={(event) =>
-                  onDatabaseUrlSecretRefChange(event.target.value)
-                }
-                placeholder="source_orders_db_cred"
-                className="h-8 font-mono text-xs"
-              />
-            </WizardField>
-            <WizardField label="샘플 limit">
-              <Input
-                value={sampleLimitText}
-                onChange={(event) => onSampleLimitChange(event.target.value)}
-                placeholder="20"
-                className="h-8 w-24 font-mono text-xs"
-              />
-            </WizardField>
-          </>
-        ) : (
-          <>
-            <WizardField label="Base URL" className="w-64">
-              <Input
-                value={baseUrl}
-                onChange={(event) => onBaseUrlChange(event.target.value)}
-                placeholder="https://api.example.com"
-                className="h-8 font-mono text-xs"
-              />
-            </WizardField>
-            <WizardField label="리소스 경로" className="w-48">
-              <Input
-                value={resourcePath}
-                onChange={(event) => onResourcePathChange(event.target.value)}
-                placeholder="/orders"
-                className="h-8 font-mono text-xs"
-              />
-            </WizardField>
-          </>
-        )}
+        <WizardField
+          label="DB URL secret 참조"
+          helper="소스 구성에서 자동으로 채워집니다."
+          className="w-64"
+        >
+          <Input
+            value={databaseUrlSecretRef}
+            onChange={(event) =>
+              onDatabaseUrlSecretRefChange(event.target.value)
+            }
+            placeholder="source_orders_db_cred"
+            className="h-8 font-mono text-xs"
+          />
+        </WizardField>
+        <WizardField label="샘플 limit">
+          <Input
+            value={sampleLimitText}
+            onChange={(event) => onSampleLimitChange(event.target.value)}
+            placeholder="20"
+            className="h-8 w-24 font-mono text-xs"
+          />
+        </WizardField>
         <Button
           size="sm"
           disabled={!canExplore || isRunning}
@@ -405,94 +321,8 @@ function ExploreConfigCard({
           ) : (
             <Search className="size-3.5" />
           )}
-          {exploreType === "postgres_jdbc" ? "리소스 탐색" : "프리뷰 실행"}
+          리소스 탐색
         </Button>
-      </div>
-    </div>
-  );
-}
-
-function RestPreviewPanel({
-  title,
-  isRunning,
-  error,
-  result,
-}: {
-  title: string;
-  isRunning: boolean;
-  error: unknown;
-  result: SourceExploreResult | null;
-}) {
-  if (isRunning) {
-    return (
-      <div className="flex items-center gap-2 rounded border bg-card p-4 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" /> {title} 프리뷰 실행 중…
-      </div>
-    );
-  }
-  if (error) return <ErrorState error={error} />;
-  if (!result) return null;
-  const rows = readExploreSampleRows(result.resultSummary);
-  const columns = readExploreSchemaColumns(result.resultSummary);
-  const columnNames =
-    columns.length > 0
-      ? columns.map((column) => column.name)
-      : rows.length > 0
-        ? Object.keys(rows[0])
-        : [];
-
-  return (
-    <div className="rounded border bg-card">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="section-label">프리뷰</span>
-        <span className="font-mono text-[11px]">{title}</span>
-        <StatusPill
-          intent={result.status === "succeeded" ? "success" : "neutral"}
-        >
-          {result.status}
-        </StatusPill>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-          run={result.explorationRunId}
-        </span>
-      </div>
-      {rows.length === 0 ? (
-        <div className="px-3 py-4 text-xs text-muted-foreground">
-          샘플 행이 없습니다.
-        </div>
-      ) : (
-        <div className="max-h-72 overflow-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b bg-muted/40">
-                {columnNames.map((name) => (
-                  <th
-                    key={name}
-                    className="px-2 py-1.5 font-mono text-[10px] font-medium whitespace-nowrap text-muted-foreground"
-                  >
-                    {name}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr key={index} className="h-8 border-b last:border-0">
-                  {columnNames.map((name) => (
-                    <td
-                      key={name}
-                      className="max-w-48 truncate px-2 py-1 font-mono text-[11px] whitespace-nowrap"
-                    >
-                      {formatSampleCell(row[name])}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
-        샘플 {rows.length}행 · 컬럼 {columnNames.length}개
       </div>
     </div>
   );

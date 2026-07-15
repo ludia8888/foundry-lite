@@ -26,6 +26,10 @@ import type { ScreenDef } from "@/lib/screens";
 export type MarketplaceCategory = "all" | "data-connection" | "platform-app";
 
 export type MarketplaceProductKind = "data-connection" | "platform-app";
+export type MarketplaceExecutionStatus =
+  | "active"
+  | "definition_only"
+  | "future";
 
 export interface MarketplaceProduct {
   /** 카드 라우팅용 안정 id. */
@@ -38,6 +42,7 @@ export interface MarketplaceProduct {
   icon: LucideIcon;
   /** capability 칩 라벨 (한국어). */
   capabilities: string[];
+  executionStatus: MarketplaceExecutionStatus;
   /**
    * 실링크 (있으면 실제로 동작하는 딥링크).
    * 데이터 연결 제품 → /data/connections?newSourceType=... (새 소스에서 사용)
@@ -89,6 +94,7 @@ export function modeLabel(code: string): { label: string; isFuture: boolean } {
     oauth: "OAuth",
     manual: "수동 실행",
     scheduled: "스케줄 실행",
+    definition_only: "정의만",
   };
   return { label: labels[base] ?? base, isFuture };
 }
@@ -98,6 +104,9 @@ function templateDescription(template: SourceTemplate): string {
   const network = template.networkModes.some((mode) => mode === "agent_proxy")
     ? "직접/에이전트 프록시"
     : "직접 연결";
+  if (template.executionStatus === "definition_only") {
+    return `${caps} 카탈로그 정의만 제공합니다. 실행형 adapter와 sync는 아직 연결되지 않았습니다.`;
+  }
   return `${caps} 지원. ${network} 방식으로 연결하고 자격 증명 참조로 sync를 실행합니다.`;
 }
 
@@ -110,6 +119,7 @@ const BUILT_IN_CSV_PRODUCT: MarketplaceProduct = {
     "브라우저에서 CSV 파일을 업로드하고 Foundry-lite dataset transaction으로 즉시 커밋합니다.",
   icon: FileUp,
   capabilities: ["배치"],
+  executionStatus: "active",
   primaryHref: "/data/connections?newSourceType=csv_upload",
   primaryLabel: "새 소스에서 사용",
   hasFutureInstall: false,
@@ -128,17 +138,29 @@ export function toDataConnectionProducts(
     description: templateDescription(template),
     icon: SOURCE_ICON_BY_TYPE[template.sourceType] ?? Cable,
     capabilities: template.capabilities.map(capabilityLabel),
+    executionStatus: template.executionStatus,
     primaryHref: `/data/connections?newSourceType=${encodeURIComponent(
       template.sourceType,
     )}`,
-    primaryLabel: "새 소스에서 사용",
+    primaryLabel:
+      template.executionStatus === "active"
+        ? "새 소스에서 사용"
+        : "실행 준비 중",
     hasFutureInstall: false,
-    diagramNodes: [
-      "외부 시스템",
-      template.displayName,
-      "자격 증명 · sync",
-      "데이터셋",
-    ],
+    diagramNodes:
+      template.executionStatus === "active"
+        ? [
+            "외부 시스템",
+            template.displayName,
+            "자격 증명 · sync",
+            "데이터셋",
+          ]
+        : [
+            "외부 시스템",
+            template.displayName,
+            "카탈로그 정의",
+            "실행형 adapter 필요",
+          ],
   }));
   if (templateProducts.some((product) => product.id === BUILT_IN_CSV_PRODUCT.id)) {
     return templateProducts;
@@ -163,6 +185,7 @@ export function toPlatformAppProducts(
         SCREEN_GROUP_CHIP[screen.group],
         statusChip(screen.status),
       ],
+      executionStatus: "active" as const,
       primaryHref: screen.route,
       primaryLabel: "앱 열기",
       hasFutureInstall: true,

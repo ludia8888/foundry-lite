@@ -71,6 +71,7 @@ class WorkflowOrchestrationService(CoreService):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         sync_name: str | None = None,
+        source_name: str | None = None,
         config_fingerprint: str | None = None,
         transaction_type: str = "SNAPSHOT",
     ) -> ProductWorkflowRun:
@@ -84,6 +85,7 @@ class WorkflowOrchestrationService(CoreService):
             resource_name,
             idempotency_key,
             sync_name,
+            source_name,
             config_fingerprint,
             transaction_type,
         )

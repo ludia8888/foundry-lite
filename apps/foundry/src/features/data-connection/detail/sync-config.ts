@@ -2,16 +2,19 @@ import type { SourceManagedSync } from "@foundry-lite/sdk";
 
 /** managed sync의 schedule(Record)을 화면 모델로 파싱한다. */
 export interface SyncScheduleView {
-  mode: "manual" | "interval" | "cron";
+  mode: "manual" | "disabled" | "interval" | "cron";
   everySeconds: number | null;
   cron: string | null;
   batchLimit: number | null;
+  autoPauseAfterFailures: number;
 }
 
 export function readSchedule(sync: SourceManagedSync): SyncScheduleView {
   const schedule = sync.schedule ?? {};
   const mode =
-    schedule.mode === "interval" || schedule.mode === "cron"
+    schedule.mode === "interval" ||
+    schedule.mode === "cron" ||
+    schedule.mode === "disabled"
       ? schedule.mode
       : "manual";
   const everySecondsRaw = schedule.everySeconds ?? schedule.intervalSeconds;
@@ -24,10 +27,15 @@ export function readSchedule(sync: SourceManagedSync): SyncScheduleView {
     cron: typeof schedule.cron === "string" ? schedule.cron : null,
     batchLimit:
       typeof schedule.batchLimit === "number" ? schedule.batchLimit : null,
+    autoPauseAfterFailures:
+      typeof schedule.autoPauseAfterFailures === "number"
+        ? schedule.autoPauseAfterFailures
+        : 3,
   };
 }
 
 export function scheduleSummary(view: SyncScheduleView): string {
+  if (view.mode === "disabled") return "일시 중지됨";
   if (view.mode === "interval" && view.everySeconds) {
     return `${view.everySeconds}초 간격`;
   }
