@@ -54,7 +54,11 @@ def test_stream_archive_restart_resumes_after_committed_offset(tmp_path: Path) -
     latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
     assert first.row_count == 2
     assert second.row_count == 1
-    assert latest_preview[0]["event_id"] == "shipment_events:0:2"
+    assert [row["event_id"] for row in latest_preview] == [
+        "shipment_events:0:0",
+        "shipment_events:0:1",
+        "shipment_events:0:2",
+    ]
     assert latest["metadata"]["streamCursor"]["offset"] == 2
 
 
@@ -77,7 +81,7 @@ def test_stream_offset_not_advanced_when_append_commit_fails(tmp_path: Path) -> 
     assert first is not None
     assert retry is not None
     assert retry.row_count == 1
-    assert preview[0]["event_id"] == "shipment_events:0:1"
+    assert [row["event_id"] for row in preview] == ["shipment_events:0:0", "shipment_events:0:1"]
     assert latest["metadata"]["streamCursor"]["offset"] == 1
 
 
@@ -371,8 +375,9 @@ def test_watermark_never_moves_backward(tmp_path: Path) -> None:
 
     latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
     preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
+    late_row = next(row for row in preview if row["event_id"] == "shipment_events:0:1")
     assert latest["metadata"]["lateDataWatermark"]["watermarkEventTime"] == first_watermark
-    assert preview[0]["late_data_status"] == "LATE_REQUIRES_REPROCESS"
+    assert late_row["late_data_status"] == "LATE_REQUIRES_REPROCESS"
 
 
 def test_duplicate_late_event_is_idempotent(tmp_path: Path) -> None:
@@ -405,13 +410,14 @@ def test_duplicate_late_event_is_idempotent(tmp_path: Path) -> None:
     latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
     preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
     versions = foundry.datasets.list_versions("raw.shipment_events", ctx=ctx)
+    late_row = next(row for row in preview if row["event_id"] == "shipment_events:0:1")
     assert late_commit is not None
     assert late_commit.row_count == 1
     assert duplicate_delivery is None
     assert len(versions) == 2
     assert latest["metadata"]["streamCursor"]["offset"] == 1
-    assert preview[0]["event_id"] == "shipment_events:0:1"
-    assert preview[0]["late_data_status"] == "LATE_REQUIRES_REPROCESS"
+    assert [row["event_id"] for row in preview] == ["shipment_events:0:0", "shipment_events:0:1"]
+    assert late_row["late_data_status"] == "LATE_REQUIRES_REPROCESS"
 
 
 def test_late_event_creates_reprocessing_plan_for_closed_archive_output(tmp_path: Path) -> None:

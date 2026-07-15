@@ -2595,7 +2595,10 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     }
     assert discard.json()["status"] == "DISCARDED"
     assert first_preview[0]["event_id"] == "shipment_cdc_events:0:1"
-    assert preview[0]["event_id"] == "shipment_cdc_events:0:2"
+    assert [row["event_id"] for row in preview] == [
+        "shipment_cdc_events:0:1",
+        "shipment_cdc_events:0:2",
+    ]
     assert any(row["event_type"] == "dead_letter_record.replay_requested" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.replayed" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.bulk_replay_item_failed" for row in audits)
