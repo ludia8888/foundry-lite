@@ -270,6 +270,22 @@ def test_exact_committed_dataset_version_reader_maps_decoded_parquet_limit_failu
     assert raised.value.details["readError"]["limitKind"] == "decoded_bytes"
 
 
+def test_nested_column_allowlist_requires_a_nonblank_pinned_geojson_geometry_field(
+    tmp_path: Path,
+) -> None:
+    request = replace(
+        _reader_harness(tmp_path).request,
+        version_metadata={
+            "geospatialSpec": {
+                "encoding": "geojson",
+                "geometryField": " ",
+            }
+        },
+    )
+
+    assert pipeline_dataset_version_reader._allowed_nested_columns(request) == ()
+
+
 def test_exact_committed_dataset_version_reader_rejects_manifest_registry_tampering(
     tmp_path: Path,
 ) -> None:

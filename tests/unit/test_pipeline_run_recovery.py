@@ -136,6 +136,28 @@ def test_geospatial_dataset_transaction_recovery_preserves_contract_and_deduplic
     assert pipeline_output_recovery._output_key(transaction_output) == pipeline_output_recovery._output_key(passport)
 
 
+def test_geospatial_dataset_transaction_recovery_requires_durable_output_contract() -> None:
+    row = {
+        "transaction_id": "tx-geo-missing-contract",
+        "dataset_id": "ds-geo-1",
+        "dataset_ref": "geo.locations",
+        "version_id": "ver-geo-1",
+        "version_number": 7,
+        "manifest_uri": "memory://geo/manifest.json",
+        "row_count": 1,
+        "schema_hash": "geo-schema-hash",
+        "metadata": {
+            "pipelineRunId": "run-geo-1",
+            "pipelineNodeId": "output",
+            "descriptorId": "output.geospatial",
+        },
+        "committed_at": "2026-07-28T00:00:00Z",
+    }
+
+    with pytest.raises(InvariantViolation, match="missing its output contract"):
+        pipeline_output_recovery._dataset_commit_output(row, {"output"})
+
+
 def test_media_transaction_recovery_rejects_missing_durable_lineage() -> None:
     malformed = cast(
         PipelineMediaCommitVersionRow,

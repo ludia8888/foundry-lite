@@ -16,6 +16,7 @@ from foundry_lite.application.services.pipeline_trained_model_contracts import (
     map_trained_model_inputs,
     merge_trained_model_outputs,
     require_trained_model_import,
+    require_trained_model_invocation_pin,
     trained_model_branch_config,
     trained_model_definition_payload,
     trained_model_definition_snapshot,
@@ -120,6 +121,21 @@ def test_trained_model_runtime_rejects_complete_snapshot_drift_after_inference()
     assert raised.value.details["actual"]["executableEntrypoint"] == "/srv/models/rotated_runner.py"
     assert raised.value.details["actual"]["branch"] == "rotated"
     assert raised.value.details["actual"]["memoryMiB"] == 16_384
+
+
+def test_trained_model_invocation_without_snapshot_uses_legacy_coordinate_pin() -> None:
+    definition = _definition()
+    invocation = TrainedModelInvocation(
+        model_ref=definition.model_ref,
+        branch=definition.branch,
+        fallback_branches=(),
+        rows=(),
+        expected_model_version=definition.version,
+        expected_revision=definition.revision,
+        expected_executable_reference=definition.executable_reference,
+    )
+
+    require_trained_model_invocation_pin(invocation, definition)
 
 
 def test_trained_model_runtime_uses_deployed_definition_after_registry_removal() -> None:

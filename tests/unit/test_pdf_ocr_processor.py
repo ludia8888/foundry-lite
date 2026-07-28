@@ -306,6 +306,16 @@ def test_pdf_ocr_rejects_large_compressed_image_before_poppler_decode(
         pdf_ocr._poppler_rasterize("a.pdf", str(tmp_path), 1, selection, 150, 5)
 
 
+def test_pdf_ocr_rejects_cumulative_embedded_image_pixel_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    images = tuple(PdfEmbeddedImage(page, 4_000, 4_000) for page in range(1, 8))
+    monkeypatch.setattr(pdf_ocr, "_pdf_embedded_images", lambda *_args: images)
+
+    with pytest.raises(PdfOcrDocumentError, match="embedded_image_total_pixel_limit_exceeded"):
+        pdf_ocr._require_pdf_embedded_image_bound("a.pdf", list(range(1, 8)), 5)
+
+
 def test_pdf_ocr_parses_embedded_image_metadata_and_filters_selected_pages() -> None:
     output = "\n".join(
         (
@@ -319,6 +329,71 @@ def test_pdf_ocr_parses_embedded_image_metadata_and_filters_selected_pages() -> 
     assert pdf_ocr._parsed_pdf_embedded_images(output, [2]) == (PdfEmbeddedImage(2, 30_000, 30_000),)
     with pytest.raises(PdfOcrDocumentError, match="pdf_image_metadata_invalid"):
         pdf_ocr._parsed_pdf_embedded_images("1 0 image bad 480 rgb 3 8", [1])
+    with pytest.raises(PdfOcrDocumentError, match="pdf_image_metadata_invalid"):
+        pdf_ocr._parsed_pdf_embedded_images("1 0 image 0 480 rgb 3 8", [1])
+
+
+def test_pdfimages_discovery_uses_fixed_binary_and_selected_page_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[list[str], int]] = []
+    monkeypatch.setattr(pdf_ocr.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        pdf_ocr,
+        "_bounded_pdfimages_output",
+        lambda command, timeout: commands.append((list(command), timeout)) or "2 0 image 640 480 rgb 3 8",
+    )
+
+    images = pdf_ocr._pdf_embedded_images("/sandbox/input.pdf", [2, 3], 7)
+
+    assert images == (PdfEmbeddedImage(2, 640, 480),)
+    assert commands == [(["/usr/bin/pdfimages", "-f", "2", "-l", "3", "-list", "/sandbox/input.pdf"], 7)]
+    monkeypatch.setattr(pdf_ocr.shutil, "which", lambda _name: None)
+    with pytest.raises(PdfOcrDocumentError, match="pdfimages_unavailable"):
+        pdf_ocr._pdf_embedded_images("/sandbox/input.pdf", [2], 7)
+
+
+def test_bounded_pdfimages_output_handles_success_nonzero_and_invalid_utf8() -> None:
+    output = pdf_ocr._bounded_pdfimages_output([sys.executable, "-c", "print('metadata')"], 5)
+    assert output == "metadata\n"
+
+    with pytest.raises(PdfOcrDocumentError, match="corrupt_pdf"):
+        pdf_ocr._bounded_pdfimages_output([sys.executable, "-c", "raise SystemExit(3)"], 5)
+    with pytest.raises(PdfOcrDocumentError, match="pdf_image_metadata_invalid"):
+        pdf_ocr._bounded_pdfimages_output(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(bytes([255]))"],
+            5,
+        )
+
+
+def test_bounded_pdfimages_output_maps_start_and_timeout_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_start(*_args: object, **_kwargs: object) -> None:
+        raise OSError("missing binary")
+
+    monkeypatch.setattr(pdf_ocr.subprocess, "Popen", fail_start)
+    with pytest.raises(PdfOcrDocumentError, match="pdfimages_unavailable"):
+        pdf_ocr._bounded_pdfimages_output(["pdfimages", "-list", "a.pdf"], 5)
+
+    process = SimpleNamespace(
+        stdout=object(),
+        returncode=None,
+        is_killed=False,
+    )
+    process.poll = lambda: None
+    process.kill = lambda: setattr(process, "is_killed", True)
+    process.wait = lambda timeout: setattr(process, "returncode", -9)
+    monkeypatch.setattr(pdf_ocr.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        pdf_ocr,
+        "_read_bounded_pdfimages_stdout",
+        lambda *_args: (_ for _ in ()).throw(subprocess.TimeoutExpired("pdfimages", 5)),
+    )
+
+    with pytest.raises(PdfOcrDocumentError, match="pdf_image_discovery_timeout"):
+        pdf_ocr._bounded_pdfimages_output(["pdfimages", "-list", "a.pdf"], 5)
+    assert process.is_killed is True
 
 
 @pytest.mark.parametrize(
