@@ -17,6 +17,7 @@ from foundry_lite.infrastructure.adapters.container_trained_model_inference impo
 from foundry_lite.infrastructure.adapters.local_trained_model_inference import (
     LocalTrainedModelInferenceAdapter,
 )
+from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
 from foundry_lite.infrastructure.local_runtime import (
     RuntimeAdapterProfiles,
     _trained_model_inference_adapter,
@@ -116,6 +117,22 @@ def test_anthropic_language_model_profile_is_explicit_and_catalog_pinned(
     assert dependencies.aip.model_catalog_seed is not None
     assert dependencies.aip.model_catalog_seed.provider_model_id == "claude-sonnet-5"
     assert dependencies.aip.model_catalog_seed.secret_ref == "anthropic_api_key"
+
+
+def test_configured_media_processor_is_not_shadowed_by_default_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE", "ocr-tesseract")
+
+    dependencies = create_runtime_core_dependencies(
+        profile=RuntimeProfile.from_value("test"),
+        db_url="sqlite:///:memory:",
+        storage_root=tmp_path,
+    )
+
+    assert isinstance(dependencies.media_processor, OcrProcessorAdapter)
+    assert dependencies.media_processor_registry is None
 
 
 def test_flat_compute_adapter_override_preserves_pipeline_repository(tmp_path: Path) -> None:

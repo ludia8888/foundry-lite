@@ -26,6 +26,7 @@ from foundry_lite.application.ports import (
     DatasetTransactionRepository,
     DatasetVersionRepository,
     MaterializationRepository,
+    MetadataRepository,
     ObjectIndexRepository,
     ObjectIndexRowHashRepository,
     ObjectReadRepository,
@@ -242,6 +243,7 @@ class CoreService:
     tool_executor: ToolExecutor
     engine: TransactionManager
     policy: PolicyService
+    metadata_repository: MetadataRepository
     insight_review_service: object
     action_repository: ActionRepository
     ai_eval_repository: AiEvalRepository

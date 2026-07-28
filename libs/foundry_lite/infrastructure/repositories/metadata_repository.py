@@ -39,6 +39,12 @@ class SqlAlchemyMetadataRepository:
                     )
                 )
 
+    def list_tenant_ids(self) -> list[str]:
+        """Return tenant identifiers in stable order for bounded worker scans."""
+        with self.engine.begin() as conn:
+            values = conn.execute(select(db.tenants.c.id).order_by(db.tenants.c.id)).scalars().all()
+        return [str(value) for value in values]
+
     def ensure_user(
         self,
         *,

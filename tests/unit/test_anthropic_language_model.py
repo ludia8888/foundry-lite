@@ -330,6 +330,23 @@ def test_anthropic_retry_transport_receives_only_the_remaining_request_budget() 
     assert observed_timeouts == [10, 6]
 
 
+def test_anthropic_one_second_budget_reaches_the_first_transport_call() -> None:
+    now = iter((100.0, 100.001, 100.1))
+    observed_timeouts: list[int] = []
+
+    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: int) -> AnthropicHttpResponse:
+        observed_timeouts.append(timeout)
+        return _success_response()
+
+    AnthropicLanguageModel(
+        _SecretProvider(),
+        transport=transport,
+        clock=lambda: next(now),
+    ).complete(replace(_request(), timeout_seconds=1))
+
+    assert observed_timeouts == [1]
+
+
 def test_anthropic_re_resolves_secret_reference_on_every_call_for_rotation() -> None:
     secret_provider = _RotatingSecretProvider()
     observed_keys: list[str] = []

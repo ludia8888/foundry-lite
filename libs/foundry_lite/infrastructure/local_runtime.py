@@ -17,6 +17,7 @@ from foundry_lite.application.dependencies import (
     CoreDependencies,
     DataDependencies,
     MediaDependencies,
+    MediaProcessorRegistry,
     ObjectDependencies,
     PathDependencies,
     RuntimeDependencies,
@@ -363,7 +364,10 @@ def _create_core_dependencies(
         model_version=CLIP_MODEL_VERSION,
     )
     media_processor = _media_processor_adapter(profiles.media_processor, vision_embedding_model_adapter)
-    media_processor_registry = build_default_media_processor_registry(vision_embedding_model_adapter)
+    media_processor_registry = _media_processor_registry(
+        profiles.media_processor,
+        vision_embedding_model_adapter,
+    )
     content_index_adapter = _content_index_adapter(profiles.content_index)
     embedding_model_adapter = LocalEmbeddingAdapter(
         embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
@@ -646,6 +650,15 @@ def _media_processor_adapter(
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
         return PdfTextProcessorAdapter()
     raise ValueError(f"unknown media processor profile: {processor_profile}")
+
+
+def _media_processor_registry(
+    processor_profile: str,
+    vision_embedding_model: VisionEmbeddingModelAdapter,
+) -> MediaProcessorRegistry | None:
+    if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media"}:
+        return build_default_media_processor_registry(vision_embedding_model)
+    return None
 
 
 def _content_index_adapter(index_profile: str) -> ContentIndexAdapter:

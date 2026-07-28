@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from uuid import uuid4
 
+from foundry_lite.application.ports.metadata_repository import MetadataRepository
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineExecutionRepository,
     PipelinePreviewRunRow,
@@ -16,6 +17,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
 from foundry_lite.application.ports.transaction_context import TransactionContext, TransactionManager
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
+from foundry_lite.security.tenant_context import tenant_context
 
 _PREVIEW_LEASE_DURATION = timedelta(minutes=2)
 _PREVIEW_HEARTBEAT_INTERVAL_SECONDS = 30.0
@@ -65,7 +67,7 @@ class PipelinePreviewExecutionLeaseGuard:
         self.raise_if_failed()
         try:
             if transaction is None:
-                with self._transaction_manager.begin() as owned_transaction:
+                with tenant_context(self._ctx.tenant_id), self._transaction_manager.begin() as owned_transaction:
                     self._renew(owned_transaction)
             else:
                 self._renew(transaction)
@@ -126,6 +128,31 @@ def new_pipeline_preview_execution_lease(
 def pipeline_preview_utc_now() -> str:
     """Return a fixed-width UTC timestamp safe for persisted lexical comparison."""
     return _timestamp_text(datetime.now(UTC))
+
+
+def recoverable_pipeline_previews(
+    transaction_manager: TransactionManager,
+    repository: PipelineExecutionRepository,
+    metadata_repository: MetadataRepository,
+    *,
+    as_of: str,
+    limit: int,
+) -> list[PipelinePreviewRunRow]:
+    """Scan each tenant inside its RLS context and return a globally bounded batch."""
+    remaining = max(1, min(limit, 100))
+    rows: list[PipelinePreviewRunRow] = []
+    for tenant_id in metadata_repository.list_tenant_ids():
+        with tenant_context(tenant_id), transaction_manager.begin() as transaction:
+            tenant_rows = repository.recoverable_previews(
+                transaction=transaction,
+                as_of=as_of,
+                limit=remaining,
+            )
+        rows.extend(tenant_rows)
+        remaining -= len(tenant_rows)
+        if remaining == 0:
+            break
+    return rows
 
 
 def pipeline_preview_lease_claim_values() -> dict[str, str]:

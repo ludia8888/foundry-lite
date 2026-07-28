@@ -24,6 +24,7 @@ from foundry_lite.application.services.pipeline_preview_recovery import (
     pipeline_preview_lease_claim_values,
     pipeline_preview_lease_reclaim_values,
     pipeline_preview_utc_now,
+    recoverable_pipeline_previews,
     recovered_pipeline_preview_context,
 )
 from foundry_lite.application.services.pipeline_preview_runtime import (
@@ -54,6 +55,7 @@ class PipelinePreviewService(CoreService):
 
     required_dependencies = (
         "engine",
+        "metadata_repository",
         "policy",
         "pipeline_repository",
         "pipeline_execution_repository",
@@ -127,12 +129,13 @@ class PipelinePreviewService(CoreService):
         return self._execute_claimed_preview(ctx, row)
 
     def recover_preview_runs(self, *, limit: int = 10) -> dict[str, object]:
-        with self.engine.begin() as conn:
-            rows = self.pipeline_execution_repository.recoverable_previews(
-                transaction=conn,
-                as_of=pipeline_preview_utc_now(),
-                limit=max(1, min(limit, 100)),
-            )
+        rows = recoverable_pipeline_previews(
+            self.engine,
+            self.pipeline_execution_repository,
+            self.metadata_repository,
+            as_of=pipeline_preview_utc_now(),
+            limit=limit,
+        )
         recovered_ids: list[str] = []
         for row in rows:
             self.execute_preview_run(str(row["id"]), ctx=recovered_pipeline_preview_context(row))

@@ -16,11 +16,16 @@ from foundry_lite.application.services.pipeline_preview_recovery import (
     recovered_pipeline_preview_context,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.security.tenant_context import current_tenant_id
 
 
 class _TransactionManager:
+    def __init__(self) -> None:
+        self.tenant_ids: list[str | None] = []
+
     @contextmanager
     def begin(self):
+        self.tenant_ids.append(current_tenant_id())
         yield object()
 
 
@@ -105,8 +110,9 @@ def test_legacy_preview_context_recovers_with_least_privileged_writer_role() -> 
 
 def test_preview_lease_guard_renews_and_fails_closed_after_ownership_loss() -> None:
     repository = _Repository(is_renewed=True)
+    transaction_manager = _TransactionManager()
     guard = PipelinePreviewExecutionLeaseGuard(
-        _TransactionManager(),  # type: ignore[arg-type]
+        transaction_manager,  # type: ignore[arg-type]
         repository,  # type: ignore[arg-type]
         RequestContext(tenant_id="tenant-a"),
         _row(),
@@ -115,6 +121,7 @@ def test_preview_lease_guard_renews_and_fails_closed_after_ownership_loss() -> N
     guard.require_active()
 
     assert repository.calls[0]["execution_lease_token"] == "lease-a"
+    assert transaction_manager.tenant_ids == ["tenant-a"]
     repository.is_renewed = False
     with pytest.raises(PipelinePreviewExecutionLeaseLost, match="lease was lost"):
         guard.require_active()

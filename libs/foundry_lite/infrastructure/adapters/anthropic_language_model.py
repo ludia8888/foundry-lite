@@ -191,10 +191,10 @@ def _request_headers(api_key: str) -> dict[str, str]:
 
 
 def _remaining_timeout_seconds(now: float, started: float, timeout_seconds: int) -> int:
-    remaining = int(timeout_seconds - (now - started))
-    if remaining < 1:
+    remaining = timeout_seconds - (now - started)
+    if remaining <= 0:
         raise _adapter_failure("timeout", True, "request_budget_exhausted", timeout_seconds)
-    return remaining
+    return max(1, int(remaining))
 
 
 def _json_body(raw: bytes) -> Mapping[str, object]:
