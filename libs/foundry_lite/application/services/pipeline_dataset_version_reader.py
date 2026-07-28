@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from foundry_lite.application.ports import (
@@ -168,6 +168,7 @@ class ExactCommittedDatasetVersionReader(CoreService):
                     path,
                     max_rows=MAX_PIPELINE_DATASET_SOURCE_ROWS - len(rows),
                     max_decoded_bytes=MAX_PIPELINE_DATASET_SOURCE_BYTES - decoded_byte_count,
+                    allowed_nested_columns=_allowed_nested_columns(request),
                 )
                 rows.extend(read.rows)
                 decoded_byte_count += read.decoded_byte_count
@@ -188,7 +189,18 @@ class ExactCommittedDatasetVersionReader(CoreService):
                 "source_rows_unreadable",
                 errorType=type(exc).__name__,
             ) from exc
+
         return tuple(dict(row) for row in rows)
+
+
+def _allowed_nested_columns(request: ExactDatasetVersionReadRequest) -> tuple[str, ...]:
+    spec = request.version_metadata.get("geospatialSpec")
+    if not isinstance(spec, Mapping) or spec.get("encoding") != "geojson":
+        return ()
+    geometry_field = spec.get("geometryField")
+    if not isinstance(geometry_field, str) or not geometry_field.strip():
+        return ()
+    return (geometry_field.strip(),)
 
 
 def _require_materialization_bound(

@@ -346,6 +346,59 @@ def test_media_set_output_evidence_failure_preserves_the_serving_commit_as_parti
     assert _run_artifact_count(fixture, str(run["id"]), "output") == 0
 
 
+def test_media_set_output_post_commit_validation_failure_preserves_serving_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "post_commit_validation", item_count=1)
+    _deploy_graph(
+        fixture,
+        _media_selection_output_graph(
+            fixture.source_ref,
+            fixture.target_ref,
+            fixture.source_version_ids,
+        ),
+    )
+    transaction_service = fixture.foundry._services.media.transaction
+    real_commit = transaction_service.commit
+    real_stat = fixture.dependencies.media_storage.stat
+    has_committed = False
+
+    def commit_then_enable_failure(*args: object, **kwargs: object):
+        nonlocal has_committed
+        result = real_commit(*args, **kwargs)
+        has_committed = True
+        return result
+
+    def fail_post_commit_stat(object_key: str):
+        if has_committed:
+            raise RuntimeError("injected post-commit storage stat failure")
+        return real_stat(object_key)
+
+    monkeypatch.setattr(transaction_service, "commit", commit_then_enable_failure)
+    monkeypatch.setattr(fixture.dependencies.media_storage, "stat", fail_post_commit_stat)
+
+    run = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-media-output-post-commit-validation",
+        ctx=fixture.ctx,
+    )
+    output = cast(list[dict[str, Any]], run["outputs"])[0]
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    transactions = _target_transactions(fixture, target.media_set_id)
+
+    assert run["status"] == "partial"
+    assert run["error"]["type"] == "PIPELINE_OUTPUT_POST_COMMIT_VALIDATION_FAILED"
+    assert output["status"] == "COMMITTED"
+    assert output["isServing"] is True
+    assert output["ref"]["mediaSetId"] == target.media_set_id
+    assert output["artifactEvidence"]["status"] == "RECONCILIATION_REQUIRED"
+    assert output["artifactEvidence"]["error"]["type"] == "PIPELINE_OUTPUT_POST_COMMIT_VALIDATION_FAILED"
+    assert [row["status"] for row in transactions] == ["COMMITTED"]
+    assert len(_committed_target_versions(fixture, target.media_set_id)) == 1
+    assert _run_artifact_count(fixture, str(run["id"]), "output") == 0
+
+
 def test_stale_run_recovers_media_transaction_committed_before_artifact_passport(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

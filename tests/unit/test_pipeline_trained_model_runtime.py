@@ -91,6 +91,37 @@ def test_trained_model_runtime_rejects_executable_drift_from_deployment_pin(
     )
 
 
+def test_trained_model_runtime_rejects_complete_snapshot_drift_after_inference() -> None:
+    class DriftedResultAdapter(LocalTrainedModelInferenceAdapter):
+        def infer(self, invocation: TrainedModelInvocation):
+            result = super().infer(invocation)
+            return replace(
+                result,
+                definition=replace(
+                    result.definition,
+                    branch="rotated",
+                    executable_entrypoint="/srv/models/rotated_runner.py",
+                    output_fields=(TrainedModelField("unexpected", "string"),),
+                    memory_mib=result.definition.memory_mib * 2,
+                ),
+            )
+
+    node = _trained_model_node()
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=DriftedResultAdapter(),
+        run_id="prun_complete_snapshot_drift",
+        model_refs=(_model_pin(node.config),),
+    )
+
+    with pytest.raises(ValidationFailed, match="definition snapshot") as raised:
+        runtime.execute(node, {"input": (_source_artifact(),)})
+
+    assert raised.value.details["expected"]["executableEntrypoint"] == ""
+    assert raised.value.details["actual"]["executableEntrypoint"] == "/srv/models/rotated_runner.py"
+    assert raised.value.details["actual"]["branch"] == "rotated"
+    assert raised.value.details["actual"]["memoryMiB"] == 16_384
+
+
 def test_trained_model_runtime_uses_deployed_definition_after_registry_removal() -> None:
     node = _trained_model_node()
     adapter = LocalTrainedModelInferenceAdapter()

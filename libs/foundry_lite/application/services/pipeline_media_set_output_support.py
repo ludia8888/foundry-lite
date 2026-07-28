@@ -11,6 +11,7 @@ from foundry_lite.application.ports.media_derivative_repository import (
 from foundry_lite.application.ports.media_repository import (
     MediaItemVersionRecord,
     MediaSetRecord,
+    MediaTransactionRecord,
 )
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.primitives import _json_hash
@@ -33,6 +34,7 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
 from foundry_lite.application.services.pipeline_v2_runtime_security import (
     strongest_classification,
 )
+from foundry_lite.domain.errors import ConflictDetected
 
 
 def media_output_entry(
@@ -101,6 +103,36 @@ def output_contract(entries: Sequence[MediaOutputEntry]) -> MediaOutputContract:
         allowed_formats=formats,
         classification=strongest_classification(tuple(classifications)),
     )
+
+
+def require_media_transaction_coordinates(
+    transaction: MediaTransactionRecord,
+    target: MediaSetRecord,
+    request_fingerprint: str,
+) -> None:
+    if transaction.media_set_id == target.media_set_id and transaction.request_fingerprint == request_fingerprint:
+        return
+    raise ConflictDetected(
+        "pipeline Media Set output idempotency coordinates changed",
+        details={"mediaTransactionId": transaction.media_transaction_id},
+    )
+
+
+def require_open_media_transaction(transaction: MediaTransactionRecord) -> None:
+    if transaction.status == "OPEN":
+        return
+    raise ConflictDetected(
+        "pipeline Media Set output transaction is not reusable",
+        details={
+            "mediaTransactionId": transaction.media_transaction_id,
+            "status": transaction.status,
+        },
+    )
+
+
+def media_transaction_idempotency_key(run_id: str, node_id: str, generation: int) -> str:
+    base = f"pipeline-output:{run_id}:{node_id}"
+    return base if generation == 1 else f"{base}:generation:{generation}"
 
 
 def require_target_contract(

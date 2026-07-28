@@ -127,6 +127,7 @@ class ComputeAdapter(Protocol):
         *,
         max_rows: int,
         max_decoded_bytes: int,
+        allowed_nested_columns: Sequence[str] = (),
     ) -> BoundedParquetRead:
         """Read only when Parquet metadata and decoded rows fit both hard limits."""
         ...

@@ -253,6 +253,59 @@ def test_graph_v2_geospatial_source_commits_governed_series_output(tmp_path: Pat
     assert rows[0]["latitude"] == 37.5
 
 
+def test_graph_v2_geojson_output_remains_readable_as_a_pinned_geospatial_source(
+    tmp_path: Path,
+) -> None:
+    foundry = _foundry_with_language_model(tmp_path, _StructuredLanguageModel({"unused": True}))
+    ctx = demo_admin_context()
+    source_ref = "raw.graph_v2_geojson_source"
+    first_output_ref = "geo.graph_v2_geojson_first"
+    second_output_ref = "geo.graph_v2_geojson_second"
+    _commit_geojson_source(foundry, ctx, source_ref)
+    first_version = _execute_graph_version(
+        foundry,
+        ctx,
+        pipeline_id="graph_v2_geojson_first",
+        graph=_geojson_copy_graph(source_ref, first_output_ref),
+    )
+    foundry.pipelines.deploy(
+        "graph_v2_geojson_first",
+        str(first_version["id"]),
+        idempotency_key="deploy-graph-v2-geojson-first",
+        ctx=ctx,
+    )
+    first = foundry.pipelines.run(
+        "graph_v2_geojson_first",
+        idempotency_key="run-graph-v2-geojson-first",
+        ctx=ctx,
+    )
+    second_version = _execute_graph_version(
+        foundry,
+        ctx,
+        pipeline_id="graph_v2_geojson-second",
+        graph=_geojson_copy_graph(first_output_ref, second_output_ref),
+    )
+    foundry.pipelines.deploy(
+        "graph_v2_geojson-second",
+        str(second_version["id"]),
+        idempotency_key="deploy-graph-v2-geojson-second",
+        ctx=ctx,
+    )
+
+    second = foundry.pipelines.run(
+        "graph_v2_geojson-second",
+        idempotency_key="run-graph-v2-geojson-second",
+        ctx=ctx,
+    )
+
+    assert first["status"] == "succeeded"
+    assert second["status"] == "succeeded"
+    assert foundry.datasets.preview(second_output_ref, ctx=ctx)[0]["geometry"] == {
+        "type": "Point",
+        "coordinates": [127.0, 37.5],
+    }
+
+
 def test_geospatial_stale_recovery_deduplicates_dataset_transaction_and_passport(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -305,6 +358,66 @@ def test_geospatial_stale_recovery_deduplicates_dataset_transaction_and_passport
     assert reconciled["outputs"][0]["ref"]["resourceRef"] == output_ref
     assert reconciled["outputs"][0]["ref"]["artifactId"]
     assert "datasetRef" not in reconciled["outputs"][0]["ref"]
+
+
+def test_geospatial_transaction_only_recovery_preserves_public_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = _foundry_with_language_model(tmp_path, _StructuredLanguageModel({"unused": True}))
+    ctx = demo_admin_context()
+    pipeline_id = "graph_v2_geospatial_transaction_recovery"
+    source_ref = "raw.graph_v2_geospatial_transaction_recovery"
+    output_ref = "geo.graph_v2_geospatial_transaction_recovery"
+    _commit_geospatial_source(foundry, ctx, tmp_path, source_ref)
+    version = _execute_graph_version(
+        foundry,
+        ctx,
+        pipeline_id=pipeline_id,
+        graph=_geospatial_copy_graph(source_ref, output_ref),
+    )
+    foundry.pipelines.deploy(pipeline_id, str(version["id"]), idempotency_key="deploy-geo-tx-recovery", ctx=ctx)
+    execution_repository = foundry._services.pipelines.run.pipeline_execution_repository
+    original_insert = execution_repository.insert_artifact
+
+    class _SimulatedWorkerCrash(BaseException):
+        pass
+
+    def crash_before_output_passport(*, transaction: object, record: object):
+        if getattr(record, "node_id", None) == "output":
+            raise _SimulatedWorkerCrash
+        return original_insert(transaction=transaction, record=record)
+
+    monkeypatch.setattr(execution_repository, "insert_artifact", crash_before_output_passport)
+    key = "run-geo-transaction-recovery"
+    with pytest.raises(_SimulatedWorkerCrash):
+        foundry.pipelines.run(pipeline_id, idempotency_key=key, ctx=ctx)
+    repository = foundry._services.pipelines.run.pipeline_repository
+    with foundry.engine.begin() as transaction:
+        row = repository.run_by_idempotency_key(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            idempotency_key=key,
+        )
+        assert row is not None
+        transaction.execute(
+            update(db.pipeline_runs)
+            .where(db.pipeline_runs.c.tenant_id == ctx.tenant_id, db.pipeline_runs.c.id == row["id"])
+            .values(execution_lease_expires_at="2000-01-01T00:00:00Z")
+        )
+
+    reconciled = foundry.pipelines.run(pipeline_id, idempotency_key=key, ctx=ctx)
+    output = cast(dict[str, Any], reconciled["outputs"][0])
+
+    assert reconciled["status"] == "partial"
+    assert output["artifactEvidence"]["recoverySource"] == "DATASET_TRANSACTION"
+    assert "artifactId" not in output["ref"]
+    assert output["manifest"]["resourceRef"] == output_ref
+    assert output["manifest"]["rowCount"] == 1
+    assert output["manifest"]["manifestUri"]
+    assert output["manifest"]["schemaHash"]
+    assert output["manifest"]["geospatialSpec"]["coordinateReferenceSystem"] == "EPSG:4326"
+    assert "metadata" not in output["manifest"]
 
 
 def test_graph_v2_dataset_llm_run_pins_source_and_model_evidence_without_duplicates(
@@ -756,6 +869,29 @@ def _commit_geospatial_source(
     return foundry.datasets.upload_csv(source_ref, source, ctx=ctx).version_id
 
 
+def _commit_geojson_source(
+    foundry: FoundryLite,
+    ctx: RequestContext,
+    source_ref: str,
+) -> str:
+    foundry.datasets.create(source_ref, classification="internal", ctx=ctx)
+    result = foundry._services.dataset.ingest.sync_rows_batch(
+        source_ref,
+        (
+            {
+                "asset_id": "A-1",
+                "geometry": {"type": "Point", "coordinates": [127.0, 37.5]},
+                "event_time": "2026-07-17T00:00:00Z",
+            },
+        ),
+        fieldnames=("asset_id", "geometry", "event_time"),
+        ctx=ctx,
+        tx_type="SNAPSHOT",
+    )
+    assert result is not None
+    return result.version_id
+
+
 def _register_stream_checkpoint(
     foundry: FoundryLite,
     ctx: RequestContext,
@@ -943,6 +1079,17 @@ def _stream_copy_graph(source_ref: str, output_ref: str) -> dict[str, object]:
 
 def _geospatial_copy_graph(source_ref: str, output_ref: str) -> dict[str, object]:
     fields = {"longitudeField": "longitude", "latitudeField": "latitude", "timeField": "event_time"}
+    return _graph(
+        [
+            _node("source", "source", "source.geospatial", {"resourceRef": source_ref, **fields}),
+            _node("output", "output", "output.geospatial", {"resourceRef": output_ref, **fields}),
+        ],
+        [_edge("source-output", "source", "series", "output", "input")],
+    )
+
+
+def _geojson_copy_graph(source_ref: str, output_ref: str) -> dict[str, object]:
+    fields = {"geometryField": "geometry", "timeField": "event_time"}
     return _graph(
         [
             _node("source", "source", "source.geospatial", {"resourceRef": source_ref, **fields}),

@@ -79,10 +79,19 @@ def test_geospatial_dataset_transaction_recovery_preserves_contract_and_deduplic
             "dataset_id": "ds-geo-1",
             "dataset_ref": "geo.locations",
             "version_id": "ver-geo-1",
+            "version_number": 7,
+            "manifest_uri": "memory://geo/manifest.json",
+            "row_count": 1,
+            "schema_hash": "geo-schema-hash",
             "metadata": {
                 "pipelineRunId": "run-geo-1",
                 "pipelineNodeId": "output",
                 "descriptorId": "output.geospatial",
+                "geospatialSpec": {
+                    "encoding": "geojson",
+                    "geometryField": "geometry",
+                    "coordinateReferenceSystem": "EPSG:4326",
+                },
             },
             "committed_at": "2026-07-28T00:00:00Z",
         },
@@ -111,6 +120,19 @@ def test_geospatial_dataset_transaction_recovery_preserves_contract_and_deduplic
     assert transaction_output.plane == "geospatial"
     assert transaction_output.ref["resourceRef"] == "geo.locations"
     assert "datasetRef" not in transaction_output.ref
+    assert transaction_output.manifest == {
+        "resourceRef": "geo.locations",
+        "versionNumber": 7,
+        "rowCount": 1,
+        "manifestUri": "memory://geo/manifest.json",
+        "schemaHash": "geo-schema-hash",
+        "geospatialSpec": {
+            "encoding": "geojson",
+            "geometryField": "geometry",
+            "coordinateReferenceSystem": "EPSG:4326",
+        },
+        "commitKind": "SERVING_ASSET",
+    }
     assert pipeline_output_recovery._output_key(transaction_output) == pipeline_output_recovery._output_key(passport)
 
 

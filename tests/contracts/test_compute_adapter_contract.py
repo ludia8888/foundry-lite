@@ -295,6 +295,57 @@ def test_duckdb_bounded_parquet_read_rejects_nested_values_before_decode(
     assert raised.value.details["columns"] == ["payload"]
 
 
+def test_duckdb_bounded_parquet_read_allows_pinned_geojson_geometry(
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "geojson.parquet"
+    row = {
+        "asset_id": "A-1",
+        "geometry": {"type": "Point", "coordinates": [127.0, 37.5]},
+    }
+    pq.write_table(pa.Table.from_pylist([row]), parquet_path)
+
+    read = DuckDBComputeAdapter().rows_from_parquet_bounded(
+        parquet_path,
+        max_rows=10,
+        max_decoded_bytes=1024 * 1024,
+        allowed_nested_columns=("geometry",),
+    )
+
+    assert read.rows == (row,)
+    assert 0 < read.decoded_byte_count <= 1024 * 1024
+
+
+def test_duckdb_bounded_geojson_rejects_metadata_limit_before_decode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parquet_path = tmp_path / "large-geojson.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"geometry": {"type": "LineString", "coordinates": [[float(index), 0.0] for index in range(1_000)]}}]
+        ),
+        parquet_path,
+        compression="zstd",
+    )
+    monkeypatch.setattr(
+        compute_module,
+        "_tabular_row",
+        lambda _value: pytest.fail("over-limit GeoJSON must fail before Python row materialization"),
+    )
+
+    with pytest.raises(ValidationFailed, match="read bound") as raised:
+        DuckDBComputeAdapter().rows_from_parquet_bounded(
+            parquet_path,
+            max_rows=10,
+            max_decoded_bytes=1024,
+            allowed_nested_columns=("geometry",),
+        )
+
+    assert raised.value.details["limitKind"] == "decoded_bytes"
+    assert raised.value.details["maximum"] == 1024
+
+
 def test_compute_adapter_contract_detects_duplicate_composite_tuple(
     adapter: ComputeAdapter,
     tmp_path: Path,

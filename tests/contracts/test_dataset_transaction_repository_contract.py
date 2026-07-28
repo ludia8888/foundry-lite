@@ -263,12 +263,17 @@ class FakeDatasetTransactionRepository:
         pipeline_run_id: str,
     ) -> list[dict[str, Any]]:
         del transaction
+        versions = {row["version_id"]: row for row in self.versions_store}
         rows = [
             {
                 "transaction_id": row["id"],
                 "dataset_id": row["dataset_id"],
                 "dataset_ref": "raw.orders",
                 "version_id": row["committed_version_id"],
+                "version_number": versions[row["committed_version_id"]]["version_number"],
+                "manifest_uri": versions[row["committed_version_id"]]["manifest_uri"],
+                "row_count": versions[row["committed_version_id"]]["row_count"],
+                "schema_hash": "schema-hash-demo",
                 "metadata": row["metadata"],
                 "committed_at": row["committed_at"],
             }
@@ -619,6 +624,7 @@ class SqlAlchemyTransactionHarness:
     def add_dataset(self) -> None:
         with self.engine.begin() as transaction:
             transaction.execute(insert(db.datasets).values(**_dataset_values()))
+            transaction.execute(insert(db.dataset_schemas).values(**_dataset_schema_values()))
 
     def run_status(self, *, run_kind: DatasetRunKind, run_id: str) -> dict[str, Any] | None:
         table = _run_table(run_kind)
@@ -866,6 +872,17 @@ def _dataset_values() -> dict[str, Any]:
     }
 
 
+def _dataset_schema_values() -> dict[str, Any]:
+    return {
+        "id": "dss_orders_1",
+        "dataset_id": "ds_orders",
+        "version": 1,
+        "schema_json": {"columns": [{"name": "order_id", "type": "string"}]},
+        "schema_hash": "schema-hash-demo",
+        "created_at": "2026-06-10T00:00:00Z",
+    }
+
+
 def _run_table(run_kind: DatasetRunKind) -> Any:
     if run_kind == "sync":
         return db.sync_runs
@@ -989,6 +1006,10 @@ def test_committed_pipeline_outputs_are_tenant_and_run_scoped(harness: Transacti
     def commit_and_read(transaction: Any) -> list[dict[str, Any]]:
         repository = harness.repository
         repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_pipeline"))
+        repository.insert_version(
+            transaction=transaction,
+            record=replace(_version_record("dstx_pipeline"), version_id="dsv_pipeline_1"),
+        )
         repository.commit_transaction(
             transaction=transaction,
             tenant_id="tenant-demo",
@@ -1020,6 +1041,10 @@ def test_committed_pipeline_outputs_are_tenant_and_run_scoped(harness: Transacti
             "dataset_id": "ds_orders",
             "dataset_ref": "raw.orders",
             "version_id": "dsv_pipeline_1",
+            "version_number": 1,
+            "manifest_uri": "memory://manifest.json",
+            "row_count": 3,
+            "schema_hash": "schema-hash-demo",
             "metadata": {"pipelineRunId": "prun_1", "pipelineNodeId": "output"},
             "committed_at": "2026-07-28T00:00:00Z",
         }

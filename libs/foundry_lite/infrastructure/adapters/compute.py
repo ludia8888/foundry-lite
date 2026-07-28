@@ -49,6 +49,8 @@ from foundry_lite.application.primitives import (
 )
 from foundry_lite.domain.errors import ValidationFailed
 
+_MAX_NESTED_PARQUET_DECODE_BYTES = 16 * 1024 * 1024
+
 
 class DuckDBComputeAdapter:
     """DuckDB-backed compute adapter for the local MVP runtime."""
@@ -127,9 +129,13 @@ class DuckDBComputeAdapter:
         *,
         max_rows: int,
         max_decoded_bytes: int,
+        allowed_nested_columns: Sequence[str] = (),
     ) -> BoundedParquetRead:
-        _require_flat_parquet_schema(parquet_path)
-        metadata_decoded_bytes = _require_parquet_read_bound(parquet_path, max_rows, max_decoded_bytes)
+        has_nested_columns = _require_supported_parquet_schema(parquet_path, allowed_nested_columns)
+        decoded_limit = (
+            min(max_decoded_bytes, _MAX_NESTED_PARQUET_DECODE_BYTES) if has_nested_columns else max_decoded_bytes
+        )
+        metadata_decoded_bytes = _require_parquet_read_bound(parquet_path, max_rows, decoded_limit)
         rows: list[TabularRow] = []
         decoded_byte_count = 0
         con = duckdb.connect()
@@ -144,7 +150,7 @@ class DuckDBComputeAdapter:
                     len(rows) + 1,
                     decoded_byte_count,
                     max_rows,
-                    max_decoded_bytes,
+                    decoded_limit,
                 )
                 rows.append(row)
         finally:
@@ -614,17 +620,22 @@ def _require_parquet_read_bound(
     return decoded_bytes
 
 
-def _require_flat_parquet_schema(parquet_path: Path) -> None:
+def _require_supported_parquet_schema(
+    parquet_path: Path,
+    allowed_nested_columns: Sequence[str],
+) -> bool:
     nested_columns = [field.name for field in pq.read_schema(parquet_path) if pa.types.is_nested(field.type)]
-    if nested_columns:
+    unexpected = sorted(set(nested_columns) - set(allowed_nested_columns))
+    if unexpected:
         raise ValidationFailed(
             "bounded parquet read requires flat scalar columns",
             details={
                 "limitKind": "nested_values",
-                "columns": nested_columns,
+                "columns": unexpected,
                 "compressedByteCount": parquet_path.stat().st_size,
             },
         )
+    return bool(nested_columns)
 
 
 def _require_decoded_result_bound(

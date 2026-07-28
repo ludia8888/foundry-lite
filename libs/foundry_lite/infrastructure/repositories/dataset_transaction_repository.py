@@ -332,13 +332,33 @@ class SqlAlchemyDatasetTransactionRepository:
                     db.dataset_transactions.c.dataset_id,
                     dataset_ref,
                     db.dataset_transactions.c.committed_version_id.label("version_id"),
+                    db.dataset_versions.c.version_number,
+                    db.dataset_versions.c.manifest_uri,
+                    db.dataset_versions.c.row_count,
+                    db.dataset_schemas.c.schema_hash,
                     db.dataset_transactions.c.metadata,
                     db.dataset_transactions.c.committed_at,
                 )
                 .join(db.datasets, db.datasets.c.id == db.dataset_transactions.c.dataset_id)
+                .join(
+                    db.dataset_versions,
+                    and_(
+                        db.dataset_versions.c.id == db.dataset_transactions.c.committed_version_id,
+                        db.dataset_versions.c.dataset_id == db.dataset_transactions.c.dataset_id,
+                    ),
+                )
+                .join(
+                    db.dataset_schemas,
+                    and_(
+                        db.dataset_schemas.c.dataset_id == db.dataset_transactions.c.dataset_id,
+                        db.dataset_schemas.c.version == db.dataset_versions.c.schema_version,
+                    ),
+                )
                 .where(
                     and_(
                         db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.datasets.c.tenant_id == tenant_id,
+                        db.dataset_versions.c.tenant_id == tenant_id,
                         db.dataset_transactions.c.status == "COMMITTED",
                         db.dataset_transactions.c.committed_version_id.is_not(None),
                         db.dataset_transactions.c.metadata["pipelineRunId"].as_string() == pipeline_run_id,

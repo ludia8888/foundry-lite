@@ -29,5 +29,9 @@ class PipelineDatasetCommitRow(TypedDict):
     dataset_id: str
     dataset_ref: str
     version_id: str
+    version_number: int
+    manifest_uri: str
+    row_count: int
+    schema_hash: str
     metadata: DatasetTransactionMetadata
     committed_at: str

@@ -145,11 +145,34 @@ def _dataset_commit_output(
             "versionId": row["version_id"],
             "transactionId": row["transaction_id"],
         },
-        manifest={"metadata": dict(row["metadata"])},
+        manifest=_dataset_commit_manifest(row, is_geospatial),
         artifact_id=None,
         recovery_source="DATASET_TRANSACTION",
         evidence_id=row["transaction_id"],
     )
+
+
+def _dataset_commit_manifest(
+    row: PipelineDatasetCommitRow,
+    is_geospatial: bool,
+) -> Mapping[str, object]:
+    if not is_geospatial:
+        return {"metadata": dict(row["metadata"])}
+    spec = row["metadata"].get("geospatialSpec")
+    if not isinstance(spec, Mapping):
+        raise InvariantViolation(
+            "committed geospatial Dataset transaction is missing its output contract",
+            details={"transaction_id": row["transaction_id"]},
+        )
+    return {
+        "resourceRef": row["dataset_ref"],
+        "versionNumber": row["version_number"],
+        "rowCount": row["row_count"],
+        "manifestUri": row["manifest_uri"],
+        "schemaHash": row["schema_hash"],
+        "geospatialSpec": dict(spec),
+        "commitKind": "SERVING_ASSET",
+    }
 
 
 def _media_commit_output(

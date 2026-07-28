@@ -32,6 +32,9 @@ from foundry_lite.application.services.pipeline_media_set_output_contracts impor
     PipelineMediaOutputSourceCorrupt,
     PipelineMediaSetOutputContractMismatch,
 )
+from foundry_lite.application.services.pipeline_media_set_output_reconciliation import (
+    handle_media_output_commit_failure,
+)
 from foundry_lite.application.services.pipeline_media_set_output_security import (
     require_derivative_security_inheritance,
     require_item_security,
@@ -46,10 +49,13 @@ from foundry_lite.application.services.pipeline_media_set_output_support import 
     item_text,
     media_output_entry,
     media_set_ref_parts,
+    media_transaction_idempotency_key,
     output_contract,
     request_fingerprint,
     require_derivative_coordinates,
     require_item_coordinate,
+    require_media_transaction_coordinates,
+    require_open_media_transaction,
     require_target_contract,
     required_text,
     schema_for_mime,
@@ -106,18 +112,16 @@ class PipelineMediaSetOutputCommitter:
         target = self._target_media_set(target_ref, contract)
         fingerprint = request_fingerprint(self._run_id, node, source, target_ref, entries)
         transaction_attempt = self._open_transaction(node, target, fingerprint)
-        try:
-            versions = self._stage_validate_commit(
-                node,
-                source,
-                target,
-                transaction_attempt,
-                fingerprint,
-                entries,
-            )
-        except Exception as exc:
-            self._abort_if_open(transaction_attempt.media_transaction_id, exc)
-            raise
+        versions = self._commit_versions_or_reconcile(
+            node,
+            source,
+            inputs,
+            target_ref,
+            target,
+            transaction_attempt,
+            fingerprint,
+            entries,
+        )
         return output_artifact(
             node,
             source,
@@ -128,6 +132,47 @@ class PipelineMediaSetOutputCommitter:
             entries,
             versions,
         )
+
+    def _commit_versions_or_reconcile(
+        self,
+        node: PipelineV2RuntimeNode,
+        source: PipelineV2RuntimeArtifact,
+        inputs: RuntimeInputs,
+        target_ref: str,
+        target: MediaSetRecord,
+        transaction_attempt: MediaOutputTransactionAttempt,
+        fingerprint: str,
+        entries: Sequence[MediaOutputEntry],
+    ) -> list[MediaItemVersionRecord]:
+        try:
+            return self._stage_validate_commit(
+                node,
+                source,
+                target,
+                transaction_attempt,
+                fingerprint,
+                entries,
+            )
+        except Exception as exc:
+            transaction_id = transaction_attempt.media_transaction_id
+            transaction = self._transaction(transaction_id)
+            handle_media_output_commit_failure(
+                node=node,
+                source=source,
+                inputs=inputs,
+                target_ref=target_ref,
+                target=target,
+                transaction_attempt=transaction_attempt,
+                transaction=transaction,
+                entries=entries,
+                committed_versions=(
+                    self._transaction_versions(transaction_id) if transaction.status == "COMMITTED" else ()
+                ),
+                media_transactions=self._media_transactions,
+                ctx=self._ctx,
+                exc=exc,
+            )
+            raise
 
     def _entries(
         self,
@@ -294,12 +339,12 @@ class PipelineMediaSetOutputCommitter:
             transaction_id = self._media_transactions.open(
                 self._ctx,
                 media_set_id=target.media_set_id,
-                idempotency_key=_transaction_idempotency_key(self._run_id, node.node_id, generation),
+                idempotency_key=media_transaction_idempotency_key(self._run_id, node.node_id, generation),
                 mode="SNAPSHOT",
                 request_fingerprint=request_fingerprint,
             )
             transaction = self._transaction(transaction_id)
-            self._require_transaction_coordinates(transaction, target, request_fingerprint)
+            require_media_transaction_coordinates(transaction, target, request_fingerprint)
             if transaction.status in {"OPEN", "COMMITTED"}:
                 return MediaOutputTransactionAttempt(transaction_id, generation)
             if transaction.status != "ABORTED":
@@ -308,19 +353,6 @@ class PipelineMediaSetOutputCommitter:
                     details={"mediaTransactionId": transaction_id, "status": transaction.status},
                 )
             generation += 1
-
-    @staticmethod
-    def _require_transaction_coordinates(
-        transaction: MediaTransactionRecord,
-        target: MediaSetRecord,
-        request_fingerprint: str,
-    ) -> None:
-        if transaction.media_set_id == target.media_set_id and transaction.request_fingerprint == request_fingerprint:
-            return
-        raise ConflictDetected(
-            "pipeline Media Set output idempotency coordinates changed",
-            details={"mediaTransactionId": transaction.media_transaction_id},
-        )
 
     def _stage_validate_commit(
         self,
@@ -340,7 +372,7 @@ class PipelineMediaSetOutputCommitter:
                 request_fingerprint,
                 is_committed=True,
             )
-        self._require_open_transaction(transaction)
+        require_open_media_transaction(transaction)
         self._stage_missing_entries(
             node,
             source,
@@ -361,18 +393,6 @@ class PipelineMediaSetOutputCommitter:
             target,
             request_fingerprint,
             is_committed=True,
-        )
-
-    @staticmethod
-    def _require_open_transaction(transaction: MediaTransactionRecord) -> None:
-        if transaction.status == "OPEN":
-            return
-        raise ConflictDetected(
-            "pipeline Media Set output transaction is not reusable",
-            details={
-                "mediaTransactionId": transaction.media_transaction_id,
-                "status": transaction.status,
-            },
         )
 
     def _stage_missing_entries(
@@ -469,17 +489,3 @@ class PipelineMediaSetOutputCommitter:
                 tenant_id=self._ctx.tenant_id,
                 media_transaction_id=transaction_id,
             )
-
-    def _abort_if_open(self, transaction_id: str, exc: Exception) -> None:
-        if self._transaction(transaction_id).status != "OPEN":
-            return
-        self._media_transactions.abort(
-            self._ctx,
-            media_transaction_id=transaction_id,
-            error={"code": getattr(exc, "code", type(exc).__name__)},
-        )
-
-
-def _transaction_idempotency_key(run_id: str, node_id: str, generation: int) -> str:
-    base = f"pipeline-output:{run_id}:{node_id}"
-    return base if generation == 1 else f"{base}:generation:{generation}"

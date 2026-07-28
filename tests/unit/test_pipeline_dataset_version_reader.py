@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -170,12 +171,14 @@ class _RecordingComputeAdapter:
         *,
         max_rows: int,
         max_decoded_bytes: int,
+        allowed_nested_columns: Sequence[str] = (),
     ):
         self.read_paths.append(parquet_path)
         return self.delegate.rows_from_parquet_bounded(
             parquet_path,
             max_rows=max_rows,
             max_decoded_bytes=max_decoded_bytes,
+            allowed_nested_columns=allowed_nested_columns,
         )
 
 

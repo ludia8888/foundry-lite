@@ -78,8 +78,8 @@ class PipelineV2TrainedModelRuntime:
         )
         result = self._adapter.infer(invocation)
         require_trained_model_invocation_pin(invocation, result.definition)
-        rows = merge_trained_model_outputs(source.items, result.rows, node.config, result.definition)
-        return _artifact(node, source, inputs, rows, result.runtime_evidence, result.definition, self._run_id)
+        rows = merge_trained_model_outputs(source.items, result.rows, node.config, definition)
+        return _artifact(node, source, inputs, rows, result.runtime_evidence, definition, self._run_id)
 
 
 def _required_model_pin(

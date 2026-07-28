@@ -114,12 +114,31 @@ def require_trained_model_invocation_pin(
     invocation: TrainedModelInvocation,
     definition: TrainedModelDefinition,
 ) -> None:
+    if invocation.pinned_definition is not None:
+        _require_complete_definition_match(invocation.pinned_definition, definition)
+        return
     require_trained_model_definition_pin(
         model_ref=invocation.model_ref,
         expected_model_version=invocation.expected_model_version,
         expected_revision=invocation.expected_revision,
         expected_executable_reference=invocation.expected_executable_reference,
         definition=definition,
+    )
+
+
+def _require_complete_definition_match(
+    expected: TrainedModelDefinition,
+    actual: TrainedModelDefinition,
+) -> None:
+    if actual == expected:
+        return
+    raise ValidationFailed(
+        "inference result does not match the deployed trained-model definition snapshot",
+        details={
+            "modelRef": expected.model_ref,
+            "expected": trained_model_definition_snapshot(expected),
+            "actual": trained_model_definition_snapshot(actual),
+        },
     )
 
 

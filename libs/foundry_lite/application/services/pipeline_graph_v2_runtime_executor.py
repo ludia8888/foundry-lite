@@ -32,6 +32,7 @@ from foundry_lite.application.services.pipeline_output_candidate_contracts impor
     require_candidate_policy,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
+    PipelineV2CommittedOutputReconciliationRequired,
     PipelineV2RunResult,
     PipelineV2RuntimeArtifact,
     PipelineV2RuntimeEdge,
@@ -115,6 +116,9 @@ class PipelineGraphV2RuntimeExecutor:
         )
         try:
             artifact = self._dispatcher.execute(node, inputs)
+        except PipelineV2CommittedOutputReconciliationRequired as exc:
+            self._record_committed_post_commit_failure(node, attempt, state, exc)
+            return
         except Exception as exc:
             self._evidence.fail(attempt, self._error_payload(exc))
             self._record_failure(node, state, exc)
@@ -142,6 +146,42 @@ class PipelineGraphV2RuntimeExecutor:
         exc: Exception,
     ) -> None:
         error = _committed_output_evidence_error(node, self._error_payload(exc))
+        self._record_committed_reconciliation(
+            node,
+            artifact,
+            attempt,
+            state,
+            error,
+            "pipeline.node.committed_evidence_reconciliation_required",
+        )
+
+    def _record_committed_post_commit_failure(
+        self,
+        node: PipelineV2RuntimeNode,
+        attempt: PipelineGraphV2AttemptContext,
+        state: _ExecutionState,
+        exc: PipelineV2CommittedOutputReconciliationRequired,
+    ) -> None:
+        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+        error = _committed_output_post_commit_error(node, self._error_payload(cause))
+        self._record_committed_reconciliation(
+            node,
+            exc.committed_artifact,
+            attempt,
+            state,
+            error,
+            "pipeline.node.committed_output_reconciliation_required",
+        )
+
+    def _record_committed_reconciliation(
+        self,
+        node: PipelineV2RuntimeNode,
+        artifact: PipelineV2RuntimeArtifact,
+        attempt: PipelineGraphV2AttemptContext,
+        state: _ExecutionState,
+        error: JsonObject,
+        event: str,
+    ) -> None:
         secondary = self._mark_attempt_failed(attempt, error)
         if secondary is not None:
             details = error.get("details")
@@ -151,7 +191,7 @@ class PipelineGraphV2RuntimeExecutor:
             state.error = error
             state.failed_node_id = node.node_id
         state.outputs.append(committed_output_reconciliation_payload(artifact, error))
-        state.timeline.append(_failed_timeline(node, error, "pipeline.node.committed_evidence_reconciliation_required"))
+        state.timeline.append(_failed_timeline(node, error, event))
 
     def _mark_attempt_failed(
         self,
@@ -353,6 +393,22 @@ def _committed_output_evidence_error(
     return {
         "type": "PIPELINE_OUTPUT_EVIDENCE_PERSISTENCE_FAILED",
         "message": "serving output committed but its pipeline artifact passport requires reconciliation",
+        "details": {
+            "nodeId": node.node_id,
+            "descriptorId": node.descriptor_id,
+            "servingCommitPreserved": True,
+            "cause": dict(cause),
+        },
+    }
+
+
+def _committed_output_post_commit_error(
+    node: PipelineV2RuntimeNode,
+    cause: Mapping[str, object],
+) -> JsonObject:
+    return {
+        "type": "PIPELINE_OUTPUT_POST_COMMIT_VALIDATION_FAILED",
+        "message": "serving output committed but post-commit validation requires reconciliation",
         "details": {
             "nodeId": node.node_id,
             "descriptorId": node.descriptor_id,

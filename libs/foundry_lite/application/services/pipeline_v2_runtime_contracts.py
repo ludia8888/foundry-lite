@@ -91,6 +91,18 @@ class PipelineV2RuntimeArtifact:
         object.__setattr__(self, "content_fingerprint", fingerprint)
 
 
+class PipelineV2CommittedOutputReconciliationRequired(Exception):
+    """Carry a serving artifact when an error occurs after its domain commit."""
+
+    def __init__(self, message: str, *, artifact: PipelineV2RuntimeArtifact) -> None:
+        super().__init__(message)
+        self._artifact = artifact
+
+    @property
+    def committed_artifact(self) -> PipelineV2RuntimeArtifact:
+        return self._artifact
+
+
 RuntimeInputs = Mapping[str, Sequence[PipelineV2RuntimeArtifact]]
 
 
