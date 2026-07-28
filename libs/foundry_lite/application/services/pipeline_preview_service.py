@@ -34,6 +34,7 @@ from foundry_lite.application.services.pipeline_preview_runtime import (
 )
 from foundry_lite.application.services.pipeline_preview_values import (
     PIPELINE_PREVIEW_CANCELLED,
+    PIPELINE_PREVIEW_FAILED,
     StatusTransition,
     _idempotent_preview_payload,
     _preview_payload,
@@ -143,9 +144,29 @@ class PipelinePreviewService(CoreService):
         )
         recovered_ids: list[str] = []
         for row in rows:
-            self.execute_preview_run(str(row["id"]), ctx=recovered_pipeline_preview_context(row))
-            recovered_ids.append(str(row["id"]))
+            recovered_ids.append(self._recover_preview_row(row))
         return {"processed": len(recovered_ids), "previewRunIds": recovered_ids}
+
+    def _recover_preview_row(self, row: PipelinePreviewRunRow) -> str:
+        ctx = recovered_pipeline_preview_context(row)
+        try:
+            self.execute_preview_run(str(row["id"]), ctx=ctx)
+        except Exception as exc:
+            error = dict(self.runtime_service._error_payload(exc, ctx, run_id=str(row["id"])))
+            with self.engine.begin() as conn:
+                current = self._require_preview(conn, ctx, str(row["id"]))
+            transition = (
+                PIPELINE_PREVIEW_CANCELLED if current["status"] == "CANCEL_REQUESTED" else PIPELINE_PREVIEW_FAILED
+            )
+            self._complete_preview(
+                ctx,
+                current,
+                transition,
+                PreviewExecutionResult([], []),
+                None if transition is PIPELINE_PREVIEW_CANCELLED else error,
+                current["execution_lease_token"],
+            )
+        return str(row["id"])
 
     def _execute_claimed_preview(
         self,

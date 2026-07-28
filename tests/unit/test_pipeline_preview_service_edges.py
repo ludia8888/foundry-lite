@@ -10,7 +10,7 @@ from foundry_lite.application.services.pipeline_preview_service import (
     PipelinePreviewService,
     _require_valid_preview_graph,
 )
-from foundry_lite.application.state_transitions import PIPELINE_PREVIEW_CANCELLED
+from foundry_lite.application.state_transitions import PIPELINE_PREVIEW_CANCELLED, StatusTransition
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
@@ -35,6 +35,14 @@ class _Runtime:
 
     def _audit(self, *_args: object, **kwargs: object) -> None:
         self.audits.append(dict(kwargs))
+
+    def _error_payload(self, exc: Exception, ctx: RequestContext, *, run_id: str) -> dict[str, object]:
+        return {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "requestId": ctx.request_id,
+            "runId": run_id,
+        }
 
 
 class _PreviewRepository:
@@ -246,3 +254,54 @@ def test_pipeline_preview_cancel_requested_execution_completes_without_running_g
     payload = service.execute_preview_run("preview-1", ctx=RequestContext())
 
     assert payload["status"] == "CANCELLED"
+
+
+def test_pipeline_preview_recovery_fails_poisoned_row_and_continues_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    poisoned = _row("QUEUED")
+    poisoned["id"] = "preview-poisoned"
+    healthy = _row("QUEUED")
+    healthy["id"] = "preview-healthy"
+    repository = _PreviewRepository(poisoned)
+    service = _service(repository)
+    service._recovery_cursor = cast(Any, object())
+    service.metadata_repository = cast(Any, object())
+    executed: list[str] = []
+    completed: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        "foundry_lite.application.services.pipeline_preview_service.recoverable_pipeline_previews",
+        lambda *_args, **_kwargs: [poisoned, healthy],
+    )
+
+    def _execute(preview_run_id: str, *, ctx: RequestContext) -> dict[str, object]:
+        executed.append(preview_run_id)
+        if preview_run_id == "preview-poisoned":
+            raise ValidationFailed("persisted caller is no longer authorized")
+        return {"status": "SUCCEEDED", "requestId": ctx.request_id}
+
+    def _complete(
+        _ctx: RequestContext,
+        row: PipelinePreviewRunRow,
+        transition: StatusTransition,
+        _result: PreviewExecutionResult,
+        error: dict[str, object] | None,
+        _execution_lease_token: str | None,
+    ) -> dict[str, object]:
+        completed.append((str(row["id"]), transition.to_status, error))
+        return {"status": transition.to_status}
+
+    monkeypatch.setattr(service, "execute_preview_run", _execute)
+    monkeypatch.setattr(service, "_complete_preview", _complete)
+
+    result = service.recover_preview_runs(limit=2)
+
+    assert result == {
+        "processed": 2,
+        "previewRunIds": ["preview-poisoned", "preview-healthy"],
+    }
+    assert executed == ["preview-poisoned", "preview-healthy"]
+    assert completed[0][0:2] == ("preview-poisoned", "FAILED")
+    assert completed[0][2] is not None
+    assert completed[0][2]["runId"] == "preview-poisoned"

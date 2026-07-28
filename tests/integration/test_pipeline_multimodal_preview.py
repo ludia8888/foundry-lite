@@ -160,6 +160,72 @@ def test_expired_preview_is_recovered_with_original_caller_context(
     assert completed["outputs"] == [{"kind": "table", "items": [{"id": 1}]}]
 
 
+def test_preview_recovery_durably_fails_unauthorized_row_and_continues(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dependencies = create_local_core_dependencies(
+        db_url=f"sqlite:///{tmp_path / 'pipeline-preview-poisoned-row.db'}",
+        storage_root=tmp_path / "preview-poisoned-row-flite",
+    )
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = demo_admin_context()
+    branch = foundry.pipelines.create_branch(
+        pipeline_id="preview-poisoned-row-pipeline",
+        name="draft",
+        idempotency_key="preview-poisoned-row-branch",
+        ctx=ctx,
+    )
+    graph = _media_rows_graph("legal.poisoned", "version-poisoned")
+    poisoned = foundry.pipelines.create_preview_run(
+        str(branch["id"]),
+        graph=graph,
+        target_node_id="out",
+        limits={"tableRows": 10},
+        idempotency_key="preview-poisoned-row",
+        ctx=ctx,
+    )
+    healthy = foundry.pipelines.create_preview_run(
+        str(branch["id"]),
+        graph=graph,
+        target_node_id="out",
+        limits={"tableRows": 10},
+        idempotency_key="preview-healthy-row",
+        ctx=ctx,
+    )
+    with dependencies.engine.begin() as transaction:
+        transaction.execute(
+            update(db.pipeline_preview_runs)
+            .where(db.pipeline_preview_runs.c.id == poisoned["id"])
+            .values(
+                execution_context={"actorUserId": "revoked-user", "roles": ["viewer"]},
+                created_at="2026-07-27T00:00:00.000000Z",
+            )
+        )
+        transaction.execute(
+            update(db.pipeline_preview_runs)
+            .where(db.pipeline_preview_runs.c.id == healthy["id"])
+            .values(created_at="2026-07-27T00:00:01.000000Z")
+        )
+
+    monkeypatch.setattr(
+        "foundry_lite.application.services.pipeline_preview_service.execute_pipeline_preview",
+        lambda *_args, **_kwargs: PreviewExecutionResult([{"kind": "table"}], []),
+    )
+
+    recovery = foundry.pipelines.recover_preview_runs(limit=2)
+    poisoned_after = foundry.pipelines.get_preview_run(str(poisoned["id"]), ctx=ctx)
+    healthy_after = foundry.pipelines.get_preview_run(str(healthy["id"]), ctx=ctx)
+
+    assert recovery == {
+        "processed": 2,
+        "previewRunIds": [poisoned["id"], healthy["id"]],
+    }
+    assert poisoned_after["status"] == "FAILED"
+    assert poisoned_after["error"]["type"] == "PERMISSION_DENIED"
+    assert healthy_after["status"] == "SUCCEEDED"
+
+
 def test_pdf_preview_extracts_and_chunks_without_committing_derivatives_or_datasets(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(
         db_url=f"sqlite:///{tmp_path / 'pipeline-media-preview.db'}",

@@ -11,6 +11,8 @@ from foundry_lite.application.ports.media_processor import MediaProcessingReques
 from foundry_lite.infrastructure.adapters.pdf_layout_processor import (
     PdfLayoutFragment,
     PdfLayoutProcessorAdapter,
+    _layout_units,
+    _page_fragments,
     _pypdf_layout_extract,
 )
 from foundry_lite.infrastructure.adapters.pdf_page_selection import PdfPageSelection
@@ -114,6 +116,39 @@ def test_direct_pypdf_extractor_preserves_position_and_font_evidence(tmp_path: P
     assert fragments[1].font_name.endswith("Helvetica-Bold")
 
 
+def test_multiline_visitor_fragment_keeps_one_coordinate_aware_bounding_box() -> None:
+    class _MediaBox:
+        width = 200
+        height = 200
+
+    class _Page:
+        mediabox = _MediaBox()
+
+        def extract_text(self, *, visitor_text) -> None:
+            visitor_text(
+                "First line\nSecond longer line\n",
+                None,
+                (1, 0, 0, 1, 10, 100),
+                {"/BaseFont": "Helvetica"},
+                10,
+            )
+
+    fragments = _page_fragments(_Page(), 1)
+    units = _layout_units(fragments)
+
+    assert [fragment.text for fragment in fragments] == ["First line\nSecond longer line"]
+    assert [(fragment.x, fragment.baseline_y) for fragment in fragments] == [(10.0, 100.0)]
+    assert units[0].bbox == {
+        "x": 10.0,
+        "y": 88.0,
+        "width": 90.0,
+        "height": 24.0,
+        "pageWidth": 200.0,
+        "pageHeight": 200.0,
+        "unit": "pt",
+    }
+
+
 def test_direct_pypdf_extractor_normalizes_corrupt_and_page_limit_failures(tmp_path: Path) -> None:
     corrupt = tmp_path / "corrupt.pdf"
     corrupt.write_bytes(b"not-a-pdf")
@@ -200,6 +235,39 @@ def test_layout_timeout_terminates_the_isolated_extractor_process(tmp_path: Path
         adapter.process(_request(str(source)))
 
     assert captured.value.failure.kind == "timeout"
+    worker_pid = int(pid_file.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(worker_pid, 0)
+
+
+def test_layout_output_limit_terminates_worker_before_buffering_unbounded_response(tmp_path: Path) -> None:
+    source = tmp_path / "layout.pdf"
+    source.write_bytes(_layout_pdf())
+    pid_file = tmp_path / "worker-output-limit.pid"
+    adapter = PdfLayoutProcessorAdapter(
+        timeout_seconds=5,
+        max_result_bytes=128,
+        worker_command=(
+            sys.executable,
+            "-c",
+            (
+                "import os,pathlib,sys,time; "
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); "
+                "sys.stdin.buffer.read(); "
+                "sys.stdout.buffer.write(b'x' * 4096); "
+                "sys.stdout.buffer.flush(); "
+                "time.sleep(60)"
+            ),
+            str(pid_file),
+        ),
+    )
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.process(_request(str(source)))
+
+    assert captured.value.failure.kind == "validation"
+    assert captured.value.failure.details["reason"] == "output_limit"
+    assert captured.value.failure.details["maxResultBytes"] == 128
     worker_pid = int(pid_file.read_text(encoding="utf-8"))
     with pytest.raises(ProcessLookupError):
         os.kill(worker_pid, 0)

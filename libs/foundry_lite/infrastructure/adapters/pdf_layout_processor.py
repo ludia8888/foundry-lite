@@ -7,6 +7,7 @@ import json
 import re
 import subprocess  # nosec B404 - adapter-owned argv, no shell; remove if construction becomes user-controlled.
 import sys
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -35,6 +36,7 @@ from foundry_lite.infrastructure.adapters.pdf_page_selection import (
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfDocumentError
 
 _DEFAULT_MAX_PAGES = 5000
+_DEFAULT_MAX_RESULT_BYTES = 8 * 1024 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DERIVATIVE_KIND = "pdf_layout"
 _TABLE_PATTERN = re.compile(r"(?:\S+\s{2,}){2,}\S+")
@@ -89,11 +91,20 @@ def _page_fragments(page: object, page_number: int) -> list[PdfLayoutFragment]:
         x = float(coordinates[4]) if len(coordinates) > 5 else 0.0
         y = float(coordinates[5]) if len(coordinates) > 5 else 0.0
         font_name = _font_name(font)
-        for line in (candidate.strip() for candidate in text.splitlines()):
-            if line:
-                fragments.append(
-                    PdfLayoutFragment(page_number, line, x, y, _positive_float(size, 10.0), font_name, width, height)
+        normalized = text.strip()
+        if normalized:
+            fragments.append(
+                PdfLayoutFragment(
+                    page_number,
+                    normalized,
+                    x,
+                    y,
+                    _positive_float(size, 10.0),
+                    font_name,
+                    width,
+                    height,
                 )
+            )
 
     page.extract_text(visitor_text=visitor)  # type: ignore[attr-defined]
     return fragments
@@ -128,6 +139,53 @@ def _fragments_from_payload(payload: object) -> list[PdfLayoutFragment]:
     return fragments
 
 
+class _PdfLayoutWorkerTimeout(Exception):
+    """The isolated layout worker exceeded its wall-clock budget."""
+
+
+class _PdfLayoutWorkerOutputLimit(Exception):
+    """The isolated layout worker exceeded its response byte budget."""
+
+
+def _read_bounded_worker_output(
+    process: subprocess.Popen[bytes],
+    worker_input: bytes,
+    *,
+    timeout_seconds: int,
+    max_result_bytes: int,
+) -> bytes:
+    if process.stdin is None or process.stdout is None:
+        raise RuntimeError("layout worker pipes are unavailable")
+    deadline = time.monotonic() + timeout_seconds
+    process.stdin.write(worker_input)
+    process.stdin.close()
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(process.stdout.read, max_result_bytes + 1)
+    try:
+        output = future.result(timeout=max(deadline - time.monotonic(), 0.0))
+    except FuturesTimeoutError as exc:
+        _terminate_worker(process)
+        future.result()
+        raise _PdfLayoutWorkerTimeout from exc
+    finally:
+        pool.shutdown(wait=True)
+    if len(output) > max_result_bytes:
+        _terminate_worker(process)
+        raise _PdfLayoutWorkerOutputLimit
+    try:
+        process.wait(timeout=max(deadline - time.monotonic(), 0.0))
+    except subprocess.TimeoutExpired as exc:
+        _terminate_worker(process)
+        raise _PdfLayoutWorkerTimeout from exc
+    return output
+
+
+def _terminate_worker(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.kill()
+    process.wait()
+
+
 class PdfLayoutProcessorAdapter:
     """Extract positioned PDF blocks with explicitly heuristic structure labels."""
 
@@ -137,11 +195,13 @@ class PdfLayoutProcessorAdapter:
         self,
         *,
         timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
+        max_result_bytes: int = _DEFAULT_MAX_RESULT_BYTES,
         layout_extractor: PageLayoutExtractor | None = None,
         should_isolate_extractor: bool | None = None,
         worker_command: Sequence[str] | None = None,
     ) -> None:
         self._timeout_seconds = timeout_seconds
+        self._max_result_bytes = max(1, max_result_bytes)
         self._layout_extractor = layout_extractor or _pypdf_layout_extract
         self._should_isolate_extractor = (
             layout_extractor is None if should_isolate_extractor is None else should_isolate_extractor
@@ -170,6 +230,12 @@ class PdfLayoutProcessorAdapter:
                     True,
                     "PDF layout extraction exceeded its bounded time budget.",
                     timeout_seconds=_DEFAULT_TIMEOUT_SECONDS,
+                ),
+                AdapterFailureMode(
+                    "process",
+                    "validation",
+                    False,
+                    "PDF layout extraction exceeded its bounded response size.",
                 ),
             ),
         )
@@ -238,7 +304,6 @@ class PdfLayoutProcessorAdapter:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
         )
         worker_input = json.dumps(
             {
@@ -246,14 +311,19 @@ class PdfLayoutProcessorAdapter:
                 "maxPages": max_pages,
                 "selection": {"start": selection.start, "limit": selection.limit},
             }
-        )
+        ).encode("utf-8")
         try:
-            stdout, _ = process.communicate(worker_input, timeout=self._timeout_seconds)
-        except subprocess.TimeoutExpired as exc:
-            process.kill()
-            process.communicate()
+            stdout = _read_bounded_worker_output(
+                process,
+                worker_input,
+                timeout_seconds=self._timeout_seconds,
+                max_result_bytes=self._max_result_bytes,
+            )
+        except _PdfLayoutWorkerTimeout as exc:
             raise self._error("timeout", "pdf layout extraction timed out", request, True) from exc
-        return self._subprocess_result(stdout, process.returncode, request)
+        except _PdfLayoutWorkerOutputLimit as exc:
+            raise self._error("validation", "output_limit", request, False) from exc
+        return self._subprocess_result(stdout.decode("utf-8"), process.returncode, request)
 
     def _subprocess_result(
         self,
@@ -293,6 +363,8 @@ class PdfLayoutProcessorAdapter:
         }
         if page is not None:
             details["page"] = page
+        if reason == "output_limit":
+            details["maxResultBytes"] = self._max_result_bytes
         return AdapterError(
             AdapterFailure(
                 self.profile_name,
@@ -346,7 +418,8 @@ def _layout_unit(fragment: PdfLayoutFragment, ordinal: int, median_size: float) 
 
 
 def _bbox(fragment: PdfLayoutFragment) -> dict[str, object]:
-    width = min(max(len(fragment.text) * fragment.font_size * 0.5, 1.0), max(fragment.page_width - fragment.x, 1.0))
+    longest_line = max((len(line) for line in fragment.text.splitlines()), default=0)
+    width = min(max(longest_line * fragment.font_size * 0.5, 1.0), max(fragment.page_width - fragment.x, 1.0))
     height = _fragment_height(fragment)
     top = _fragment_top(fragment)
     return {
@@ -396,11 +469,15 @@ def _typographic_structure_role(
 
 
 def _fragment_height(fragment: PdfLayoutFragment) -> float:
-    return max(fragment.font_size * 1.2, 1.0)
+    return _fragment_line_height(fragment) * max(len(fragment.text.splitlines()), 1)
 
 
 def _fragment_top(fragment: PdfLayoutFragment) -> float:
-    return max(fragment.page_height - fragment.baseline_y - _fragment_height(fragment), 0.0)
+    return max(fragment.page_height - fragment.baseline_y - _fragment_line_height(fragment), 0.0)
+
+
+def _fragment_line_height(fragment: PdfLayoutFragment) -> float:
+    return max(fragment.font_size * 1.2, 1.0)
 
 
 def _content_hash(units: Sequence[ProcessedContentUnit]) -> str:
