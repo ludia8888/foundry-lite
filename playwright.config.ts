@@ -28,7 +28,10 @@ export default defineConfig({
       command: "bash scripts/e2e_start_api.sh",
       url: "http://127.0.0.1:8000/healthz",
       reuseExistingServer: !process.env.CI,
-      timeout: 30_000,
+      // API startup seeds the full demo runtime and initializes local model
+      // adapters. Keep this separate from the static web server budget so a
+      // cold CI runner cannot fail before browser assertions begin.
+      timeout: 120_000,
     },
     {
       command: "uv run python -m http.server 4173 --directory apps/web",
