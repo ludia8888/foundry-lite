@@ -116,7 +116,8 @@ def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_pat
             for row in connection.execute(
                 text(
                     """
-                    select id, trigger_type, timezone, next_due_at, status, paused_reason
+                    select id, trigger_type, timezone, next_due_at, runtime_config_updated_at,
+                           status, paused_reason, updated_at
                     from pipeline_schedules
                     order by id
                     """
@@ -125,11 +126,13 @@ def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_pat
         }
     assert rows["active-schedule"].trigger_type == "interval"
     assert rows["active-schedule"].timezone == "Asia/Seoul"
+    assert rows["active-schedule"].runtime_config_updated_at == rows["active-schedule"].updated_at
     active_next_due_at = datetime.fromisoformat(rows["active-schedule"].next_due_at.replace("Z", "+00:00"))
     assert upgrade_started_at <= active_next_due_at <= upgrade_finished_at + timedelta(seconds=1)
     assert rows["active-schedule"].status == "active"
     assert rows["disabled-schedule"].trigger_type == "cron"
     assert rows["disabled-schedule"].timezone == "UTC"
+    assert rows["disabled-schedule"].runtime_config_updated_at == rows["disabled-schedule"].updated_at
     assert rows["disabled-schedule"].next_due_at is None
     assert rows["disabled-schedule"].status == "paused"
     assert rows["disabled-schedule"].paused_reason == "disabled_before_pipeline_v2_upgrade"

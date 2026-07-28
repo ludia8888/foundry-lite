@@ -124,6 +124,7 @@ pipeline_schedules = Table(
     Column("trigger_type", String),
     Column("timezone", String),
     Column("next_due_at", String),
+    Column("runtime_config_updated_at", String),
     Column("lease_owner", String),
     Column("lease_token", String),
     Column("lease_expires_at", String),

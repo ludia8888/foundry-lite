@@ -115,14 +115,24 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
     schedule = foundry.pipelines.upsert_schedule(
         "orders_readiness",
         version_id=str(version["id"]),
-        schedule={"triggerType": "interval", "timezone": "UTC", "intervalSeconds": 900},
+        schedule={
+            "triggerType": "interval",
+            "timezone": "UTC",
+            "intervalSeconds": 900,
+            "startAt": "2099-01-01T00:00:00Z",
+        },
         idempotency_key="schedule-orders-readiness-v1",
         ctx=ctx,
     )
     replayed_schedule = foundry.pipelines.upsert_schedule(
         "orders_readiness",
         version_id=str(version["id"]),
-        schedule={"triggerType": "interval", "timezone": "UTC", "intervalSeconds": 900},
+        schedule={
+            "triggerType": "interval",
+            "timezone": "UTC",
+            "intervalSeconds": 900,
+            "startAt": "2099-01-01T00:00:00Z",
+        },
         idempotency_key="schedule-orders-readiness-v1",
         ctx=ctx,
     )
@@ -134,9 +144,27 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
             idempotency_key="schedule-orders-readiness-v1",
             ctx=ctx,
         )
+    legacy_updated_at = schedule_iso(parse_schedule_timestamp(_now(), field="now") + timedelta(seconds=1))
+    with foundry.engine.begin() as transaction:
+        transaction.execute(
+            update(db.pipeline_schedules)
+            .where(db.pipeline_schedules.c.id == schedule["id"])
+            .values(
+                schedule={"type": "interval", "timezone": "UTC", "intervalMinutes": 15},
+                enabled=True,
+                updated_by="legacy-app-user",
+                updated_at=legacy_updated_at,
+            )
+        )
     loaded_schedule = foundry.pipelines.get_schedule("orders_readiness", ctx=ctx)
     due = foundry.pipelines.preview_due(max_runs=0, ctx=ctx)
     ticked = foundry.pipelines.tick(max_runs=1, ctx=ctx)
+    with foundry.engine.connect() as connection:
+        runtime_config_updated_at = connection.execute(
+            select(db.pipeline_schedules.c.runtime_config_updated_at).where(
+                db.pipeline_schedules.c.id == schedule["id"]
+            )
+        ).scalar_one()
     paused_schedule = foundry.pipelines.pause_schedule(
         "orders_readiness",
         idempotency_key="pause-orders-readiness-v1",
@@ -222,8 +250,10 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
     assert loaded_schedule is not None
     assert loaded_schedule["id"] == schedule["id"]
     assert due["maxRuns"] == 1
-    assert due["items"][0]["pipelineId"] == "orders_readiness"
+    assert due["items"] == []
+    assert ticked["reconciled"] == 1
     assert ticked["started"][0]["run"]["status"] == "succeeded"
+    assert runtime_config_updated_at == legacy_updated_at
     assert paused_schedule["status"] == "paused"
     assert replayed_pause["status"] == "paused"
     assert resumed_schedule["status"] == "active"
@@ -245,6 +275,7 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
         event["event_type"] == "pipeline.cancelled" and event["resource_id"] == cancelled["id"]
         for event in audit_events
     )
+    assert any(event["event_type"] == "pipeline.schedule.reconciled" for event in audit_events)
     assert claimed_run is not None and claimed_run["status"] == "executing"
     with pytest.raises(ConflictDetected, match="cancellation is no longer safe"):
         foundry.pipelines.cancel(str(executing_run["id"]), ctx=ctx)

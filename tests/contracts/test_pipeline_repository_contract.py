@@ -17,7 +17,7 @@ from foundry_lite.application.ports.pipeline_repository import (
 from foundry_lite.application.state_transitions import PIPELINE_RUN_FAILED, PIPELINE_RUN_SUCCEEDED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.pipeline_repository import SqlAlchemyPipelineRepository
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.engine import Engine
 
 
@@ -395,6 +395,7 @@ def _assert_pipeline_scheduler_repository_contract(engine: Engine) -> None:
         )
     assert not_due == []
     assert [row["id"] for row in due] == [schedule["id"]]
+    _assert_legacy_schedule_write_is_reconcilable(repository, engine, schedule)
 
     first_claim = _claim_schedule(repository, engine, schedule, "worker-a", "lease-a", "2026-07-05T00:07:00Z")
     duplicate_claim = _claim_schedule(repository, engine, schedule, "worker-b", "lease-b", "2026-07-05T00:08:00Z")
@@ -426,6 +427,60 @@ def _assert_pipeline_scheduler_repository_contract(engine: Engine) -> None:
 
     _assert_expired_lease_takeover(repository, engine, completed)
     _assert_schedule_operation_idempotency(repository, engine)
+
+
+def _assert_legacy_schedule_write_is_reconcilable(
+    repository: SqlAlchemyPipelineRepository,
+    engine: Engine,
+    schedule: dict[str, object],
+) -> None:
+    legacy_updated_at = "2026-07-05T00:05:30Z"
+    with engine.begin() as transaction:
+        transaction.execute(
+            update(db.pipeline_schedules)
+            .where(db.pipeline_schedules.c.id == schedule["id"])
+            .values(
+                schedule={"type": "interval", "intervalMinutes": 5, "timezone": "UTC"},
+                enabled=True,
+                updated_at=legacy_updated_at,
+            )
+        )
+        stale = repository.list_schedules_needing_reconciliation(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            observed_at="2026-07-05T00:06:00Z",
+            limit=10,
+        )
+        reconciled = repository.reconcile_schedule_runtime(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            schedule_id=str(schedule["id"]),
+            expected_updated_at=legacy_updated_at,
+            observed_at="2026-07-05T00:06:00Z",
+            schedule={"triggerType": "interval", "intervalSeconds": 300, "timezone": "UTC"},
+            status="active",
+            trigger_type="interval",
+            timezone="UTC",
+            next_due_at="2026-07-05T00:06:00Z",
+            paused_reason=None,
+        )
+        stale_retry = repository.reconcile_schedule_runtime(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            schedule_id=str(schedule["id"]),
+            expected_updated_at=legacy_updated_at,
+            observed_at="2026-07-05T00:06:00Z",
+            schedule={"triggerType": "interval", "intervalSeconds": 300, "timezone": "UTC"},
+            status="active",
+            trigger_type="interval",
+            timezone="UTC",
+            next_due_at="2026-07-05T00:06:00Z",
+            paused_reason=None,
+        )
+    assert [row["id"] for row in stale] == [schedule["id"]]
+    assert reconciled is not None
+    assert reconciled["runtime_config_updated_at"] == legacy_updated_at
+    assert stale_retry is None
 
 
 def _claim_schedule(

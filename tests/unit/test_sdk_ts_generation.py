@@ -182,6 +182,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipCitationNavigationResolveRequest = { navigationRef: string };" in generated
     assert "export type CitationNavigationEvidence = {" in generated
     assert "export type CitationNavigationResolution = {" in generated
+    assert "evidence: CitationNavigationEvidence | null;" in generated
     assert "export type MediaProcessorDescriptor = Record<string, unknown> & {" in generated
     assert "export type MediaContentUnit = {" in generated
     assert "export type MediaContentUnitList = {" in generated

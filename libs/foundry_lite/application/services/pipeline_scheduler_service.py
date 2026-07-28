@@ -24,6 +24,7 @@ from foundry_lite.application.services.pipeline_run_requests import require_depl
 from foundry_lite.application.services.pipeline_run_service import PipelineRunService
 from foundry_lite.application.services.pipeline_schedule_runtime import (
     initial_next_due_at,
+    normalize_legacy_pipeline_schedule,
     normalize_pipeline_schedule,
     schedule_iso,
     schedule_operation_fingerprint,
@@ -31,7 +32,12 @@ from foundry_lite.application.services.pipeline_schedule_runtime import (
     scheduled_run_idempotency_key,
     scheduler_now,
 )
+from foundry_lite.application.services.pipeline_scheduler_evidence import (
+    record_pipeline_schedule_event,
+    require_pipeline_schedule_write,
+)
 from foundry_lite.application.services.pipeline_scheduler_queries import (
+    list_due_schedule_rows,
     require_pipeline_schedule,
     require_schedule_version,
 )
@@ -49,6 +55,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 _LEASE_SECONDS = 60
+_RECONCILIATION_LIMIT = 100
 _SUCCESS_STATUSES = {"succeeded"}
 _SKIPPED_REASONS = {"lease_not_acquired", "run_in_progress"}
 
@@ -71,7 +78,7 @@ class PipelineSchedulerService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
-        self._require_schedule_write(ctx, "upsert_pipeline_schedule", pipeline_id)
+        require_pipeline_schedule_write(self.runtime_service, ctx, "upsert_pipeline_schedule", pipeline_id)
         now = scheduler_now()
         request = upsert_request(version_id, schedule, enabled)
         spec = normalize_pipeline_schedule(schedule, is_enabled=enabled, now=now)
@@ -135,7 +142,7 @@ class PipelineSchedulerService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
-        self._require_schedule_write(ctx, "delete_pipeline_schedule", pipeline_id)
+        require_pipeline_schedule_write(self.runtime_service, ctx, "delete_pipeline_schedule", pipeline_id)
         fingerprint = schedule_operation_fingerprint(pipeline_id, "delete", {})
         with self.engine.begin() as conn:
             reservation = self._reserve_operation(
@@ -195,11 +202,18 @@ class PipelineSchedulerService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
-        self._require_schedule_write(ctx, "tick_pipeline_schedules", "tick")
+        require_pipeline_schedule_write(self.runtime_service, ctx, "tick_pipeline_schedules", "tick")
         limit = bounded_pipeline_limit(max_runs)
         evaluated_at = scheduler_now(now)
         owner = scheduler_owner or f"pipeline-scheduler:{ctx.request_id}"
-        candidates = self._due_rows(ctx, evaluated_at, limit)
+        reconciled = self._reconcile_legacy_schedules(ctx, evaluated_at)
+        candidates = list_due_schedule_rows(
+            self.engine,
+            self.pipeline_repository,
+            tenant_id=ctx.tenant_id,
+            due_at=schedule_iso(evaluated_at),
+            limit=limit,
+        )
         results = [self._claim_and_run(ctx, row, evaluated_at, owner) for row in candidates]
         started = [result for result in results if result.get("reason") not in _SKIPPED_REASONS]
         skipped = [result for result in results if result.get("reason") in _SKIPPED_REASONS]
@@ -209,6 +223,7 @@ class PipelineSchedulerService(CoreService):
             "evaluated": len(candidates),
             "started": started,
             "skipped": skipped,
+            "reconciled": reconciled,
             "maxRuns": limit,
         }
 
@@ -222,7 +237,12 @@ class PipelineSchedulerService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         operation = "resume" if target_status == "active" else "pause"
-        self._require_schedule_write(ctx, f"{operation}_pipeline_schedule", pipeline_id)
+        require_pipeline_schedule_write(
+            self.runtime_service,
+            ctx,
+            f"{operation}_pipeline_schedule",
+            pipeline_id,
+        )
         fingerprint = schedule_operation_fingerprint(pipeline_id, operation, {})
         now = scheduler_now()
         with self.engine.begin() as conn:
@@ -284,7 +304,7 @@ class PipelineSchedulerService(CoreService):
         )
         if completed is None:
             raise ConflictDetected("pipeline schedule operation result was not persisted")
-        self._record_event(conn, ctx, row, event, result, idempotency_key)
+        record_pipeline_schedule_event(self.runtime_service, conn, ctx, row, event, result, idempotency_key)
 
     def _upsert_row(
         self,
@@ -337,19 +357,59 @@ class PipelineSchedulerService(CoreService):
             raise NotFound("pipeline schedule not found", details={"pipeline_id": current["pipeline_id"]})
         return row
 
-    def _due_rows(
+    def _reconcile_legacy_schedules(
         self,
         ctx: RequestContext,
         now: datetime,
-        limit: int,
-    ) -> list[PipelineScheduleRow]:
+    ) -> int:
+        observed_at = schedule_iso(now)
         with self.engine.begin() as conn:
-            return self.pipeline_repository.list_due_schedules(
+            rows = self.pipeline_repository.list_schedules_needing_reconciliation(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
-                due_at=schedule_iso(now),
-                limit=limit,
+                observed_at=observed_at,
+                limit=_RECONCILIATION_LIMIT,
             )
+            return sum(self._reconcile_legacy_schedule(conn, ctx, row, now) for row in rows)
+
+    def _reconcile_legacy_schedule(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        row: PipelineScheduleRow,
+        now: datetime,
+    ) -> int:
+        spec, is_fallback = normalize_legacy_pipeline_schedule(
+            row["schedule"],
+            is_enabled=bool(row["enabled"]),
+            now=now,
+        )
+        canonical_schedule = schedule_spec_payload(spec)
+        status = "active" if spec.is_enabled else "paused"
+        reconciled = self.pipeline_repository.reconcile_schedule_runtime(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            schedule_id=str(row["id"]),
+            expected_updated_at=str(row["updated_at"]),
+            observed_at=schedule_iso(now),
+            schedule=canonical_schedule,
+            status=status,
+            trigger_type=spec.trigger_kind,
+            timezone=spec.timezone,
+            next_due_at=initial_next_due_at(spec, now),
+            paused_reason=None if spec.is_enabled else "disabled_by_legacy_writer",
+        )
+        if reconciled is None:
+            return 0
+        payload = cast(dict[str, object], schedule_payload(reconciled))
+        payload["reconciliation"] = {
+            "legacyWriterUpdatedAt": row["updated_at"],
+            "originalSchedule": dict(row["schedule"]),
+            "fallbackApplied": is_fallback,
+        }
+        key = f"pipeline-schedule-reconcile:{row['id']}:{row['updated_at']}"
+        record_pipeline_schedule_event(self.runtime_service, conn, ctx, reconciled, "reconciled", payload, key)
+        return 1
 
     def _claim_and_run(
         self,
@@ -427,7 +487,8 @@ class PipelineSchedulerService(CoreService):
             if completed is None:
                 return lease_lost_result(claimed, slot_start, run)
             result = tick_result(completed, slot_start, run, error)
-            self._record_event(
+            record_pipeline_schedule_event(
+                self.runtime_service,
                 conn,
                 ctx,
                 completed,
@@ -436,45 +497,3 @@ class PipelineSchedulerService(CoreService):
                 scheduled_run_idempotency_key(str(claimed["id"]), slot_start),
             )
             return result
-
-    def _record_event(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        row: PipelineScheduleRow | None,
-        event: str,
-        result: Mapping[str, object],
-        idempotency_key: str,
-    ) -> None:
-        pipeline_id = str(row["pipeline_id"]) if row is not None else "unknown"
-        schedule_id = str(row["id"]) if row is not None else pipeline_id
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type=f"pipeline.schedule.{event}",
-            resource_type="pipeline_schedule",
-            resource_id=schedule_id,
-            action=f"pipeline:schedule:{event}",
-            after_ref=result,
-            correlation_id=idempotency_key,
-        )
-        self.runtime_service._outbox(
-            conn,
-            ctx,
-            f"pipeline.schedule.{event}",
-            "pipeline_schedule",
-            schedule_id,
-            {"pipelineId": pipeline_id, **dict(result)},
-            idempotency_key=idempotency_key,
-            correlation_id=idempotency_key,
-        )
-
-    def _require_schedule_write(self, ctx: RequestContext, operation: str, resource_id: str) -> None:
-        permission = "pipeline:run" if operation == "tick_pipeline_schedules" else "pipeline:deploy"
-        self.runtime_service._require_or_audit(ctx, permission, "pipeline_schedule", resource_id)
-        self.runtime_service._require_write_traffic_open(
-            ctx,
-            operation=operation,
-            resource_type="pipeline_schedule",
-            resource_id=resource_id,
-        )

@@ -77,7 +77,15 @@ def _extend_pipeline_runs() -> None:
 
 
 def _extend_pipeline_schedules() -> None:
-    for name in ("trigger_type", "timezone", "next_due_at", "lease_owner", "lease_token", "lease_expires_at"):
+    for name in (
+        "trigger_type",
+        "timezone",
+        "next_due_at",
+        "runtime_config_updated_at",
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+    ):
         op.add_column("pipeline_schedules", sa.Column(name, sa.String(), nullable=True))
     op.add_column(
         "pipeline_schedules",
@@ -109,6 +117,7 @@ def _backfill_pipeline_schedules() -> None:
         sa.column("trigger_type", sa.String()),
         sa.column("timezone", sa.String()),
         sa.column("next_due_at", sa.String()),
+        sa.column("runtime_config_updated_at", sa.String()),
         sa.column("status", sa.String()),
         sa.column("paused_reason", sa.Text()),
     )
@@ -136,6 +145,7 @@ def _backfill_pipeline_schedules() -> None:
                 trigger_type=_legacy_trigger_type(schedule),
                 timezone=str(schedule.get("timezone") or "UTC"),
                 next_due_at=migration_started_at if is_enabled else None,
+                runtime_config_updated_at=str(row["updated_at"]),
                 status="active" if is_enabled else "paused",
                 paused_reason=None if is_enabled else "disabled_before_pipeline_v2_upgrade",
             )

@@ -770,7 +770,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  sourceVersion: string;",
         "  contentHash: string;",
         "  displayLabel: string;",
-        "  evidence: CitationNavigationEvidence;",
+        "  evidence: CitationNavigationEvidence | null;",
         "};",
         "export type AipEvalCaseRequest = {",
         "  caseApiName: string;",

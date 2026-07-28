@@ -89,6 +89,68 @@ def list_due_schedules(
     return [_row(row, PipelineScheduleRow) for row in rows]
 
 
+def list_schedules_needing_reconciliation(
+    transaction: Any,
+    tenant_id: str,
+    observed_at: str,
+    limit: int,
+) -> list[PipelineScheduleRow]:
+    rows = (
+        transaction.execute(
+            select(db.pipeline_schedules)
+            .where(
+                and_(
+                    db.pipeline_schedules.c.tenant_id == tenant_id,
+                    _runtime_config_is_stale(),
+                    _lease_is_claimable(observed_at),
+                )
+            )
+            .order_by(
+                db.pipeline_schedules.c.enabled.desc(),
+                db.pipeline_schedules.c.updated_at,
+                db.pipeline_schedules.c.id,
+            )
+            .limit(limit)
+        )
+        .mappings()
+        .all()
+    )
+    return [_row(row, PipelineScheduleRow) for row in rows]
+
+
+def reconcile_schedule_runtime(
+    transaction: Any,
+    *,
+    tenant_id: str,
+    schedule_id: str,
+    expected_updated_at: str,
+    observed_at: str,
+    values: dict[str, object],
+) -> PipelineScheduleRow | None:
+    result = transaction.execute(
+        update(db.pipeline_schedules)
+        .where(
+            and_(
+                db.pipeline_schedules.c.tenant_id == tenant_id,
+                db.pipeline_schedules.c.id == schedule_id,
+                db.pipeline_schedules.c.updated_at == expected_updated_at,
+                _runtime_config_is_stale(),
+                _lease_is_claimable(observed_at),
+            )
+        )
+        .values(
+            **values,
+            runtime_config_updated_at=expected_updated_at,
+            lease_owner=None,
+            lease_token=None,
+            lease_expires_at=None,
+        )
+    )
+    if not result.rowcount:
+        return None
+    return schedule_by_id(transaction, tenant_id, schedule_id)
+
+
 def claim_due_schedule(
     transaction: Any,
     *,
@@ -299,6 +361,7 @@ def _updated_schedule_values(record: PipelineScheduleRecord) -> dict[str, object
         "trigger_type": record.trigger_type,
         "timezone": record.timezone,
         "next_due_at": record.next_due_at,
+        "runtime_config_updated_at": record.updated_at,
         "paused_reason": record.paused_reason,
         "updated_by": record.updated_by,
         "updated_at": record.updated_at,
@@ -327,6 +390,20 @@ def _schedule_identity(tenant_id: str, schedule_id: str) -> Any:
     return and_(
         db.pipeline_schedules.c.tenant_id == tenant_id,
         db.pipeline_schedules.c.id == schedule_id,
+    )
+
+
+def _runtime_config_is_stale() -> Any:
+    return or_(
+        db.pipeline_schedules.c.runtime_config_updated_at.is_(None),
+        db.pipeline_schedules.c.runtime_config_updated_at != db.pipeline_schedules.c.updated_at,
+    )
+
+
+def _lease_is_claimable(observed_at: str) -> Any:
+    return or_(
+        db.pipeline_schedules.c.lease_expires_at.is_(None),
+        db.pipeline_schedules.c.lease_expires_at <= observed_at,
     )
 
 

@@ -11,6 +11,7 @@ from foundry_lite.application.services.pipeline_execution_contracts import Pipel
 from foundry_lite.application.services.pipeline_schedule_runtime import (
     initial_next_due_at,
     next_due_after_slot,
+    normalize_legacy_pipeline_schedule,
     normalize_pipeline_schedule,
     parse_schedule_timestamp,
     pipeline_schedule_spec_from_row,
@@ -42,6 +43,25 @@ def test_interval_schedule_normalizes_legacy_minutes_and_advances_exact_slot() -
     assert initial_next_due_at(spec, now) == "2026-01-01T00:00:00Z"
     assert next_due_after_slot(spec, "2026-01-01T00:00:00Z") == "2026-01-01T00:15:00Z"
     assert resumed_next_due_at(spec, now) == "2026-01-01T00:15:00Z"
+
+
+def test_legacy_scheduler_fallback_keeps_pre_v2_enabled_schedule_runnable() -> None:
+    now = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+
+    spec, is_fallback = normalize_legacy_pipeline_schedule(
+        {"kind": "manual"},
+        is_enabled=True,
+        now=now,
+    )
+
+    assert is_fallback is True
+    assert schedule_spec_payload(spec) == {
+        "triggerType": "interval",
+        "timezone": "UTC",
+        "intervalSeconds": 60,
+        "startAt": "2026-01-01T00:00:00Z",
+    }
+    assert initial_next_due_at(spec, now) == "2026-01-01T00:00:00Z"
 
 
 def test_interval_schedule_skips_past_slots_without_replaying_backlog() -> None:
@@ -277,6 +297,7 @@ def _schedule_row() -> dict[str, object]:
         "trigger_type": "interval",
         "timezone": "UTC",
         "next_due_at": "2026-01-01T00:00:00Z",
+        "runtime_config_updated_at": "2026-01-01T00:00:00Z",
         "lease_owner": "worker-a",
         "lease_token": "lease-a",
         "lease_expires_at": "2026-01-01T00:01:00Z",

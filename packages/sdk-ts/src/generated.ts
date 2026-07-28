@@ -752,7 +752,7 @@ export type CitationNavigationResolution = {
   sourceVersion: string;
   contentHash: string;
   displayLabel: string;
-  evidence: CitationNavigationEvidence;
+  evidence: CitationNavigationEvidence | null;
 };
 export type AipEvalCaseRequest = {
   caseApiName: string;

@@ -14,6 +14,7 @@ from foundry_lite.domain.errors import ValidationFailed
 
 _MAX_CRON_LOOKAHEAD_MINUTES = 60 * 24 * 366 * 5
 _MAX_INTERVAL_SECONDS = 60 * 60 * 24 * 366 * 5
+_LEGACY_TICK_INTERVAL_SECONDS = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,23 @@ def normalize_pipeline_schedule(
     timezone = str(schedule.get("timezone") or "UTC").strip()
     _timezone(timezone)
     return _time_schedule_spec(schedule, trigger_kind, timezone, is_enabled, now)
+
+
+def normalize_legacy_pipeline_schedule(
+    schedule: Mapping[str, object],
+    *,
+    is_enabled: bool,
+    now: datetime,
+) -> tuple[PipelineScheduleSpec, bool]:
+    try:
+        return normalize_pipeline_schedule(schedule, is_enabled=is_enabled, now=now), False
+    except ValidationFailed:
+        fallback = {
+            "triggerType": "interval",
+            "timezone": "UTC",
+            "intervalSeconds": _LEGACY_TICK_INTERVAL_SECONDS,
+        }
+        return normalize_pipeline_schedule(fallback, is_enabled=is_enabled, now=now), True
 
 
 def schedule_spec_payload(spec: PipelineScheduleSpec) -> dict[str, object]:

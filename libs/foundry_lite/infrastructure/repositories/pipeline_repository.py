@@ -630,6 +630,52 @@ class SqlAlchemyPipelineRepository:
     ) -> list[PipelineScheduleRow]:
         return pipeline_schedule_rows.list_due_schedules(transaction, tenant_id, due_at, limit)
 
+    def list_schedules_needing_reconciliation(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        observed_at: str,
+        limit: int,
+    ) -> list[PipelineScheduleRow]:
+        return pipeline_schedule_rows.list_schedules_needing_reconciliation(
+            transaction,
+            tenant_id,
+            observed_at,
+            limit,
+        )
+
+    def reconcile_schedule_runtime(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        schedule_id: str,
+        expected_updated_at: str,
+        observed_at: str,
+        schedule: dict[str, object],
+        status: str,
+        trigger_type: str,
+        timezone: str,
+        next_due_at: str | None,
+        paused_reason: str | None,
+    ) -> PipelineScheduleRow | None:
+        return pipeline_schedule_rows.reconcile_schedule_runtime(
+            transaction,
+            tenant_id=tenant_id,
+            schedule_id=schedule_id,
+            expected_updated_at=expected_updated_at,
+            observed_at=observed_at,
+            values={
+                "schedule": schedule,
+                "status": status,
+                "trigger_type": trigger_type,
+                "timezone": timezone,
+                "next_due_at": next_due_at,
+                "paused_reason": paused_reason,
+            },
+        )
+
     def claim_due_schedule(
         self,
         *,
@@ -690,6 +736,7 @@ class SqlAlchemyPipelineRepository:
             "paused_reason": paused_reason,
             "updated_by": updated_by,
             "updated_at": updated_at,
+            "runtime_config_updated_at": updated_at,
         }
         if status == "active":
             values.update(failure_count=0, last_error=None)
