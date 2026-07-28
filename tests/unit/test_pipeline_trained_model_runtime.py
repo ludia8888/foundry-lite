@@ -123,6 +123,32 @@ def test_trained_model_runtime_rejects_complete_snapshot_drift_after_inference()
     assert raised.value.details["actual"]["memoryMiB"] == 16_384
 
 
+def test_trained_model_runtime_rejects_value_type_drift_from_pinned_output_schema() -> None:
+    class WrongValueTypeAdapter(LocalTrainedModelInferenceAdapter):
+        def infer(self, invocation: TrainedModelInvocation):
+            result = super().infer(invocation)
+            return replace(
+                result,
+                rows=({"riskScore": "0.8", "decision": "review"},),
+            )
+
+    node = _trained_model_node()
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=WrongValueTypeAdapter(),
+        run_id="prun_output_type_drift",
+        model_refs=(_model_pin(node.config),),
+    )
+
+    with pytest.raises(ValidationFailed, match="pinned output type") as raised:
+        runtime.execute(node, {"input": (_source_artifact(),)})
+
+    assert raised.value.details == {
+        "field": "riskScore",
+        "expectedType": "double",
+        "actualType": "str",
+    }
+
+
 def test_trained_model_invocation_without_snapshot_uses_legacy_coordinate_pin() -> None:
     definition = _definition()
     invocation = TrainedModelInvocation(
@@ -377,6 +403,77 @@ def test_trained_model_output_merge_enforces_row_and_schema_cardinality() -> Non
             definition,
         )
     assert raised.value.details == {"missing": ["decision"], "extra": ["extra"]}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (TrainedModelField("value", "boolean"), True),
+        (TrainedModelField("value", "byte"), 127),
+        (TrainedModelField("value", "short"), 32_767),
+        (TrainedModelField("value", "integer"), 2_147_483_647),
+        (TrainedModelField("value", "long"), 9_223_372_036_854_775_807),
+        (TrainedModelField("value", "float"), 1.5),
+        (TrainedModelField("value", "double"), 2),
+        (TrainedModelField("value", "decimal"), "12.340"),
+        (TrainedModelField("value", "string"), "text"),
+        (TrainedModelField("value", "binary"), "AP8="),
+        (TrainedModelField("value", "date"), "2026-07-28"),
+        (TrainedModelField("value", "timestamp"), "2026-07-28T12:30:00+00:00"),
+        (TrainedModelField("value", "array"), [1, 2]),
+        (TrainedModelField("value", "map"), {"key": "value"}),
+        (TrainedModelField("value", "struct"), {"key": "value"}),
+        (TrainedModelField("value", "mediaReference"), {"mediaItemVersionId": "mver-1"}),
+        (TrainedModelField("value", "string", is_required=False), None),
+    ],
+)
+def test_trained_model_output_merge_accepts_declared_value_types(
+    field: TrainedModelField,
+    value: object,
+) -> None:
+    definition = replace(_definition(), output_fields=(field,))
+
+    merged = merge_trained_model_outputs(
+        [{"id": 1}],
+        [{"value": value}],
+        {"outputMappings": {"value": "model_value"}},
+        definition,
+    )
+
+    assert merged == ({"id": 1, "model_value": value},)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (TrainedModelField("value", "boolean"), 1),
+        (TrainedModelField("value", "byte"), 128),
+        (TrainedModelField("value", "integer"), True),
+        (TrainedModelField("value", "double"), float("inf")),
+        (TrainedModelField("value", "decimal"), "not-a-decimal"),
+        (TrainedModelField("value", "decimal"), object()),
+        (TrainedModelField("value", "string"), 42),
+        (TrainedModelField("value", "array"), (1, 2)),
+        (TrainedModelField("value", "map"), "not-a-map"),
+        (TrainedModelField("value", "string"), None),
+    ],
+)
+def test_trained_model_output_merge_rejects_declared_value_type_drift(
+    field: TrainedModelField,
+    value: object,
+) -> None:
+    definition = replace(_definition(), output_fields=(field,))
+
+    with pytest.raises(ValidationFailed, match="pinned output type") as raised:
+        merge_trained_model_outputs(
+            [{"id": 1}],
+            [{"value": value}],
+            {"outputMappings": {"value": "model_value"}},
+            definition,
+        )
+
+    assert raised.value.details["field"] == "value"
+    assert "actualValue" not in raised.value.details
 
 
 def _definition() -> TrainedModelDefinition:

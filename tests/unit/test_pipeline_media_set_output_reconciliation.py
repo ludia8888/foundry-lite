@@ -1,36 +1,37 @@
+from types import SimpleNamespace
 from typing import Any, cast
 
-from foundry_lite.application.ports.media_repository import MediaTransactionRecord
-from foundry_lite.application.services.pipeline_media_set_output_reconciliation import (
-    handle_media_output_commit_failure,
+import pytest
+from foundry_lite.application.services.media.transactions import MediaCommitResult
+from foundry_lite.application.services.pipeline_media_output_port_types import (
+    MediaItemVersionRecord,
 )
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.application.services.pipeline_media_set_output_reconciliation import (
+    require_media_commit_receipt,
+)
+from foundry_lite.domain.errors import ConflictDetected
 
 
-def test_aborted_media_output_failure_does_not_abort_or_reconcile_again() -> None:
-    transaction = MediaTransactionRecord(
-        media_transaction_id="mtx-aborted",
-        tenant_id="tenant-demo",
-        media_set_id="media-set-1",
-        status="ABORTED",
-        mode="SNAPSHOT",
-        idempotency_key="pipeline-output:run-1:output",
-        request_fingerprint="request-fingerprint",
-        opened_at="2026-07-28T00:00:00Z",
-        aborted_at="2026-07-28T00:01:00Z",
+def test_media_commit_receipt_must_match_prevalidated_version_coordinates() -> None:
+    versions = [
+        cast(
+            MediaItemVersionRecord,
+            cast(Any, SimpleNamespace(media_item_version_id="mver-1")),
+        )
+    ]
+    matching = MediaCommitResult(
+        media_transaction_id="mtx-1",
+        committed_version_ids=("mver-1",),
+        head_version_id_by_item={},
+        committed_at="2026-07-28T00:00:00Z",
+    )
+    mismatched = MediaCommitResult(
+        media_transaction_id="mtx-1",
+        committed_version_ids=("mver-other",),
+        head_version_id_by_item={},
+        committed_at="2026-07-28T00:00:00Z",
     )
 
-    handle_media_output_commit_failure(
-        node=cast(Any, object()),
-        source=cast(Any, object()),
-        inputs={},
-        target_ref="media.output",
-        target=cast(Any, object()),
-        transaction_attempt=cast(Any, object()),
-        transaction=transaction,
-        entries=(),
-        committed_versions=(),
-        media_transactions=cast(Any, object()),
-        ctx=RequestContext(tenant_id="tenant-demo"),
-        exc=RuntimeError("original failure"),
-    )
+    require_media_commit_receipt(matching, versions)
+    with pytest.raises(ConflictDetected, match="does not match"):
+        require_media_commit_receipt(mismatched, versions)

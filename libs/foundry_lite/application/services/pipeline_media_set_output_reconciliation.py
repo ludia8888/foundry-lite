@@ -1,68 +1,50 @@
-"""Failure reconciliation around the Media Set output domain commit point."""
+"""Commit receipts and typed reconciliation for Media Set pipeline outputs."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
+from foundry_lite.application.services.media.transactions import MediaCommitResult
 from foundry_lite.application.services.pipeline_media_output_port_types import (
     MediaItemVersionRecord,
-    MediaSetRecord,
-    MediaTransactionRecord,
-)
-from foundry_lite.application.services.pipeline_media_output_service_types import (
-    MediaTransactionService,
-)
-from foundry_lite.application.services.pipeline_media_set_output_artifact import (
-    output_artifact,
-)
-from foundry_lite.application.services.pipeline_media_set_output_contracts import (
-    MediaOutputEntry,
-    MediaOutputTransactionAttempt,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2CommittedOutputReconciliationRequired,
     PipelineV2RuntimeArtifact,
-    PipelineV2RuntimeNode,
-    RuntimeInputs,
 )
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
 
 
-def handle_media_output_commit_failure(
-    *,
-    node: PipelineV2RuntimeNode,
-    source: PipelineV2RuntimeArtifact,
-    inputs: RuntimeInputs,
-    target_ref: str,
-    target: MediaSetRecord,
-    transaction_attempt: MediaOutputTransactionAttempt,
-    transaction: MediaTransactionRecord,
-    entries: Sequence[MediaOutputEntry],
-    committed_versions: Sequence[MediaItemVersionRecord],
-    media_transactions: MediaTransactionService,
-    ctx: RequestContext,
+def committed_media_versions(
+    versions: Sequence[MediaItemVersionRecord],
+    committed_at: str | None,
+) -> tuple[MediaItemVersionRecord, ...]:
+    return tuple(replace(version, status="COMMITTED", committed_at=committed_at) for version in versions)
+
+
+def require_media_commit_receipt(
+    result: MediaCommitResult,
+    versions: Sequence[MediaItemVersionRecord],
+) -> None:
+    expected_ids = {version.media_item_version_id for version in versions}
+    if set(result.committed_version_ids) == expected_ids:
+        return
+    raise ConflictDetected(
+        "pipeline Media Set commit receipt does not match its prevalidated versions",
+        details={
+            "mediaTransactionId": result.media_transaction_id,
+            "expectedVersionIds": sorted(expected_ids),
+            "actualVersionIds": sorted(result.committed_version_ids),
+        },
+    )
+
+
+def raise_media_output_reconciliation(
+    artifact: PipelineV2RuntimeArtifact,
     exc: Exception,
 ) -> None:
-    if transaction.status == "OPEN":
-        media_transactions.abort(
-            ctx,
-            media_transaction_id=transaction.media_transaction_id,
-            error={"code": getattr(exc, "code", type(exc).__name__)},
-        )
-        return
-    if transaction.status != "COMMITTED":
-        return
-    artifact = output_artifact(
-        node,
-        source,
-        inputs,
-        target_ref,
-        target,
-        transaction_attempt,
-        entries,
-        committed_versions,
-    )
     raise PipelineV2CommittedOutputReconciliationRequired(
-        "pipeline Media Set output committed but post-commit validation failed",
+        "pipeline Media Set output committed but secondary validation failed",
         artifact=artifact,
     ) from exc

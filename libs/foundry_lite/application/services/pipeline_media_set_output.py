@@ -21,8 +21,8 @@ from foundry_lite.application.services.pipeline_media_output_service_types impor
     MediaTransactionService,
     MediaUploadService,
 )
-from foundry_lite.application.services.pipeline_media_set_output_artifact import (
-    output_artifact,
+from foundry_lite.application.services.pipeline_media_set_output_commit_protocol import (
+    PipelineMediaSetOutputCommitProtocol,
 )
 from foundry_lite.application.services.pipeline_media_set_output_contracts import (
     MediaOutputContract,
@@ -31,9 +31,6 @@ from foundry_lite.application.services.pipeline_media_set_output_contracts impor
     PipelineMediaDerivativeBytesUnavailable,
     PipelineMediaOutputSourceCorrupt,
     PipelineMediaSetOutputContractMismatch,
-)
-from foundry_lite.application.services.pipeline_media_set_output_reconciliation import (
-    handle_media_output_commit_failure,
 )
 from foundry_lite.application.services.pipeline_media_set_output_security import (
     require_derivative_security_inheritance,
@@ -55,11 +52,9 @@ from foundry_lite.application.services.pipeline_media_set_output_support import 
     require_derivative_coordinates,
     require_item_coordinate,
     require_media_transaction_coordinates,
-    require_open_media_transaction,
     require_target_contract,
     required_text,
     schema_for_mime,
-    validate_output_versions,
     versions_by_entry,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
@@ -112,67 +107,25 @@ class PipelineMediaSetOutputCommitter:
         target = self._target_media_set(target_ref, contract)
         fingerprint = request_fingerprint(self._run_id, node, source, target_ref, entries)
         transaction_attempt = self._open_transaction(node, target, fingerprint)
-        versions = self._commit_versions_or_reconcile(
-            node,
-            source,
-            inputs,
-            target_ref,
-            target,
-            transaction_attempt,
-            fingerprint,
-            entries,
+        protocol = PipelineMediaSetOutputCommitProtocol(
+            media_storage=self._media_storage,
+            media_transactions=self._media_transactions,
+            ctx=self._ctx,
+            require_active_lease=self._execution_lease_guard.require_active,
+            transaction_loader=self._transaction,
+            versions_loader=self._transaction_versions,
+            stage_missing_entries=self._stage_missing_entries,
         )
-        return output_artifact(
-            node,
-            source,
-            inputs,
-            target_ref,
-            target,
-            transaction_attempt,
-            entries,
-            versions,
+        return protocol.commit(
+            node=node,
+            source=source,
+            inputs=inputs,
+            target_ref=target_ref,
+            target=target,
+            transaction_attempt=transaction_attempt,
+            request_fingerprint=fingerprint,
+            entries=entries,
         )
-
-    def _commit_versions_or_reconcile(
-        self,
-        node: PipelineV2RuntimeNode,
-        source: PipelineV2RuntimeArtifact,
-        inputs: RuntimeInputs,
-        target_ref: str,
-        target: MediaSetRecord,
-        transaction_attempt: MediaOutputTransactionAttempt,
-        fingerprint: str,
-        entries: Sequence[MediaOutputEntry],
-    ) -> list[MediaItemVersionRecord]:
-        try:
-            return self._stage_validate_commit(
-                node,
-                source,
-                target,
-                transaction_attempt,
-                fingerprint,
-                entries,
-            )
-        except Exception as exc:
-            transaction_id = transaction_attempt.media_transaction_id
-            transaction = self._transaction(transaction_id)
-            handle_media_output_commit_failure(
-                node=node,
-                source=source,
-                inputs=inputs,
-                target_ref=target_ref,
-                target=target,
-                transaction_attempt=transaction_attempt,
-                transaction=transaction,
-                entries=entries,
-                committed_versions=(
-                    self._transaction_versions(transaction_id) if transaction.status == "COMMITTED" else ()
-                ),
-                media_transactions=self._media_transactions,
-                ctx=self._ctx,
-                exc=exc,
-            )
-            raise
 
     def _entries(
         self,
@@ -354,47 +307,6 @@ class PipelineMediaSetOutputCommitter:
                 )
             generation += 1
 
-    def _stage_validate_commit(
-        self,
-        node: PipelineV2RuntimeNode,
-        source: PipelineV2RuntimeArtifact,
-        target: MediaSetRecord,
-        transaction_attempt: MediaOutputTransactionAttempt,
-        request_fingerprint: str,
-        entries: Sequence[MediaOutputEntry],
-    ) -> list[MediaItemVersionRecord]:
-        transaction = self._transaction(transaction_attempt.media_transaction_id)
-        if transaction.status == "COMMITTED":
-            return self._validated_versions(
-                transaction_attempt,
-                entries,
-                target,
-                request_fingerprint,
-                is_committed=True,
-            )
-        require_open_media_transaction(transaction)
-        self._stage_missing_entries(
-            node,
-            source,
-            target,
-            transaction_attempt,
-            request_fingerprint,
-            entries,
-        )
-        self._validated_versions(transaction_attempt, entries, target, request_fingerprint)
-        self._media_transactions.commit(
-            self._ctx,
-            media_transaction_id=transaction_attempt.media_transaction_id,
-            before_commit=self._execution_lease_guard.require_active,
-        )
-        return self._validated_versions(
-            transaction_attempt,
-            entries,
-            target,
-            request_fingerprint,
-            is_committed=True,
-        )
-
     def _stage_missing_entries(
         self,
         node: PipelineV2RuntimeNode,
@@ -415,27 +327,6 @@ class PipelineMediaSetOutputCommitter:
                     request_fingerprint,
                     entry,
                 )
-
-    def _validated_versions(
-        self,
-        transaction_attempt: MediaOutputTransactionAttempt,
-        entries: Sequence[MediaOutputEntry],
-        target: MediaSetRecord,
-        request_fingerprint: str,
-        *,
-        is_committed: bool = False,
-    ) -> list[MediaItemVersionRecord]:
-        versions = self._transaction_versions(transaction_attempt.media_transaction_id)
-        validate_output_versions(
-            versions,
-            entries,
-            target,
-            request_fingerprint,
-            transaction_attempt.generation,
-            self._media_storage,
-            is_committed=is_committed,
-        )
-        return versions
 
     def _stage_entry(
         self,

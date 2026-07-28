@@ -21,6 +21,7 @@ class MediaCommitResult:
     media_transaction_id: str
     committed_version_ids: tuple[str, ...]
     head_version_id_by_item: dict[str, str | None]
+    committed_at: str | None
 
 
 class MediaTransactionService(CoreService):
@@ -253,6 +254,10 @@ class MediaTransactionService(CoreService):
             media_transaction_id=media_transaction_id,
             committed_version_ids=tuple(version.media_item_version_id for version in committed),
             head_version_id_by_item=heads,
+            committed_at=max(
+                (version.committed_at for version in committed if version.committed_at is not None),
+                default=None,
+            ),
         )
 
 

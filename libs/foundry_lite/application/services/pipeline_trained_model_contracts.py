@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from decimal import Decimal, InvalidOperation
+from math import isfinite
 
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
@@ -12,6 +14,12 @@ from foundry_lite.application.ports.trained_model_inference import (
 from foundry_lite.domain.errors import ValidationFailed
 
 JsonObject = dict[str, object]
+_INTEGER_RANGES = {
+    "byte": (-128, 127),
+    "short": (-32_768, 32_767),
+    "integer": (-2_147_483_648, 2_147_483_647),
+    "long": (-9_223_372_036_854_775_808, 9_223_372_036_854_775_807),
+}
 
 SUPPORTED_TRAINED_MODEL_TYPES = frozenset(
     {
@@ -331,5 +339,55 @@ def _merged_output(
         )
     result = dict(source)
     for field in definition.output_fields:
-        result[str(aliases[field.name])] = output[field.name]
+        value = output[field.name]
+        _require_trained_model_output_value(field, value)
+        result[str(aliases[field.name])] = value
     return result
+
+
+def _require_trained_model_output_value(
+    field: TrainedModelField,
+    value: object,
+) -> None:
+    if _is_trained_model_value(field, value):
+        return
+    raise ValidationFailed(
+        "trained model returned a value that contradicts its pinned output type",
+        details={
+            "field": field.name,
+            "expectedType": field.data_type,
+            "actualType": type(value).__name__,
+        },
+    )
+
+
+def _is_trained_model_value(field: TrainedModelField, value: object) -> bool:
+    if value is None:
+        return not field.is_required
+    if field.data_type in _INTEGER_RANGES:
+        minimum, maximum = _INTEGER_RANGES[field.data_type]
+        return isinstance(value, int) and not isinstance(value, bool) and minimum <= value <= maximum
+    return _is_non_integer_trained_model_value(field.data_type, value)
+
+
+def _is_non_integer_trained_model_value(data_type: str, value: object) -> bool:
+    if data_type == "boolean":
+        return isinstance(value, bool)
+    if data_type in {"float", "double"}:
+        return isinstance(value, int | float) and not isinstance(value, bool) and isfinite(float(value))
+    if data_type == "decimal":
+        return _is_decimal_value(value)
+    if data_type in {"string", "binary", "date", "timestamp"}:
+        return isinstance(value, str)
+    if data_type == "array":
+        return isinstance(value, list)
+    return isinstance(value, Mapping)
+
+
+def _is_decimal_value(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str | int | float | Decimal):
+        return False
+    try:
+        return Decimal(str(value)).is_finite()
+    except InvalidOperation:
+        return False

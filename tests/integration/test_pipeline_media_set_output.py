@@ -22,6 +22,7 @@ from foundry_lite.application.services.pipeline_run_recovery import (
     PipelineExecutionLeaseGuard,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
+    PipelineV2CommittedOutputReconciliationRequired,
     PipelineV2RuntimeArtifact,
     PipelineV2RuntimeNode,
 )
@@ -301,6 +302,56 @@ def test_media_set_output_retry_uses_a_new_fenced_generation_after_abort(
     assert len(_committed_target_versions(fixture, target.media_set_id)) == 1
 
 
+def test_media_set_output_preserves_primary_error_when_abort_evidence_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "abort_evidence_failure", item_count=1)
+    committer, node, inputs, transaction_service = _direct_committer(fixture)
+
+    def fail_commit(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("primary media commit failure")
+
+    def fail_abort(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("secondary abort evidence failure")
+
+    monkeypatch.setattr(transaction_service, "commit", fail_commit)
+    monkeypatch.setattr(transaction_service, "abort", fail_abort)
+
+    with pytest.raises(RuntimeError, match="primary media commit failure") as raised:
+        committer.commit(node, inputs)
+
+    assert raised.value.__notes__ == ["media output abort failed: RuntimeError"]
+
+
+def test_committed_media_set_replay_read_failure_keeps_transaction_coordinates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "committed_replay_read_failure", item_count=1)
+    committer, node, inputs, _transaction_service = _direct_committer(fixture)
+    committed = committer.commit(node, inputs)
+
+    def fail_version_read(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected committed version read failure")
+
+    monkeypatch.setattr(
+        fixture.dependencies.media_repository,
+        "fetch_transaction_versions",
+        fail_version_read,
+    )
+
+    with pytest.raises(PipelineV2CommittedOutputReconciliationRequired) as raised:
+        committer.commit(node, inputs)
+
+    artifact = raised.value.committed_artifact
+    assert artifact.status == "COMMITTED"
+    assert artifact.is_serving is True
+    assert artifact.artifact_ref["mediaTransactionId"] == committed.artifact_ref["mediaTransactionId"]
+    assert artifact.artifact_ref["mediaSetId"] == committed.artifact_ref["mediaSetId"]
+    assert artifact.manifest["coordinateCompleteness"] == "TRANSACTION_ONLY"
+
+
 def test_media_set_output_evidence_failure_preserves_the_serving_commit_as_partial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -360,9 +411,13 @@ def test_media_set_output_post_commit_validation_failure_preserves_serving_commi
         ),
     )
     transaction_service = fixture.foundry._services.media.transaction
+    media_repository = fixture.dependencies.media_repository
     real_commit = transaction_service.commit
     real_stat = fixture.dependencies.media_storage.stat
+    real_transaction_by_id = media_repository.transaction_by_id
+    real_fetch_versions = media_repository.fetch_transaction_versions
     has_committed = False
+    repository_reads_after_commit = 0
 
     def commit_then_enable_failure(*args: object, **kwargs: object):
         nonlocal has_committed
@@ -375,8 +430,24 @@ def test_media_set_output_post_commit_validation_failure_preserves_serving_commi
             raise RuntimeError("injected post-commit storage stat failure")
         return real_stat(object_key)
 
+    def fail_post_commit_transaction_read(*args: object, **kwargs: object):
+        nonlocal repository_reads_after_commit
+        if has_committed:
+            repository_reads_after_commit += 1
+            raise RuntimeError("injected post-commit transaction read failure")
+        return real_transaction_by_id(*args, **kwargs)
+
+    def fail_post_commit_version_read(*args: object, **kwargs: object):
+        nonlocal repository_reads_after_commit
+        if has_committed:
+            repository_reads_after_commit += 1
+            raise RuntimeError("injected post-commit version read failure")
+        return real_fetch_versions(*args, **kwargs)
+
     monkeypatch.setattr(transaction_service, "commit", commit_then_enable_failure)
     monkeypatch.setattr(fixture.dependencies.media_storage, "stat", fail_post_commit_stat)
+    monkeypatch.setattr(media_repository, "transaction_by_id", fail_post_commit_transaction_read)
+    monkeypatch.setattr(media_repository, "fetch_transaction_versions", fail_post_commit_version_read)
 
     run = fixture.foundry.pipelines.run(
         fixture.pipeline_id,
@@ -397,6 +468,7 @@ def test_media_set_output_post_commit_validation_failure_preserves_serving_commi
     assert [row["status"] for row in transactions] == ["COMMITTED"]
     assert len(_committed_target_versions(fixture, target.media_set_id)) == 1
     assert _run_artifact_count(fixture, str(run["id"]), "output") == 0
+    assert repository_reads_after_commit == 0
 
 
 def test_stale_run_recovers_media_transaction_committed_before_artifact_passport(

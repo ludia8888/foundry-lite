@@ -59,6 +59,47 @@ def output_artifact(
     )
 
 
+def transaction_reconciliation_artifact(
+    node: PipelineV2RuntimeNode,
+    source: PipelineV2RuntimeArtifact,
+    inputs: RuntimeInputs,
+    target_ref: str,
+    target: MediaSetRecord,
+    transaction_attempt: MediaOutputTransactionAttempt,
+    entries: Sequence[MediaOutputEntry],
+    committed_version_ids: Sequence[str] = (),
+) -> PipelineV2RuntimeArtifact:
+    return PipelineV2RuntimeArtifact(
+        node_id=node.node_id,
+        descriptor_id=node.descriptor_id,
+        spec_version=node.spec_version,
+        port_id="media",
+        artifact_kind="media_set_selection",
+        plane="media",
+        items=(),
+        artifact_ref={
+            "mediaSetRef": target_ref,
+            "mediaSetId": target.media_set_id,
+            "mediaTransactionId": transaction_attempt.media_transaction_id,
+            "mediaTransactionGeneration": transaction_attempt.generation,
+            "mediaItemVersionIds": list(committed_version_ids),
+        },
+        manifest={
+            "inputArtifacts": artifact_input_refs(inputs),
+            "sourceArtifactKind": source.artifact_kind,
+            "expectedItemCount": len(entries),
+            "commitKind": "SERVING_ASSET",
+            "commitProtocol": ["stage", "validate", "commit"],
+            "transactionGeneration": transaction_attempt.generation,
+            "coordinateCompleteness": "TRANSACTION_ONLY",
+            "sourceLineage": [_source_lineage(entry) for entry in entries],
+        },
+        security_envelope=inherited_runtime_security([source]),
+        status="COMMITTED",
+        is_serving=True,
+    )
+
+
 def _output_items(
     target_ref: str,
     target: MediaSetRecord,
@@ -129,5 +170,13 @@ def _lineage_manifest(entry: MediaOutputEntry, item: Mapping[str, object]) -> Js
         "sourceMediaItemVersionId": entry.source_media_item_version_id,
         "mediaDerivativeId": entry.media_derivative_id,
         "targetMediaItemVersionId": item["mediaItemVersionId"],
+        "entryFingerprint": entry.entry_fingerprint,
+    }
+
+
+def _source_lineage(entry: MediaOutputEntry) -> JsonObject:
+    return {
+        "sourceMediaItemVersionId": entry.source_media_item_version_id,
+        "mediaDerivativeId": entry.media_derivative_id,
         "entryFingerprint": entry.entry_fingerprint,
     }
