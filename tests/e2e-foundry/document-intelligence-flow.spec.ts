@@ -358,20 +358,31 @@ test("Document Intelligence previews a real long PDF with layout evidence and no
   }
 
   const comparisonGraphs: JsonRecord[] = [];
+  let activeComparisonCreates = 0;
+  let maximumActiveComparisonCreates = 0;
+  const isComparisonCreateRequest = (request: Request) =>
+    request.method() === "POST" &&
+    request.url().includes("/preview-runs") &&
+    request
+      .headers()
+      ["idempotency-key"]?.startsWith("document-lab-comparison-");
   const captureComparisonRequest = (request: Request) => {
-    if (
-      request.method() !== "POST" ||
-      !request.url().includes("/preview-runs") ||
-      !request
-        .headers()
-        ["idempotency-key"]?.startsWith("document-lab-comparison-")
-    ) {
-      return;
-    }
+    if (!isComparisonCreateRequest(request)) return;
+    activeComparisonCreates += 1;
+    maximumActiveComparisonCreates = Math.max(
+      maximumActiveComparisonCreates,
+      activeComparisonCreates,
+    );
     const payload = request.postDataJSON() as JsonRecord;
     comparisonGraphs.push(payload.graph as JsonRecord);
   };
+  const completeComparisonRequest = (response: { request(): Request }) => {
+    if (isComparisonCreateRequest(response.request())) {
+      activeComparisonCreates -= 1;
+    }
+  };
   page.on("request", captureComparisonRequest);
+  page.on("response", completeComparisonRequest);
   await page
     .getByRole("button", { name: "Compare Raw · OCR · Layout · VLM" })
     .click();
@@ -385,6 +396,9 @@ test("Document Intelligence previews a real long PDF with layout evidence and no
   }
   await expect.poll(() => comparisonGraphs.length).toBe(4);
   page.off("request", captureComparisonRequest);
+  page.off("response", completeComparisonRequest);
+  expect(maximumActiveComparisonCreates).toBe(1);
+  expect(activeComparisonCreates).toBe(0);
   const vlmGraph = comparisonGraphs.find((candidate) =>
     (candidate.nodes as JsonRecord[]).some((node) => {
       const config = node.config as JsonRecord;

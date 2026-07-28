@@ -368,75 +368,75 @@ export default function DocumentIntelligencePage() {
       try {
         const activeBranchId = await ensureLabBranch();
         const sessionId = `${Date.now()}-${config.mediaItemVersionId}`;
-        const completed = await Promise.all(
-          candidates.map(async (candidate) => {
-            if (!candidate.config) {
-              return { ...candidate, run: null, error: null };
-            }
-            try {
-              const graph = buildDocumentLabGraph(candidate.config);
-              const created = await client.pipelines.previewRuns.create(
-                activeBranchId,
-                {
-                  graph,
-                  targetNodeId: "out",
-                  limits: {
-                    tableRows: GENERAL_TABLE_PREVIEW_ROW_LIMIT,
-                    mediaItems: 5,
-                    pdfPages: Math.min(
-                      10,
-                      Math.max(1, candidate.config.pageLimit),
-                    ),
-                    totalBytes: 32 * 1024 * 1024,
-                    timeoutSeconds: 30,
-                  },
-                },
-                {
-                  idempotencyKey: idempotencyKey(
-                    "document-lab-comparison",
-                    `${sessionId}:${candidate.id}:${JSON.stringify(graph)}`,
+        const completed: DocumentComparisonResult[] = [];
+        for (const candidate of candidates) {
+          if (!candidate.config) {
+            completed.push({ ...candidate, run: null, error: null });
+            continue;
+          }
+          try {
+            const graph = buildDocumentLabGraph(candidate.config);
+            const created = await client.pipelines.previewRuns.create(
+              activeBranchId,
+              {
+                graph,
+                targetNodeId: "out",
+                limits: {
+                  tableRows: GENERAL_TABLE_PREVIEW_ROW_LIMIT,
+                  mediaItems: 5,
+                  pdfPages: Math.min(
+                    10,
+                    Math.max(1, candidate.config.pageLimit),
                   ),
+                  totalBytes: 32 * 1024 * 1024,
+                  timeoutSeconds: 30,
                 },
-              );
-              setComparisonResults((results) =>
-                updateComparisonResult(results, candidate.id, {
-                  ...candidate,
-                  run: created,
-                  error: null,
-                }),
-              );
-              const terminal = await waitForPreviewRun(
-                client.pipelines.previewRuns.get,
-                created,
-              );
-              const result = { ...candidate, run: terminal, error: null };
-              setComparisonResults((results) =>
-                updateComparisonResult(results, candidate.id, result),
-              );
-              setRunProfiles((profiles) => ({
-                ...profiles,
-                [terminal.id]: candidate.config as DocumentLabConfig,
-              }));
-              setRunHistory((history) =>
-                [
-                  terminal,
-                  ...history.filter((item) => item.id !== terminal.id),
-                ].slice(0, 8),
-              );
-              return result;
-            } catch (caught) {
-              const result = {
+              },
+              {
+                idempotencyKey: idempotencyKey(
+                  "document-lab-comparison",
+                  `${sessionId}:${candidate.id}:${JSON.stringify(graph)}`,
+                ),
+              },
+            );
+            setComparisonResults((results) =>
+              updateComparisonResult(results, candidate.id, {
                 ...candidate,
-                run: null,
-                error: comparisonErrorMessage(caught),
-              };
-              setComparisonResults((results) =>
-                updateComparisonResult(results, candidate.id, result),
-              );
-              return result;
-            }
-          }),
-        );
+                run: created,
+                error: null,
+              }),
+            );
+            const terminal = await waitForPreviewRun(
+              client.pipelines.previewRuns.get,
+              created,
+            );
+            const result = { ...candidate, run: terminal, error: null };
+            setComparisonResults((results) =>
+              updateComparisonResult(results, candidate.id, result),
+            );
+            setRunProfiles((profiles) => ({
+              ...profiles,
+              [terminal.id]: candidate.config as DocumentLabConfig,
+            }));
+            setRunHistory((history) =>
+              [
+                terminal,
+                ...history.filter((item) => item.id !== terminal.id),
+              ].slice(0, 8),
+            );
+            completed.push(result);
+          } catch (caught) {
+            const result = {
+              ...candidate,
+              run: null,
+              error: comparisonErrorMessage(caught),
+            };
+            setComparisonResults((results) =>
+              updateComparisonResult(results, candidate.id, result),
+            );
+            completed.push(result);
+          }
+        }
         setComparisonResults(completed);
         const preferred =
           completed.find(
