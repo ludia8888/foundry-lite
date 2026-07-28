@@ -39,6 +39,7 @@ function okResponse(body = {}) {
     status: 200,
     headers: responseHeaders({ "X-Request-ID": RESPONSE_REQUEST_ID }),
     json: async () => body,
+    blob: async () => new Blob([JSON.stringify(body)], { type: "application/json" }),
   };
 }
 
@@ -385,7 +386,7 @@ async function expectSdkCall(surfaceId, invoke, expectation) {
   responseQueue.push(okResponse({ surfaceId }));
   const beforeCalls = calls.length;
   const beforeTelemetry = telemetry.length;
-  await invoke();
+  const result = await invoke();
   assert.equal(calls.length, beforeCalls + 1, surfaceId);
   assert.equal(telemetry.length, beforeTelemetry + 1, surfaceId);
   const call = calls.at(-1);
@@ -401,6 +402,7 @@ async function expectSdkCall(surfaceId, invoke, expectation) {
     surfaceId,
   );
   coveredSurfaceIds.add(surfaceId);
+  return result;
 }
 
 function assertMissingIdempotencyFailFast(surfaceId, invoke, operationName) {
@@ -1252,11 +1254,14 @@ await expectSdkCall(
     },
   },
 );
-assert.equal(
-  client.media.versions.sourceUrl("media-version/1"),
-  `${BASE_URL}/api/media/versions/media-version%2F1/content`,
+const mediaContent = await expectSdkCall(
+  "media.versions.readContent",
+  () => client.media.versions.readContent("media-version/1"),
+  {
+    path: "/api/media/versions/media-version%2F1/content",
+  },
 );
-coveredSurfaceIds.add("media.versions.sourceUrl");
+assert.equal(mediaContent.type, "application/json");
 await expectSdkCall("media.derivatives.get", () => client.media.derivatives.get("media-derivative/1"), {
   path: "/api/media/derivatives/media-derivative%2F1",
 });

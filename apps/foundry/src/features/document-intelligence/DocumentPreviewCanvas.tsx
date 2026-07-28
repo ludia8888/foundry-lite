@@ -15,6 +15,7 @@ export type CitationVerificationState =
 
 interface DocumentPreviewCanvasProps {
   blocks: readonly DocumentLabBlock[];
+  sourceContentType: string | null;
   sourceUrl: string | null;
   selectedBlockId: string | null;
   onSelectBlock: (blockId: string) => void;
@@ -24,6 +25,7 @@ interface DocumentPreviewCanvasProps {
 
 export function DocumentPreviewCanvas({
   blocks,
+  sourceContentType,
   sourceUrl,
   selectedBlockId,
   onSelectBlock,
@@ -46,22 +48,8 @@ export function DocumentPreviewCanvas({
     }
   }, [pages, selectedPage]);
   useEffect(() => {
-    setPreviewKind("media");
-    if (!sourceUrl) return;
-    const controller = new AbortController();
-    void fetch(sourceUrl, { method: "HEAD", signal: controller.signal })
-      .then((response) => {
-        if (response.ok) {
-          setPreviewKind(
-            mediaPreviewKindFromContentType(
-              response.headers.get("content-type"),
-            ),
-          );
-        }
-      })
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, [sourceUrl]);
+    setPreviewKind(mediaPreviewKindFromContentType(sourceContentType));
+  }, [sourceContentType]);
   const visibleBlocks = blocks.filter(
     (block) => block.pageNumber === selectedPage,
   );
@@ -133,9 +121,6 @@ export function DocumentPreviewCanvas({
                   src={selectedPageUrl}
                   title={previewCopy.frameTitle}
                   className="absolute inset-0 size-full border-0 bg-white"
-                  onLoad={(event) =>
-                    setPreviewKind(mediaPreviewKind(event.currentTarget))
-                  }
                 />
               ) : (
                 <PageSkeleton blocks={visibleBlocks} />
@@ -355,16 +340,6 @@ function blockLabel(block: DocumentLabBlock, index: number): string {
         ? block.structure.type
         : block.raw.unitKind;
   return typeof role === "string" && role ? role : `block ${index + 1}`;
-}
-
-function mediaPreviewKind(frame: HTMLIFrameElement): MediaPreviewKind {
-  try {
-    return mediaPreviewKindFromContentType(
-      frame.contentDocument?.contentType ?? null,
-    );
-  } catch {
-    return "media";
-  }
 }
 
 function mediaPreviewKindFromContentType(

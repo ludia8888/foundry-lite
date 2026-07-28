@@ -169,7 +169,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         media=(
             OperationClientSurface("sets", ("create", "get")),
             OperationClientSurface("transactions", ("open", "upload", "commit")),
-            OperationClientSurface("versions", ("process", "sourceUrl")),
+            OperationClientSurface("versions", ("process", "readContent")),
             OperationClientSurface("derivatives", ("get", "contentUnits", "index")),
             OperationClientSurface("content", ("search",)),
             OperationClientSurface("visual", ("indexDerivative", "promoteGeneration", "search")),

@@ -26,6 +26,7 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFai
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _FUTURE = "2099-01-01T00:00:00Z"
@@ -107,8 +108,13 @@ def media(tmp_path: Path) -> _MediaEnv:
     upload = MediaUploadService(engine=engine, media_repository=repo, media_storage=storage)
     transaction = MediaTransactionService(engine=engine, media_repository=repo, media_storage=storage)
     transaction.bind_collaborators({"runtime_service": runtime})
-    reference = MediaReferenceService(engine=engine, media_repository=repo, media_storage=storage)
-    ctx = RequestContext()
+    reference = MediaReferenceService(
+        engine=engine,
+        policy=PolicyService(),
+        media_repository=repo,
+        media_storage=storage,
+    )
+    ctx = RequestContext(roles=("admin",))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(

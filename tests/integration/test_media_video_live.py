@@ -47,6 +47,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaDerivativeRepository,
     SqlAlchemyMediaRepository,
 )
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _PROBE_SPEC = ProcessorSpec(processor="video_probe_v1", processor_version="1.0", model="ffprobe", model_version="8.0")
@@ -78,6 +79,7 @@ class _Env:
 def _processing(engine, repo, deriv, storage, runtime, processor) -> MediaProcessingService:
     service = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

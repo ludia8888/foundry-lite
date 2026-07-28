@@ -218,7 +218,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "sets: {" in generated
     assert "processors: {" in generated
     assert "list(): Promise<{ available: boolean; items: MediaProcessorDescriptor[] }>;" in generated
-    assert "sourceUrl(mediaItemVersionId: string): string;" in generated
+    assert "readContent(mediaItemVersionId: string, options?: { signal?: AbortSignal }): Promise<Blob>;" in generated
     assert "contentUnits(mediaDerivativeId: string, filters?: MediaContentUnitFilters):" in generated
     assert "upload(mediaSetId: string, mediaTransactionId: string, payload: MediaUploadRequest):" in generated
     assert "function mediaUploadFormData(payload: MediaUploadRequest): FormData" in generated
@@ -449,7 +449,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["media"] == {
         "sets": ["create", "get"],
         "transactions": ["open", "upload", "commit"],
-        "versions": ["process", "sourceUrl"],
+        "versions": ["process", "readContent"],
         "derivatives": ["get", "contentUnits", "index"],
         "content": ["search"],
         "visual": ["indexDerivative", "promoteGeneration", "search"],

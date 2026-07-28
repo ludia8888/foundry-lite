@@ -16,16 +16,20 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from foundry_lite.infrastructure import schema as db
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import MetaData, Table, create_engine, inspect, text
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _upgrade_fresh_db(database_url: str) -> None:
+    command.upgrade(_migration_config(database_url), "head")
+
+
+def _migration_config(database_url: str) -> Config:
     config = Config(str(_REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(_REPO_ROOT / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+    return config
 
 
 def _script_head() -> str:
@@ -64,6 +68,67 @@ def test_pipeline_v2_migration_matches_declared_execution_indexes(tmp_path: Path
         declared = {index.name for index in db.metadata.tables[table_name].indexes}
         migrated = {str(index["name"]) for index in inspector.get_indexes(table_name)}
         assert migrated == declared, f"index drift in {table_name}"
+
+
+def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'pipeline-v2-schedule-upgrade.db'}"
+    config = _migration_config(database_url)
+    command.upgrade(config, "f0a2c4e6b8d0")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        legacy_schedules = Table("pipeline_schedules", MetaData(), autoload_with=connection)
+        connection.execute(
+            legacy_schedules.insert(),
+            [
+                {
+                    "id": "active-schedule",
+                    "tenant_id": "tenant-a",
+                    "pipeline_id": "pipeline-a",
+                    "version_id": "version-a",
+                    "schedule": {"type": "interval", "intervalMinutes": 15, "timezone": "Asia/Seoul"},
+                    "enabled": True,
+                    "updated_by": "user-a",
+                    "updated_at": "2026-07-15T01:02:03Z",
+                    "last_tick_at": None,
+                },
+                {
+                    "id": "disabled-schedule",
+                    "tenant_id": "tenant-a",
+                    "pipeline_id": "pipeline-b",
+                    "version_id": "version-b",
+                    "schedule": {"cronExpression": "0 * * * *"},
+                    "enabled": False,
+                    "updated_by": "user-a",
+                    "updated_at": "2026-07-15T02:03:04Z",
+                    "last_tick_at": None,
+                },
+            ],
+        )
+
+    command.upgrade(config, "head")
+
+    with engine.connect() as connection:
+        rows = {
+            row.id: row
+            for row in connection.execute(
+                text(
+                    """
+                    select id, trigger_type, timezone, next_due_at, status, paused_reason
+                    from pipeline_schedules
+                    order by id
+                    """
+                )
+            )
+        }
+    assert rows["active-schedule"].trigger_type == "interval"
+    assert rows["active-schedule"].timezone == "Asia/Seoul"
+    assert rows["active-schedule"].next_due_at == "2026-07-15T01:02:03Z"
+    assert rows["active-schedule"].status == "active"
+    assert rows["disabled-schedule"].trigger_type == "cron"
+    assert rows["disabled-schedule"].timezone == "UTC"
+    assert rows["disabled-schedule"].next_due_at is None
+    assert rows["disabled-schedule"].status == "paused"
+    assert rows["disabled-schedule"].paused_reason == "disabled_before_pipeline_v2_upgrade"
 
 
 def test_semantic_row_cache_migration_keeps_tenant_key_uniqueness(tmp_path: Path) -> None:

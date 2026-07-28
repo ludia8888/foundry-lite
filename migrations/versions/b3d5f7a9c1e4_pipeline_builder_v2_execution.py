@@ -87,6 +87,58 @@ def _extend_pipeline_schedules() -> None:
     op.add_column("pipeline_schedules", sa.Column("last_failure_at", sa.String(), nullable=True))
     op.add_column("pipeline_schedules", sa.Column("last_error", sa.JSON(), nullable=True))
     op.create_index("ix_pipeline_schedules_due", "pipeline_schedules", ["tenant_id", "enabled", "next_due_at"])
+    _backfill_pipeline_schedules()
+
+
+def _backfill_pipeline_schedules() -> None:
+    schedules = sa.table(
+        "pipeline_schedules",
+        sa.column("id", sa.String()),
+        sa.column("schedule", sa.JSON()),
+        sa.column("enabled", sa.Boolean()),
+        sa.column("updated_at", sa.String()),
+        sa.column("trigger_type", sa.String()),
+        sa.column("timezone", sa.String()),
+        sa.column("next_due_at", sa.String()),
+        sa.column("status", sa.String()),
+        sa.column("paused_reason", sa.Text()),
+    )
+    connection = op.get_bind()
+    rows = (
+        connection.execute(
+            sa.select(
+                schedules.c.id,
+                schedules.c.schedule,
+                schedules.c.enabled,
+                schedules.c.updated_at,
+            )
+        )
+        .mappings()
+        .all()
+    )
+    for row in rows:
+        schedule = row["schedule"] if isinstance(row["schedule"], dict) else {}
+        is_enabled = bool(row["enabled"])
+        connection.execute(
+            schedules.update()
+            .where(schedules.c.id == row["id"])
+            .values(
+                trigger_type=_legacy_trigger_type(schedule),
+                timezone=str(schedule.get("timezone") or "UTC"),
+                next_due_at=row["updated_at"] if is_enabled else None,
+                status="active" if is_enabled else "paused",
+                paused_reason=None if is_enabled else "disabled_before_pipeline_v2_upgrade",
+            )
+        )
+
+
+def _legacy_trigger_type(schedule: dict[str, object]) -> str:
+    declared = schedule.get("triggerType") or schedule.get("type") or schedule.get("kind")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip().lower()
+    if schedule.get("cronExpression") or schedule.get("cron"):
+        return "cron"
+    return "interval"
 
 
 def _create_pipeline_schedule_operations() -> None:

@@ -313,6 +313,7 @@ def _processing(
 ) -> MediaProcessingService:
     svc = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

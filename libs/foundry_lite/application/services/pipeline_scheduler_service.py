@@ -50,6 +50,7 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFai
 
 _LEASE_SECONDS = 60
 _SUCCESS_STATUSES = {"succeeded"}
+_SKIPPED_REASONS = {"lease_not_acquired", "run_in_progress"}
 
 
 class PipelineSchedulerService(CoreService):
@@ -200,8 +201,8 @@ class PipelineSchedulerService(CoreService):
         owner = scheduler_owner or f"pipeline-scheduler:{ctx.request_id}"
         candidates = self._due_rows(ctx, evaluated_at, limit)
         results = [self._claim_and_run(ctx, row, evaluated_at, owner) for row in candidates]
-        started = [result for result in results if result.get("reason") != "lease_not_acquired"]
-        skipped = [result for result in results if result.get("reason") == "lease_not_acquired"]
+        started = [result for result in results if result.get("reason") not in _SKIPPED_REASONS]
+        skipped = [result for result in results if result.get("reason") in _SKIPPED_REASONS]
         return {
             "status": "evaluated",
             "evaluatedAt": schedule_iso(evaluated_at),
@@ -372,6 +373,14 @@ class PipelineSchedulerService(CoreService):
         except Exception as exc:
             error = dict(self.runtime_service._error_payload(exc, ctx, correlation_id=key))
             return self._finish_claim(ctx, claimed, slot_start, None, error, now)
+        if str(run.get("status")) == "executing":
+            return {
+                "scheduleId": claimed["id"],
+                "slotStart": slot_start,
+                "run": run,
+                "reason": "run_in_progress",
+                "fencingToken": claimed["fencing_token"],
+            }
         run_error = cast(dict[str, object] | None, run.get("error"))
         return self._finish_claim(ctx, claimed, slot_start, run, run_error, now)
 

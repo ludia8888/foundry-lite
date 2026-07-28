@@ -6,6 +6,9 @@ from collections.abc import Mapping
 
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_execution_plan_backfill import (
+    ensure_pipeline_execution_plan,
+)
 from foundry_lite.application.services.pipeline_run_component_types import (
     DatasetPipelineNodeCommitter,
     GovernedCandidatePipelineOutputCommitter,
@@ -97,6 +100,9 @@ class PipelineRunService(CoreService):
         self.runtime_service._require_or_audit(ctx, "pipeline:run", "pipeline", pipeline_id)
         self._require_write_open(ctx, "start_pipeline_run", pipeline_id)
         version = self._deployed_version(ctx, pipeline_id, version_id)
+        version = ensure_pipeline_execution_plan(
+            self.engine, self.pipeline_repository, self.runtime_service, ctx, version
+        )
         request_fingerprint = run_request_fingerprint(pipeline_id, version, parameters, target_node_ids)
         effective_key = idempotency_key or f"request:{ctx.request_id}:{pipeline_id}:{version['id']}"
         row, is_created = self._create_or_replay_run(

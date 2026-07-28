@@ -35,6 +35,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 # OCR spec: the SUCCESS derivative_kind ("ocr_v1") equals spec.processor, so a FAILED
@@ -111,6 +112,7 @@ def env(tmp_path: Path) -> _Env:
     transaction.bind_collaborators({"runtime_service": runtime})
     processing = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

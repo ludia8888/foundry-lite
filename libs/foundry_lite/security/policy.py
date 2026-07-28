@@ -74,6 +74,7 @@ class PolicyService:
         "insight:read": {"admin", "data_engineer", "ops_manager", "finance"},
         "insight:create": {"admin", "data_engineer"},
         "insight:review": {"admin", "ops_manager"},
+        "media:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "media:search": {"admin", "data_engineer", "ops_manager"},
         # AIP eval runs record durable release-gate evidence, so they are
         # operator/engineer only (viewers and finance are excluded). Release

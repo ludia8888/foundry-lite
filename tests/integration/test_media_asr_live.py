@@ -41,6 +41,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaDerivativeRepository,
     SqlAlchemyMediaRepository,
 )
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _ASR_SPEC = ProcessorSpec(processor="asr_v1", processor_version="1.0", model="whisper", model_version="tiny")
@@ -85,6 +86,7 @@ def env(tmp_path: Path) -> _Env:
     transaction.bind_collaborators({"runtime_service": runtime})
     processing = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

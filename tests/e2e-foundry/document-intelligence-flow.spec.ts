@@ -225,15 +225,22 @@ test("Document Intelligence previews a real long PDF with layout evidence and no
   await page.goto("/document-intelligence");
 
   await page.getByLabel("Media Set ref").fill(source.mediaSetRef);
+  const sourceRequestPromise = page.waitForRequest(
+    (request) =>
+      request.url().includes(
+        `/api/media/versions/${source.mediaItemVersionId}/content`,
+      ) && request.method() === "GET",
+  );
   await page
     .getByLabel("Media item version ID")
     .fill(source.mediaItemVersionId);
+  const sourceRequest = await sourceRequestPromise;
   await expect(page.getByTitle("원본 PDF 1 페이지")).toHaveAttribute(
     "src",
-    new RegExp(
-      `/api/media/versions/${source.mediaItemVersionId}/content#page=1`,
-    ),
+    /^blob:.*#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0$/,
   );
+  expect(sourceRequest.headers()["x-tenant-id"]).toBe("tenant-demo");
+  expect(sourceRequest.headers()["x-request-id"]).toMatch(/^sdk-/);
   await page
     .locator("aside")
     .getByRole("button", { name: "Layout-aware", exact: true })

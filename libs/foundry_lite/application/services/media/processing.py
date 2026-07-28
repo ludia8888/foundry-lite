@@ -39,6 +39,10 @@ from foundry_lite.application.services.media.processing_records import (
     _derivative_record,
 )
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
+from foundry_lite.application.services.media.read_access import (
+    require_content_unit_clearance,
+    require_media_derivative_clearance,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 
@@ -76,6 +80,7 @@ class MediaProcessingService(CoreService):
 
     required_dependencies = (
         "engine",
+        "policy",
         "media_repository",
         "media_derivative_repository",
         "media_storage",
@@ -89,6 +94,7 @@ class MediaProcessingService(CoreService):
         self,
         *,
         engine: object,
+        policy: object,
         media_repository: object,
         media_derivative_repository: object,
         media_storage: object,
@@ -99,6 +105,7 @@ class MediaProcessingService(CoreService):
             raise TypeError("MediaProcessingService requires a processor registry or legacy processor adapter")
         super().__init__(
             engine=engine,
+            policy=policy,
             media_repository=media_repository,
             media_derivative_repository=media_derivative_repository,
             media_storage=media_storage,
@@ -199,6 +206,7 @@ class MediaProcessingService(CoreService):
         page_number: int | None = None,
         limit: int = 200,
     ) -> ContentUnitPage:
+        self.policy.require(ctx, "media:read")
         bounded_limit = _content_unit_limit(limit)
         _require_non_negative(after_ordinal, "afterOrdinal")
         _require_positive_optional(page_number, "pageNumber")
@@ -210,6 +218,7 @@ class MediaProcessingService(CoreService):
             )
             if derivative is None or derivative.status != "COMMITTED":
                 raise NotFound("committed derivative not found", details={"media_derivative_id": media_derivative_id})
+            require_media_derivative_clearance(ctx, derivative)
             rows = self.media_derivative_repository.get_content_units(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -218,6 +227,8 @@ class MediaProcessingService(CoreService):
                 page_number=page_number,
                 limit=bounded_limit + 1,
             )
+        for unit in rows:
+            require_content_unit_clearance(ctx, unit)
         items = tuple(rows[:bounded_limit])
         next_cursor = items[-1].ordinal if len(rows) > bounded_limit and items else None
         return ContentUnitPage(media_derivative_id, derivative.source_media_item_version_id, items, next_cursor)

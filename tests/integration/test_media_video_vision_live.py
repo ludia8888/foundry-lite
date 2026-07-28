@@ -106,6 +106,7 @@ def env(tmp_path: Path) -> _Env:
     transaction.bind_collaborators({"runtime_service": runtime})
     processing = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

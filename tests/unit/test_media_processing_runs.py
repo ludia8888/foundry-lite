@@ -32,6 +32,7 @@ from foundry_lite.domain.errors import NotFound
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import select
 
 _SPEC = ProcessorSpec(processor="ocr_v1", processor_version="1.0", model="tesseract", model_version="5.3.0")
@@ -104,6 +105,7 @@ def _processing(
 ) -> MediaProcessingService:
     svc = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

@@ -54,6 +54,7 @@ import {
   promoteDocumentExtractProfile,
   type DocumentComparisonResult,
 } from "./document-lab-comparison-model";
+import { useAuthenticatedMediaSource } from "./useAuthenticatedMediaSource";
 
 const LAB_PIPELINE_ID = "document-intelligence-lab";
 const GENERAL_TABLE_PREVIEW_ROW_LIMIT = 500;
@@ -243,18 +244,18 @@ export default function DocumentIntelligencePage() {
   const isVision =
     config.strategy === "basic_vision" ||
     config.strategy === "layout_aware_vision";
-  const sourceUrl = useMemo(() => {
+  const sourceMediaItemVersionId = useMemo(() => {
     if (citationResolution) {
-      return client.media.versions.sourceUrl(
-        citationResolution.evidence.mediaItemVersionId,
-      );
+      return citationResolution.evidence.mediaItemVersionId;
     }
     if (isCitationMode) return null;
     const mediaItemVersionId = config.mediaItemVersionId.trim();
-    return mediaItemVersionId
-      ? client.media.versions.sourceUrl(mediaItemVersionId)
-      : null;
-  }, [citationResolution, client, config.mediaItemVersionId, isCitationMode]);
+    return mediaItemVersionId || null;
+  }, [citationResolution, config.mediaItemVersionId, isCitationMode]);
+  const source = useAuthenticatedMediaSource(
+    client,
+    sourceMediaItemVersionId,
+  );
   const citationState: CitationVerificationState = isResolvingCitation
     ? "resolving"
     : citationResolution
@@ -567,7 +568,8 @@ export default function DocumentIntelligencePage() {
         <div className="flex min-w-0 flex-1 flex-col">
           <DocumentPreviewCanvas
             blocks={blocks}
-            sourceUrl={sourceUrl}
+            sourceUrl={source?.url ?? null}
+            sourceContentType={source?.contentType ?? null}
             selectedBlockId={selectedBlockId}
             onSelectBlock={setSelectedBlockId}
             viewMode={isCitationMode ? "verified-citation" : "lab"}

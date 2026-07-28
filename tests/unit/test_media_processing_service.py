@@ -34,11 +34,12 @@ from foundry_lite.application.services.media.processing import MediaProcessingSe
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound
+from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.media_processor_registry import StaticMediaProcessorRegistry
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _FUTURE = "2099-01-01T00:00:00Z"
@@ -59,6 +60,15 @@ class _FakeRuntime:
         if self.fail_outbox:
             raise RuntimeError("injected outbox failure")
         return event_type
+
+    def _require_or_audit(
+        self,
+        ctx: RequestContext,
+        permission: str,
+        _resource_type: str,
+        _resource_id: str | None,
+    ) -> None:
+        PolicyService().require(ctx, permission)
 
 
 class _FakeProcessor:
@@ -125,6 +135,7 @@ def _registry(processor: _FakeProcessor, *, version: str = "1.0.0") -> StaticMed
 def _registry_processing(env: _Env, registry: StaticMediaProcessorRegistry) -> MediaProcessingService:
     processing = MediaProcessingService(
         engine=env.engine,
+        policy=PolicyService(),
         media_repository=env.processing.media_repository,
         media_derivative_repository=env.derivative_repo,
         media_storage=env.processing.media_storage,
@@ -185,13 +196,14 @@ def env(tmp_path: Path) -> _Env:
     transaction.bind_collaborators({"runtime_service": runtime})
     processing = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=derivative_repo,
         media_storage=storage,
         media_processor=processor,
     )
     processing.bind_collaborators({"runtime_service": runtime})
-    ctx = RequestContext()
+    ctx = RequestContext(roles=("admin",))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(
@@ -299,6 +311,15 @@ def test_content_unit_page_is_read_only_paginated_and_tenant_scoped(env: _Env) -
     with pytest.raises(NotFound):
         env.processing.list_derivative_content_units(
             RequestContext(tenant_id="tenant-other"),
+            media_derivative_id=outcome.media_derivative_id,
+        )
+    with pytest.raises(PermissionDenied, match="clearance"):
+        env.processing.list_derivative_content_units(
+            RequestContext(
+                tenant_id=env.ctx.tenant_id,
+                actor_user_id="viewer-without-confidential-clearance",
+                roles=("viewer",),
+            ),
             media_derivative_id=outcome.media_derivative_id,
         )
 

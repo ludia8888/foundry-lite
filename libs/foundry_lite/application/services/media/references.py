@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaReference
 from foundry_lite.application.ports.media_storage import ByteRange, MediaReadGrant, MediaReadGrantRequest
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.read_access import require_media_version_clearance
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, NotFound, ValidationFailed
 
@@ -37,10 +38,11 @@ class MediaReferenceService(CoreService):
     committed row, that is a hard failure, never a silent empty read.
     """
 
-    required_dependencies = ("engine", "media_repository", "media_storage")
+    required_dependencies = ("engine", "policy", "media_repository", "media_storage")
     required_collaborators = ()
 
     def resolve(self, ctx: RequestContext, *, media_item_version_id: str) -> ResolvedMediaReference:
+        self.policy.require(ctx, "media:read")
         with self.engine.begin() as conn:
             version = self.media_repository.media_item_version_by_id(
                 transaction=conn, tenant_id=ctx.tenant_id, media_item_version_id=media_item_version_id
@@ -52,6 +54,7 @@ class MediaReferenceService(CoreService):
                     "media version is not committed",
                     details={"media_item_version_id": media_item_version_id, "status": version.status},
                 )
+            require_media_version_clearance(ctx, version)
             item = self.media_repository.media_item_by_id(
                 transaction=conn, tenant_id=ctx.tenant_id, media_item_id=version.media_item_id
             )

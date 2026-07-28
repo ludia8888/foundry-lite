@@ -30,7 +30,7 @@ def test_committed_media_source_endpoint_streams_exact_version_with_range(
         schema_type="document",
         primary_format="pdf",
         allowed_input_formats=("pdf",),
-        classification="public",
+        classification="confidential",
     )
     transaction_id = foundry.media.open_transaction(
         ctx,
@@ -46,7 +46,7 @@ def test_committed_media_source_endpoint_streams_exact_version_with_range(
         supplied_mime_type="application/pdf",
         schema_type="document",
         format="pdf",
-        security_envelope={"tenantId": ctx.tenant_id, "classification": "public"},
+        security_envelope={"tenantId": ctx.tenant_id, "classification": "confidential"},
     )
     foundry.media.commit(ctx, media_transaction_id=transaction_id)
 
@@ -63,6 +63,9 @@ def test_committed_media_source_endpoint_streams_exact_version_with_range(
     full = client.get(path, headers=headers)
     cross_tenant_metadata = client.head(path, headers={**headers, "X-Tenant-ID": "tenant-other"})
     cross_tenant = client.get(path, headers={**headers, "X-Tenant-ID": "tenant-other"})
+    viewer_headers = {**headers, "X-User-ID": "viewer-a", "X-Roles": "viewer"}
+    uncleared_metadata = client.head(path, headers=viewer_headers)
+    uncleared = client.get(path, headers=viewer_headers)
 
     assert metadata.status_code == 200
     assert metadata.content == b""
@@ -76,3 +79,5 @@ def test_committed_media_source_endpoint_streams_exact_version_with_range(
     assert full.content == body
     assert cross_tenant_metadata.status_code == 404
     assert cross_tenant.status_code == 404
+    assert uncleared_metadata.status_code == 403
+    assert uncleared.status_code == 403

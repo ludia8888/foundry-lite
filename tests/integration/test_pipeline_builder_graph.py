@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,15 @@ from foundry_lite.application.services.pipeline_compiler_service import Pipeline
 from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
 from foundry_lite.application.services.pipeline_graph_normalizer import normalize_pipeline_graph
 from foundry_lite.application.services.pipeline_payloads import run_record
+from foundry_lite.application.services.pipeline_schedule_runtime import (
+    parse_schedule_timestamp,
+    schedule_iso,
+)
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from sqlalchemy import update
 
 
 def _assign_and_approve(
@@ -321,6 +328,104 @@ def test_pipeline_unexpected_failure_preserves_execution_claim_timeline(
         "pipeline.run.execution_claimed",
         "pipeline.run.failed",
     ]
+
+
+def test_pre_v2_deployed_version_backfills_pinned_execution_plan_on_first_run(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,10\n", encoding="utf-8")
+    foundry.datasets.ensure("raw.pipeline_orders", ctx=ctx)
+    foundry.datasets.upload_csv("raw.pipeline_orders", csv_path, ctx=ctx)
+    _insert_legacy_governance_rows(foundry, ctx, graph=_orders_pipeline_graph())
+    deployed_at = "2026-07-15T00:02:00Z"
+    with foundry.engine.begin() as transaction:
+        transaction.execute(
+            update(db.pipeline_versions)
+            .where(db.pipeline_versions.c.id == "legacy-version")
+            .values(deployed_at=deployed_at)
+        )
+
+    run = foundry.pipelines.run(
+        "historical_v1",
+        version_id="legacy-version",
+        idempotency_key="legacy-first-run-after-v2-upgrade",
+        ctx=ctx,
+    )
+    version = foundry.pipelines.get_version("legacy-version", ctx=ctx)
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+
+    assert run["status"] == "succeeded"
+    assert version["deployedAt"] == deployed_at
+    assert version["executionPlan"]["planFingerprint"] == version["planFingerprint"]
+    assert any(
+        event["event_type"] == "pipeline.execution_plan_backfilled" and event["resource_id"] == "legacy-version"
+        for event in audit_events
+    )
+
+
+def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _insert_legacy_governance_rows(foundry, ctx, graph=_orders_pipeline_graph())
+    with foundry.engine.begin() as transaction:
+        foundry.pipeline_repository.mark_version_deployed(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            version_id="legacy-version",
+            execution_plan={"kind": "tabular_v1"},
+            plan_fingerprint="plan-fingerprint",
+            compiler_version="test",
+            deployed_at=_now(),
+        )
+    schedule = foundry.pipelines.upsert_schedule(
+        "historical_v1",
+        version_id="legacy-version",
+        schedule={
+            "triggerType": "interval",
+            "timezone": "UTC",
+            "intervalSeconds": 300,
+            "autoPauseAfterFailures": 1,
+        },
+        idempotency_key="legacy-scheduler-takeover",
+        ctx=ctx,
+    )
+    slot_start = str(schedule["nextDueAt"])
+    with foundry.engine.begin() as transaction:
+        claimed = foundry.pipeline_repository.claim_due_schedule(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            schedule_id=str(schedule["id"]),
+            due_at=slot_start,
+            lease_owner="worker-before-timeout",
+            lease_token="expired-lease",
+            lease_expires_at=slot_start,
+        )
+    assert claimed is not None
+
+    monkeypatch.setattr(
+        foundry._services.pipelines.run,
+        "start_run",
+        lambda *_args, **_kwargs: {"id": "run-still-executing", "status": "executing"},
+    )
+    takeover_at = parse_schedule_timestamp(slot_start, field="slotStart") + timedelta(seconds=61)
+    result = foundry._services.pipelines.scheduler.tick_schedules(
+        max_runs=1,
+        now=takeover_at,
+        scheduler_owner="worker-after-timeout",
+        ctx=ctx,
+    )
+    current = foundry.pipelines.get_schedule("historical_v1", ctx=ctx)
+
+    assert result["started"] == []
+    assert result["skipped"][0]["reason"] == "run_in_progress"
+    assert current["status"] == "active"
+    assert current["failureCount"] == 0
+    assert current["nextDueAt"] == slot_start
+    assert current["leaseExpiresAt"] == schedule_iso(takeover_at + timedelta(seconds=60))
 
 
 def test_pipeline_builder_persisted_v2_tabular_graph_deploys_and_runs(tmp_path: Path) -> None:

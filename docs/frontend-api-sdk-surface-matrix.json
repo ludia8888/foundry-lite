@@ -596,12 +596,12 @@
       "proofClass": "sdk-request-contract"
     },
     {
-      "id": "media.versions.sourceUrl",
+      "id": "media.versions.readContent",
       "route": "GET /api/media/versions/{media_item_version_id}/content",
       "productArea": "media-content-plane",
-      "sdkSurface": "media.versions.sourceUrl",
+      "sdkSurface": "media.versions.readContent",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "The source URL resolves only an immutable committed media version, verifies storage hash and size, and then streams a bounded byte range or redirects to a scoped remote read grant.",
+      "operatorEvidence": "The authenticated SDK read preserves bearer token and request context, resolves only an immutable committed media version after media-read and classification-clearance checks, verifies storage hash and size, and returns bytes for a caller-owned blob preview.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

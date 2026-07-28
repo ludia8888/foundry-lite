@@ -35,6 +35,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffprobe_video_probe_runner,
 )
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
@@ -333,6 +334,7 @@ def _processing(
 ) -> MediaProcessingService:
     service = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=media_repository,
         media_derivative_repository=derivative_repository,
         media_storage=storage,

@@ -26,6 +26,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.image_processor import ImageDescription, ImageProcessorAdapter
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from PIL import Image
 
 _IMAGE_SPEC = ProcessorSpec(processor="image_v1", processor_version="1.0")
@@ -59,6 +60,7 @@ class _Env:
 def _processing(env: _Env, processor: object) -> MediaProcessingService:
     svc = MediaProcessingService(
         engine=env.engine,
+        policy=PolicyService(),
         media_repository=env.repo,
         media_derivative_repository=env.deriv,
         media_storage=env.storage,

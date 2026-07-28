@@ -131,7 +131,6 @@ test("AIP citation opens only by signed token and renders server-verified PDF co
   await page.route(
     "**/api/media/versions/miv-citation-pdf-1/content",
     async (route) => {
-      const isHead = route.request().method() === "HEAD";
       await route.fulfill({
         status: 200,
         contentType: "application/pdf",
@@ -139,7 +138,7 @@ test("AIP citation opens only by signed token and renders server-verified PDF co
           "Content-Length": String(pdfBytes.byteLength),
           ETag: '"sha256:verified-pdf-content"',
         },
-        body: isHead ? "" : pdfBytes,
+        body: pdfBytes,
       });
     },
   );
