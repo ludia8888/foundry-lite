@@ -247,6 +247,14 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install and verify document and media processors
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
+          command -v tesseract
+          command -v pdftoppm
+          command -v ffprobe
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 

@@ -215,6 +215,10 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
 
     e2e_job = workflow.split("quality_e2e:", maxsplit=1)[1].split("quality_gate:", maxsplit=1)[0]
     assert "timeout-minutes: 20" in e2e_job
+    assert "sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg" in e2e_job
+    assert "command -v tesseract" in e2e_job
+    assert "command -v pdftoppm" in e2e_job
+    assert "command -v ffprobe" in e2e_job
     assert "run: pnpm exec playwright install --with-deps chromium" in e2e_job
     assert "run: pnpm ci:gate:e2e" in e2e_job
 
