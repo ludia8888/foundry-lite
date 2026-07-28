@@ -48,17 +48,22 @@ def _merge_value(
     conflicts: list[PipelineGraphMergeConflict],
 ) -> object:
     if ours == theirs:
-        return deepcopy(ours)
+        return _copy_merge_value(ours)
     if ours == base:
-        return deepcopy(theirs)
+        return _copy_merge_value(theirs)
     if theirs == base:
-        return deepcopy(ours)
+        return _copy_merge_value(ours)
     if _are_mappings(base, ours, theirs):
         return _merge_mapping(base, ours, theirs, path, conflicts)
     if _is_keyed_list_path(path) and _are_lists(base, ours, theirs):
         return _merge_keyed_list(base, ours, theirs, path, conflicts)
     conflicts.append({"path": path, "kind": "concurrent_change"})
-    return deepcopy(ours)
+    return _copy_merge_value(ours)
+
+
+def _copy_merge_value(value: object) -> object:
+    """Preserve the identity-based deletion sentinel while isolating real values."""
+    return _MISSING if value is _MISSING else deepcopy(value)
 
 
 def _merge_mapping(

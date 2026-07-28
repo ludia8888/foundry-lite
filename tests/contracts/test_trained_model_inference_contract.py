@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,47 @@ def test_container_sidecar_enforces_controls_and_returns_typed_rows(tmp_path: Pa
     assert _required_container_flags() <= set(captured[-1])
     assert not any("target=/model-output," in token for token in captured[-1])
     assert "UNSAFE_SECRET=must-not-pass" not in captured[-1]
+
+
+def test_container_sidecar_prefers_requested_branch_over_earlier_fallback_spec(tmp_path: Path) -> None:
+    commands: list[tuple[str, ...]] = []
+    fallback = replace(TRANSACTION_RISK_DEFINITION, branch="master", revision="fallback")
+    requested = replace(TRANSACTION_RISK_DEFINITION, branch="feature/model-api", revision="requested")
+
+    def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        commands.append(tuple(command))
+        _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
+        return ContainerCommandResult(0)
+
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(
+            specs=(
+                ContainerTrainedModelSpec(fallback, "registry.example/model:fallback"),
+                ContainerTrainedModelSpec(requested, "registry.example/model:requested"),
+            ),
+            workspace_root=tmp_path,
+        ),
+        command_runner=runner,
+        environ={},
+    )
+
+    resolved = adapter.resolve(
+        requested.model_ref,
+        branch=requested.branch,
+        fallback_branches=(fallback.branch,),
+    )
+    result = adapter.infer(
+        replace(
+            _container_invocation(),
+            branch=requested.branch,
+            fallback_branches=(fallback.branch,),
+        )
+    )
+
+    assert resolved.revision == "requested"
+    assert result.definition.revision == "requested"
+    assert "registry.example/model:requested" in commands[-1]
+    assert "registry.example/model:fallback" not in commands[-1]
 
 
 def test_container_sidecar_redacts_model_failure(tmp_path: Path) -> None:

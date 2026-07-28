@@ -125,9 +125,10 @@ class ContainerTrainedModelInferenceAdapter:
         fallback_branches: Sequence[str],
     ) -> ContainerTrainedModelSpec:
         branches = (branch, *fallback_branches)
-        for spec in self.config.specs:
-            if spec.definition.model_ref == model_ref and spec.definition.branch in branches:
-                return spec
+        for candidate_branch in branches:
+            for spec in self.config.specs:
+                if spec.definition.model_ref == model_ref and spec.definition.branch == candidate_branch:
+                    return spec
         raise NotFound(
             "trained model was not found on the selected branch or fallbacks",
             details={"modelRef": model_ref, "branches": list(branches)},
