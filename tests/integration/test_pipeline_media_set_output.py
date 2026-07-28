@@ -483,11 +483,15 @@ def test_media_set_output_post_commit_validation_failure_preserves_serving_commi
     assert repository_reads_after_commit == 0
 
 
-def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation_evidence(
+@pytest.mark.parametrize("has_other_failed_output", [False, True])
+def test_media_set_output_unknown_commit_result_reconciles_without_losing_other_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    has_other_failed_output: bool,
 ) -> None:
-    fixture = _selection_output_fixture(tmp_path, "unknown_commit_result", item_count=1)
+    suffix = "mixed" if has_other_failed_output else "only"
+    fixture = _selection_output_fixture(tmp_path, f"unknown_commit_result_{suffix}", item_count=1)
+    idempotency_key = f"run-media-output-unknown-commit-result-{suffix}"
     _deploy_graph(
         fixture,
         _media_selection_output_graph(
@@ -527,7 +531,7 @@ def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation
 
     run = fixture.foundry.pipelines.run(
         fixture.pipeline_id,
-        idempotency_key="run-media-output-unknown-commit-result",
+        idempotency_key=idempotency_key,
         ctx=fixture.ctx,
     )
     output = cast(list[dict[str, Any]], run["outputs"])[0]
@@ -546,20 +550,28 @@ def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation
     assert output["artifactEvidence"]["status"] == "RECONCILIATION_REQUIRED"
     assert [row["status"] for row in transactions] == ["COMMITTED"]
     assert abort_calls == 0
+    if has_other_failed_output:
+        _inject_failed_run_output(fixture, run)
 
     reconciled = fixture.foundry.pipelines.run(
         fixture.pipeline_id,
-        idempotency_key="run-media-output-unknown-commit-result",
+        idempotency_key=idempotency_key,
         ctx=fixture.ctx,
     )
-    reconciled_output = cast(list[dict[str, Any]], reconciled["outputs"])[0]
+    reconciled_outputs = cast(list[dict[str, Any]], reconciled["outputs"])
+    reconciled_output = next(item for item in reconciled_outputs if item["status"] == "COMMITTED")
 
     assert reconciled["id"] == run["id"]
-    assert reconciled["status"] == "succeeded"
-    assert reconciled["error"] is None
     assert reconciled_output["status"] == "COMMITTED"
     assert reconciled_output["isServing"] is True
     assert len(_target_transactions(fixture, target.media_set_id)) == 1
+    if has_other_failed_output:
+        assert reconciled["status"] == "partial"
+        assert reconciled["error"]["message"] == "pipeline output commit reconciled with failed outputs"
+        assert [item["status"] for item in reconciled_outputs] == ["COMMITTED", "FAILED"]
+    else:
+        assert reconciled["status"] == "succeeded"
+        assert reconciled["error"] is None
 
 
 def test_media_set_output_open_unknown_commit_is_aborted_and_failed_on_replay(
@@ -612,7 +624,12 @@ def test_media_set_output_open_unknown_commit_is_aborted_and_failed_on_replay(
     assert cast(list[dict[str, Any]], unknown["outputs"])[0]["isServing"] is False
     assert replayed["id"] == unknown["id"]
     assert replayed["status"] == "failed"
-    assert replayed["outputs"] == []
+    replayed_output = cast(list[dict[str, Any]], replayed["outputs"])[0]
+    assert replayed_output["status"] == "FAILED"
+    assert replayed_output["isServing"] is False
+    assert replayed_output["manifest"]["commitOutcome"] == "NOT_COMMITTED"
+    assert replayed_output["manifest"]["transactionStatus"] == "ABORTED"
+    assert replayed_output["artifactEvidence"]["status"] == "RECONCILED_FAILED"
     assert replayed["error"]["message"] == "pipeline output commit reconciled as not committed"
     assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["ABORTED"]
 
@@ -1337,6 +1354,31 @@ def _run_artifact_count(
             .scalar_one()
         )
     return int(count)
+
+
+def _inject_failed_run_output(
+    fixture: _MediaOutputFixture,
+    run: Mapping[str, object],
+) -> None:
+    failed_output = {
+        "nodeId": "failed-output",
+        "artifactKind": "dataset_version",
+        "plane": "dataset",
+        "status": "FAILED",
+        "commitKind": "SERVING_ASSET",
+        "isServing": False,
+        "ref": {},
+        "manifest": {},
+    }
+    with fixture.foundry.engine.begin() as transaction:
+        cast(Any, transaction).execute(
+            update(db.pipeline_runs)
+            .where(
+                db.pipeline_runs.c.tenant_id == fixture.ctx.tenant_id,
+                db.pipeline_runs.c.id == run["id"],
+            )
+            .values(outputs=[failed_output, *cast(list[dict[str, Any]], run["outputs"])])
+        )
 
 
 def _make_pdf(text: str) -> bytes:

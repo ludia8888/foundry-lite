@@ -203,11 +203,20 @@ def _resolution(
     if recovered is None:
         return None
     committed_ids = {_media_transaction_id(output) for output in recovered}
-    if all(status == "COMMITTED" for status in statuses.values()):
-        if set(statuses) - committed_ids:
-            return None
+    are_unknowns_committed = all(status == "COMMITTED" for status in statuses.values())
+    if are_unknowns_committed and set(statuses) - committed_ids:
+        return None
+    failed_outputs = _resolved_failed_outputs(row, statuses)
+    if are_unknowns_committed and not failed_outputs:
         return _successful_resolution(recovered)
-    return _unsuccessful_resolution(runtime_service, ctx, row, statuses, recovered)
+    return _unsuccessful_resolution(
+        runtime_service,
+        ctx,
+        row,
+        statuses,
+        recovered,
+        failed_outputs,
+    )
 
 
 def _recovered_outputs(
@@ -252,12 +261,18 @@ def _unsuccessful_resolution(
     row: PipelineRunRow,
     statuses: Mapping[str, str],
     recovered: list[RecoveredPipelineOutput],
+    failed_outputs: tuple[JsonObject, ...],
 ) -> PipelineUnknownCommitResolution:
     transition = PIPELINE_RUN_RECONCILED_PARTIAL if recovered else PIPELINE_RUN_RECONCILED_FAILED
     status = "partial" if recovered else "failed"
+    message = (
+        "pipeline output commit reconciled with failed outputs"
+        if all(value == "COMMITTED" for value in statuses.values())
+        else "pipeline output commit reconciled as not committed"
+    )
     error = runtime_service._error_payload(
         InvariantViolation(
-            "pipeline output commit reconciled as not committed",
+            message,
             details={"run_id": row["id"], "media_transaction_statuses": dict(statuses)},
         ),
         ctx,
@@ -267,11 +282,69 @@ def _unsuccessful_resolution(
     return PipelineUnknownCommitResolution(
         transition,
         status,
-        tuple(reconciled_pipeline_output(output) for output in recovered),
+        (
+            *(reconciled_pipeline_output(output) for output in recovered),
+            *failed_outputs,
+        ),
         dataset_ref,
         version_id,
         dict(error),
     )
+
+
+def _resolved_failed_outputs(
+    row: PipelineRunRow,
+    statuses: Mapping[str, str],
+) -> tuple[JsonObject, ...]:
+    outputs: list[JsonObject] = []
+    for output in row["outputs"]:
+        if output.get("status") == "FAILED":
+            outputs.append(dict(output))
+        elif output.get("status") == "COMMIT_OUTCOME_UNKNOWN":
+            failed = _failed_unknown_output(output, statuses)
+            if failed is not None:
+                outputs.append(failed)
+    return tuple(outputs)
+
+
+def _failed_unknown_output(
+    output: Mapping[str, object],
+    statuses: Mapping[str, str],
+) -> JsonObject | None:
+    transaction_id = _unknown_transaction_id(output)
+    status = statuses.get(str(transaction_id))
+    if status is None or status == "COMMITTED":
+        return None
+    failed = dict(output)
+    failed["status"] = "FAILED"
+    failed["isServing"] = False
+    failed["manifest"] = _failed_unknown_manifest(output, status)
+    failed["artifactEvidence"] = _failed_unknown_evidence(output, status)
+    return failed
+
+
+def _failed_unknown_manifest(
+    output: Mapping[str, object],
+    transaction_status: str,
+) -> JsonObject:
+    manifest = output.get("manifest")
+    return {
+        **(dict(manifest) if isinstance(manifest, Mapping) else {}),
+        "commitOutcome": "NOT_COMMITTED",
+        "transactionStatus": transaction_status,
+    }
+
+
+def _failed_unknown_evidence(
+    output: Mapping[str, object],
+    transaction_status: str,
+) -> JsonObject:
+    evidence = output.get("artifactEvidence")
+    return {
+        **(dict(evidence) if isinstance(evidence, Mapping) else {}),
+        "status": "RECONCILED_FAILED",
+        "transactionStatus": transaction_status,
+    }
 
 
 def _persist_resolution(
