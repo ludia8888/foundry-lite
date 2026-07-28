@@ -150,6 +150,10 @@ pipeline_preview_runs = Table(
     Column("idempotency_key", String, nullable=False),
     Column("request_fingerprint", String, nullable=False),
     Column("is_commit_forbidden", Boolean, nullable=False, server_default=text("true")),
+    Column("execution_context", JSON, nullable=False, server_default=text("'{}'")),
+    Column("execution_lease_token", String),
+    Column("execution_lease_expires_at", String),
+    Column("execution_heartbeat_at", String),
     Column("cancel_requested_at", String),
     Column("error", JSON),
     Column("created_by", String, nullable=False),
@@ -163,6 +167,13 @@ Index(
     "ix_pipeline_preview_branch",
     pipeline_preview_runs.c.tenant_id,
     pipeline_preview_runs.c.branch_id,
+    pipeline_preview_runs.c.created_at,
+)
+
+Index(
+    "ix_pipeline_preview_recovery",
+    pipeline_preview_runs.c.status,
+    pipeline_preview_runs.c.execution_lease_expires_at,
     pipeline_preview_runs.c.created_at,
 )
 

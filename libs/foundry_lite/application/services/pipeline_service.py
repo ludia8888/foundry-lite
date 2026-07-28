@@ -153,6 +153,9 @@ class PipelineService(CoreService):
     def cancel_preview_run(self, preview_run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.pipeline_preview_service.cancel_preview_run(preview_run_id, ctx=ctx)
 
+    def recover_preview_runs(self, *, limit: int = 10) -> dict[str, object]:
+        return self.pipeline_preview_service.recover_preview_runs(limit=limit)
+
     def node_stats(
         self,
         branch_id: str,

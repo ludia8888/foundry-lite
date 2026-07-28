@@ -12,6 +12,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
 from foundry_lite.application.state_transitions import (
     PIPELINE_NODE_ATTEMPT_SUCCEEDED,
     PIPELINE_NODE_RUN_SUCCEEDED,
+    PIPELINE_PREVIEW_FAILED,
     PIPELINE_PREVIEW_SUCCEEDED,
 )
 from foundry_lite.infrastructure import schema as db
@@ -44,6 +45,9 @@ def test_preview_run_contract_is_tenant_scoped_and_commit_forbidden(tmp_path: Pa
             tenant_id="tenant-a",
             preview_run_id="preview-a",
             started_at=NOW,
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-16T00:02:00+00:00",
+            execution_heartbeat_at=NOW,
         )
         completed = repository.update_preview_terminal(
             transaction=transaction,
@@ -54,6 +58,7 @@ def test_preview_run_contract_is_tenant_scoped_and_commit_forbidden(tmp_path: Pa
             artifacts=[],
             error=None,
             completed_at=NOW,
+            execution_lease_token="lease-a",
         )
     assert created["status"] == "QUEUED"
     assert created["is_commit_forbidden"] is True
@@ -62,6 +67,93 @@ def test_preview_run_contract_is_tenant_scoped_and_commit_forbidden(tmp_path: Pa
     assert claimed is not None and claimed["status"] == "RUNNING"
     assert completed is not None and completed["status"] == "SUCCEEDED"
     assert completed["outputs"][0]["rows"] == [{"id": 1}]
+
+
+def test_preview_success_atomically_honors_concurrent_cancellation(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-cancel.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineExecutionRepository(engine)
+    with engine.begin() as transaction:
+        repository.insert_preview(transaction=transaction, record=_preview_record())
+        repository.claim_preview(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            started_at=NOW,
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-16T00:02:00+00:00",
+            execution_heartbeat_at=NOW,
+        )
+        repository.request_preview_cancel(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            requested_at=NOW,
+        )
+        completed = repository.complete_preview_success(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            execution_lease_token="lease-a",
+            outputs=[{"kind": "table"}],
+            artifacts=[],
+            completed_at=NOW,
+        )
+
+    assert completed is not None
+    assert completed["status"] == "CANCELLED"
+
+
+def test_expired_preview_reclaim_fences_the_original_executor(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-reclaim.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineExecutionRepository(engine)
+    with engine.begin() as transaction:
+        repository.insert_preview(transaction=transaction, record=_preview_record())
+        repository.claim_preview(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            started_at="2026-07-15T23:57:00+00:00",
+            execution_lease_token="expired-lease",
+            execution_lease_expires_at="2026-07-15T23:59:00+00:00",
+            execution_heartbeat_at="2026-07-15T23:57:00+00:00",
+        )
+        recoverable = repository.recoverable_previews(transaction=transaction, as_of=NOW, limit=10)
+        reclaimed = repository.reclaim_expired_preview(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            reclaim_before=NOW,
+            execution_lease_token="recovery-lease",
+            execution_lease_expires_at="2026-07-16T00:02:00+00:00",
+            execution_heartbeat_at=NOW,
+        )
+        stale_terminal = repository.update_preview_terminal(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            transition=PIPELINE_PREVIEW_FAILED,
+            outputs=[],
+            artifacts=[],
+            error={"code": "stale"},
+            completed_at=NOW,
+            execution_lease_token="expired-lease",
+        )
+        completed = repository.complete_preview_success(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            execution_lease_token="recovery-lease",
+            outputs=[{"kind": "table"}],
+            artifacts=[],
+            completed_at=NOW,
+        )
+
+    assert [row["id"] for row in recoverable] == ["preview-a"]
+    assert reclaimed is not None and reclaimed["execution_lease_token"] == "recovery-lease"
+    assert stale_terminal is None
+    assert completed is not None and completed["status"] == "SUCCEEDED"
 
 
 def test_node_attempt_and_artifact_contract_preserves_passport(tmp_path: Path) -> None:
@@ -197,6 +289,13 @@ def _preview_record() -> PipelinePreviewRunRecord:
         limits={"tableRows": 50, "maxBytes": 33_554_432},
         idempotency_key="preview-key",
         request_fingerprint="request-fp",
+        execution_context={
+            "actorUserId": "user-a",
+            "roles": ["data_engineer"],
+            "applicationId": None,
+            "clientId": None,
+            "tokenScopes": [],
+        },
         created_by="user-a",
         created_at=NOW,
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -40,7 +41,11 @@ def test_initialize_api_runtime_builds_once(monkeypatch) -> None:  # type: ignor
 
 def test_fastapi_lifespan_initializes_and_instruments(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     fake_engine = object()
-    initialized = SimpleNamespace(foundry=SimpleNamespace(engine=fake_engine), auth_provider=object())
+    pipelines = SimpleNamespace(recover_preview_runs=lambda: {"processed": 0})
+    initialized = SimpleNamespace(
+        foundry=SimpleNamespace(engine=fake_engine, pipelines=pipelines),
+        auth_provider=object(),
+    )
     engines: list[object] = []
 
     monkeypatch.setattr(main.runtime, "initialize_api_runtime", lambda: initialized)
@@ -50,3 +55,73 @@ def test_fastapi_lifespan_initializes_and_instruments(monkeypatch) -> None:  # t
         assert client.get("/healthz").json() == {"status": "ok"}
 
     assert engines == [fake_engine]
+
+
+def test_preview_recovery_loop_dispatches_durable_work(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    calls: list[str] = []
+    foundry = SimpleNamespace(
+        pipelines=SimpleNamespace(recover_preview_runs=lambda: calls.append("recover")),
+    )
+
+    async def _to_thread(function):  # type: ignore[no-untyped-def]
+        return function()
+
+    async def _stop_after_first_scan(_seconds):  # type: ignore[no-untyped-def]
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main.asyncio, "to_thread", _to_thread)
+    monkeypatch.setattr(main.asyncio, "sleep", _stop_after_first_scan)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(main._recover_pipeline_previews(foundry))
+
+    assert calls == ["recover"]
+
+
+def test_preview_recovery_loop_logs_failure_and_keeps_scanning(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def _failed_scan(_function):  # type: ignore[no-untyped-def]
+        raise RuntimeError("database temporarily unavailable")
+
+    async def _stop_after_failure(_seconds):  # type: ignore[no-untyped-def]
+        raise asyncio.CancelledError
+
+    def _capture_event(_logger, event, **fields):  # type: ignore[no-untyped-def]
+        events.append((event, fields))
+
+    monkeypatch.setattr(main.asyncio, "to_thread", _failed_scan)
+    monkeypatch.setattr(main.asyncio, "sleep", _stop_after_failure)
+    monkeypatch.setattr(main, "log_event", _capture_event)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            main._recover_pipeline_previews(
+                SimpleNamespace(pipelines=SimpleNamespace(recover_preview_runs=lambda: None))
+            )
+        )
+
+    assert events == [
+        (
+            "pipeline.preview.recovery_failed",
+            {
+                "request_id": "req-pipeline-preview-recovery",
+                "tenant_id": "system",
+                "error_type": "RuntimeError",
+            },
+        )
+    ]
+
+
+def test_preview_recovery_loop_propagates_task_cancellation(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def _cancelled_scan(_function):  # type: ignore[no-untyped-def]
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(main.asyncio, "to_thread", _cancelled_scan)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            main._recover_pipeline_previews(
+                SimpleNamespace(pipelines=SimpleNamespace(recover_preview_runs=lambda: None))
+            )
+        )

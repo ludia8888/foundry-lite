@@ -54,6 +54,18 @@ class _PreviewRepository:
     def claim_preview(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
         return None
 
+    def reclaim_expired_preview(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
+        return None
+
+    def renew_preview_execution_lease(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
+        return self.row
+
+    def recoverable_previews(self, **_kwargs: object) -> list[PipelinePreviewRunRow]:
+        return [] if self.row is None else [self.row]
+
+    def complete_preview_success(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
+        return self.terminal_result
+
     def request_preview_cancel(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
         self.cancel_requests += 1
         return None
@@ -83,6 +95,16 @@ def _row(status: str = "QUEUED") -> PipelinePreviewRunRow:
         "idempotency_key": "preview-key",
         "request_fingerprint": "sha256:request",
         "is_commit_forbidden": True,
+        "execution_context": {
+            "actorUserId": "operator",
+            "roles": ["data_engineer"],
+            "applicationId": None,
+            "clientId": None,
+            "tokenScopes": [],
+        },
+        "execution_lease_token": "preview-lease" if status != "QUEUED" else None,
+        "execution_lease_expires_at": "9999-12-31T23:59:59Z" if status != "QUEUED" else None,
+        "execution_heartbeat_at": "2026-07-28T00:00:00Z" if status != "QUEUED" else None,
         "cancel_requested_at": None,
         "error": None,
         "created_by": "operator",
@@ -163,9 +185,25 @@ def test_pipeline_preview_terminal_update_reloads_concurrent_winner() -> None:
         PIPELINE_PREVIEW_CANCELLED,
         PreviewExecutionResult([], []),
         None,
+        "preview-lease",
     )
 
     assert payload["status"] == "CANCEL_REQUESTED"
+
+
+def test_pipeline_preview_success_resolves_concurrent_cancel_in_repository_transaction() -> None:
+    cancelled = _row("CANCELLED")
+    repository = _PreviewRepository(_row("CANCEL_REQUESTED"), terminal_result=cancelled)
+    service = _service(repository)
+
+    payload = service._complete_preview_success(
+        RequestContext(),
+        _row("RUNNING"),
+        PreviewExecutionResult([{"kind": "table"}], []),
+        "preview-lease",
+    )
+
+    assert payload["status"] == "CANCELLED"
 
 
 def test_pipeline_preview_cancel_requested_execution_completes_without_running_graph() -> None:

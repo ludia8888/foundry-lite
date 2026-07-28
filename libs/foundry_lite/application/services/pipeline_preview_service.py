@@ -12,31 +12,41 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
 )
 from foundry_lite.application.ports.pipeline_repository import PipelineBranchRow, PipelineRepository
 from foundry_lite.application.ports.semantic_row_cache_repository import SemanticRowCacheRepository
-from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint, validate_pipeline_graph
 from foundry_lite.application.services.pipeline_preview_executor import (
     PreviewExecutionResult,
     execute_pipeline_preview,
     normalize_preview_limits,
 )
+from foundry_lite.application.services.pipeline_preview_recovery import (
+    PipelinePreviewExecutionLeaseLost,
+    pipeline_preview_execution_heartbeat,
+    pipeline_preview_lease_claim_values,
+    pipeline_preview_lease_reclaim_values,
+    pipeline_preview_utc_now,
+    recovered_pipeline_preview_context,
+)
 from foundry_lite.application.services.pipeline_preview_runtime import (
     PipelinePreviewDatasetRegistry,
     PipelinePreviewRuntime,
+)
+from foundry_lite.application.services.pipeline_preview_values import (
+    PIPELINE_PREVIEW_CANCELLED,
+    PIPELINE_PREVIEW_FAILED,
+    StatusTransition,
+    _idempotent_preview_payload,
+    _preview_payload,
+    _preview_record,
+    _preview_request_fingerprint,
+    _require_valid_preview_graph,
 )
 from foundry_lite.application.services.pipeline_semantic_row_cache import (
     SemanticRowCacheSession,
     semantic_resource_security_policy_fingerprint,
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
-from foundry_lite.application.state_transitions import (
-    PIPELINE_PREVIEW_CANCELLED,
-    PIPELINE_PREVIEW_FAILED,
-    PIPELINE_PREVIEW_SUCCEEDED,
-    StatusTransition,
-)
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+from foundry_lite.domain.errors import NotFound
 
 
 class PipelinePreviewService(CoreService):
@@ -104,21 +114,66 @@ class PipelinePreviewService(CoreService):
         self.policy.require(ctx, "pipeline:write")
         row, is_claimed = self._claim_preview(preview_run_id, ctx)
         if row["status"] == "CANCEL_REQUESTED":
-            return self._complete_preview(ctx, row, PIPELINE_PREVIEW_CANCELLED, PreviewExecutionResult([], []), None)
+            return self._complete_preview(
+                ctx,
+                row,
+                PIPELINE_PREVIEW_CANCELLED,
+                PreviewExecutionResult([], []),
+                None,
+                row["execution_lease_token"],
+            )
         if not is_claimed:
             return _preview_payload(row)
-        try:
-            result = execute_pipeline_preview(
-                row["graph"],
-                preview_run_id=preview_run_id,
-                target_node_id=row["target_node_id"],
-                limits=row["limits"],
-                runtime=self._preview_runtime(ctx, row),
+        return self._execute_claimed_preview(ctx, row)
+
+    def recover_preview_runs(self, *, limit: int = 10) -> dict[str, object]:
+        with self.engine.begin() as conn:
+            rows = self.pipeline_execution_repository.recoverable_previews(
+                transaction=conn,
+                as_of=pipeline_preview_utc_now(),
+                limit=max(1, min(limit, 100)),
             )
-            return self._finish_execution(ctx, row, result)
-        except Exception as exc:
-            error = dict(self.runtime_service._error_payload(exc, ctx, run_id=preview_run_id))
-            return self._complete_preview(ctx, row, PIPELINE_PREVIEW_FAILED, PreviewExecutionResult([], []), error)
+        recovered_ids: list[str] = []
+        for row in rows:
+            self.execute_preview_run(str(row["id"]), ctx=recovered_pipeline_preview_context(row))
+            recovered_ids.append(str(row["id"]))
+        return {"processed": len(recovered_ids), "previewRunIds": recovered_ids}
+
+    def _execute_claimed_preview(
+        self,
+        ctx: RequestContext,
+        row: PipelinePreviewRunRow,
+    ) -> dict[str, object]:
+        result = PreviewExecutionResult([], [])
+        error: dict[str, object] | None = None
+        try:
+            with pipeline_preview_execution_heartbeat(
+                self.engine,
+                self.pipeline_execution_repository,
+                ctx,
+                row,
+            ) as guard:
+                try:
+                    result = self._execute_preview_graph(ctx, row)
+                except Exception as exc:
+                    error = dict(self.runtime_service._error_payload(exc, ctx, run_id=str(row["id"])))
+                guard.require_active()
+            return self._finish_claimed_execution(ctx, row, guard.token, result, error)
+        except PipelinePreviewExecutionLeaseLost:
+            return self.get_preview_run(str(row["id"]), ctx=ctx)
+
+    def _execute_preview_graph(
+        self,
+        ctx: RequestContext,
+        row: PipelinePreviewRunRow,
+    ) -> PreviewExecutionResult:
+        return execute_pipeline_preview(
+            row["graph"],
+            preview_run_id=str(row["id"]),
+            target_node_id=row["target_node_id"],
+            limits=row["limits"],
+            runtime=self._preview_runtime(ctx, row),
+        )
 
     def get_preview_run(
         self,
@@ -154,7 +209,7 @@ class PipelinePreviewService(CoreService):
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 preview_run_id=preview_run_id,
-                requested_at=_now(),
+                requested_at=pipeline_preview_utc_now(),
             )
             if row is None:
                 row = self._require_preview(conn, ctx, preview_run_id)
@@ -189,24 +244,60 @@ class PipelinePreviewService(CoreService):
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 preview_run_id=preview_run_id,
-                started_at=_now(),
+                **pipeline_preview_lease_claim_values(),
             )
             if claimed is not None:
                 return claimed, True
+            reclaimed = self.pipeline_execution_repository.reclaim_expired_preview(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                preview_run_id=preview_run_id,
+                **pipeline_preview_lease_reclaim_values(),
+            )
+            if reclaimed is not None:
+                return reclaimed, True
             return self._require_preview(conn, ctx, preview_run_id), False
 
-    def _finish_execution(
+    def _finish_claimed_execution(
+        self,
+        ctx: RequestContext,
+        row: PipelinePreviewRunRow,
+        execution_lease_token: str,
+        result: PreviewExecutionResult,
+        error: dict[str, object] | None,
+    ) -> dict[str, object]:
+        if error is not None:
+            return self._complete_preview(
+                ctx,
+                row,
+                PIPELINE_PREVIEW_FAILED,
+                PreviewExecutionResult([], []),
+                error,
+                execution_lease_token,
+            )
+        return self._complete_preview_success(ctx, row, result, execution_lease_token)
+
+    def _complete_preview_success(
         self,
         ctx: RequestContext,
         row: PipelinePreviewRunRow,
         result: PreviewExecutionResult,
+        execution_lease_token: str,
     ) -> dict[str, object]:
         with self.engine.begin() as conn:
-            current = self._require_preview(conn, ctx, str(row["id"]))
-        transition = (
-            PIPELINE_PREVIEW_CANCELLED if current["status"] == "CANCEL_REQUESTED" else PIPELINE_PREVIEW_SUCCEEDED
-        )
-        return self._complete_preview(ctx, current, transition, result, None)
+            after = self.pipeline_execution_repository.complete_preview_success(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                preview_run_id=str(row["id"]),
+                execution_lease_token=execution_lease_token,
+                outputs=result.outputs,
+                artifacts=result.artifacts,
+                completed_at=pipeline_preview_utc_now(),
+            )
+            if after is None:
+                return _preview_payload(self._require_preview(conn, ctx, str(row["id"])))
+            self._audit_preview(conn, ctx, after, after["status"].lower())
+        return _preview_payload(after)
 
     def _complete_preview(
         self,
@@ -215,6 +306,7 @@ class PipelinePreviewService(CoreService):
         transition: StatusTransition,
         result: PreviewExecutionResult,
         error: dict[str, object] | None,
+        execution_lease_token: str | None,
     ) -> dict[str, object]:
         with self.engine.begin() as conn:
             after = self.pipeline_execution_repository.update_preview_terminal(
@@ -225,7 +317,8 @@ class PipelinePreviewService(CoreService):
                 outputs=result.outputs,
                 artifacts=result.artifacts,
                 error=error,
-                completed_at=_now(),
+                completed_at=pipeline_preview_utc_now(),
+                execution_lease_token=execution_lease_token,
             )
             if after is None:
                 return _preview_payload(self._require_preview(conn, ctx, str(row["id"])))
@@ -310,82 +403,3 @@ class PipelinePreviewService(CoreService):
             action=event,
             after_ref={"status": row["status"], "commitForbidden": row["is_commit_forbidden"]},
         )
-
-
-def _preview_record(
-    ctx: RequestContext,
-    *,
-    pipeline_id: str,
-    branch_id: str,
-    graph: Mapping[str, object],
-    target_node_id: str | None,
-    limits: Mapping[str, object],
-    idempotency_key: str,
-    request_fingerprint: str,
-) -> PipelinePreviewRunRecord:
-    return PipelinePreviewRunRecord(
-        preview_run_id=_new_id("pprev"),
-        tenant_id=ctx.tenant_id,
-        pipeline_id=pipeline_id,
-        branch_id=branch_id,
-        graph=dict(graph),
-        graph_fingerprint=pipeline_graph_fingerprint(graph),
-        target_node_id=target_node_id,
-        limits=dict(limits),
-        idempotency_key=idempotency_key,
-        request_fingerprint=request_fingerprint,
-        created_by=ctx.actor_user_id,
-        created_at=_now(),
-    )
-
-
-def _preview_request_fingerprint(
-    graph: Mapping[str, object],
-    target_node_id: str | None,
-    limits: Mapping[str, object],
-) -> str:
-    return _json_hash(
-        {
-            "graphFingerprint": pipeline_graph_fingerprint(graph),
-            "targetNodeId": target_node_id,
-            "limits": dict(limits),
-        }
-    )
-
-
-def _idempotent_preview_payload(row: PipelinePreviewRunRow, request_fingerprint: str) -> dict[str, object]:
-    if row["request_fingerprint"] == request_fingerprint:
-        return _preview_payload(row)
-    raise ConflictDetected(
-        "pipeline preview idempotency key was reused with a different request",
-        details={"preview_run_id": row["id"]},
-    )
-
-
-def _preview_payload(row: PipelinePreviewRunRow) -> dict[str, object]:
-    return {
-        "id": row["id"],
-        "pipelineId": row["pipeline_id"],
-        "branchId": row["branch_id"],
-        "status": row["status"],
-        "graphFingerprint": row["graph_fingerprint"],
-        "targetNodeId": row["target_node_id"],
-        "limits": row["limits"],
-        "outputs": row["outputs"],
-        "artifacts": row["artifacts"],
-        "commitForbidden": row["is_commit_forbidden"],
-        "servingVersionCreated": False,
-        "notice": "미리보기 전용 · 출력 버전이 생성되지 않음",
-        "cancelRequestedAt": row["cancel_requested_at"],
-        "error": row["error"],
-        "createdBy": row["created_by"],
-        "createdAt": row["created_at"],
-        "startedAt": row["started_at"],
-        "completedAt": row["completed_at"],
-    }
-
-
-def _require_valid_preview_graph(graph: Mapping[str, object]) -> None:
-    validation = validate_pipeline_graph(graph)
-    if not validation["valid"]:
-        raise ValidationFailed("pipeline preview graph is invalid", details={"validation": validation})

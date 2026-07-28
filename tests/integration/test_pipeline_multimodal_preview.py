@@ -19,6 +19,7 @@ from foundry_lite.application.ports.media_processor_registry import (
     ProcessorResourceRequirements,
 )
 from foundry_lite.application.primitives import _json_hash
+from foundry_lite.application.services.pipeline_preview_executor import PreviewExecutionResult
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.asr_processor import (
@@ -80,6 +81,9 @@ def test_preview_execution_claim_has_one_winner(
             tenant_id=ctx.tenant_id,
             preview_run_id=str(queued["id"]),
             started_at="2026-07-27T00:00:00Z",
+            execution_lease_token="active-preview-lease",
+            execution_lease_expires_at="9999-12-31T23:59:59Z",
+            execution_heartbeat_at="2026-07-27T00:00:00Z",
         )
     assert claimed is not None
 
@@ -95,6 +99,65 @@ def test_preview_execution_claim_has_one_winner(
 
     assert replay["status"] == "RUNNING"
     assert replay["startedAt"] == "2026-07-27T00:00:00Z"
+
+
+def test_expired_preview_is_recovered_with_original_caller_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dependencies = create_local_core_dependencies(
+        db_url=f"sqlite:///{tmp_path / 'pipeline-preview-recovery.db'}",
+        storage_root=tmp_path / "preview-recovery-flite",
+    )
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = RequestContext(
+        tenant_id="tenant-recovery",
+        actor_user_id="preview-owner",
+        roles=("admin", "data_engineer"),
+        application_id="pipeline-builder",
+        client_id="browser-client",
+        token_scopes=("pipeline:write",),
+    )
+    branch = foundry.pipelines.create_branch(
+        pipeline_id="preview-recovery-pipeline",
+        name="draft",
+        idempotency_key="preview-recovery-branch",
+        ctx=ctx,
+    )
+    queued = foundry.pipelines.create_preview_run(
+        str(branch["id"]),
+        graph=_media_rows_graph("legal.recovery", "version-recovery"),
+        target_node_id="out",
+        limits={"tableRows": 10},
+        idempotency_key="preview-recovery-run",
+        ctx=ctx,
+    )
+    with dependencies.engine.begin() as transaction:
+        foundry._services.pipelines.preview.pipeline_execution_repository.claim_preview(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            preview_run_id=str(queued["id"]),
+            started_at="2026-07-27T00:00:00Z",
+            execution_lease_token="expired-preview-lease",
+            execution_lease_expires_at="2026-07-27T00:02:00Z",
+            execution_heartbeat_at="2026-07-27T00:00:00Z",
+        )
+
+    def _execute(*_args, **kwargs):
+        assert kwargs["runtime"] is not None
+        return PreviewExecutionResult([{"kind": "table", "items": [{"id": 1}]}], [])
+
+    monkeypatch.setattr(
+        "foundry_lite.application.services.pipeline_preview_service.execute_pipeline_preview",
+        _execute,
+    )
+
+    recovery = foundry.pipelines.recover_preview_runs(limit=10)
+    completed = foundry.pipelines.get_preview_run(str(queued["id"]), ctx=ctx)
+
+    assert recovery == {"processed": 1, "previewRunIds": [queued["id"]]}
+    assert completed["status"] == "SUCCEEDED"
+    assert completed["outputs"] == [{"kind": "table", "items": [{"id": 1}]}]
 
 
 def test_pdf_preview_extracts_and_chunks_without_committing_derivatives_or_datasets(tmp_path: Path) -> None:

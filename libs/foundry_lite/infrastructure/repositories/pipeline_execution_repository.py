@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 import foundry_lite.infrastructure.repositories.pipeline_execution_node_rows as node_rows
+import foundry_lite.infrastructure.repositories.pipeline_preview_rows as preview_rows
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineDeploymentRecord,
     PipelineDeploymentRow,
@@ -21,13 +22,8 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineRunArtifactRecord,
     PipelineRunArtifactRow,
 )
-from foundry_lite.application.state_transitions import (
-    PIPELINE_PREVIEW_CANCEL_REQUESTED,
-    PIPELINE_PREVIEW_RUNNING,
-    StatusTransition,
-)
+from foundry_lite.application.state_transitions import StatusTransition
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 _DEPLOYMENT_NUMBER_RETRY_LIMIT = 8
 
@@ -39,97 +35,106 @@ class SqlAlchemyPipelineExecutionRepository:
         self._engine = engine
 
     def insert_preview(self, *, transaction: Any, record: PipelinePreviewRunRecord) -> PipelinePreviewRunRow:
-        savepoint = transaction.begin_nested()
-        try:
-            transaction.execute(
-                insert(db.pipeline_preview_runs).values(
-                    id=record.preview_run_id,
-                    tenant_id=record.tenant_id,
-                    pipeline_id=record.pipeline_id,
-                    branch_id=record.branch_id,
-                    status="QUEUED",
-                    graph=record.graph,
-                    graph_fingerprint=record.graph_fingerprint,
-                    target_node_id=record.target_node_id,
-                    limits=record.limits,
-                    outputs=[],
-                    artifacts=[],
-                    idempotency_key=record.idempotency_key,
-                    request_fingerprint=record.request_fingerprint,
-                    is_commit_forbidden=True,
-                    cancel_requested_at=None,
-                    error=None,
-                    created_by=record.created_by,
-                    created_at=record.created_at,
-                    started_at=None,
-                    completed_at=None,
-                )
-            )
-        except IntegrityError:
-            savepoint.rollback()
-            existing = self.preview_by_idempotency_key(
-                transaction=transaction,
-                tenant_id=record.tenant_id,
-                idempotency_key=record.idempotency_key,
-            )
-            if existing is not None:
-                return existing
-            raise
-        savepoint.commit()
-        row = self.preview_by_id(
-            transaction=transaction,
-            tenant_id=record.tenant_id,
-            preview_run_id=record.preview_run_id,
-        )
-        assert row is not None
-        return row
+        return preview_rows.insert_preview(transaction, record)
 
     def preview_by_id(self, *, transaction: Any, tenant_id: str, preview_run_id: str) -> PipelinePreviewRunRow | None:
-        row = (
-            transaction.execute(
-                select(db.pipeline_preview_runs).where(
-                    and_(
-                        db.pipeline_preview_runs.c.tenant_id == tenant_id,
-                        db.pipeline_preview_runs.c.id == preview_run_id,
-                    )
-                )
-            )
-            .mappings()
-            .first()
-        )
-        return _row(row, PipelinePreviewRunRow)
+        return preview_rows.preview_by_id(transaction, tenant_id, preview_run_id)
 
     def preview_by_idempotency_key(
         self, *, transaction: Any, tenant_id: str, idempotency_key: str
     ) -> PipelinePreviewRunRow | None:
-        row = (
-            transaction.execute(
-                select(db.pipeline_preview_runs).where(
-                    and_(
-                        db.pipeline_preview_runs.c.tenant_id == tenant_id,
-                        db.pipeline_preview_runs.c.idempotency_key == idempotency_key,
-                    )
-                )
-            )
-            .mappings()
-            .first()
-        )
-        return _row(row, PipelinePreviewRunRow)
+        return preview_rows.preview_by_idempotency_key(transaction, tenant_id, idempotency_key)
 
     def claim_preview(
-        self, *, transaction: Any, tenant_id: str, preview_run_id: str, started_at: str
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        preview_run_id: str,
+        started_at: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
     ) -> PipelinePreviewRunRow | None:
-        updated = cas_status_update(
+        return preview_rows.claim_preview(
             transaction,
-            db.pipeline_preview_runs,
-            tenant_id=tenant_id,
-            row_id=preview_run_id,
-            transition=PIPELINE_PREVIEW_RUNNING,
-            values={"started_at": started_at},
+            tenant_id,
+            preview_run_id,
+            started_at,
+            execution_lease_token,
+            execution_lease_expires_at,
+            execution_heartbeat_at,
         )
-        if not updated:
-            return None
-        return self.preview_by_id(transaction=transaction, tenant_id=tenant_id, preview_run_id=preview_run_id)
+
+    def reclaim_expired_preview(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        preview_run_id: str,
+        reclaim_before: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelinePreviewRunRow | None:
+        return preview_rows.reclaim_expired_preview(
+            transaction,
+            tenant_id,
+            preview_run_id,
+            reclaim_before,
+            execution_lease_token,
+            execution_lease_expires_at,
+            execution_heartbeat_at,
+        )
+
+    def renew_preview_execution_lease(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        preview_run_id: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelinePreviewRunRow | None:
+        return preview_rows.renew_preview_execution_lease(
+            transaction,
+            tenant_id,
+            preview_run_id,
+            execution_lease_token,
+            execution_lease_expires_at,
+            execution_heartbeat_at,
+        )
+
+    def recoverable_previews(
+        self,
+        *,
+        transaction: Any,
+        as_of: str,
+        limit: int,
+    ) -> list[PipelinePreviewRunRow]:
+        return preview_rows.recoverable_previews(transaction, as_of, limit)
+
+    def complete_preview_success(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        preview_run_id: str,
+        execution_lease_token: str,
+        outputs: list[dict[str, object]],
+        artifacts: list[dict[str, object]],
+        completed_at: str,
+    ) -> PipelinePreviewRunRow | None:
+        return preview_rows.complete_preview_success(
+            transaction,
+            tenant_id,
+            preview_run_id,
+            execution_lease_token,
+            outputs,
+            artifacts,
+            completed_at,
+        )
 
     def update_preview_terminal(
         self,
@@ -142,33 +147,24 @@ class SqlAlchemyPipelineExecutionRepository:
         artifacts: list[dict[str, object]],
         error: dict[str, object] | None,
         completed_at: str,
+        execution_lease_token: str | None,
     ) -> PipelinePreviewRunRow | None:
-        updated = cas_status_update(
+        return preview_rows.update_preview_terminal(
             transaction,
-            db.pipeline_preview_runs,
-            tenant_id=tenant_id,
-            row_id=preview_run_id,
-            transition=transition,
-            values={"outputs": outputs, "artifacts": artifacts, "error": error, "completed_at": completed_at},
+            tenant_id,
+            preview_run_id,
+            transition,
+            outputs,
+            artifacts,
+            error,
+            completed_at,
+            execution_lease_token,
         )
-        if not updated:
-            return None
-        return self.preview_by_id(transaction=transaction, tenant_id=tenant_id, preview_run_id=preview_run_id)
 
     def request_preview_cancel(
         self, *, transaction: Any, tenant_id: str, preview_run_id: str, requested_at: str
     ) -> PipelinePreviewRunRow | None:
-        updated = cas_status_update(
-            transaction,
-            db.pipeline_preview_runs,
-            tenant_id=tenant_id,
-            row_id=preview_run_id,
-            transition=PIPELINE_PREVIEW_CANCEL_REQUESTED,
-            values={"cancel_requested_at": requested_at},
-        )
-        if not updated:
-            return None
-        return self.preview_by_id(transaction=transaction, tenant_id=tenant_id, preview_run_id=preview_run_id)
+        return preview_rows.request_preview_cancel(transaction, tenant_id, preview_run_id, requested_at)
 
     def insert_node_run(self, *, transaction: Any, record: PipelineNodeRunRecord) -> PipelineNodeRunRow:
         return node_rows.insert_node_run(transaction, record)

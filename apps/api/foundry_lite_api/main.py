@@ -7,14 +7,19 @@ handlers, helpers) as re-exports so existing tests and tooling keep working.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.observability.logging import log_event
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import instrument_fastapi_app, instrument_sqlalchemy_engine
 
@@ -209,12 +214,41 @@ from foundry_lite_api.webhooks import (  # noqa: F401
     _webhook_request_context,
 )
 
+_LOGGER = logging.getLogger(__name__)
+_PREVIEW_RECOVERY_INTERVAL_SECONDS = max(
+    1.0,
+    float(os.getenv("FOUNDRY_LITE_PIPELINE_PREVIEW_RECOVERY_INTERVAL_SECONDS", "5")),
+)
+
+
+async def _recover_pipeline_previews(foundry: FoundryLite) -> None:
+    while True:
+        try:
+            await asyncio.to_thread(foundry.pipelines.recover_preview_runs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - keep the durable recovery scanner alive
+            log_event(
+                _LOGGER,
+                "pipeline.preview.recovery_failed",
+                request_id="req-pipeline-preview-recovery",
+                tenant_id="system",
+                error_type=type(exc).__name__,
+            )
+        await asyncio.sleep(_PREVIEW_RECOVERY_INTERVAL_SECONDS)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     api_runtime = runtime.initialize_api_runtime()
     instrument_sqlalchemy_engine(api_runtime.foundry.engine)
-    yield
+    preview_recovery = asyncio.create_task(_recover_pipeline_previews(api_runtime.foundry))
+    try:
+        yield
+    finally:
+        preview_recovery.cancel()
+        with suppress(asyncio.CancelledError):
+            await preview_recovery
 
 
 app = FastAPI(title="Foundry-lite API", version="0.1.0", lifespan=lifespan)

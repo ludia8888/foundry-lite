@@ -51,6 +51,10 @@ class PipelinePreviewRunRow(TypedDict):
     idempotency_key: str
     request_fingerprint: str
     is_commit_forbidden: bool
+    execution_context: JsonObject
+    execution_lease_token: str | None
+    execution_lease_expires_at: str | None
+    execution_heartbeat_at: str | None
     cancel_requested_at: str | None
     error: JsonObject | None
     created_by: str
@@ -149,6 +153,7 @@ class PipelinePreviewRunRecord:
     limits: JsonObject
     idempotency_key: str
     request_fingerprint: str
+    execution_context: JsonObject
     created_by: str
     created_at: str
 
@@ -246,10 +251,62 @@ class PipelineExecutionRepository(Protocol):
         artifacts: list[JsonObject],
         error: JsonObject | None,
         completed_at: str,
+        execution_lease_token: str | None,
     ) -> PipelinePreviewRunRow | None: ...
 
     def claim_preview(
-        self, *, transaction: TransactionContext, tenant_id: str, preview_run_id: str, started_at: str
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        preview_run_id: str,
+        started_at: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelinePreviewRunRow | None: ...
+
+    def reclaim_expired_preview(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        preview_run_id: str,
+        reclaim_before: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelinePreviewRunRow | None: ...
+
+    def renew_preview_execution_lease(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        preview_run_id: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelinePreviewRunRow | None: ...
+
+    def recoverable_previews(
+        self,
+        *,
+        transaction: TransactionContext,
+        as_of: str,
+        limit: int,
+    ) -> list[PipelinePreviewRunRow]: ...
+
+    def complete_preview_success(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        preview_run_id: str,
+        execution_lease_token: str,
+        outputs: list[JsonObject],
+        artifacts: list[JsonObject],
+        completed_at: str,
     ) -> PipelinePreviewRunRow | None: ...
 
     def request_preview_cancel(
