@@ -182,6 +182,42 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
     )
 
 
+def test_graph_v2_dataset_artifact_evidence_failure_preserves_serving_commit_as_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = _foundry_with_language_model(
+        tmp_path,
+        _StructuredLanguageModel({"category": "payment", "risk": 1}),
+    )
+    ctx = demo_admin_context()
+    pipeline_id = "graph_v2_dataset_evidence_reconciliation"
+    source_ref = "raw.graph_v2_dataset_evidence_reconciliation"
+    output_ref = "clean.graph_v2_dataset_evidence_reconciliation"
+    _commit_dataset_source(foundry, ctx, tmp_path, source_ref)
+    graph = _dataset_semantic_graph(source_ref, output_ref)
+    version = _execute_graph_version(foundry, ctx, pipeline_id=pipeline_id, graph=graph)
+    foundry.pipelines.deploy(pipeline_id, str(version["id"]), idempotency_key="deploy-evidence-failure", ctx=ctx)
+    repository = foundry._services.pipelines.run.pipeline_execution_repository
+    insert_artifact = repository.insert_artifact
+
+    def fail_output_artifact(*, transaction: object, record: object):
+        if getattr(record, "node_id", None) == "output":
+            raise RuntimeError("injected dataset artifact evidence failure")
+        return insert_artifact(transaction=transaction, record=record)
+
+    monkeypatch.setattr(repository, "insert_artifact", fail_output_artifact)
+
+    run = foundry.pipelines.run(pipeline_id, idempotency_key="run-evidence-failure", ctx=ctx)
+
+    assert run["status"] == "partial", run
+    assert run["error"]["type"] == "PIPELINE_OUTPUT_EVIDENCE_PERSISTENCE_FAILED"
+    assert run["outputs"][0]["status"] == "COMMITTED"
+    assert run["outputs"][0]["isServing"] is True
+    assert run["outputs"][0]["ref"]["versionId"] == _dataset_version_ids(foundry, ctx, output_ref)[0]
+    assert len(_dataset_version_ids(foundry, ctx, output_ref)) == 1
+
+
 def test_graph_v2_geospatial_source_commits_governed_series_output(tmp_path: Path) -> None:
     foundry = _foundry_with_language_model(tmp_path, _StructuredLanguageModel({"unused": True}))
     ctx = demo_admin_context()

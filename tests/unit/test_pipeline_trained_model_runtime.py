@@ -91,16 +91,12 @@ def test_trained_model_runtime_rejects_executable_drift_from_deployment_pin(
     )
 
 
-def test_trained_model_runtime_uses_deployed_definition_after_branch_advances() -> None:
+def test_trained_model_runtime_uses_deployed_definition_after_registry_removal() -> None:
     node = _trained_model_node()
     adapter = LocalTrainedModelInferenceAdapter()
-    advanced = replace(
-        adapter.resolve("demo.transaction-risk", branch="master"),
-        version="2026.08.1",
-        revision="container-risk-model-r2",
-        executable_reference="local://demo.transaction-risk@container-risk-model-r2",
+    adapter.resolve = lambda *_args, **_kwargs: pytest.fail(  # type: ignore[method-assign]
+        "deployed model execution must not require the current registry"
     )
-    adapter.resolve = lambda *_args, **_kwargs: advanced  # type: ignore[method-assign]
     runtime = PipelineV2TrainedModelRuntime(
         adapter=adapter,
         run_id="prun_historical_model",

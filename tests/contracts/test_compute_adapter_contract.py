@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import pytest
 from foundry_lite.application.ports import ComputeAdapter
 from foundry_lite.application.ports.adapter_failure import AdapterError
@@ -235,16 +237,28 @@ def test_duckdb_bounded_parquet_read_rejects_highly_compressed_decoded_payload(
     adapter = DuckDBComputeAdapter()
     parquet_path = tmp_path / "compressed.parquet"
     adapter.rows_to_parquet(
-        [{"payload": "x" * 100_000} for _ in range(20)],
+        rows := [{"payload": "x" * 100_000} for _ in range(20)],
         parquet_path,
         ["payload"],
     )
+    metadata = pq.ParquetFile(parquet_path).metadata
+    metadata_bytes = (
+        sum(
+            metadata.row_group(group).column(column).total_uncompressed_size
+            for group in range(metadata.num_row_groups)
+            for column in range(metadata.num_columns)
+        )
+        + metadata.num_rows * metadata.num_columns * 16
+    )
+    decoded_bytes = sum(len(json.dumps(row, sort_keys=True, separators=(",", ":")).encode()) for row in rows)
+    decoded_limit = (metadata_bytes + decoded_bytes) // 2
+    assert metadata_bytes < decoded_limit < decoded_bytes
 
     with pytest.raises(ValidationFailed, match="read bound") as raised:
         adapter.rows_from_parquet_bounded(
             parquet_path,
             max_rows=100,
-            max_decoded_bytes=50_000,
+            max_decoded_bytes=decoded_limit,
         )
 
     assert raised.value.details["limitKind"] == "decoded_bytes"

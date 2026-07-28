@@ -83,7 +83,11 @@ class ContainerTrainedModelInferenceAdapter:
         return _resolved_definition(self._resolve_spec(model_ref, branch, fallback_branches))
 
     def infer(self, invocation: TrainedModelInvocation) -> TrainedModelInferenceResult:
-        resolved = self._resolve_spec(invocation.model_ref, invocation.branch, invocation.fallback_branches)
+        resolved = _pinned_spec(invocation) or self._resolve_spec(
+            invocation.model_ref,
+            invocation.branch,
+            invocation.fallback_branches,
+        )
         spec = _execution_spec(self.config, resolved, invocation.expected_executable_reference)
         definition = invocation.pinned_definition or _resolved_definition(spec)
         require_trained_model_invocation_pin(invocation, definition)
@@ -205,6 +209,14 @@ def _request_payload(invocation: TrainedModelInvocation) -> dict[str, object]:
 
 def _resolved_definition(spec: ContainerTrainedModelSpec) -> TrainedModelDefinition:
     return replace(spec.definition, executable_reference=spec.image_reference)
+
+
+def _pinned_spec(invocation: TrainedModelInvocation) -> ContainerTrainedModelSpec | None:
+    definition = invocation.pinned_definition
+    if definition is None:
+        return None
+    image_reference = invocation.expected_executable_reference or definition.executable_reference
+    return ContainerTrainedModelSpec(definition=definition, image_reference=image_reference)
 
 
 def _execution_spec(

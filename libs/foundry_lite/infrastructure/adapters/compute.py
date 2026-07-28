@@ -135,18 +135,17 @@ class DuckDBComputeAdapter:
         try:
             result = con.execute("select * from read_parquet(?)", [str(parquet_path)])
             names = [str(column[0]) for column in result.description]
-            while batch := result.fetchmany(1_000):
-                for raw_row in batch:
-                    row = _tabular_row(dict(zip(names, raw_row, strict=True)))
-                    rows.append(row)
-                    decoded_byte_count += _decoded_row_byte_count(row)
-                    _require_decoded_result_bound(
-                        parquet_path,
-                        len(rows),
-                        decoded_byte_count,
-                        max_rows,
-                        max_decoded_bytes,
-                    )
+            while (raw_row := result.fetchone()) is not None:
+                row = _tabular_row(dict(zip(names, raw_row, strict=True)))
+                decoded_byte_count += _decoded_row_byte_count(row)
+                _require_decoded_result_bound(
+                    parquet_path,
+                    len(rows) + 1,
+                    decoded_byte_count,
+                    max_rows,
+                    max_decoded_bytes,
+                )
+                rows.append(row)
         finally:
             con.close()
         return BoundedParquetRead(tuple(rows), max(metadata_decoded_bytes, decoded_byte_count))

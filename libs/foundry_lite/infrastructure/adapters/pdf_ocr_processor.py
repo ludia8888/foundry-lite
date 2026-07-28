@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import import_module
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 from statistics import median
 
@@ -49,8 +49,18 @@ _DEFAULT_TIMEOUT_SECONDS = 120
 _DEFAULT_DPI = 150
 _MIN_DPI = 72
 _MAX_DPI = 300
+_MAX_RASTER_PAGE_PIXELS = 25_000_000
+_MAX_RASTER_TOTAL_PIXELS = 100_000_000
 _LANGUAGES_PATTERN = re.compile(r"^[A-Za-z0-9_.+-]{1,80}$")
 _PAGE_FILE_PATTERN = re.compile(r"-(\d+)\.png$")
+_PAGE_SIZE_PATTERN = re.compile(
+    r"^Page\s+(\d+)\s+size:\s+([0-9]+(?:\.[0-9]+)?)\s+x\s+([0-9]+(?:\.[0-9]+)?)\s+pts",
+    re.MULTILINE,
+)
+_SINGLE_PAGE_SIZE_PATTERN = re.compile(
+    r"^Page size:\s+([0-9]+(?:\.[0-9]+)?)\s+x\s+([0-9]+(?:\.[0-9]+)?)\s+pts",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -272,6 +282,12 @@ def _poppler_rasterize(
     )
     if not page_numbers:
         return ()
+    _require_pdf_raster_bound(
+        source_path,
+        page_numbers,
+        dpi,
+        _remaining_seconds(deadline),
+    )
     executable = shutil.which("pdftoppm")
     if executable is None:
         raise PdfOcrDocumentError("pdftoppm_unavailable", kind="unavailable")
@@ -324,6 +340,70 @@ def _pdf_page_metadata(source_path: str, timeout_seconds: int) -> tuple[int, boo
     if pages is None or not pages.isdigit() or int(pages) < 1:
         raise PdfOcrDocumentError("corrupt_pdf")
     return int(pages), metadata.get("Encrypted", "no").strip().lower() != "no"
+
+
+def _require_pdf_raster_bound(
+    source_path: str,
+    page_numbers: Sequence[int],
+    dpi: int,
+    timeout_seconds: int,
+) -> None:
+    dimensions = _pdf_page_dimensions(source_path, page_numbers, timeout_seconds)
+    total_pixels = 0
+    for page_number in page_numbers:
+        width_points, height_points = dimensions[page_number]
+        page_pixels = ceil(width_points * dpi / 72) * ceil(height_points * dpi / 72)
+        if page_pixels > _MAX_RASTER_PAGE_PIXELS:
+            raise PdfOcrDocumentError("raster_page_pixel_limit_exceeded", page=page_number)
+        total_pixels += page_pixels
+        if total_pixels > _MAX_RASTER_TOTAL_PIXELS:
+            raise PdfOcrDocumentError("raster_total_pixel_limit_exceeded", page=page_number)
+
+
+def _pdf_page_dimensions(
+    source_path: str,
+    page_numbers: Sequence[int],
+    timeout_seconds: int,
+) -> dict[int, tuple[float, float]]:
+    executable = shutil.which("pdfinfo")
+    if executable is None:
+        raise PdfOcrDocumentError("pdfinfo_unavailable", kind="unavailable")
+    try:
+        result = subprocess.run(  # nosec B603 - fixed Poppler binary and one sandbox-owned source path.
+            [executable, "-box", "-f", str(page_numbers[0]), "-l", str(page_numbers[-1]), source_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_seconds, 1),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PdfOcrDocumentError("pdf_page_geometry_timeout", kind="timeout", is_retryable=True) from exc
+    except OSError as exc:
+        raise PdfOcrDocumentError("pdfinfo_unavailable", kind="unavailable") from exc
+    if result.returncode != 0:
+        raise PdfOcrDocumentError("corrupt_pdf")
+    return _parsed_pdf_page_dimensions(result.stdout, page_numbers)
+
+
+def _parsed_pdf_page_dimensions(
+    output: str,
+    page_numbers: Sequence[int],
+) -> dict[int, tuple[float, float]]:
+    dimensions = {
+        int(match.group(1)): (float(match.group(2)), float(match.group(3)))
+        for match in _PAGE_SIZE_PATTERN.finditer(output)
+    }
+    if not dimensions and len(page_numbers) == 1:
+        match = _SINGLE_PAGE_SIZE_PATTERN.search(output)
+        if match is not None:
+            dimensions[page_numbers[0]] = (float(match.group(1)), float(match.group(2)))
+    if any(page not in dimensions or not _valid_page_dimensions(dimensions[page]) for page in page_numbers):
+        raise PdfOcrDocumentError("pdf_page_geometry_invalid")
+    return {page: dimensions[page] for page in page_numbers}
+
+
+def _valid_page_dimensions(dimensions: tuple[float, float]) -> bool:
+    return all(isfinite(value) and value > 0 for value in dimensions)
 
 
 def _pdfinfo_fields(output: str) -> dict[str, str]:

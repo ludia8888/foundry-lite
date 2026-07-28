@@ -343,12 +343,7 @@ def _is_reconcilable_committed_output(
     node: PipelineV2RuntimeNode,
     artifact: PipelineV2RuntimeArtifact,
 ) -> bool:
-    return (
-        node.descriptor_id == "output.media_set"
-        and node.kind == "output"
-        and artifact.status == "COMMITTED"
-        and artifact.is_serving
-    )
+    return node.kind == "output" and artifact.status == "COMMITTED" and artifact.is_serving
 
 
 def _committed_output_evidence_error(

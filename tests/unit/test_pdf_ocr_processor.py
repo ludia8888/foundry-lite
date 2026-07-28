@@ -206,6 +206,7 @@ def test_pdf_ocr_poppler_selection_and_command_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     selection = PdfPageSelection(start=1, limit=None)
+    monkeypatch.setattr(pdf_ocr, "_require_pdf_raster_bound", lambda *_args: None)
     monkeypatch.setattr(pdf_ocr, "_selected_pdf_page_numbers", lambda *_args: [])
     assert pdf_ocr._poppler_rasterize("a.pdf", str(tmp_path), 10, selection, 150, 3) == ()
 
@@ -233,6 +234,52 @@ def test_pdf_ocr_poppler_selection_and_command_edges(
         str(tmp_path / "page"),
     ]
     assert 1 <= commands[0][1] <= 7
+
+
+def test_pdf_ocr_raster_geometry_is_bounded_before_poppler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = PdfPageSelection(start=1, limit=1)
+    monkeypatch.setattr(pdf_ocr, "_selected_pdf_page_numbers", lambda *_args: [1])
+    monkeypatch.setattr(pdf_ocr, "_pdf_page_dimensions", lambda *_args: {1: (20_000.0, 20_000.0)})
+    monkeypatch.setattr(
+        pdf_ocr,
+        "_run_pdftoppm",
+        lambda *_args: pytest.fail("over-limit geometry must fail before Poppler rasterization"),
+    )
+
+    with pytest.raises(PdfOcrDocumentError, match="raster_page_pixel_limit_exceeded"):
+        pdf_ocr._poppler_rasterize("a.pdf", str(tmp_path), 1, selection, 300, 5)
+
+
+def test_pdf_ocr_parses_per_page_geometry_and_rejects_missing_pages() -> None:
+    output = "\n".join(
+        (
+            "Pages:           2",
+            "Page    1 size:  612 x 792 pts (letter)",
+            "Page    2 size:  595.28 x 841.89 pts (A4)",
+        )
+    )
+
+    assert pdf_ocr._parsed_pdf_page_dimensions(output, [1, 2]) == {
+        1: (612.0, 792.0),
+        2: (595.28, 841.89),
+    }
+    with pytest.raises(PdfOcrDocumentError, match="pdf_page_geometry_invalid"):
+        pdf_ocr._parsed_pdf_page_dimensions(output, [1, 2, 3])
+
+
+def test_pdf_ocr_rejects_total_raster_pixel_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    pages = list(range(1, 51))
+    monkeypatch.setattr(
+        pdf_ocr,
+        "_pdf_page_dimensions",
+        lambda *_args: {page: (612.0, 792.0) for page in pages},
+    )
+
+    with pytest.raises(PdfOcrDocumentError, match="raster_total_pixel_limit_exceeded"):
+        pdf_ocr._require_pdf_raster_bound("a.pdf", pages, 150, 5)
 
 
 def test_pdf_ocr_page_discovery_validation(monkeypatch: pytest.MonkeyPatch) -> None:

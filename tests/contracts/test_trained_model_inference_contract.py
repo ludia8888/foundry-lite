@@ -170,6 +170,45 @@ def test_container_sidecar_executes_deployment_digest_when_current_branch_image_
     assert current_image not in commands[-1]
 
 
+def test_container_sidecar_executes_deployment_pin_after_current_registry_removal(tmp_path: Path) -> None:
+    deployed_image = f"registry.example/model@sha256:{'a' * 64}"
+    rotated_image = f"registry.example/other@sha256:{'c' * 64}"
+    rotated_definition = replace(
+        TRANSACTION_RISK_DEFINITION,
+        model_ref="demo.other-model",
+        display_name="Other model",
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        commands.append(tuple(command))
+        _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
+        return ContainerCommandResult(0)
+
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(
+            specs=(ContainerTrainedModelSpec(rotated_definition, rotated_image),),
+            workspace_root=tmp_path,
+            is_image_digest_required=True,
+        ),
+        command_runner=runner,
+        environ={},
+    )
+    invocation = replace(
+        _container_invocation(),
+        expected_model_version="2026.07.1",
+        expected_revision="container-risk-model-r1",
+        expected_executable_reference=deployed_image,
+        pinned_definition=replace(TRANSACTION_RISK_DEFINITION, executable_reference=deployed_image),
+    )
+
+    result = adapter.infer(invocation)
+
+    assert result.definition.model_ref == "demo.transaction-risk"
+    assert deployed_image in commands[-1]
+    assert rotated_image not in commands[-1]
+
+
 def test_container_sidecar_rejects_non_digest_deployment_pin_in_protected_runtime(tmp_path: Path) -> None:
     current_image = f"registry.example/model@sha256:{'b' * 64}"
     adapter = ContainerTrainedModelInferenceAdapter(
