@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
 from typing import Any
@@ -17,6 +18,7 @@ from foundry_lite.application.ports.pipeline_repository import (
 from foundry_lite.application.state_transitions import (
     PIPELINE_RUN_FAILED,
     PIPELINE_RUN_PARTIAL,
+    PIPELINE_RUN_RECONCILED_PARTIAL,
     PIPELINE_RUN_SUCCEEDED,
 )
 from foundry_lite.infrastructure import schema as db
@@ -279,6 +281,49 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
     assert deleted_again is False
     assert test_result["result"] == {"valid": True}
     assert hidden_run is None
+
+
+def test_pipeline_partial_reconciliation_fences_stale_replays(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline_reconciliation.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineRepository(engine)
+    record = replace(
+        _run_record(),
+        run_id="run_reconciliation",
+        status="partial",
+        completed_at="2026-07-05T00:05:00Z",
+    )
+
+    with engine.begin() as transaction:
+        repository.insert_run(transaction=transaction, record=record)
+        first = repository.update_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=record.run_id,
+            transition=PIPELINE_RUN_RECONCILED_PARTIAL,
+            output_dataset_ref=None,
+            output_version_id=None,
+            timeline=[{"event": "pipeline.run.commit_outcome_reconciled"}],
+            error={"message": "mixed outputs"},
+            completed_at="2026-07-05T00:06:00Z",
+            expected_completed_at=record.completed_at,
+        )
+        stale = repository.update_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=record.run_id,
+            transition=PIPELINE_RUN_RECONCILED_PARTIAL,
+            output_dataset_ref=None,
+            output_version_id=None,
+            timeline=[{"event": "duplicate reconciliation"}],
+            error={"message": "duplicate"},
+            completed_at="2026-07-05T00:07:00Z",
+            expected_completed_at=record.completed_at,
+        )
+
+    assert first is not None
+    assert first["completed_at"] == "2026-07-05T00:06:00Z"
+    assert stale is None
 
 
 def test_pipeline_run_execution_lease_contract(tmp_path: Path) -> None:

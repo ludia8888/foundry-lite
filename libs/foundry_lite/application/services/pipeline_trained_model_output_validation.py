@@ -74,7 +74,7 @@ def _is_scalar_or_structured_value(data_type: str, value: object) -> bool:
         return isinstance(value, list) and _is_json_safe_value(value)
     if data_type == "mediaReference":
         return _is_media_reference_value(value)
-    return isinstance(value, Mapping) and _is_json_safe_value(value)
+    return isinstance(value, dict) and _is_json_safe_value(value)
 
 
 def _is_temporal_value(data_type: str, value: object) -> bool:
@@ -170,6 +170,6 @@ def _is_json_safe_value(value: object, *, depth: int = 0) -> bool:
         return isfinite(value)
     if isinstance(value, list | tuple):
         return all(_is_json_safe_value(item, depth=depth + 1) for item in value)
-    if isinstance(value, Mapping):
+    if isinstance(value, dict):
         return all(isinstance(key, str) and _is_json_safe_value(item, depth=depth + 1) for key, item in value.items())
     return False

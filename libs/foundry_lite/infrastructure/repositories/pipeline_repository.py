@@ -588,13 +588,18 @@ class SqlAlchemyPipelineRepository:
         timeline: list[dict[str, object]],
         error: dict[str, object] | None,
         completed_at: str,
+        expected_completed_at: str | None = None,
     ) -> PipelineRunRow | None:
+        conditions = (
+            (db.pipeline_runs.c.completed_at == expected_completed_at,) if expected_completed_at is not None else ()
+        )
         updated = cas_status_update(
             transaction,
             db.pipeline_runs,
             tenant_id=tenant_id,
             row_id=run_id,
             transition=transition,
+            conditions=conditions,
             values=_with_cleared_execution_lease(
                 {
                     "output_dataset_ref": output_dataset_ref,

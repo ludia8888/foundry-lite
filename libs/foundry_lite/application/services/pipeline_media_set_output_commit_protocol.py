@@ -107,15 +107,19 @@ class PipelineMediaSetOutputCommitProtocol:
         request_fingerprint: str,
         entries: Sequence[MediaOutputEntry],
     ) -> PipelineV2RuntimeArtifact:
+        unknown = self._unknown_reconciliation_artifact(
+            node, source, inputs, target_ref, target, transaction_attempt, entries
+        )
         try:
             versions = self._prepare_open(node, source, target, transaction_attempt, request_fingerprint, entries)
         except Exception as exc:
-            self._abort_open_preserving_error(transaction_attempt.media_transaction_id, exc)
+            if not self._abort_open_preserving_error(transaction_attempt.media_transaction_id, exc):
+                raise PipelineV2OutputCommitOutcomeUnknown(
+                    "pipeline Media Set output cleanup outcome is unknown",
+                    artifact=unknown,
+                ) from exc
             raise
         fallback = transaction_reconciliation_artifact(
-            node, source, inputs, target_ref, target, transaction_attempt, entries
-        )
-        unknown = self._unknown_reconciliation_artifact(
             node, source, inputs, target_ref, target, transaction_attempt, entries
         )
         result = self._commit_with_reconciliation(transaction_attempt, fallback, unknown)
@@ -200,8 +204,8 @@ class PipelineMediaSetOutputCommitProtocol:
         if status == "COMMITTED":
             raise_media_output_reconciliation(committed_fallback, exc)
         if status == "OPEN":
-            self._abort_open_preserving_error(media_transaction_id, exc)
-            return
+            if self._abort_open_preserving_error(media_transaction_id, exc):
+                return
         if status == "ABORTED":
             return
         raise PipelineV2OutputCommitOutcomeUnknown(
@@ -310,7 +314,7 @@ class PipelineMediaSetOutputCommitProtocol:
         self,
         media_transaction_id: str,
         exc: Exception,
-    ) -> None:
+    ) -> bool:
         try:
             self._media_transactions.abort(
                 self._ctx,
@@ -324,3 +328,5 @@ class PipelineMediaSetOutputCommitProtocol:
                 cleanup_error=abort_exc,
             )
             exc.add_note(f"media output abort failed: {type(abort_exc).__name__}")
+            return False
+        return True

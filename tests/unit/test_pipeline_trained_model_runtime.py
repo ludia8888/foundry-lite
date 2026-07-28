@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
 from foundry_lite.application.ports.trained_model_inference import (
@@ -497,6 +498,7 @@ def test_trained_model_media_output_requires_tenant_catalog_coordinates() -> Non
         (TrainedModelField("value", "array"), (1, 2)),
         (TrainedModelField("value", "array"), [{"nested": float("nan")}]),
         (TrainedModelField("value", "map"), "not-a-map"),
+        (TrainedModelField("value", "map"), MappingProxyType({"nested": "value"})),
         (TrainedModelField("value", "map"), {"nested": [float("inf")]}),
         (TrainedModelField("value", "struct"), {"nested": object()}),
         (TrainedModelField("value", "mediaReference"), {}),

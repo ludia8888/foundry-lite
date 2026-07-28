@@ -374,6 +374,7 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
         timeline: list[JsonObject],
         error: JsonObject | None,
         completed_at: str,
+        expected_completed_at: str | None = None,
     ) -> PipelineRunRow | None: ...
 
     def insert_test_result(

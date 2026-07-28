@@ -23,6 +23,7 @@ from foundry_lite.application.services.pipeline_run_recovery import (
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2CommittedOutputReconciliationRequired,
+    PipelineV2OutputCommitOutcomeUnknown,
     PipelineV2RuntimeArtifact,
     PipelineV2RuntimeNode,
 )
@@ -321,11 +322,16 @@ def test_media_set_output_preserves_primary_error_when_abort_evidence_fails(
     monkeypatch.setattr(transaction_service, "commit", fail_commit)
     monkeypatch.setattr(transaction_service, "abort", fail_abort)
 
-    with pytest.raises(RuntimeError, match="primary media commit failure") as raised:
+    with pytest.raises(PipelineV2OutputCommitOutcomeUnknown) as raised:
         committer.commit(node, inputs)
 
-    assert raised.value.__notes__ == ["media output abort failed: RuntimeError"]
-    assert runtime_error_payload(raised.value)["details"] == {
+    primary = raised.value.__cause__
+    assert isinstance(primary, RuntimeError)
+    assert str(primary) == "primary media commit failure"
+    assert primary.__notes__ == ["media output abort failed: RuntimeError"]
+    assert raised.value.reconciliation_artifact.status == "COMMIT_OUTCOME_UNKNOWN"
+    assert raised.value.reconciliation_artifact.is_serving is False
+    assert runtime_error_payload(primary)["details"] == {
         "cleanupFailures": [
             {
                 "operation": "mediaTransactionAbort",
@@ -588,25 +594,21 @@ def test_media_set_output_open_unknown_commit_is_aborted_and_failed_on_replay(
         ),
     )
     transaction_service = fixture.foundry._services.media.transaction
-    media_repository = fixture.dependencies.media_repository
-    real_transaction_by_id = media_repository.transaction_by_id
-    has_commit_failed = False
-    failed_state_reads = 0
+    real_abort = transaction_service.abort
+    abort_calls = 0
 
     def fail_before_commit(*args: object, **kwargs: object):
-        nonlocal has_commit_failed
-        has_commit_failed = True
         raise ConnectionError("injected commit transport failure")
 
-    def fail_first_reconciliation_read(*args: object, **kwargs: object):
-        nonlocal failed_state_reads
-        if has_commit_failed and failed_state_reads == 0:
-            failed_state_reads += 1
-            raise ConnectionError("injected reconciliation read outage")
-        return real_transaction_by_id(*args, **kwargs)
+    def fail_first_abort(*args: object, **kwargs: object):
+        nonlocal abort_calls
+        abort_calls += 1
+        if abort_calls == 1:
+            raise ConnectionError("injected abort evidence outage")
+        return real_abort(*args, **kwargs)
 
     monkeypatch.setattr(transaction_service, "commit", fail_before_commit)
-    monkeypatch.setattr(media_repository, "transaction_by_id", fail_first_reconciliation_read)
+    monkeypatch.setattr(transaction_service, "abort", fail_first_abort)
 
     unknown = fixture.foundry.pipelines.run(
         fixture.pipeline_id,
@@ -622,6 +624,8 @@ def test_media_set_output_open_unknown_commit_is_aborted_and_failed_on_replay(
 
     assert unknown["status"] == "partial"
     assert cast(list[dict[str, Any]], unknown["outputs"])[0]["isServing"] is False
+    unknown_cause = cast(dict[str, Any], unknown["error"]["details"]["cause"])
+    assert unknown_cause["details"]["cleanupFailures"][0]["operation"] == "mediaTransactionAbort"
     assert replayed["id"] == unknown["id"]
     assert replayed["status"] == "failed"
     replayed_output = cast(list[dict[str, Any]], replayed["outputs"])[0]
@@ -632,6 +636,7 @@ def test_media_set_output_open_unknown_commit_is_aborted_and_failed_on_replay(
     assert replayed_output["artifactEvidence"]["status"] == "RECONCILED_FAILED"
     assert replayed["error"]["message"] == "pipeline output commit reconciled as not committed"
     assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["ABORTED"]
+    assert abort_calls == 2
 
 
 def test_media_set_output_aborted_commit_error_remains_a_known_failure(

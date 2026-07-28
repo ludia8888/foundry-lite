@@ -247,9 +247,13 @@ class MediaRepository(Protocol):
         ...
 
     def get_media_item_versions(
-        self, *, transaction: TransactionContext, ids: list[str]
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ids: list[str],
     ) -> list[MediaItemVersionRecord]:
-        """Return immutable version rows for the given ids (batch-first)."""
+        """Return tenant-scoped immutable version rows for the given ids (batch-first)."""
         ...
 
     def next_version_number(self, *, transaction: TransactionContext, media_item_id: str) -> int:

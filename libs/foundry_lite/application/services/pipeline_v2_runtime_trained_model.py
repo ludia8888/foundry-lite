@@ -110,6 +110,7 @@ class PipelineV2TrainedModelRuntime:
         with self._transaction_manager.begin() as transaction:
             versions = self._media_repository.get_media_item_versions(
                 transaction=transaction,
+                tenant_id=self._ctx.tenant_id,
                 ids=sorted(version_ids),
             )
         return frozenset(
@@ -119,7 +120,7 @@ class PipelineV2TrainedModelRuntime:
                 version.content_hash.removeprefix("sha256:"),
             )
             for version in versions
-            if version.tenant_id == self._ctx.tenant_id and version.status == "COMMITTED"
+            if version.status == "COMMITTED"
         )
 
 

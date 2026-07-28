@@ -134,7 +134,11 @@ def env(tmp_path: Path) -> _Env:
     )
     transaction.commit(ctx, media_transaction_id=tx)
     with engine.begin() as conn:
-        version = repo.get_media_item_versions(transaction=conn, ids=[staged.media_item_version_id])[0]
+        version = repo.get_media_item_versions(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ids=[staged.media_item_version_id],
+        )[0]
     return _Env(
         ctx=ctx,
         engine=engine,

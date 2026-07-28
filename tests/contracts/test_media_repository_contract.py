@@ -572,6 +572,27 @@ def test_mark_and_fetch_retention_marked_versions_is_grace_bounded(
     assert [version.media_item_version_id for version in past_grace] == ["miv-1"]
 
 
+def test_media_item_version_batch_read_is_tenant_scoped(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        _seed_version(repo, conn, "miv-tenant", version_number=1)
+        visible = repo.get_media_item_versions(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            ids=["miv-tenant"],
+        )
+        hidden = repo.get_media_item_versions(
+            transaction=conn,
+            tenant_id="tenant-other",
+            ids=["miv-tenant"],
+        )
+
+    assert [version.media_item_version_id for version in visible] == ["miv-tenant"]
+    assert hidden == []
+
+
 def test_legal_hold_toggle_and_reference_reachability(
     media_repo: tuple[SqlAlchemyMediaRepository, Engine],
 ) -> None:

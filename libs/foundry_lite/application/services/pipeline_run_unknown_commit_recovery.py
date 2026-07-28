@@ -355,6 +355,8 @@ def _persist_resolution(
     row: PipelineRunRow,
     resolution: PipelineUnknownCommitResolution,
 ) -> bool:
+    if row["completed_at"] is None:
+        return False
     event: JsonObject = {
         "event": "pipeline.run.commit_outcome_reconciled",
         "at": _now(),
@@ -376,6 +378,7 @@ def _persist_resolution(
             timeline=timeline,
             error=resolution.error,
             completed_at=_now(),
+            expected_completed_at=row["completed_at"],
         )
         if after is not None:
             _audit_resolution(runtime_service, transaction, ctx, row, resolution)

@@ -266,11 +266,24 @@ class SqlAlchemyMediaRepository:
         )
         return [_media_selection_from_row(row) for row in rows]
 
-    def get_media_item_versions(self, *, transaction: Any, ids: list[str]) -> list[MediaItemVersionRecord]:
+    def get_media_item_versions(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ids: list[str],
+    ) -> list[MediaItemVersionRecord]:
         if not ids:
             return []
         rows = (
-            transaction.execute(select(db.media_item_versions).where(db.media_item_versions.c.id.in_(ids)))
+            transaction.execute(
+                select(db.media_item_versions).where(
+                    and_(
+                        db.media_item_versions.c.tenant_id == tenant_id,
+                        db.media_item_versions.c.id.in_(ids),
+                    )
+                )
+            )
             .mappings()
             .all()
         )
