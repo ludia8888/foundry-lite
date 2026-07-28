@@ -213,6 +213,7 @@ def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> Non
 def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     playwright_config = (ROOT / "playwright.config.ts").read_text(encoding="utf-8")
+    foundry_playwright_config = (ROOT / "playwright.foundry.config.ts").read_text(encoding="utf-8")
 
     e2e_job = workflow.split("quality_e2e:", maxsplit=1)[1].split("quality_gate:", maxsplit=1)[0]
     assert "timeout-minutes: 20" in e2e_job
@@ -232,6 +233,11 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
         "},", maxsplit=1
     )[0]
     assert "timeout: 120_000" in api_server
+    foundry_api_server = foundry_playwright_config.split(
+        'FOUNDRY_LITE_HOME="$PWD/.foundry-lite-foundry-e2e" bash scripts/e2e_start_api.sh',
+        maxsplit=1,
+    )[1].split("},", maxsplit=1)[0]
+    assert "timeout: 120_000" in foundry_api_server
 
 
 def test_github_coverage_lane_keeps_serial_layer_coverage_from_timing_out() -> None:

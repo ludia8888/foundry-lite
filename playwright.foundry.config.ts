@@ -45,7 +45,9 @@ export default defineConfig({
         'FOUNDRY_LITE_HOME="$PWD/.foundry-lite-foundry-e2e" bash scripts/e2e_start_api.sh',
       url: `${foundryApiBaseUrl}/healthz`,
       reuseExistingServer: shouldReuseExistingServer,
-      timeout: 45_000,
+      // This suite uses the same full seeded API runtime as the generic E2E
+      // suite, so it must keep the same cold-runner readiness budget.
+      timeout: 120_000,
     },
     {
       command: "pnpm --filter @foundry-lite/foundry dev --host 127.0.0.1",
