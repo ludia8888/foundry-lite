@@ -6,6 +6,7 @@ Create Date: 2026-07-16 14:00:00.000000
 """
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import context, op
@@ -104,6 +105,7 @@ def _backfill_pipeline_schedules() -> None:
         sa.column("paused_reason", sa.Text()),
     )
     connection = op.get_bind()
+    migration_started_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     rows = (
         connection.execute(
             sa.select(
@@ -125,7 +127,7 @@ def _backfill_pipeline_schedules() -> None:
             .values(
                 trigger_type=_legacy_trigger_type(schedule),
                 timezone=str(schedule.get("timezone") or "UTC"),
-                next_due_at=row["updated_at"] if is_enabled else None,
+                next_due_at=migration_started_at if is_enabled else None,
                 status="active" if is_enabled else "paused",
                 paused_reason=None if is_enabled else "disabled_before_pipeline_v2_upgrade",
             )

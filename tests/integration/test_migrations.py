@@ -9,6 +9,7 @@ or this fails — the runtime guard companion to the schema-revision fingerprint
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -105,7 +106,9 @@ def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_pat
             ],
         )
 
+    upgrade_started_at = datetime.now(UTC).replace(microsecond=0)
     command.upgrade(config, "head")
+    upgrade_finished_at = datetime.now(UTC).replace(microsecond=0)
 
     with engine.connect() as connection:
         rows = {
@@ -122,7 +125,8 @@ def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_pat
         }
     assert rows["active-schedule"].trigger_type == "interval"
     assert rows["active-schedule"].timezone == "Asia/Seoul"
-    assert rows["active-schedule"].next_due_at == "2026-07-15T01:02:03Z"
+    active_next_due_at = datetime.fromisoformat(rows["active-schedule"].next_due_at.replace("Z", "+00:00"))
+    assert upgrade_started_at <= active_next_due_at <= upgrade_finished_at + timedelta(seconds=1)
     assert rows["active-schedule"].status == "active"
     assert rows["disabled-schedule"].trigger_type == "cron"
     assert rows["disabled-schedule"].timezone == "UTC"
