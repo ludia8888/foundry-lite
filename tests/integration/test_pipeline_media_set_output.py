@@ -342,6 +342,88 @@ def test_media_set_output_preserves_primary_error_when_abort_evidence_fails(
     }
 
 
+def test_media_set_output_prepare_failure_stays_reconcilable_when_abort_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "prepare_abort_failure", item_count=1)
+    committer, node, inputs, transaction_service = _direct_committer(fixture)
+
+    def fail_prepare_read(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("primary media preparation failure")
+
+    def fail_abort(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("secondary preparation abort failure")
+
+    monkeypatch.setattr(
+        fixture.dependencies.media_repository,
+        "fetch_transaction_versions",
+        fail_prepare_read,
+    )
+    monkeypatch.setattr(transaction_service, "abort", fail_abort)
+
+    with pytest.raises(PipelineV2OutputCommitOutcomeUnknown) as raised:
+        committer.commit(node, inputs)
+
+    primary = raised.value.__cause__
+    assert isinstance(primary, RuntimeError)
+    assert str(primary) == "primary media preparation failure"
+    assert primary.__notes__ == ["media output abort failed: RuntimeError"]
+    artifact = raised.value.reconciliation_artifact
+    assert artifact.status == "COMMIT_OUTCOME_UNKNOWN"
+    assert artifact.is_serving is False
+    assert artifact.artifact_ref["mediaTransactionId"]
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["OPEN"]
+
+
+def test_media_set_output_prepare_failure_aborts_before_propagating_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "prepare_abort_success", item_count=1)
+    committer, node, inputs, _transaction_service = _direct_committer(fixture)
+
+    def fail_prepare_read(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("primary media preparation failure")
+
+    monkeypatch.setattr(
+        fixture.dependencies.media_repository,
+        "fetch_transaction_versions",
+        fail_prepare_read,
+    )
+
+    with pytest.raises(RuntimeError, match="primary media preparation failure"):
+        committer.commit(node, inputs)
+
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["ABORTED"]
+
+
+def test_media_set_output_lost_acknowledgement_reports_known_serving_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "known_commit_after_disconnect", item_count=1)
+    committer, node, inputs, transaction_service = _direct_committer(fixture)
+    real_commit = transaction_service.commit
+
+    def commit_then_disconnect(*args: object, **kwargs: object):
+        real_commit(*args, **kwargs)
+        raise ConnectionError("injected lost commit acknowledgement")
+
+    monkeypatch.setattr(transaction_service, "commit", commit_then_disconnect)
+
+    with pytest.raises(PipelineV2CommittedOutputReconciliationRequired) as raised:
+        committer.commit(node, inputs)
+
+    artifact = raised.value.committed_artifact
+    assert artifact.status == "COMMITTED"
+    assert artifact.is_serving is True
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["COMMITTED"]
+
+
 def test_committed_media_set_replay_read_failure_keeps_transaction_coordinates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

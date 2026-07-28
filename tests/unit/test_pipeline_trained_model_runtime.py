@@ -1,13 +1,20 @@
 """Graph v2 trained-model mapping, execution, and model-pin evidence."""
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 from types import MappingProxyType
+from typing import Any, cast
 
 import pytest
+from foundry_lite.application.ports.media_repository import (
+    MediaItemVersionRecord,
+    MediaRepository,
+)
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelField,
+    TrainedModelInferenceResult,
     TrainedModelInvocation,
 )
 from foundry_lite.application.primitives import _json_hash
@@ -33,6 +40,7 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
 from foundry_lite.application.services.pipeline_v2_runtime_trained_model import (
     PipelineV2TrainedModelRuntime,
 )
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure.adapters.local_trained_model_inference import (
     LocalTrainedModelInferenceAdapter,
@@ -150,6 +158,64 @@ def test_trained_model_runtime_rejects_value_type_drift_from_pinned_output_schem
     }
 
 
+def test_trained_model_runtime_binds_media_output_to_tenant_catalog_truth() -> None:
+    reference, definition, node, pin, source = _media_reference_runtime_case()
+    repository = _RecordingMediaRepository(versions=(_media_version(reference, status="COMMITTED"),))
+    ctx = RequestContext(
+        tenant_id="tenant-demo",
+        actor_user_id="user-data-engineer",
+        request_id="req-trained-media",
+        roles=("data_engineer",),
+    )
+
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=_MediaReferenceAdapter(definition, reference),
+        run_id="prun_media_reference",
+        model_refs=(pin,),
+        transaction_manager=_TransactionManager(),
+        media_repository=cast(MediaRepository, repository),
+        ctx=ctx,
+    )
+    result = runtime.execute(node, {"input": (source,)})
+
+    assert result.items[0]["scored_media"] == reference
+    assert repository.requested_tenants == ["tenant-demo"]
+    assert repository.requested_ids == [["mver-tenant-1"]]
+
+
+def test_trained_model_runtime_requires_catalog_dependencies_for_media_output() -> None:
+    reference, definition, node, pin, source = _media_reference_runtime_case()
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=_MediaReferenceAdapter(definition, reference),
+        run_id="prun_media_reference_missing_catalog",
+        model_refs=(pin,),
+    )
+
+    with pytest.raises(InvariantViolation, match="tenant catalog validation"):
+        runtime.execute(node, {"input": (source,)})
+
+
+def test_trained_model_runtime_rejects_uncommitted_catalog_coordinates() -> None:
+    reference, definition, node, pin, source = _media_reference_runtime_case()
+    repository = _RecordingMediaRepository(versions=(_media_version(reference, status="STAGED"),))
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=_MediaReferenceAdapter(definition, reference),
+        run_id="prun_media_reference_staged",
+        model_refs=(pin,),
+        transaction_manager=_TransactionManager(),
+        media_repository=cast(MediaRepository, repository),
+        ctx=RequestContext(
+            tenant_id="tenant-demo",
+            actor_user_id="user-data-engineer",
+            request_id="req-trained-media-staged",
+            roles=("data_engineer",),
+        ),
+    )
+
+    with pytest.raises(ValidationFailed, match="pinned output type"):
+        runtime.execute(node, {"input": (source,)})
+
+
 def test_trained_model_invocation_without_snapshot_uses_legacy_coordinate_pin() -> None:
     definition = _definition()
     invocation = TrainedModelInvocation(
@@ -206,6 +272,34 @@ def test_trained_model_runtime_rejects_ambiguous_entrypoint_snapshots() -> None:
         runtime.execute(node, {"input": (_source_artifact(),)})
 
     assert raised.value.details["matchingPinCount"] == 2
+
+
+def test_trained_model_runtime_rejects_unexpected_model_pin_provider() -> None:
+    node = _trained_model_node()
+    pin = replace(_model_pin(node.config), provider="unexpected")
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=LocalTrainedModelInferenceAdapter(),
+        run_id="prun_unexpected_provider",
+        model_refs=(pin,),
+    )
+
+    with pytest.raises(InvariantViolation, match="unexpected provider"):
+        runtime.execute(node, {"input": (_source_artifact(),)})
+
+
+def test_trained_model_runtime_requires_nonempty_model_ref() -> None:
+    node = replace(
+        _trained_model_node(),
+        config={**dict(_trained_model_node().config), "modelRef": "  "},
+    )
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=LocalTrainedModelInferenceAdapter(),
+        run_id="prun_missing_model_ref",
+        model_refs=(),
+    )
+
+    with pytest.raises(ValidationFailed, match="config field is required"):
+        runtime.execute(node, {"input": (_source_artifact(),)})
 
 
 def test_trained_model_definition_snapshot_round_trips_and_rejects_malformed_data() -> None:
@@ -492,8 +586,10 @@ def test_trained_model_media_output_requires_tenant_catalog_coordinates() -> Non
         (TrainedModelField("value", "decimal"), "not-a-decimal"),
         (TrainedModelField("value", "decimal"), object()),
         (TrainedModelField("value", "string"), 42),
+        (TrainedModelField("value", "date"), 20260728),
         (TrainedModelField("value", "date"), "not-a-date"),
         (TrainedModelField("value", "timestamp"), "2026-07-28"),
+        (TrainedModelField("value", "timestamp"), "invalidTtimestamp"),
         (TrainedModelField("value", "timestamp"), "2026-07-28T12:30:00"),
         (TrainedModelField("value", "array"), (1, 2)),
         (TrainedModelField("value", "array"), [{"nested": float("nan")}]),
@@ -501,6 +597,7 @@ def test_trained_model_media_output_requires_tenant_catalog_coordinates() -> Non
         (TrainedModelField("value", "map"), MappingProxyType({"nested": "value"})),
         (TrainedModelField("value", "map"), {"nested": [float("inf")]}),
         (TrainedModelField("value", "struct"), {"nested": object()}),
+        (TrainedModelField("value", "mediaReference"), "not-a-reference"),
         (TrainedModelField("value", "mediaReference"), {}),
         (
             TrainedModelField("value", "mediaReference"),
@@ -549,6 +646,166 @@ def test_trained_model_output_merge_rejects_declared_value_type_drift(
 
     assert raised.value.details["field"] == "value"
     assert "actualValue" not in raised.value.details
+
+
+def test_trained_model_media_reference_may_be_nested_in_a_source_list() -> None:
+    reference = {
+        "mediaItemVersionId": "mver-nested",
+        "mimeType": "application/pdf",
+        "contentHash": f"sha256:{'e' * 64}",
+    }
+    definition = replace(
+        _definition(),
+        output_fields=(TrainedModelField("value", "mediaReference"),),
+    )
+
+    merged = merge_trained_model_outputs(
+        [{"id": 1, "references": [reference]}],
+        [{"value": reference}],
+        {"outputMappings": {"value": "model_value"}},
+        definition,
+        trusted_media_coordinates=frozenset({("mver-nested", "application/pdf", "e" * 64)}),
+    )
+
+    assert merged[0]["model_value"] == reference
+
+
+def test_trained_model_structured_output_rejects_excessive_json_depth() -> None:
+    nested: object = "leaf"
+    for _depth in range(66):
+        nested = {"nested": nested}
+    definition = replace(
+        _definition(),
+        output_fields=(TrainedModelField("value", "struct"),),
+    )
+
+    with pytest.raises(ValidationFailed, match="pinned output type"):
+        merge_trained_model_outputs(
+            [{"id": 1}],
+            [{"value": nested}],
+            {"outputMappings": {"value": "model_value"}},
+            definition,
+        )
+
+
+def _media_reference_runtime_case() -> tuple[
+    dict[str, object],
+    TrainedModelDefinition,
+    PipelineV2RuntimeNode,
+    ModelRef,
+    PipelineV2RuntimeArtifact,
+]:
+    reference: dict[str, object] = {
+        "mediaItemVersionId": "mver-tenant-1",
+        "mimeType": "application/pdf",
+        "contentHash": f"sha256:{'c' * 64}",
+    }
+    definition = replace(
+        LocalTrainedModelInferenceAdapter().resolve(
+            "demo.transaction-risk",
+            branch="feature/model-api",
+            fallback_branches=("master",),
+        ),
+        output_fields=(TrainedModelField("media", "mediaReference"),),
+    )
+    node = replace(
+        _trained_model_node(),
+        config={
+            **dict(_trained_model_node().config),
+            "outputMappings": {"media": "scored_media"},
+        },
+    )
+    pin = ModelRef(
+        model_id=definition.model_ref,
+        model_version=definition.version,
+        provider="trained_model",
+        revision=definition.revision,
+        parameters_fingerprint=_json_hash(dict(node.config)),
+        executable_reference=definition.executable_reference,
+        definition_snapshot=trained_model_definition_snapshot(definition),
+    )
+    source = replace(
+        _source_artifact(),
+        items=(
+            {
+                **dict(_source_artifact().items[0]),
+                "pinnedMediaReference": reference,
+            },
+        ),
+    )
+    return reference, definition, node, pin, source
+
+
+class _MediaReferenceAdapter(LocalTrainedModelInferenceAdapter):
+    def __init__(
+        self,
+        definition: TrainedModelDefinition,
+        reference: Mapping[str, object],
+    ) -> None:
+        super().__init__()
+        self._definition = definition
+        self._reference = dict(reference)
+
+    def infer(self, invocation: TrainedModelInvocation) -> TrainedModelInferenceResult:
+        del invocation
+        return TrainedModelInferenceResult(
+            definition=self._definition,
+            rows=({"media": self._reference},),
+            runtime_evidence={"adapter": "media-reference-test"},
+        )
+
+
+class _RecordingMediaRepository:
+    def __init__(self, *, versions: tuple[MediaItemVersionRecord, ...]) -> None:
+        self._versions = versions
+        self.requested_tenants: list[str] = []
+        self.requested_ids: list[list[str]] = []
+
+    def get_media_item_versions(
+        self,
+        *,
+        transaction: object,
+        tenant_id: str,
+        ids: list[str],
+    ) -> list[MediaItemVersionRecord]:
+        del transaction
+        self.requested_tenants.append(tenant_id)
+        self.requested_ids.append(ids)
+        return list(self._versions)
+
+
+class _TransactionManager:
+    @contextmanager
+    def begin(self) -> Any:
+        yield object()
+
+
+def _media_version(
+    reference: Mapping[str, object],
+    *,
+    status: str,
+) -> MediaItemVersionRecord:
+    version_id = str(reference["mediaItemVersionId"])
+    return MediaItemVersionRecord(
+        media_item_version_id=version_id,
+        tenant_id="tenant-demo",
+        media_item_id=f"item-{version_id}",
+        media_transaction_id=f"transaction-{version_id}",
+        version_number=1,
+        blob_key=f"media/{version_id}",
+        content_hash=str(reference["contentHash"]).removeprefix("sha256:"),
+        byte_size=1,
+        supplied_mime_type=str(reference["mimeType"]),
+        sniffed_mime_type=str(reference["mimeType"]),
+        schema_type="document",
+        format="pdf",
+        probe_metadata={},
+        security_envelope={"classification": "INTERNAL"},
+        source_ref=None,
+        status=status,
+        created_at="2026-07-28T00:00:00+00:00",
+        committed_at="2026-07-28T00:00:00+00:00" if status == "COMMITTED" else None,
+    )
 
 
 def _definition() -> TrainedModelDefinition:
