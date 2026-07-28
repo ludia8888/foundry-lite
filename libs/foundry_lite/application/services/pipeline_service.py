@@ -5,10 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_catalog_service import PipelineCatalogService
 from foundry_lite.application.services.pipeline_definition_service import PipelineDefinitionService
+from foundry_lite.application.services.pipeline_deployment_service import PipelineDeploymentService
 from foundry_lite.application.services.pipeline_governance_service import PipelineGovernanceService
 from foundry_lite.application.services.pipeline_graph_validation_service import PipelineGraphValidationService
+from foundry_lite.application.services.pipeline_preview_service import PipelinePreviewService
 from foundry_lite.application.services.pipeline_run_service import PipelineRunService
+from foundry_lite.application.services.pipeline_scheduler_service import PipelineSchedulerService
 from foundry_lite.domain.context import RequestContext
 
 
@@ -17,15 +21,32 @@ class PipelineService(CoreService):
 
     required_dependencies = ()
     required_collaborators = (
+        "pipeline_catalog_service",
         "pipeline_definition_service",
+        "pipeline_deployment_service",
         "pipeline_governance_service",
         "pipeline_graph_validation_service",
+        "pipeline_preview_service",
         "pipeline_run_service",
+        "pipeline_scheduler_service",
     )
+    pipeline_catalog_service: PipelineCatalogService
     pipeline_definition_service: PipelineDefinitionService
+    pipeline_deployment_service: PipelineDeploymentService
     pipeline_governance_service: PipelineGovernanceService
     pipeline_graph_validation_service: PipelineGraphValidationService
+    pipeline_preview_service: PipelinePreviewService
     pipeline_run_service: PipelineRunService
+    pipeline_scheduler_service: PipelineSchedulerService
+
+    def node_types(self, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_catalog_service.node_types(ctx=ctx)
+
+    def media_processors(self, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_catalog_service.media_processors(ctx=ctx)
+
+    def trained_models(self, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_catalog_service.trained_models(ctx=ctx)
 
     def create_branch(
         self,
@@ -103,6 +124,37 @@ class PipelineService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         return self.pipeline_graph_validation_service.preview_node(branch_id, node_id, options=options, ctx=ctx)
+
+    def create_preview_run(
+        self,
+        branch_id: str,
+        *,
+        graph: Mapping[str, object],
+        target_node_id: str | None,
+        limits: Mapping[str, object] | None,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.pipeline_preview_service.create_preview_run(
+            branch_id,
+            graph=graph,
+            target_node_id=target_node_id,
+            limits=limits,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def execute_preview_run(self, preview_run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_preview_service.execute_preview_run(preview_run_id, ctx=ctx)
+
+    def get_preview_run(self, preview_run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_preview_service.get_preview_run(preview_run_id, ctx=ctx)
+
+    def cancel_preview_run(self, preview_run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_preview_service.cancel_preview_run(preview_run_id, ctx=ctx)
+
+    def recover_preview_runs(self, *, limit: int = 10) -> dict[str, object]:
+        return self.pipeline_preview_service.recover_preview_runs(limit=limit)
 
     def node_stats(
         self,
@@ -197,25 +249,51 @@ class PipelineService(CoreService):
         pipeline_id: str,
         version_id: str,
         *,
+        idempotency_key: str,
         options: Mapping[str, object] | None = None,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
-        return self.pipeline_run_service.deploy(pipeline_id, version_id, options=options, ctx=ctx)
+        return self.pipeline_deployment_service.deploy(
+            pipeline_id,
+            version_id,
+            idempotency_key=idempotency_key,
+            options=options,
+            ctx=ctx,
+        )
+
+    def list_deployments(
+        self,
+        pipeline_id: str,
+        *,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.pipeline_deployment_service.list_deployments(pipeline_id, limit=limit, ctx=ctx)
 
     def start_run(
         self,
         pipeline_id: str,
         *,
         version_id: str | None = None,
+        idempotency_key: str | None = None,
+        parameters: Mapping[str, object] | None = None,
+        target_node_ids: list[str] | None = None,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
-        return self.pipeline_run_service.start_run(pipeline_id, version_id=version_id, ctx=ctx)
+        return self.pipeline_run_service.start_run(
+            pipeline_id,
+            version_id=version_id,
+            idempotency_key=idempotency_key,
+            parameters=parameters,
+            target_node_ids=target_node_ids,
+            ctx=ctx,
+        )
 
     def get_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.pipeline_run_service.get_run(run_id, ctx=ctx)
 
-    def run_timeline(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
-        return self.pipeline_run_service.run_timeline(run_id, ctx=ctx)
+    def get_run_timeline(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.pipeline_run_service.get_run_timeline(run_id, ctx=ctx)
 
     def cancel_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.pipeline_run_service.cancel_run(run_id, ctx=ctx)
@@ -227,24 +305,62 @@ class PipelineService(CoreService):
         version_id: str,
         schedule: Mapping[str, object],
         enabled: bool = True,
+        idempotency_key: str,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
-        return self.pipeline_run_service.upsert_schedule(
+        return self.pipeline_scheduler_service.upsert_schedule(
             pipeline_id,
             version_id=version_id,
             schedule=schedule,
             enabled=enabled,
+            idempotency_key=idempotency_key,
             ctx=ctx,
         )
 
     def get_schedule(self, pipeline_id: str, *, ctx: RequestContext | None = None) -> dict[str, object] | None:
-        return self.pipeline_run_service.get_schedule(pipeline_id, ctx=ctx)
+        return self.pipeline_scheduler_service.get_schedule(pipeline_id, ctx=ctx)
 
-    def delete_schedule(self, pipeline_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
-        return self.pipeline_run_service.delete_schedule(pipeline_id, ctx=ctx)
+    def pause_schedule(
+        self,
+        pipeline_id: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.pipeline_scheduler_service.pause_schedule(
+            pipeline_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def resume_schedule(
+        self,
+        pipeline_id: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.pipeline_scheduler_service.resume_schedule(
+            pipeline_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def delete_schedule(
+        self,
+        pipeline_id: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.pipeline_scheduler_service.delete_schedule(
+            pipeline_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
 
     def preview_due_schedules(self, *, max_runs: int = 50, ctx: RequestContext | None = None) -> dict[str, object]:
-        return self.pipeline_run_service.preview_due_schedules(max_runs=max_runs, ctx=ctx)
+        return self.pipeline_scheduler_service.preview_due_schedules(max_runs=max_runs, ctx=ctx)
 
     def tick_schedules(self, *, max_runs: int = 50, ctx: RequestContext | None = None) -> dict[str, object]:
-        return self.pipeline_run_service.tick_schedules(max_runs=max_runs, ctx=ctx)
+        return self.pipeline_scheduler_service.tick_schedules(max_runs=max_runs, ctx=ctx)

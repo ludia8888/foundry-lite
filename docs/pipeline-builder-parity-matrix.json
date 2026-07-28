@@ -1,0 +1,1002 @@
+{
+  "schemaVersion": 1,
+  "title": "Palantir MMDP and Pipeline Builder public-behavior parity matrix",
+  "scope": "Publicly documented capabilities, user workflows, typed contracts, execution evidence, and governance. This registry does not claim access to or duplication of Palantir private source code, Rubix internals, Apollo internals, trademarks, or brand assets.",
+  "implementationConstraints": [
+    "Streaming execution is implemented only through Kafka, CDC, WebSocket ingestion, and Foundry-lite durable workers with checkpoints, leases, fencing, retry, and replay evidence."
+  ],
+  "statusValues": [
+    "current",
+    "foundation",
+    "planned"
+  ],
+  "statusDefinitions": {
+    "current": "A user-visible or runtime behavior exists in the current checkout, has focused automated proof, and leaves operator evidence.",
+    "foundation": "A typed contract, validator, persistence boundary, registry, migration, or guarded UI exists, but the complete end-to-end product behavior is not yet available.",
+    "planned": "The capability is an accepted target with an explicit rollout phase and completion rule, but it has no active implementation evidence in this matrix."
+  },
+  "officialSources": [
+    {
+      "id": "palantir-mmdp",
+      "title": "Multimodal Data Plane",
+      "url": "https://www.palantir.com/docs/foundry/architecture-center/multimodal-data-plane",
+      "observedBehavior": "Table, media, document, stream, geospatial, compute, and model modalities remain open and governable without forcing all workloads into one storage or runtime shape."
+    },
+    {
+      "id": "palantir-pipeline-overview",
+      "title": "Pipeline Builder overview",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/overview",
+      "observedBehavior": "The builder uses a backend intermediary between logic creation and execution, type-safe functions, strict output checks, path pruning, multiple execution engines, preview, version control, media, model, geospatial, and streaming capabilities."
+    },
+    {
+      "id": "palantir-transform-media",
+      "title": "Transform media",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/transforms-transform-media",
+      "observedBehavior": "A Media Set can enter the graph as media and use typed media transformations. Palantir's public pages are not fully consistent about transformed-media chaining, so the matrix records the newer batch tutorial separately instead of inventing one universal rule."
+    },
+    {
+      "id": "palantir-document-intelligence",
+      "title": "AIP Document Intelligence overview",
+      "url": "https://www.palantir.com/docs/foundry/document-intelligence/overview",
+      "observedBehavior": "Users compare raw, OCR, layout-aware, and VLM-assisted document extraction, inspect PDF regions and extracted content together, and evaluate quality, latency, and token usage."
+    },
+    {
+      "id": "palantir-document-intelligence-core",
+      "title": "Document Intelligence core concepts",
+      "url": "https://www.palantir.com/docs/foundry/document-intelligence/core-concepts",
+      "observedBehavior": "Document Intelligence can pass OCR output and original PDF pages to a VLM, lets users customize prompts, and deploys the selected configuration through a generated Python transform repository. Its public default output is Markdown or layout content, not a fixed H1, H2, and body JSON contract."
+    },
+    {
+      "id": "palantir-use-llm",
+      "title": "Use LLM node in Pipeline Builder",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/pipeline-builder-llm",
+      "observedBehavior": "Five prebuilt prompt templates plus a separate Empty prompt, configurable user and system prompts, typed outputs, per-row trials, error output, row-cache invalidation, and image or PDF vision inputs are configured on a dedicated board. Vision consumes a mediaReference column produced by converting a Media Set to table rows."
+    },
+    {
+      "id": "palantir-use-llm-expression",
+      "title": "Use LLM expression",
+      "url": "https://www.palantir.com/docs/foundry/pb-functions-expression/useLlmV3",
+      "observedBehavior": "The expression accepts image and PDF media references, converts PDFs to page images for the model, and returns schema-checked output. It does not establish direct audio, raw-video, or live-video prompting."
+    },
+    {
+      "id": "palantir-pipeline-preview",
+      "title": "Preview a pipeline",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/outputs-preview-pipeline",
+      "observedBehavior": "Preview executes upstream logic to the selected node. General tabular preview supports up to 500 rows, while Use LLM limits output preview to 50 rows; preview sampling does not constrain the subsequent full build."
+    },
+    {
+      "id": "palantir-trained-model",
+      "title": "Use a trained model",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/transforms-trained-model",
+      "observedBehavior": "A no-code trained-model node maps one tabular input to one tabular output and can accept mediaReference fields. Preview is not supported, and public documentation describes static model-version pinning as planned rather than current."
+    },
+    {
+      "id": "palantir-image-layout-aware",
+      "title": "Image layout-aware content extraction",
+      "url": "https://www.palantir.com/docs/foundry/pb-functions-expression/imageLayoutAwareContentExtractionV1",
+      "observedBehavior": "Image layout extraction returns structured content and spatial coordinates that can be joined with downstream semantic interpretation."
+    },
+    {
+      "id": "palantir-media-batch-tutorial",
+      "title": "Create a batch pipeline with a Media Set",
+      "url": "https://www.palantir.com/docs/foundry/building-pipelines/create-batch-pipeline-pb-media-set",
+      "observedBehavior": "The newer tutorial demonstrates chaining media operations such as rotation followed by OCR. This conflicts with older transform-media wording and is treated as the newer public example, with the inconsistency preserved as evidence."
+    },
+    {
+      "id": "palantir-audio-transcription",
+      "title": "Transcribe an audio media set",
+      "url": "https://www.palantir.com/docs/foundry/media-sets-advanced-formats/add-audio-transcription",
+      "observedBehavior": "Pipeline Builder transcribes audio media references into text or timestamped speaker segments that can be exploded, transformed, and mapped to Dataset or Ontology outputs."
+    },
+    {
+      "id": "palantir-media-transform-api",
+      "title": "Media set transforms API",
+      "url": "https://www.palantir.com/docs/foundry/transforms-python/media-set-transforms-api",
+      "observedBehavior": "Video processing exposes explicit operations such as audio extraction, scene-frame extraction, timestamp-frame extraction, chunking, and transcoding. The public API does not establish a single raw-video prompt node in Pipeline Builder."
+    },
+    {
+      "id": "palantir-streams",
+      "title": "Streams",
+      "url": "https://www.palantir.com/docs/foundry/data-integration/streams",
+      "observedBehavior": "A stream is a schema-bearing row resource. Multimedia capture must become governed bounded artifacts before ordinary typed pipeline transforms consume it."
+    },
+    {
+      "id": "palantir-websocket-listeners",
+      "title": "WebSocket listeners",
+      "url": "https://www.palantir.com/docs/foundry/data-connection/listeners-websocket",
+      "observedBehavior": "Persistent real-time socket handling is exposed as a separate listener and compute boundary, not as a long-lived graph preview request."
+    },
+    {
+      "id": "palantir-pipeline-outputs",
+      "title": "Pipeline outputs overview",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/outputs-overview",
+      "observedBehavior": "Pipeline outputs include datasets, media sets, virtual tables, object types, object links, time series, and geotemporal outputs."
+    },
+    {
+      "id": "palantir-pipeline-branches",
+      "title": "Pipeline branches overview",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/branches-overview",
+      "observedBehavior": "Protected branches can require proposals and at least one approval from an eligible non-contributing reviewer."
+    },
+    {
+      "id": "palantir-pipeline-management",
+      "title": "Pipeline management overview",
+      "url": "https://www.palantir.com/docs/foundry/pipeline-builder/management-overview",
+      "observedBehavior": "Pipeline management includes reusable parameters and custom functions, sampling, build settings, subgraphs, folders, color groups, checkpoints, job groups, export, and find-and-replace."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "tabular-builder-compatibility",
+      "publicBehavior": "Users can author, validate, preview, review, deploy, and run a governed tabular pipeline through the existing Builder flow.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-pipeline-branches"
+      ],
+      "status": "current",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_service.py",
+        "libs/foundry_lite/application/services/pipeline_run_service.py",
+        "apps/foundry/src/features/pipelines/use-pipeline-workbench.ts"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines"
+      ],
+      "proofTests": [
+        "test_pipeline_builder_graph_preview_review_deploy_and_run",
+        "test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule"
+      ],
+      "operatorEvidence": [
+        "tests/e2e-foundry/pipeline-builder-flow.spec.ts exercises the browser Builder flow and run evidence."
+      ],
+      "gaps": [
+        "The current executable compiler is still the tabular v1 compiler.",
+        "Independent reviewer enforcement, stale-proposal blocking, and conflict-aware three-way rebase are current; richer path-level history diff and global Pipeline/Ontology branch coordination remain incomplete."
+      ],
+      "rolloutPhase": 3,
+      "completionRule": "Keep every existing tabular Builder regression green while Graph v2 is introduced behind compatibility normalization."
+    },
+    {
+      "id": "media-plane-runtime",
+      "publicBehavior": "Media remains an immutable, governed plane with version-pinned processing, inherited security, derivatives, content units, and search evidence.",
+      "sourceIds": [
+        "palantir-mmdp",
+        "palantir-transform-media",
+        "palantir-audio-transcription",
+        "palantir-media-transform-api"
+      ],
+      "status": "current",
+      "implementationEvidence": [
+        "docs/adr/0001-media-plane-parallel-to-dataset-plane.md",
+        "libs/foundry_lite/application/services/media/processing.py",
+        "libs/foundry_lite/infrastructure/schema/media.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/media.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/datasets/MediaWorkspace.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineMediaConfigurationBoard.tsx"
+      ],
+      "proofTests": [
+        "test_process_commits_derivative_with_inherited_security_envelope",
+        "test_media_golden_pipeline_threads_one_version_upstream_to_downstream",
+        "test_default_registry_exposes_all_processor_families_in_one_runtime"
+      ],
+      "operatorEvidence": [
+        "Media processing runs, derivative rows, immutable media versions, and security envelopes are durable runtime evidence.",
+        "The browser authors image OCR and metadata, audio ASR, video probe, scene-frame, and scene-vision processor pins through the Transform media configuration board."
+      ],
+      "gaps": [
+        "Media assets execute as typed Graph v2 artifacts in the bounded no-commit preview runtime and can be authored in the browser, but production multimodal deployment and build execution are not yet active.",
+        "Geospatial and streaming planes are not unified with this runtime."
+      ],
+      "rolloutPhase": 5,
+      "completionRule": "Preserve the Media Plane invariants while exposing media artifacts through Graph v2 ports and manifests."
+    },
+    {
+      "id": "typed-graph-v2",
+      "publicBehavior": "Pipeline authors write a canonical schemaVersion 2 graph whose node shell is independent from execution-engine details.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-mmdp"
+      ],
+      "status": "current",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_graph_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_graph_normalizer.py",
+        "libs/foundry_lite/application/services/pipeline_graph_v2_validation.py",
+        "libs/foundry_lite/application/services/pipeline_execution_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_plan_compiler.py",
+        "libs/foundry_lite/application/services/pipeline_deployment_service.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/pipeline-model.ts",
+        "apps/foundry/src/features/pipelines/components/PipelineFlowCanvas.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineNodeConfigurationBoard.tsx"
+      ],
+      "proofTests": [
+        "test_v2_validation_accepts_multiple_typed_outputs_and_preserves_raw_fingerprint",
+        "test_v2_validation_rejects_legacy_node_shell_and_missing_output",
+        "test_compiler_normalizes_v1_and_freezes_a_descriptor_pinned_plan"
+      ],
+      "operatorEvidence": [
+        "Deployment detail and history expose the immutable PipelineExecutionPlan fingerprint and compiler version through API and generated SDK surfaces.",
+        "New browser-authored pipelines persist schemaVersion 2 nodes and named-port edges while legacy v1 graphs remain load-compatible."
+      ],
+      "gaps": [
+        "Supported Graph v2 descriptors now execute through the engine-neutral plan and persist node, attempt, artifact, output, and terminal evidence, but execution remains an in-process synchronous DAG.",
+        "A durable asynchronous worker with crash resume, retry orchestration, and takeover is not active."
+      ],
+      "rolloutPhase": 1,
+      "completionRule": "Make Graph v2 the only new-write format while retaining permanent v1 replay compatibility."
+    },
+    {
+      "id": "named-artifact-ports",
+      "publicBehavior": "Every edge records source and target port identities, and validators reject wrong artifact kinds, missing ports, and cardinality violations.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-transform-media",
+        "palantir-pipeline-outputs"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_graph_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_graph_v2_validation.py",
+        "libs/foundry_lite/application/services/pipeline_execution_contracts.py"
+      ],
+      "apiSurfaces": [],
+      "sdkSurfaces": [],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/ArtifactPassport.tsx",
+        "apps/foundry/src/features/pipelines/components/InsertTransformEdge.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineFlowCanvas.tsx"
+      ],
+      "proofTests": [
+        "test_v2_join_normalizes_full_alias_and_requires_distinct_named_ports",
+        "test_v2_validation_rejects_artifact_mismatch_unknown_ports_and_bad_config"
+      ],
+      "operatorEvidence": [
+        "The no-commit browser preview displays an Artifact Passport with serving state and pinned artifact evidence.",
+        "Every authored canvas edge renders its artifact kind, exact source and target port ids, descriptor/spec producer pin, and inherited security classification."
+      ],
+      "gaps": [
+        "Artifact Passport is rendered on every authored canvas edge and preview artifact, while a live per-edge runtime-state overlay for retries, queued attempts, and worker takeover remains incomplete.",
+        "Supported production Graph v2 nodes now emit the runtime artifact-manifest chain, while asynchronous retry and takeover evidence remain incomplete."
+      ],
+      "rolloutPhase": 1,
+      "completionRule": "Require named-port validation in save, preview, deploy, and build paths before Graph v2 becomes default."
+    },
+    {
+      "id": "server-node-descriptor-catalog",
+      "publicBehavior": "The server owns node types, port contracts, configuration fields, artifact kinds, and honest runtime availability.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-transform-media"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_graph_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_catalog_service.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/PipelineCapabilityCatalog.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineNodeConfigurationBoard.tsx"
+      ],
+      "proofTests": [
+        "test_descriptor_catalog_exposes_artifact_ports_and_honest_runtime_availability",
+        "test_pipeline_preview_run_executes_unsaved_graph_without_serving_commit"
+      ],
+      "operatorEvidence": [
+        "GET /api/pipelines/node-types and client.pipelines.nodeTypes() expose the server-owned descriptor catalog to the browser."
+      ],
+      "gaps": [
+        "Executable Graph v2 nodes, governed candidates, and explicitly validation-only Media Set or Virtual Table outputs are addable with honest runtime badges; descriptors without a safe config serializer remain non-addable with an explicit reason.",
+        "The browser catalog does not yet cover every planned reusable, parameter, compute, and model family."
+      ],
+      "rolloutPhase": 1,
+      "completionRule": "Expose the immutable descriptor catalog to API, SDK, and UI without duplicating node contracts in the browser."
+    },
+    {
+      "id": "pipeline-execution-evidence",
+      "publicBehavior": "Preview, node runs, attempts, artifacts, deployments, pins, security envelopes, and serving status have durable tenant-scoped records.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-mmdp"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/ports/pipeline_execution_repository.py",
+        "libs/foundry_lite/infrastructure/repositories/pipeline_execution_repository.py",
+        "libs/foundry_lite/infrastructure/schema/pipeline_execution.py",
+        "migrations/versions/b3d5f7a9c1e4_pipeline_builder_v2_execution.py",
+        "libs/foundry_lite/application/services/pipeline_preview_service.py",
+        "libs/foundry_lite/application/services/pipeline_plan_compiler.py",
+        "libs/foundry_lite/application/services/pipeline_deployment_service.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/document-intelligence/DocumentConfigPanel.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineCapabilityCatalog.tsx"
+      ],
+      "proofTests": [
+        "test_preview_run_contract_is_tenant_scoped_and_commit_forbidden",
+        "test_node_attempt_and_artifact_contract_preserves_passport",
+        "test_pipeline_preview_run_executes_unsaved_graph_without_serving_commit",
+        "test_compiler_normalizes_v1_and_freezes_a_descriptor_pinned_plan",
+        "test_deployment_contract_assigns_sequence_and_replays_idempotently"
+      ],
+      "operatorEvidence": [
+        "Preview API responses and durable pipeline_preview_runs rows expose status, artifacts, request identity, commitForbidden, and servingVersionCreated evidence.",
+        "Idempotent deploy and deployment-list API or SDK surfaces expose immutable plan fingerprints, compiler version, compute profile, pins, promotion identity, and sequence."
+      ],
+      "gaps": [
+        "Preview and supported Graph v2 build execution write end-to-end evidence, but build DAG node runs and attempts are not yet driven by a durable asynchronous worker.",
+        "Build retry, worker takeover, and non-Dataset multi-plane commit evidence remain incomplete."
+      ],
+      "rolloutPhase": 2,
+      "completionRule": "Make every preview and build node transition observable through this repository before enabling async execution."
+    },
+    {
+      "id": "media-processor-registry",
+      "publicBehavior": "Users select typed PDF, OCR, image, ASR, video, and vision processing operations with explicit input and output contracts. Foundry-lite's exact processor and version registry is its internal fail-closed mechanism, not a claimed Palantir backend implementation detail.",
+      "sourceIds": [
+        "palantir-transform-media",
+        "palantir-document-intelligence",
+        "palantir-image-layout-aware",
+        "palantir-media-batch-tutorial",
+        "palantir-mmdp"
+      ],
+      "status": "current",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/ports/media_processor_registry.py",
+        "libs/foundry_lite/infrastructure/adapters/media_processor_registry.py",
+        "libs/foundry_lite/infrastructure/adapters/pdf_ocr_processor.py",
+        "libs/foundry_lite/application/services/media/processing.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/PipelineCapabilityDetails.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineMediaConfigurationBoard.tsx"
+      ],
+      "proofTests": [
+        "test_registry_resolves_multiple_processors_by_exact_identity",
+        "test_registry_rejects_unknown_version_or_format_without_fallback",
+        "test_registry_rejects_duplicate_identity_during_startup",
+        "test_default_registry_exposes_all_processor_families_in_one_runtime",
+        "test_pdf_ocr_emits_deterministic_page_bbox_and_hierarchy_units"
+      ],
+      "operatorEvidence": [
+        "GET /api/media/processors and client.media.processors.list() expose every registered processor descriptor without selecting an implicit fallback.",
+        "The Transform media board exposes exact processor presets, their input and output contracts, model or runtime pins, and bounded no-commit status.",
+        "The PDF OCR descriptor pins the detected Poppler and Tesseract toolchain, rasterizes only the bounded page window, and returns page, bbox, OCR confidence, block content, and a clearly labelled Foundry-lite heuristic structure that may classify title, H1, H2, or body."
+      ],
+      "gaps": [
+        "The Builder now authors and validates exact image, audio, and video processor pins, but production deployment and build execution do not yet run every registered processor as an asynchronous graph node.",
+        "Processor throughput and live-engine evidence remain separate from Builder execution.",
+        "Palantir public documentation is inconsistent about transformed-media chaining; the product must preserve this source conflict instead of overstating one rule."
+      ],
+      "rolloutPhase": 5,
+      "completionRule": "Use exact registry resolution in preview, deploy, and build, and expose typed failures without implicit fallback."
+    },
+    {
+      "id": "builder-p0-correctness",
+      "publicBehavior": "The current browser editor preserves edge handles, normalizes full outer joins, exposes Python and select/cast configuration, and does not advertise an unsafe scheduler as production-ready.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-pipeline-management"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "apps/foundry/src/features/pipelines/pipeline-model.ts",
+        "apps/foundry/src/features/pipelines/components/NodeOperationEditor.tsx",
+        "apps/foundry/src/features/pipelines/components/ScheduleCard.tsx"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines"
+      ],
+      "proofTests": [
+        "test_pipeline_graph_validation_reports_node_and_join_configuration_errors",
+        "test_pipeline_compiler_registers_python_and_generated_nodes_without_raw_paths"
+      ],
+      "operatorEvidence": [
+        "The browser golden flow authors multimodal nodes, blocks direct Media Set to LLM wiring, preserves named ports in the saved graph, and displays an artifact passport on every authored edge."
+      ],
+      "gaps": [
+        "Complete edge-level Artifact Passports are active; the canvas-equivalent keyboard tree or list editor remains incomplete."
+      ],
+      "rolloutPhase": 3,
+      "completionRule": "Pass the existing tabular browser flow plus a Graph v2 authoring regression without placeholder or misleading controls."
+    },
+    {
+      "id": "no-commit-multimodal-preview",
+      "publicBehavior": "An unsaved draft graph can preview bounded table, media, PDF, audio, video, and search results without creating a serving Dataset or Media version. General tabular preview uses a 500-row ceiling, while Use LLM output preview is capped at 50 rows.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-transform-media",
+        "palantir-document-intelligence",
+        "palantir-use-llm",
+        "palantir-pipeline-preview"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_preview_service.py",
+        "libs/foundry_lite/application/services/pipeline_preview_executor.py",
+        "libs/foundry_lite/infrastructure/adapters/asr_processor.py",
+        "libs/foundry_lite/infrastructure/adapters/video_probe_processor.py",
+        "tests/integration/test_pipeline_multimodal_preview.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/document-intelligence/DocumentIntelligencePage.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentPreviewCanvas.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentResultDock.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineMediaConfigurationBoard.tsx",
+        "apps/foundry/src/features/pipelines/components/PreviewPanel.tsx"
+      ],
+      "proofTests": [
+        "test_general_table_preview_defaults_and_clamps_to_500_rows",
+        "test_general_table_preview_returns_up_to_500_rows",
+        "test_use_llm_preview_is_capped_at_50_rows_when_table_preview_is_500",
+        "test_pdf_preview_extracts_and_chunks_without_committing_derivatives_or_datasets",
+        "test_pipeline_preview_run_executes_unsaved_graph_without_serving_commit",
+        "test_long_pdf_preview_selects_first_pages_without_treating_preview_limit_as_hard_guard",
+        "test_audio_preview_enforces_processor_bounds_and_never_commits_serving_artifacts",
+        "test_video_frames_and_vision_receive_duration_and_scene_bounds",
+        "test_duration_bound_defensively_clamps_units_and_returns_evidence",
+        "test_processing_bounds_reach_extractor_and_cap_frames_with_evidence",
+        "test_vision_bounds_cap_embedding_inputs_and_return_evidence"
+      ],
+      "operatorEvidence": [
+        "The PDF integration test verifies extracted content and chunks while Dataset versions, committed Media derivatives, and serving outputs remain unchanged.",
+        "Preview API and DB evidence expose commitForbidden=true and servingVersionCreated=false.",
+        "General table preview accepts up to 500 rows while Use LLM returns at most 50 preview rows.",
+        "The browser renders the immutable source PDF with synchronized page selection, layout roles, source locators, and point-based bounding boxes.",
+        "The browser displays processor-attested requested versus applied audio/video bounds, timecodes, speaker/language, scene counts, source MediaVersion, model, and processing spec evidence directly below the configuration board."
+      ],
+      "gaps": [
+        "Search-result preview, durable asynchronous worker cancellation/takeover, and nightly live-engine throughput evidence remain incomplete."
+      ],
+      "rolloutPhase": 6,
+      "completionRule": "A browser-created draft preview must prove zero new serving versions through API and database evidence."
+    },
+    {
+      "id": "async-dag-scheduler",
+      "publicBehavior": "A compiled graph runs asynchronously with node attempts, lease fencing, retry, cancellation, crash resume, schedule triggers, and durable event streaming.",
+      "sourceIds": [
+        "palantir-pipeline-overview",
+        "palantir-pipeline-management"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_scheduler_service.py",
+        "libs/foundry_lite/application/services/pipeline_schedule_runtime.py",
+        "libs/foundry_lite/infrastructure/repositories/pipeline_schedule_rows.py",
+        "libs/foundry_lite/infrastructure/schema/pipelines.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts",
+        "packages/sdk-ts/src/screen-recipes.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/ScheduleCard.tsx"
+      ],
+      "proofTests": [
+        "test_interval_schedule_normalizes_legacy_minutes_and_advances_exact_slot",
+        "test_pipeline_scheduler_repository_contract_sqlite",
+        "test_pipeline_scheduler_repository_contract_postgres",
+        "test_pipeline_scheduler_claim_has_one_postgres_winner",
+        "test_pipeline_builder_graph_preview_review_deploy_and_run",
+        "test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule",
+        "test_pipeline_scheduler_due_scan_measures_current_boundary"
+      ],
+      "operatorEvidence": [
+        "Cron and interval definitions persist timezone, nextDueAt, active or paused status, failure evidence, lease state, and monotonic fencing tokens.",
+        "A scheduled run uses a deterministic schedule-and-slot idempotency key, so an expired lease takeover cannot create a second run for the same slot.",
+        "Pause and resume mutations require an idempotency key, preserve durable evidence, and clear an outstanding lease before changing automatic trigger state.",
+        "The performance gate measures a real bounded due query across 10,000 schedule rows and enforces p95 below one second."
+      ],
+      "gaps": [
+        "Pipeline execution is still an in-process bounded call rather than a durable asynchronous worker with crash resume and retry orchestration.",
+        "Data and logic triggers remain unavailable and fail closed instead of silently falling back to time scheduling.",
+        "A continuously deployed scheduler worker, durable server-sent event stream, and full multi-node cancellation or takeover proof remain incomplete."
+      ],
+      "rolloutPhase": 4,
+      "completionRule": "Prove one-winner lease fencing, bounded retry, cancellation, and worker takeover for a multi-node run."
+    },
+    {
+      "id": "multi-output-plane-commit",
+      "publicBehavior": "A pipeline can produce several typed outputs whose owning planes independently stage, validate, and commit, with partial success reported precisely.",
+      "sourceIds": [
+        "palantir-pipeline-outputs",
+        "palantir-mmdp"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_compiler_service.py",
+        "libs/foundry_lite/application/services/pipeline_run_execution.py",
+        "libs/foundry_lite/application/services/pipeline_run_service.py",
+        "libs/foundry_lite/application/services/pipeline_graph_v2_runtime_executor.py",
+        "libs/foundry_lite/application/services/pipeline_graph_v2_execution_evidence.py",
+        "libs/foundry_lite/application/services/pipeline_media_set_output.py",
+        "libs/foundry_lite/application/services/pipeline_media_set_output_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_media_set_output_support.py",
+        "libs/foundry_lite/application/services/pipeline_candidate_output_committer.py",
+        "libs/foundry_lite/infrastructure/repositories/pipeline_repository.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/pipeline-model.ts",
+        "apps/foundry/src/features/pipelines/components/NodeOperationEditor.tsx",
+        "apps/foundry/src/features/pipelines/components/RunsPanel.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineOutputsTab.tsx"
+      ],
+      "proofTests": [
+        "test_pipeline_run_pairs_each_output_node_with_its_committed_dataset_version",
+        "test_pipeline_run_preserves_first_commit_when_second_output_fails",
+        "test_pipeline_run_first_output_failure_marks_later_outputs_failed_and_skipped",
+        "test_pipeline_run_target_node_ids_execute_only_the_selected_output",
+        "test_pipeline_run_target_prunes_an_unrelated_validation_only_branch",
+        "test_pipeline_run_idempotent_replay_creates_no_additional_output_versions",
+        "test_pipeline_commits_dataset_and_non_serving_governed_output_candidates",
+        "test_pipeline_is_partial_when_later_governed_candidate_fails",
+        "test_media_set_output_commits_exact_source_versions_with_durable_lineage_and_replays_once",
+        "test_media_set_output_rejects_an_existing_target_with_a_different_contract",
+        "test_media_set_output_rejects_a_committed_derivative_without_durable_bytes",
+        "test_media_set_output_copies_a_committed_derivative_with_verified_durable_bytes"
+      ],
+      "operatorEvidence": [
+        "Pipeline run payloads and the Runs panel expose every selected Dataset output by node, artifact kind, plane, immutable Dataset ref/version, and COMMITTED or FAILED status.",
+        "A Dataset job group with an earlier immutable commit and a later failure terminates as partial without hiding the committed result; single-output legacy fields are emitted only when exactly one Dataset output is selected.",
+        "The browser golden flow authors, configures, connects, and serializes executable output.media_set, validation-only output.virtual_table, and output.ontology as an immutable governed candidate, so each output shows its actual runtime boundary instead of a placeholder.",
+        "Graph v2 output.media_set accepts committed Media Set selections or durable derivative bytes, revalidates source hashes and target contracts, stages and commits immutable target MediaVersions, preserves the exact source security envelope and lineage pins, and creates zero duplicate versions on same-run replay.",
+        "The Pipeline Builder browser E2E creates and deploys a real Graph v2 source.dataset to two output.dataset graph, starts it from the History UI, displays committed 2 and two exact ref/version passports without legacy fallback, and reads three committed rows from both outputs."
+      ],
+      "gaps": [
+        "Dataset job groups and Graph v2 candidate outputs preserve exact node/ref/version pairing, partial evidence, target pruning, idempotent replay, and durable node-run/attempt/artifact evidence.",
+        "Dataset and Media Set outputs now have serving commit paths; virtual table, Ontology object/link/time-series, and geotemporal serving committers are still missing.",
+        "Ontology output currently commits a governed non-serving mapping candidate only; proposal approval, activation, and object reindex remain separate follow-up work.",
+        "Semantic index output is a Foundry-lite extension and must not be presented as a native Palantir Pipeline Builder output."
+      ],
+      "rolloutPhase": 7,
+      "completionRule": "Commit at least Dataset and Media Set outputs from one run and distinguish immutable successes from failed outputs; label semantic-index output as an extension."
+    },
+    {
+      "id": "document-intelligence-lab",
+      "publicBehavior": "Users compare raw, OCR, layout, and VLM extraction strategies on the same PDF, inspect synchronized page regions, quality, latency, and cost, then deploy the selected configuration through a generated Python transform repository.",
+      "sourceIds": [
+        "palantir-document-intelligence",
+        "palantir-document-intelligence-core",
+        "palantir-transform-media"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "apps/foundry/src/features/document-intelligence/document-lab-model.ts",
+        "apps/foundry/src/features/document-intelligence/document-lab-comparison-model.ts",
+        "apps/foundry/src/features/document-intelligence/DocumentComparisonView.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentIntelligencePage.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentPreviewCanvas.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentConfigPanel.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentResultDock.tsx",
+        "libs/foundry_lite/application/services/pipeline_preview_runtime.py",
+        "libs/foundry_lite/application/services/pipeline_semantic_interpretation.py",
+        "libs/foundry_lite/application/services/aip/model_gateway.py",
+        "libs/foundry_lite/application/services/pipeline_media_reference.py",
+        "libs/foundry_lite/infrastructure/adapters/pdf_ocr_processor.py",
+        "libs/foundry_lite/infrastructure/adapters/anthropic_language_model.py",
+        "libs/foundry_lite/infrastructure/adapters/anthropic_message_codec.py",
+        "libs/foundry_lite/infrastructure/local_runtime.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/media.py",
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/document-intelligence"
+      ],
+      "proofTests": [
+        "test_generated_pdf_yields_deterministic_structured_blocks_with_coordinates",
+        "test_long_pdf_preview_selects_first_pages_without_treating_preview_limit_as_hard_guard",
+        "test_document_structure_enum_is_validated_in_schema_and_model_output",
+        "test_anthropic_compiles_top_level_system_and_structured_output",
+        "test_anthropic_places_pdf_and_image_blocks_before_user_text",
+        "test_anthropic_re_resolves_secret_reference_on_every_call_for_rotation",
+        "test_anthropic_layout_aware_pdf_preview_is_structured_and_non_committing",
+        "test_audio_or_video_media_reference_requires_typed_preprocessing_first",
+        "test_pdf_ocr_emits_deterministic_page_bbox_and_hierarchy_units",
+        "test_gateway_rejects_promoted_model_pin_drift_before_adapter_call",
+        "test_graph_v2_document_extract_media_reference_matches_preview_and_resolver_truth"
+      ],
+      "operatorEvidence": [
+        "A browser operator can run raw, OCR, or layout extraction against an immutable PDF version, inspect the real source page with synchronized bbox overlays, and retain no-commit preview evidence.",
+        "Vision modes provide safe defaults while both user and system prompt surfaces remain configurable, and structured prompt output is checked against a typed JSON Schema.",
+        "The explicit anthropic language-model profile pins claude-sonnet-5, re-resolves its secretRef on every call, sends verified PDF/image bytes as base64 content blocks, and preserves commitForbidden=true plus servingVersionCreated=false evidence.",
+        "The live browser golden flow processed a real PDF, rendered layout bounding boxes, then invoked Anthropic on three bounded trial rows with thinkingMode=disabled and a closed one-block JSON schema; all rows completed with end_turn while no serving version was created.",
+        "The comparison Lab runs Raw, PDF OCR, Layout, and VLM as separate no-commit preview runs against one immutable PDF, synchronizes selected page and bbox evidence, and CAS-promotes extraction, chunking, and an adjacent Use LLM node as one executable Foundry-lite Graph v2 fragment.",
+        "Semantic promotion records the preview-resolved model ID and revision. A later alias drift is rejected by the governed gateway before provider invocation, while the production node artifact retains model, prompt, and output-schema pins.",
+        "A live scanned-image PDF was rasterized with Poppler and recognized with Tesseract into bbox-backed Content Units; title, heading, and body labels are Foundry-lite heuristics rather than Palantir's fixed public OCR schema."
+      ],
+      "gaps": [
+        "Side-by-side comparison and exact Graph v2 draft promotion are active, but Palantir's documented generated Python transform repository deployment path is not implemented.",
+        "Graph v2 draft promotion is a Foundry-lite extension and must not be described as Palantir's public deployment path.",
+        "Comparison history and evaluation scorecards are not yet durable first-class resources and the promoted profile is not yet an independently immutable profile resource.",
+        "The Anthropic adapter does not yet consume native SSE, accept typed tool schemas, use prompt-cache control or cache usage fields, or synchronize the catalog from the Models API.",
+        "Raw audio and video are not direct model inputs; audio must become ASR units and video or live video must become bounded scene-frame and/or ASR micro-batches before semantic interpretation.",
+        "Provider-native citations remain separate from the authoritative ContentUnit citation chain, and managed asynchronous worker deployment remains incomplete."
+      ],
+      "rolloutPhase": 7,
+      "completionRule": "Reproduce exact page and region evidence and deploy the selected strategy through a generated transform repository; keep Graph node promotion labelled as a Foundry-lite extension."
+    },
+    {
+      "id": "use-llm-board",
+      "publicBehavior": "The Use LLM board offers five prebuilt templates plus a separate Empty prompt, editable user and system prompts, typed output schemas, row-level errors, image and PDF mediaReference inputs, interactive trial rows, and cache-aware recomputation.",
+      "sourceIds": [
+        "palantir-use-llm",
+        "palantir-use-llm-expression",
+        "palantir-pipeline-preview"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_semantic_interpretation.py",
+        "libs/foundry_lite/application/services/pipeline_semantic_prompts.py",
+        "libs/foundry_lite/application/services/pipeline_semantic_row_cache.py",
+        "libs/foundry_lite/application/services/pipeline_semantic_trial_evidence.py",
+        "libs/foundry_lite/application/services/pipeline_graph_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_semantic_cache_coordinates.py",
+        "libs/foundry_lite/application/ports/semantic_row_cache_repository.py",
+        "libs/foundry_lite/infrastructure/repositories/semantic_row_cache_repository.py",
+        "migrations/versions/c7e9a1b3d5f0_pipeline_semantic_row_cache.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/PipelineNodeConfigurationBoard.tsx",
+        "apps/foundry/src/features/pipelines/components/UseLlmTrialPanel.tsx",
+        "apps/foundry/src/features/pipelines/pipeline-use-llm-trial-model.ts"
+      ],
+      "proofTests": [
+        "test_content_unit_prompt_produces_typed_json_with_pinned_evidence",
+        "test_interactive_trial_evidence_keeps_safe_input_and_never_persists_raw_prompt_or_secrets",
+        "test_with_errors_trial_records_failed_parse_and_final_error_without_correction",
+        "test_simple_trial_failure_carries_scrubbed_evidence_in_the_preview_error",
+        "test_trial_snapshot_has_a_hard_bound_and_explicit_truncation_marker",
+        "test_image_media_reference_is_passed_to_the_governed_multimodal_model_port",
+        "test_with_errors_keeps_a_typed_row_error_for_invalid_model_json",
+        "test_explicit_basic_vision_keeps_user_and_system_prompts_editable",
+        "test_explicit_layout_aware_vision_keeps_user_and_system_prompts_editable",
+        "test_anthropic_layout_aware_pdf_preview_is_structured_and_non_committing",
+        "test_anthropic_invalid_json_preview_persists_safe_trial_error_without_serving_commit",
+        "test_successful_row_is_reused_with_explicit_hit_and_miss_evidence",
+        "test_skip_recomputing_rows_false_bypasses_cache_reads_and_writes",
+        "test_invalid_model_output_is_never_cached",
+        "test_every_semantic_input_and_version_coordinate_invalidates_cache",
+        "test_cache_key_is_tenant_scoped",
+        "test_cache_is_owned_by_pipeline_scope_node_generation_and_security_policy",
+        "test_cache_enabled_without_explicit_ownership_context_fails_closed",
+        "test_cache_context_generation_must_match_node_configuration",
+        "test_resource_security_fingerprint_distinguishes_effective_masking_policy",
+        "test_graph_v2_distinct_run_reuses_successful_semantic_rows",
+        "test_gateway_rejects_promoted_model_pin_drift_before_adapter_call",
+        "test_insert_success_is_immutable_and_idempotent",
+        "test_lookup_is_tenant_scoped_even_for_the_same_cache_key"
+      ],
+      "operatorEvidence": [
+        "A live Anthropic PDF preview returned schema-checked JSON with provider, model revision, and prompt-version evidence while commitForbidden remained true and serving counts remained unchanged.",
+        "The Use LLM board runs the unsaved form draft through the no-commit Preview API, caps the run at 50 rows, and renders actual input, typed output or error, bounded provider-response snapshots, parse attempts, correction status, model pins, token/latency evidence, and cache state.",
+        "The browser labels every trial as preview-only with commitForbidden=true and servingVersionCreated=false, and the invalid-JSON integration persists the same safe trial evidence without raw prompt, secret, or provider response text.",
+        "Production Graph v2 runs and no-commit previews use a durable success-only row cache whose namespace includes tenant, Pipeline, promoted deployment or draft branch, node, explicit cache generation, and inherited resource security policy. Exact input/media/model/prompt/schema/config matches within that authorized scope expose cacheHit evidence without a second model call.",
+        "The Use LLM board clears logical cache ownership by incrementing cacheGeneration in the branch graph. Previous immutable rows remain rebuildable evidence but cannot be read by the new generation; preview remains no-commit and creates no serving version.",
+        "Document Lab promotion can pin expectedModelId and expectedModelRevision on the Use LLM node; the board exposes that promoted pin and requires an explicit clear before alias drift can be accepted."
+      ],
+      "gaps": [
+        "The live trial currently samples bounded upstream rows; manual trial-row authoring, selecting arbitrary input-table rows, and the official raw prompt/output detail dialog are incomplete. Foundry-lite intentionally exposes bounded redacted snapshots rather than raw secrets or unrestricted source content.",
+        "Parse failures are recorded with explicit correction.attempted=false, but an automatic typed correction attempt and its intermediate/final response chain are not yet implemented.",
+        "Direct model input is limited to image and PDF references; audio and video require typed preprocessing."
+      ],
+      "rolloutPhase": 7,
+      "completionRule": "Run editable trial rows from the board, expose the full trial evidence chain, and prove durable cache reuse and invalidation without changing typed output semantics."
+    },
+    {
+      "id": "trained-model-node",
+      "publicBehavior": "A no-code trained-model node maps one tabular input, including optional mediaReference fields, to one typed tabular output.",
+      "sourceIds": [
+        "palantir-trained-model"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/ports/trained_model_inference.py",
+        "libs/foundry_lite/infrastructure/adapters/local_trained_model_inference.py",
+        "libs/foundry_lite/infrastructure/adapters/container_trained_model_inference.py",
+        "libs/foundry_lite/infrastructure/adapters/container_trained_model_runtime.py",
+        "infra/trained_model_sidecar/Dockerfile",
+        "libs/foundry_lite/application/services/pipeline_trained_model_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_v2_runtime_trained_model.py",
+        "libs/foundry_lite/application/services/pipeline_deployment_service.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/PipelineCapabilityCatalog.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineNodeConfigurationBoard.tsx"
+      ],
+      "proofTests": [
+        "test_trained_model_port_resolves_branch_and_returns_exact_api_columns",
+        "test_container_sidecar_enforces_controls_and_returns_typed_rows",
+        "test_container_sidecar_redacts_model_failure",
+        "test_container_sidecar_timeout_force_cleans_container",
+        "test_container_sidecar_requires_digest_in_protected_runtime",
+        "test_trained_model_runtime_maps_expressions_and_aliases_output",
+        "test_trained_model_config_requires_unique_output_aliases"
+      ],
+      "operatorEvidence": [
+        "The catalog only enables the node when at least one reusable model is imported and shows exact API fields, branch-latest version, resource coordinates, batch-only execution, and preview unavailable.",
+        "Deployment resolves the selected branch and fallbacks, validates required input expressions and unique output aliases, and pins the resolved version and revision in the immutable execution plan.",
+        "The production Graph v2 runtime maps source expressions, executes a single-table batch, verifies exact output API columns, preserves inherited security, and records model/runtime evidence in the artifact manifest.",
+        "A browser golden E2E imports the visible reusable into durable branch graph metadata, authors input expressions and output aliases, then a full proposal, approval, deployment, and run creates a real scored Dataset with resolved model pins.",
+        "Graph validation and deployment both reject a trained-model node whose modelRef is absent from Pipeline Reusables, so direct API authors cannot bypass the UI import gate.",
+        "The real browser build runs the trained-model batch in a separate non-root container with network disabled, read-only root, all capabilities dropped, no-new-privileges, CPU/memory/PID/timeout bounds, and durable artifact-manifest evidence; protected runtimes additionally require a digest-pinned image."
+      ],
+      "gaps": [
+        "The production-safe container sidecar is active and live-tested for the built-in transaction-risk image; uploading arbitrary external user model artifacts and creating their image/spec registration remains incomplete.",
+        "Reusable import is now versioned with the Pipeline branch, proposal, and immutable version; an explicit remove flow and cross-Pipeline reusable browser are still incomplete."
+      ],
+      "rolloutPhase": 9,
+      "completionRule": "Author and build one trained-model node with a tabular or mediaReference input while honestly showing preview and model-version limitations."
+    },
+    {
+      "id": "ontology-aip-handoff",
+      "publicBehavior": "Pipeline outputs map governed document and chunk artifacts into Ontology objects and AIP evidence that navigates to the exact media version, page, region, or timecode.",
+      "sourceIds": [
+        "palantir-pipeline-outputs",
+        "palantir-mmdp",
+        "palantir-document-intelligence"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_output_candidate_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_candidate_output_committer.py",
+        "libs/foundry_lite/application/services/pipeline_graph_v2_runtime_executor.py",
+        "libs/foundry_lite/application/services/media/content_unit_evidence.py",
+        "libs/foundry_lite/infrastructure/adapters/content_unit_citation_source_verifier.py",
+        "libs/foundry_lite/application/services/aip/citation_navigation.py",
+        "libs/foundry_lite/application/services/aip/citation_service.py",
+        "libs/foundry_lite/application/services/aip/retrieval_orchestrator.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py",
+        "apps/api/foundry_lite_api/routers/aip.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/pipeline-model.ts",
+        "apps/foundry/src/features/pipelines/components/NodeOperationEditor.tsx",
+        "apps/foundry/src/features/pipelines/components/PipelineOutputsTab.tsx",
+        "apps/foundry/src/features/aip/components/CitationCard.tsx",
+        "apps/foundry/src/features/document-intelligence/CitationEvidencePanel.tsx",
+        "apps/foundry/src/features/document-intelligence/DocumentPreviewCanvas.tsx"
+      ],
+      "proofTests": [
+        "test_pipeline_commits_dataset_and_non_serving_governed_output_candidates",
+        "test_targeted_candidate_only_run_never_creates_a_serving_output_dataset",
+        "test_pipeline_is_partial_when_later_governed_candidate_fails",
+        "test_authoritative_verifier_returns_committed_pdf_locator_and_pins_without_raw_text",
+        "test_authoritative_verifier_rejects_uri_version_hash_and_cross_tenant_mismatch",
+        "test_navigation_token_rejects_tampering_and_unbounded_or_inverted_lifetime",
+        "test_navigation_resolve_api_rereads_committed_content_unit_and_fails_closed"
+      ],
+      "operatorEvidence": [
+        "Pipeline Builder can author and serialize an output.ontology node with a named input port and mappingRef; build commits an immutable non-serving mapping candidate and leaves the active Ontology and object index unchanged.",
+        "The live browser flow uploads and processes a real PDF, indexes committed ContentUnits, runs AIP retrieval, follows a signed citation, re-resolves authoritative evidence, and renders the exact server-verified page and bounding box.",
+        "The navigation URL contains only a short-lived signed reference; tampered, expired, cross-tenant, stale, pin-mismatched, or security-weakened evidence fails closed without fetching source bytes.",
+        "Citation token, resolver response, logs, and public evidence omit raw ContentUnit text."
+      ],
+      "gaps": [
+        "Ontology mapping output currently stops at an immutable governed candidate; proposal review, activation, and object reindex are not yet executed by the Pipeline output node.",
+        "The exact PDF page and bbox handoff is active, while a browser golden flow from a Pipeline-created and activated Ontology object and exact audio/video timecode navigation remains incomplete."
+      ],
+      "rolloutPhase": 8,
+      "completionRule": "Navigate one verified AIP citation from an Ontology object to the exact immutable PDF page and region."
+    },
+    {
+      "id": "collaboration-production-parity",
+      "publicBehavior": "Protected branches require proposals and an eligible separate reviewer, and users can inspect history, configuration, and schema differences before promotion or rollback.",
+      "sourceIds": [
+        "palantir-pipeline-branches",
+        "palantir-pipeline-management"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_governance_service.py",
+        "libs/foundry_lite/application/services/pipeline_definition_service.py",
+        "libs/foundry_lite/application/services/pipeline_graph_three_way_merge.py",
+        "libs/foundry_lite/infrastructure/repositories/pipeline_repository.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts",
+        "packages/sdk-ts/src/screen-recipes.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/ProposalsPanel.tsx",
+        "apps/foundry/src/features/pipelines/components/BuilderToolbar.tsx",
+        "apps/foundry/src/features/pipelines/components/ProposalDiffPanel.tsx"
+      ],
+      "proofTests": [
+        "test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execution",
+        "test_pipeline_rebase_three_way_merges_independent_changes_and_reports_conflicts",
+        "test_three_way_merge_preserves_independent_node_changes",
+        "test_three_way_merge_reports_same_field_conflict_without_silent_overwrite",
+        "test_three_way_merge_reports_delete_vs_modify_conflict"
+      ],
+      "operatorEvidence": [
+        "The browser proposal flow assigns a named reviewer and prevents the creator session from approving; an independent reviewer decision is required before version creation.",
+        "The Builder toolbar displays Protected state and exposes Rebase only for a clean branch whose base is stale.",
+        "API evidence proves independent node changes survive three-way rebase while same-field changes return a typed path-level 409 conflict without mutating the branch."
+      ],
+      "gaps": [
+        "Protected-by-default separate review, stale blocking, and three-way rebase are active; policy administration, richer path-level configuration/history diff, and a browser conflict-resolution editor remain incomplete.",
+        "Global Pipeline and Ontology branch coordination is absent."
+      ],
+      "rolloutPhase": 11,
+      "completionRule": "Block self-approval and stale merge, then prove promotion and rollback with preserved immutable history."
+    },
+    {
+      "id": "python-code-isolation",
+      "publicBehavior": "Custom Python executes outside the API process in an OCI container with an explicit non-root UID/GID, denied network, read-only root filesystem, dropped capabilities, bounded CPU, memory, PID, tmpfs, and timeout settings, and an allowlisted environment.",
+      "sourceIds": [
+        "palantir-mmdp",
+        "palantir-pipeline-management"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/ports/code_execution.py",
+        "libs/foundry_lite/infrastructure/adapters/container_code_execution.py",
+        "libs/foundry_lite/infrastructure/adapters/container_code_execution_runtime.py",
+        "libs/foundry_lite/infrastructure/runners/python_transform_runner.py",
+        "infra/code_execution/Dockerfile"
+      ],
+      "apiSurfaces": [],
+      "sdkSurfaces": [],
+      "uiSurfaces": [],
+      "proofTests": [
+        "test_code_execution_contract_enforces_sandbox_controls_and_env_allowlist",
+        "test_code_execution_contract_requires_digest_pinned_image_for_protected_runtime",
+        "test_saved_python_transform_cannot_fall_back_to_api_process_execution",
+        "test_python_transform_runner_rejects_source_changed_after_manifest",
+        "test_python_transform_runs_through_sdk_handles_without_raw_storage_path",
+        "test_python_transform_row_errors_are_quarantined_without_failing_run"
+      ],
+      "operatorEvidence": [
+        "The live Colima proof records UID/GID 65532, an exact eight-key environment allowlist, blocked external network access, blocked root-filesystem writes, zero effective Linux capabilities, and NoNewPrivs=1.",
+        "The command contract proves --network=none, --read-only, --cap-drop=ALL, no-new-privileges, CPU, memory, PID, tmpfs, timeout, read-only declared inputs, and no host mount for the runner or transforms SDK.",
+        "Protected runtime startup rejects mutable image tags and requires an @sha256 digest reference that covers the image-baked runner and transforms SDK.",
+        "Typed failure evidence stores failure class, exit or signal, sandbox policy, image reference, and hashes of stderr and exception messages without retaining raw stderr."
+      ],
+      "gaps": [
+        "The current proof uses a local Docker or Colima runtime; a rootless daemon, managed worker pool or Kubernetes isolation profile, image signature/SBOM verification, and production rollout rehearsal are not yet proven.",
+        "Successful transform transactions do not yet persist a durable execution receipt containing the resolved image digest, runner contract version, resource usage, and sandbox termination evidence.",
+        "CPU, memory, and PID flags have deterministic command-contract coverage, while live OOM and PID-exhaustion kill proofs and an output-volume disk quota remain incomplete.",
+        "The minimal runner image pins PyArrow only; governed pandas, Polars, native-library, and dependency-lock package catalogs remain future work."
+      ],
+      "rolloutPhase": 4,
+      "completionRule": "Prove filesystem, network, environment, PID, memory, CPU, and timeout isolation with typed failure evidence."
+    },
+    {
+      "id": "streaming-geospatial-runtime",
+      "publicBehavior": "The same typed Builder can execute streaming and geospatial paths while preserving checkpoints, time semantics, and governed outputs.",
+      "sourceIds": [
+        "palantir-mmdp",
+        "palantir-pipeline-overview",
+        "palantir-pipeline-outputs",
+        "palantir-streams",
+        "palantir-websocket-listeners"
+      ],
+      "status": "foundation",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_source_contract_resolver.py",
+        "libs/foundry_lite/application/services/pipeline_structured_source_contracts.py",
+        "libs/foundry_lite/application/services/pipeline_v2_runtime_dataset.py",
+        "libs/foundry_lite/application/services/pipeline_v2_runtime_geospatial.py",
+        "libs/foundry_lite/application/services/pipeline_geospatial_contracts.py"
+      ],
+      "apiSurfaces": [
+        "apps/api/foundry_lite_api/routers/pipelines.py",
+        "apps/api/foundry_lite_api/routers/sources.py"
+      ],
+      "sdkSurfaces": [
+        "packages/sdk-ts/src/generated.ts"
+      ],
+      "uiSurfaces": [
+        "apps/foundry/src/features/pipelines/components/PipelineNodeConfigurationBoard.tsx",
+        "apps/foundry/src/features/pipelines/pipeline-model.ts",
+        "apps/foundry/src/features/pipelines/pipeline-catalog-capability-model.ts"
+      ],
+      "proofTests": [
+        "test_stream_source_pins_committed_dataset_version_and_checkpoint",
+        "test_geospatial_source_requires_actual_spatial_schema_and_pins_spec",
+        "test_stream_runtime_reads_backing_version_and_emits_checkpoint_passport",
+        "test_geospatial_runtime_validates_geojson_rows_and_preserves_version_pin",
+        "test_graph_v2_stream_checkpoint_builds_reproducible_dataset_output",
+        "test_graph_v2_geospatial_source_commits_governed_series_output",
+        "Stream and geospatial nodes expose executable typed configuration boards"
+      ],
+      "operatorEvidence": [
+        "A stream source deployment pins one successful managed Kafka, CDC, or WebSocket Sync run, its exact committed Dataset version, and checkpointStart/checkpointEnd without reconnecting to the broker during Pipeline build.",
+        "The no-commit preview reads the pinned stream Dataset version and exposes checkpoint evidence while proving that no serving output version is created.",
+        "The same engine-neutral Graph v2 dispatcher executes source.stream through bridge.stream_to_dataset and executes source.geospatial through output.geospatial with EPSG:4326 field validation and inherited security.",
+        "A Chromium browser E2E creates Stream/CDC, stream checkpoint bridge, and Geospatial nodes from the visible catalog, edits their typed configuration boards, saves the draft, and asserts the canonical Graph v2 configs returned by the API.",
+        "Streaming ingestion remains owned by Foundry-lite Kafka, CDC, and WebSocket managed workers; no additional stream engine is introduced."
+      ],
+      "gaps": [
+        "The Pipeline consumes immutable committed micro-batches and checkpoints; it does not yet run a continuously updating hot transform graph inside one Pipeline run.",
+        "Geospatial series are governed Dataset-backed assets with GeoJSON or longitude/latitude validation; native tile serving, spatial indexing, map-layer rendering, and geotemporal window transforms remain incomplete.",
+        "Browser authoring and save are proven, while a single visible browser flow that also provisions real upstream stream/geospatial sources and completes deployment, build, and output inspection remains incomplete."
+      ],
+      "rolloutPhase": 10,
+      "completionRule": "Execute at least one checkpointed stream path and one geospatial output path through the same compiled-plan contract."
+    }
+  ]
+}

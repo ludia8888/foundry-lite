@@ -537,18 +537,6 @@
         "Broader Operations UI",
         "Frontend workspace"
       ]
-    },
-    {
-      "id": "production-flink-runner",
-      "name": "Flink runner",
-      "status": "not-applicable",
-      "riskTier": "P2",
-      "owner": "compute-runtime",
-      "owningDoc": "docs/implementation-status.md",
-      "reason": "Flink remains outside the current S46 execution path.",
-      "activeInfraRefs": [],
-      "proofLevel": "L0",
-      "notApplicableReason": "Spark is the current compute ratchet; Flink is explicitly deferred until a later compute-family decision."
     }
   ]
 }

@@ -18,7 +18,11 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineVersionRow,
 )
 from foundry_lite.application.primitives import _new_id
-from foundry_lite.application.services.pipeline_graph_model import empty_pipeline_graph, pipeline_graph_fingerprint
+from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
+from foundry_lite.application.services.pipeline_graph_normalizer import (
+    empty_pipeline_graph_v2,
+    pipeline_graph_schema_version,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
@@ -38,20 +42,28 @@ def required_text(value: str | None, field: str) -> str:
     return normalized
 
 
-def branch_record(ctx: RequestContext, *, pipeline_id: str, name: str, now: str) -> PipelineBranchRecord:
-    graph = empty_pipeline_graph()
+def branch_record(
+    ctx: RequestContext,
+    *,
+    pipeline_id: str,
+    name: str,
+    now: str,
+    latest: PipelineVersionRow | None = None,
+) -> PipelineBranchRecord:
+    graph = dict(latest["graph"]) if latest is not None else dict(empty_pipeline_graph_v2())
     return PipelineBranchRecord(
         branch_id=_new_id("pbr"),
         tenant_id=ctx.tenant_id,
         pipeline_id=pipeline_id,
         name=name,
-        base_version_id=None,
+        base_version_id=latest["id"] if latest is not None else None,
         base_graph=graph,
         graph=graph,
         graph_fingerprint=pipeline_graph_fingerprint(graph),
         created_by=ctx.actor_user_id,
         created_at=now,
         updated_at=now,
+        graph_schema_version=pipeline_graph_schema_version(graph),
     )
 
 
@@ -74,6 +86,7 @@ def proposal_record(
         graph_fingerprint=str(branch["graph_fingerprint"]),
         created_by=ctx.actor_user_id,
         created_at=now,
+        graph_schema_version=int(branch["graph_schema_version"]),
     )
 
 
@@ -94,10 +107,22 @@ def version_record(
         proposal_id=str(proposal["id"]),
         created_by=ctx.actor_user_id,
         created_at=now,
+        graph_schema_version=int(proposal["graph_schema_version"]),
     )
 
 
-def run_record(ctx: RequestContext, *, pipeline_id: str, version_id: str, now: str) -> PipelineRunRecord:
+def run_record(
+    ctx: RequestContext,
+    *,
+    pipeline_id: str,
+    version_id: str,
+    idempotency_key: str | None = None,
+    request_fingerprint: str | None = None,
+    plan_fingerprint: str | None = None,
+    parameters: Mapping[str, object] | None = None,
+    target_node_ids: list[str] | None = None,
+    now: str,
+) -> PipelineRunRecord:
     return PipelineRunRecord(
         run_id=_new_id("prun"),
         tenant_id=ctx.tenant_id,
@@ -111,6 +136,11 @@ def run_record(ctx: RequestContext, *, pipeline_id: str, version_id: str, now: s
         created_by=ctx.actor_user_id,
         started_at=now,
         completed_at=None,
+        idempotency_key=idempotency_key,
+        request_fingerprint=request_fingerprint,
+        plan_fingerprint=plan_fingerprint,
+        parameters=dict(parameters or {}),
+        target_node_ids=list(target_node_ids or []),
     )
 
 
@@ -121,6 +151,11 @@ def schedule_record(
     version_id: str,
     schedule: Mapping[str, object],
     enabled: bool,
+    status: str,
+    trigger_type: str,
+    timezone: str,
+    next_due_at: str | None,
+    paused_reason: str | None,
     now: str,
 ) -> PipelineScheduleRecord:
     return PipelineScheduleRecord(
@@ -130,8 +165,13 @@ def schedule_record(
         version_id=version_id,
         schedule=dict(schedule),
         enabled=enabled,
+        status=status,
+        trigger_type=trigger_type,
+        timezone=timezone,
+        next_due_at=next_due_at,
         updated_by=ctx.actor_user_id,
         updated_at=now,
+        paused_reason=paused_reason,
     )
 
 
@@ -165,11 +205,17 @@ def branch_payload(row: PipelineBranchRow) -> JsonObject:
         "baseVersionId": row["base_version_id"],
         "graph": row["graph"],
         "graphFingerprint": row["graph_fingerprint"],
+        "graphSchemaVersion": row["graph_schema_version"],
         "createdBy": row["created_by"],
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
         "proposalId": row["proposal_id"],
         "mergedVersionId": row["merged_version_id"],
+        "protection": {
+            "requiresProposal": True,
+            "requiresSeparateReviewer": True,
+            "blocksStaleProposal": True,
+        },
     }
 
 
@@ -183,6 +229,7 @@ def proposal_payload(row: PipelineProposalRow) -> JsonObject:
         "status": row["status"],
         "graph": row["graph"],
         "graphFingerprint": row["graph_fingerprint"],
+        "graphSchemaVersion": row["graph_schema_version"],
         "assignedTo": row["assigned_to"],
         "decision": row["decision"],
         "decisionComment": row["decision_comment"],
@@ -200,6 +247,10 @@ def version_payload(row: PipelineVersionRow) -> JsonObject:
         "versionNumber": row["version_number"],
         "graph": row["graph"],
         "graphFingerprint": row["graph_fingerprint"],
+        "graphSchemaVersion": row["graph_schema_version"],
+        "executionPlan": row["execution_plan"],
+        "planFingerprint": row["plan_fingerprint"],
+        "compilerVersion": row["compiler_version"],
         "proposalId": row["proposal_id"],
         "createdBy": row["created_by"],
         "createdAt": row["created_at"],
@@ -213,6 +264,15 @@ def run_payload(row: PipelineRunRow) -> JsonObject:
         "pipelineId": row["pipeline_id"],
         "versionId": row["version_id"],
         "status": row["status"],
+        "idempotencyKey": row["idempotency_key"],
+        "requestFingerprint": row["request_fingerprint"],
+        "planFingerprint": row["plan_fingerprint"],
+        "workflowRunId": row["workflow_run_id"],
+        "executionLeaseExpiresAt": row["execution_lease_expires_at"],
+        "executionHeartbeatAt": row["execution_heartbeat_at"],
+        "parameters": row["parameters"],
+        "targetNodeIds": row["target_node_ids"],
+        "outputs": row["outputs"],
         "outputDatasetRef": row["output_dataset_ref"],
         "outputVersionId": row["output_version_id"],
         "timeline": row["timeline"],
@@ -232,9 +292,21 @@ def schedule_payload(row: PipelineScheduleRow | None) -> JsonObject | None:
         "versionId": row["version_id"],
         "schedule": row["schedule"],
         "enabled": row["enabled"],
+        "status": row["status"],
         "updatedBy": row["updated_by"],
         "updatedAt": row["updated_at"],
         "lastTickAt": row["last_tick_at"],
+        "lastSlotAt": row["last_slot_at"],
+        "triggerType": row["trigger_type"],
+        "timezone": row["timezone"],
+        "nextDueAt": row["next_due_at"],
+        "leaseOwner": row["lease_owner"],
+        "leaseExpiresAt": row["lease_expires_at"],
+        "fencingToken": row["fencing_token"],
+        "failureCount": row["failure_count"],
+        "pausedReason": row["paused_reason"],
+        "lastFailureAt": row["last_failure_at"],
+        "lastError": row["last_error"],
     }
 
 

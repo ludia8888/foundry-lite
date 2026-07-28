@@ -48,6 +48,8 @@ class PolicyService:
 
     permission_roles: dict[str, set[str]] = {
         "dataset:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance", "connector_ingest"},
+        "dataset:read:confidential": {"admin", "data_engineer", "ops_manager", "finance"},
+        "dataset:read:restricted": {"admin", "data_engineer", "ops_manager"},
         "dataset:write": {"admin", "data_engineer"},
         "dataset:webhook_ingest": {"admin", "data_engineer", "connector_ingest"},
         "source:read": {"admin", "data_engineer", "ops_manager"},
@@ -72,6 +74,7 @@ class PolicyService:
         "insight:read": {"admin", "data_engineer", "ops_manager", "finance"},
         "insight:create": {"admin", "data_engineer"},
         "insight:review": {"admin", "ops_manager"},
+        "media:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "media:search": {"admin", "data_engineer", "ops_manager"},
         # AIP eval runs record durable release-gate evidence, so they are
         # operator/engineer only (viewers and finance are excluded). Release
@@ -122,6 +125,16 @@ class PolicyService:
                 f"permission denied for {permission}",
                 details={"permission": permission, "reason": decision.reason},
             )
+
+    def require_dataset_classification(self, ctx: RequestContext, classification: object) -> None:
+        """Apply a dataset-level ACL in addition to column masking."""
+
+        self.require(ctx, _dataset_classification_permission(classification))
+
+    def can_read_dataset_classification(self, ctx: RequestContext, classification: object) -> bool:
+        """Return whether a dataset may appear in a caller's resource listing."""
+
+        return self.decide(ctx, _dataset_classification_permission(classification)).allowed
 
     def _allowed_roles(self, ctx: RequestContext, permission: str) -> tuple[set[str], str]:
         """Resolve (allowed roles, source) so deny reasons explain where roles came from.
@@ -252,6 +265,15 @@ class _PropertyPolicySets:
     sensitive_columns: set[str] = field(default_factory=lambda: set())
     #: object type -> property -> datasource segment ``requiredRole``
     segment_roles_by_type: dict[str, dict[str, str]] = field(default_factory=lambda: {})
+
+
+def _dataset_classification_permission(classification: object) -> str:
+    value = str(classification or "public").strip().upper()
+    if value in {"UNCLASSIFIED", "PUBLIC", "INTERNAL"}:
+        return "dataset:read"
+    if value == "CONFIDENTIAL":
+        return "dataset:read:confidential"
+    return "dataset:read:restricted"
 
 
 def _collect_classification(sets: _PropertyPolicySets, row: Mapping[str, object]) -> None:

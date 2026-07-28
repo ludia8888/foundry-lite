@@ -229,7 +229,7 @@ infrastructure
 
 ### 4.3 Scale Foundation과 Infra Swap 규칙
 
-Scale Foundation은 “처음부터 Spark, Flink, Kafka, S3를 모두 붙인다”는 뜻이 아니다. 뜻은 더 실용적이다. 작은 로컬 구현으로 시작하더라도, 나중에 큰 인프라로 바꿀 때 업무 규칙과 추적 체계가 흔들리지 않도록 경계를 먼저 고정한다.
+Scale Foundation은 “처음부터 Spark, Kafka, S3를 모두 붙인다”는 뜻이 아니다. 뜻은 더 실용적이다. 작은 로컬 구현으로 시작하더라도, 나중에 큰 인프라로 바꿀 때 업무 규칙과 추적 체계가 흔들리지 않도록 경계를 먼저 고정한다.
 
 비개발자에게 설명하면, Foundry-lite의 핵심 제품 로직은 “운영 규칙과 감사 장부”이고 인프라는 “장비”다. 장비가 바뀌어도 운영 규칙과 감사 장부는 바뀌면 안 된다.
 
@@ -239,7 +239,7 @@ Scale Foundation은 “처음부터 Spark, Flink, Kafka, S3를 모두 붙인다�
 | DatasetStorageAdapter | local filesystem, fake storage | MinIO/S3/GCS/Azure Blob, Iceberg storage | dataset commit protocol은 storage 종류와 무관해야 한다. |
 | DatasetTransactionRepository | SQLAlchemy transaction + schema revision guard | PostgreSQL transaction + Alembic migration history | OPEN/COMMITTED/ABORTED 상태 전이는 동일해야 한다. |
 | RuntimeRepository | SQLAlchemy audit/outbox/lineage/run table | PostgreSQL partitioned audit/outbox, later stream publisher state | audit, outbox, lineage, run state의 key 의미가 동일해야 한다. |
-| ComputeAdapter | DuckDB | Spark, Flink bounded job, Ray | input version, output staging, lineage, health gate는 동일해야 한다. |
+| ComputeAdapter | DuckDB | Spark batch, Ray 또는 격리된 bounded worker | input version, output staging, lineage, health gate는 동일해야 한다. |
 | EventPublisher/StreamAdapter | SQLAlchemy outbox + local/fake stream + Kafka-compatible proof | Kafka/Redpanda publisher and continuously running worker | event idempotency, DLQ, replay cursor는 동일해야 한다. |
 | SearchAdapter | local/fake + Elasticsearch-compatible projection proof | managed Elasticsearch cluster | search는 projection이고 object store가 source of truth다. |
 | WorkflowAdapter | direct call/local worker | Temporal | retry, timeout, run state, replay key를 잃지 않는다. |

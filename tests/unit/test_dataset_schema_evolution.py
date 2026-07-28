@@ -8,6 +8,7 @@ from foundry_lite.application.services.dataset.schema_evolution import (
     DatasetSchemaEvolutionChange,
     build_schema_evolution_result,
     plan_schema_evolution,
+    resolve_inferred_null_types,
     resume_schema_backfill_progress,
     schema_columns_by_name,
 )
@@ -187,6 +188,30 @@ def test_schema_evolution_rejects_invalid_schema_shapes() -> None:
     for schema in invalid_schemas:
         with pytest.raises(ValidationFailed):
             schema_columns_by_name(schema)
+
+
+def test_schema_evolution_resolves_null_only_column_without_false_type_conflict() -> None:
+    current = _schema(
+        {"name": "order_id", "type": "string", "nullable": False},
+        {"name": "note", "type": "null", "nullable": True},
+    )
+    concrete = _schema(
+        {"name": "order_id", "type": "string", "nullable": False},
+        {"name": "note", "type": "string", "nullable": True},
+    )
+
+    plan = plan_schema_evolution(current_schema=current, next_schema=concrete, primary_key=("order_id",))
+    preserved = resolve_inferred_null_types(
+        concrete,
+        _schema(
+            {"name": "order_id", "type": "string", "nullable": False},
+            {"name": "note", "type": "null", "nullable": True},
+        ),
+    )
+
+    assert plan.failure() is None
+    assert [change.kind for change in plan.changes] == ["resolve_null_type"]
+    assert schema_columns_by_name(preserved)["note"]["type"] == "string"
 
 
 def _schema(*columns: dict[str, object]) -> dict[str, object]:

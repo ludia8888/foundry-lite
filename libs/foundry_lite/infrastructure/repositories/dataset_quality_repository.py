@@ -75,6 +75,27 @@ class SqlAlchemyDatasetQualityRepository:
         )
         return cast(DatasetSchemaRow, dict(row)) if row else None
 
+    def schema_by_version(
+        self,
+        *,
+        transaction: Any,
+        dataset_id: str,
+        schema_version: int,
+    ) -> DatasetSchemaRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_schemas).where(
+                    and_(
+                        db.dataset_schemas.c.dataset_id == dataset_id,
+                        db.dataset_schemas.c.version == schema_version,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetSchemaRow, dict(row)) if row else None
+
     def insert_schema(self, *, transaction: Any, record: DatasetSchemaRecord) -> None:
         transaction.execute(
             insert(db.dataset_schemas).values(

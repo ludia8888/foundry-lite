@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import inspect
 import json
-import sys
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import ModuleType
 from typing import Any, cast
 
 import duckdb
@@ -18,13 +12,20 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from foundry_lite.application.ports import DatasetCheckConfig, DatasetCheckResult
-from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailure,
+    AdapterFailureContract,
+    AdapterFailureMode,
+)
+from foundry_lite.application.ports.code_execution import CodeExecutionAdapter
 from foundry_lite.application.ports.compute_adapter import (
+    BoundedParquetRead,
     InputFilePaths,
+    ParquetFieldType,
     PythonTransformPlan,
     SqlTransformPlan,
     TabularRow,
-    TransformDeadLetterRecord,
     TransformExecutionResult,
     TransformPlan,
 )
@@ -45,16 +46,19 @@ from foundry_lite.application.primitives import (
     _required_row,
     _sql_identifier,
     _sql_literal,
-    _write_rows_to_csv,
 )
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.transforms_sdk import Output, _runtime_input, _runtime_output
+
+_MAX_NESTED_PARQUET_DECODE_BYTES = 16 * 1024 * 1024
 
 
 class DuckDBComputeAdapter:
     """DuckDB-backed compute adapter for the local MVP runtime."""
 
     profile_name = "duckdb"
+
+    def __init__(self, *, code_execution_adapter: CodeExecutionAdapter | None = None) -> None:
+        self._code_execution_adapter = code_execution_adapter
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -92,10 +96,23 @@ class DuckDBComputeAdapter:
         finally:
             con.close()
 
-    def rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
-        csv_path = target_path.with_suffix(".csv")
-        _write_rows_to_csv(rows, csv_path, fieldnames)
-        self.csv_to_parquet(csv_path, target_path)
+    def rows_to_parquet(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+        *,
+        field_types: Mapping[str, ParquetFieldType] | None = None,
+    ) -> None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            pq.write_table(_typed_rows_table(rows, fieldnames, field_types=field_types), target_path)
+        except ValidationFailed:
+            target_path.unlink(missing_ok=True)
+            raise
+        except (pa.ArrowException, OverflowError, TypeError, ValueError) as exc:
+            target_path.unlink(missing_ok=True)
+            raise _typed_parquet_failure(target_path, fieldnames, len(rows), exc) from exc
 
     def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:
         con = duckdb.connect()
@@ -105,6 +122,40 @@ class DuckDBComputeAdapter:
             return [_tabular_row(dict(zip(names, row, strict=True))) for row in result.fetchall()]
         finally:
             con.close()
+
+    def rows_from_parquet_bounded(
+        self,
+        parquet_path: Path,
+        *,
+        max_rows: int,
+        max_decoded_bytes: int,
+        allowed_nested_columns: Sequence[str] = (),
+    ) -> BoundedParquetRead:
+        has_nested_columns = _require_supported_parquet_schema(parquet_path, allowed_nested_columns)
+        decoded_limit = (
+            min(max_decoded_bytes, _MAX_NESTED_PARQUET_DECODE_BYTES) if has_nested_columns else max_decoded_bytes
+        )
+        metadata_decoded_bytes = _require_parquet_read_bound(parquet_path, max_rows, decoded_limit)
+        rows: list[TabularRow] = []
+        decoded_byte_count = 0
+        con = duckdb.connect()
+        try:
+            result = con.execute("select * from read_parquet(?)", [str(parquet_path)])
+            names = [str(column[0]) for column in result.description]
+            while (raw_row := result.fetchone()) is not None:
+                row = _tabular_row(dict(zip(names, raw_row, strict=True)))
+                decoded_byte_count += _decoded_row_byte_count(row)
+                _require_decoded_result_bound(
+                    parquet_path,
+                    len(rows) + 1,
+                    decoded_byte_count,
+                    max_rows,
+                    decoded_limit,
+                )
+                rows.append(row)
+        finally:
+            con.close()
+        return BoundedParquetRead(tuple(rows), max(metadata_decoded_bytes, decoded_byte_count))
 
     def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[TabularRow]:
         con = duckdb.connect()
@@ -125,11 +176,12 @@ class DuckDBComputeAdapter:
             describe = con.execute("describe select * from read_parquet(?)", [str(parquet_path)]).fetchall()
         finally:
             con.close()
+        parquet_schema = pq.read_schema(parquet_path)
         primary_key_set = set(primary_key)
         columns = [
             {
                 "name": row[0],
-                "type": _normalize_duckdb_type(row[1]),
+                "type": _inspected_parquet_type(parquet_schema, str(row[0]), str(row[1])),
                 "nullable": row[0] not in primary_key_set,
             }
             for row in describe
@@ -216,23 +268,18 @@ class DuckDBComputeAdapter:
             con.close()
 
     def _execute_python_transform(self, plan: PythonTransformPlan) -> TransformExecutionResult:
-        target_path = plan.target_path
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        module_path = _write_python_transform_module(plan)
-        dead_letters: list[TransformDeadLetterRecord] = []
-        try:
-            with _python_entrypoint_parent_on_path(plan.entrypoint):
-                module = _load_python_transform_module(module_path)
-                func = _python_transform_callable(module, plan.function_name)
-                result = func(**_python_transform_kwargs(plan, func, dead_letters))
-            if result is not None:
-                output = _runtime_output(plan.output_dataset_ref, _arrow_table_writer(target_path))
-                _write_python_returned_rows(output, result)
-            if not target_path.exists():
-                raise ValidationFailed("Python transform did not write output", details={"entrypoint": plan.entrypoint})
-            return TransformExecutionResult(dead_letters=tuple(dead_letters))
-        finally:
-            module_path.unlink(missing_ok=True)
+        if self._code_execution_adapter is None:
+            raise AdapterError(
+                AdapterFailure(
+                    adapter_profile="code-execution-unconfigured",
+                    operation="execute_python_transform",
+                    kind="unavailable",
+                    is_retryable=False,
+                    operator_message="Python transform execution requires an isolated code-execution adapter.",
+                    details={"codeExecution": {"failureType": "runtime_unavailable", "executionAttempted": False}},
+                )
+            )
+        return self._code_execution_adapter.execute_python_transform(plan)
 
     def _row_count_min_check(self, row_count: int, check: DatasetCheckConfig) -> DatasetCheckResult:
         minimum = int(cast(str | int, check["min"]))
@@ -374,6 +421,255 @@ class FakeComputeAdapter(DuckDBComputeAdapter):
     """Fake compute profile that keeps local semantics but exercises adapter replacement."""
 
     profile_name = "fake-compute"
+
+
+def _inspected_parquet_type(schema: pa.Schema, column_name: str, duckdb_type: str) -> str:
+    """Preserve Arrow's null-only marker instead of DuckDB's INTEGER fallback."""
+
+    field = schema.field(column_name)
+    if pa.types.is_null(field.type):
+        return "null"
+    return _normalize_duckdb_type(duckdb_type)
+
+
+def _typed_rows_table(
+    rows: Sequence[Mapping[str, object]],
+    fieldnames: list[str],
+    *,
+    field_types: Mapping[str, ParquetFieldType] | None = None,
+) -> pa.Table:
+    fields = _validated_parquet_fieldnames(fieldnames)
+    declared_types = _validated_parquet_field_types(fields, field_types)
+    normalized = _normalized_parquet_rows(rows, fields)
+    arrays = [
+        pa.array(
+            [row[field] for row in normalized],
+            type=_declared_or_inferred_arrow_type(normalized, field, declared_types),
+        )
+        for field in fields
+    ]
+    return pa.Table.from_arrays(arrays, names=fields)
+
+
+def _validated_parquet_field_types(
+    fieldnames: Sequence[str],
+    field_types: Mapping[str, ParquetFieldType] | None,
+) -> Mapping[str, ParquetFieldType]:
+    declared: dict[str, ParquetFieldType] = dict(field_types or {})
+    unknown_fields = sorted(set(declared) - set(fieldnames))
+    supported = {"boolean", "float64", "int64", "string"}
+    invalid_types = sorted({value for value in declared.values() if value not in supported})
+    if unknown_fields or invalid_types:
+        raise ValidationFailed(
+            "rows cannot be written as typed parquet",
+            details={
+                "reason": "invalid_field_types",
+                "unknownFields": unknown_fields,
+                "invalidTypes": invalid_types,
+            },
+        )
+    return declared
+
+
+def _declared_or_inferred_arrow_type(
+    rows: Sequence[Mapping[str, object]],
+    field: str,
+    declared_types: Mapping[str, ParquetFieldType],
+) -> pa.DataType:
+    declared = declared_types.get(field)
+    if declared is not None:
+        return {
+            "boolean": pa.bool_(),
+            "float64": pa.float64(),
+            "int64": pa.int64(),
+            "string": pa.string(),
+        }[declared]
+    return _json_arrow_type([row[field] for row in rows], field)
+
+
+def _validated_parquet_fieldnames(fieldnames: list[str]) -> tuple[str, ...]:
+    if not fieldnames or any(not isinstance(field, str) or not field.strip() for field in fieldnames):
+        raise ValidationFailed("rows cannot be written as typed parquet", details={"reason": "invalid_fieldnames"})
+    if len(set(fieldnames)) != len(fieldnames):
+        raise ValidationFailed("rows cannot be written as typed parquet", details={"reason": "duplicate_fieldnames"})
+    return tuple(fieldnames)
+
+
+def _normalized_parquet_rows(
+    rows: Sequence[Mapping[str, object]],
+    fieldnames: Sequence[str],
+) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValidationFailed(
+                "rows cannot be written as typed parquet",
+                details={"reason": "row_not_mapping", "rowIndex": index},
+            )
+        normalized.append({field: _json_ready(row.get(field)) for field in fieldnames})
+    return normalized
+
+
+def _json_arrow_type(values: Sequence[object], path: str) -> pa.DataType:
+    present = [value for value in values if value is not None]
+    if not present:
+        return pa.null()
+    container_type = _json_container_arrow_type(present, path)
+    if container_type is not None:
+        return container_type
+    return _json_scalar_arrow_type(present, path)
+
+
+def _json_container_arrow_type(
+    present: Sequence[object],
+    path: str,
+) -> pa.DataType | None:
+    if all(isinstance(value, Mapping) for value in present):
+        return _json_mapping_arrow_type(cast(Sequence[Mapping[str, object]], present), path)
+    if all(isinstance(value, list) for value in present):
+        items = [item for value in cast(Sequence[list[object]], present) for item in value]
+        return pa.list_(_json_arrow_type(items, f"{path}[]")) if items else pa.list_(pa.null())
+    return None
+
+
+def _json_scalar_arrow_type(
+    present: Sequence[object],
+    path: str,
+) -> pa.DataType:
+    if all(isinstance(value, bool) for value in present):
+        return pa.bool_()
+    number_type = _json_number_arrow_type(present)
+    if number_type is not None:
+        return number_type
+    if all(isinstance(value, str) for value in present):
+        return pa.string()
+    raise ValidationFailed(
+        "rows cannot be written as typed parquet",
+        details={"reason": "incompatible_value_types", "field": path, "valueTypes": _value_type_names(present)},
+    )
+
+
+def _json_number_arrow_type(present: Sequence[object]) -> pa.DataType | None:
+    if all(isinstance(value, int) and not isinstance(value, bool) for value in present):
+        return _integer_arrow_type(cast(Sequence[int], present))
+    if all(isinstance(value, int | float) and not isinstance(value, bool) for value in present):
+        return pa.float64()
+    return None
+
+
+def _json_mapping_arrow_type(values: Sequence[Mapping[str, object]], path: str) -> pa.DataType:
+    keys = sorted({key for value in values for key in value})
+    if not keys:
+        return pa.map_(pa.string(), pa.null())
+    return pa.struct(
+        [pa.field(key, _json_arrow_type([value.get(key) for value in values], f"{path}.{key}")) for key in keys]
+    )
+
+
+def _integer_arrow_type(values: Sequence[int]) -> pa.DataType:
+    if all(-(2**63) <= value < 2**63 for value in values):
+        return pa.int64()
+    precision = max(len(str(abs(value))) for value in values)
+    if precision <= 38:
+        return pa.decimal128(precision, 0)
+    raise ValidationFailed(
+        "rows cannot be written as typed parquet",
+        details={"reason": "integer_out_of_range", "maxPrecision": precision},
+    )
+
+
+def _value_type_names(values: Sequence[object]) -> list[str]:
+    return sorted({type(value).__name__ for value in values})
+
+
+def _typed_parquet_failure(
+    target_path: Path,
+    fieldnames: Sequence[str],
+    row_count: int,
+    exc: Exception,
+) -> ValidationFailed:
+    return ValidationFailed(
+        "rows cannot be written as typed parquet",
+        details={
+            "path": str(target_path),
+            "fieldnames": list(fieldnames),
+            "rowCount": row_count,
+            "errorType": type(exc).__name__,
+        },
+    )
+
+
+def _require_parquet_read_bound(
+    parquet_path: Path,
+    max_rows: int,
+    max_decoded_bytes: int,
+) -> int:
+    if max_rows < 0 or max_decoded_bytes < 0:
+        raise ValidationFailed("parquet read bounds must not be negative")
+    metadata = pq.ParquetFile(parquet_path).metadata
+    if metadata.num_rows > max_rows:
+        raise _parquet_bound_failure("rows", metadata.num_rows, max_rows, parquet_path)
+    decoded_bytes = sum(
+        max(metadata.row_group(group).column(column).total_uncompressed_size, 0)
+        for group in range(metadata.num_row_groups)
+        for column in range(metadata.num_columns)
+    )
+    decoded_bytes += metadata.num_rows * max(metadata.num_columns, 1) * 16
+    if decoded_bytes > max_decoded_bytes:
+        raise _parquet_bound_failure("decoded_bytes", decoded_bytes, max_decoded_bytes, parquet_path)
+    return decoded_bytes
+
+
+def _require_supported_parquet_schema(
+    parquet_path: Path,
+    allowed_nested_columns: Sequence[str],
+) -> bool:
+    nested_columns = [field.name for field in pq.read_schema(parquet_path) if pa.types.is_nested(field.type)]
+    unexpected = sorted(set(nested_columns) - set(allowed_nested_columns))
+    if unexpected:
+        raise ValidationFailed(
+            "bounded parquet read requires flat scalar columns",
+            details={
+                "limitKind": "nested_values",
+                "columns": unexpected,
+                "compressedByteCount": parquet_path.stat().st_size,
+            },
+        )
+    return bool(nested_columns)
+
+
+def _require_decoded_result_bound(
+    parquet_path: Path,
+    row_count: int,
+    decoded_byte_count: int,
+    max_rows: int,
+    max_decoded_bytes: int,
+) -> None:
+    if row_count > max_rows:
+        raise _parquet_bound_failure("rows", row_count, max_rows, parquet_path)
+    if decoded_byte_count > max_decoded_bytes:
+        raise _parquet_bound_failure("decoded_bytes", decoded_byte_count, max_decoded_bytes, parquet_path)
+
+
+def _parquet_bound_failure(
+    limit_kind: str,
+    actual: int,
+    maximum: int,
+    parquet_path: Path,
+) -> ValidationFailed:
+    return ValidationFailed(
+        "parquet read bound exceeded",
+        details={
+            "limitKind": limit_kind,
+            "actual": actual,
+            "maximum": maximum,
+            "compressedByteCount": parquet_path.stat().st_size,
+        },
+    )
+
+
+def _decoded_row_byte_count(row: Mapping[str, object]) -> int:
+    return len(json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode())
 
 
 def _tabular_row(value: object) -> TabularRow:
@@ -565,107 +861,6 @@ def _numeric_operator_sql(operator: str) -> str:
     return "<="
 
 
-def _write_python_transform_module(plan: PythonTransformPlan) -> Path:
-    digest = hashlib.sha256(f"{plan.entrypoint}:{plan.source_code}".encode()).hexdigest()[:16]
-    module_path = plan.target_path.parent / f".foundry-lite-python-transform-{digest}.py"
-    module_path.write_text(plan.source_code, encoding="utf-8")
-    return module_path
-
-
-def _load_python_transform_module(module_path: Path) -> ModuleType:
-    module_name = f"_foundry_lite_transform_{module_path.stem.replace('-', '_')}"
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise ValidationFailed("Python transform entrypoint cannot be loaded", details={"entrypoint": str(module_path)})
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.modules.pop(module_name, None)
-    return module
-
-
-def _python_transform_callable(module: ModuleType, function_name: str | None) -> Callable[..., object]:
-    if function_name:
-        candidate = getattr(module, function_name, None)
-        if callable(candidate):
-            return cast(Callable[..., object], candidate)
-        raise ValidationFailed("Python transform function not found", details={"function": function_name})
-    decorated = [
-        value
-        for value in vars(module).values()
-        if callable(value) and isinstance(getattr(value, "_foundry_lite_transform_bindings", None), Mapping)
-    ]
-    if len(decorated) == 1:
-        return cast(Callable[..., object], decorated[0])
-    candidate = getattr(module, "compute", None)
-    if callable(candidate):
-        return cast(Callable[..., object], candidate)
-    raise ValidationFailed("Python transform must define one decorated function or compute()")
-
-
-def _python_transform_kwargs(
-    plan: PythonTransformPlan,
-    callable_obj: Callable[..., object],
-    dead_letters: list[TransformDeadLetterRecord],
-) -> dict[str, object]:
-    output = _runtime_output(plan.output_dataset_ref, _arrow_table_writer(plan.target_path))
-    kwargs: dict[str, object] = {
-        alias: _runtime_input(
-            dataset_ref,
-            _arrow_table_reader(plan.input_paths_by_ref[dataset_ref]),
-            _row_error_recorder(dead_letters, dataset_ref),
-        )
-        for alias, dataset_ref in plan.input_refs_by_alias.items()
-    }
-    kwargs.update(_python_output_kwargs(callable_obj, output))
-    return kwargs
-
-
-def _row_error_recorder(
-    dead_letters: list[TransformDeadLetterRecord],
-    dataset_ref: str,
-) -> Callable[[int, Mapping[str, object], str, str], None]:
-    def record(row_index: int, row: Mapping[str, object], error_kind: str, error_message: str) -> None:
-        dead_letters.append(
-            TransformDeadLetterRecord(
-                input_dataset_ref=dataset_ref,
-                row_index=row_index,
-                payload=_tabular_row(row),
-                error_kind=error_kind,
-                error_message=error_message,
-            )
-        )
-
-    return record
-
-
-def _python_output_kwargs(callable_obj: Callable[..., object], output: Output) -> dict[str, Output]:
-    bindings = getattr(callable_obj, "_foundry_lite_transform_bindings", {})
-    aliases = [name for name, binding in bindings.items() if isinstance(binding, Output)]
-    if aliases:
-        return {alias: output for alias in aliases}
-    parameters = inspect.signature(callable_obj).parameters
-    if "output" in parameters:
-        return {"output": output}
-    if "out" in parameters:
-        return {"out": output}
-    return {}
-
-
-def _write_python_returned_rows(output: Output, result: object) -> None:
-    if not isinstance(result, Sequence) or isinstance(result, str | bytes):
-        raise ValidationFailed("Python transform return value must be a sequence of row mappings")
-    if not all(isinstance(row, Mapping) for row in result):
-        raise ValidationFailed("Python transform return rows must be mappings")
-    output.write_rows(cast(Sequence[Mapping[str, object]], result))
-
-
-def _arrow_table_reader(paths: InputFilePaths) -> Callable[[], Any]:
-    return lambda: _read_arrow_tables(paths)
-
-
 def _read_arrow_tables(paths: InputFilePaths) -> Any:
     parquet_paths = _input_path_tuple(paths)
     if len(parquet_paths) == 1:
@@ -675,18 +870,3 @@ def _read_arrow_tables(paths: InputFilePaths) -> Any:
 
 def _input_path_tuple(paths: InputFilePaths) -> tuple[Path, ...]:
     return (paths,) if isinstance(paths, Path) else paths
-
-
-def _arrow_table_writer(path: Path) -> Callable[[Any], None]:
-    return lambda table: pq.write_table(table, path)
-
-
-@contextmanager
-def _python_entrypoint_parent_on_path(entrypoint: str):
-    parent = str(Path(entrypoint).expanduser().resolve().parent)
-    sys.path.insert(0, parent)
-    try:
-        yield
-    finally:
-        if parent in sys.path:
-            sys.path.remove(parent)

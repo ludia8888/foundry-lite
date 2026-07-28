@@ -36,13 +36,13 @@
 
 Palantir의 공개 문서만 놓고 보면, Foundry는 단순한 데이터 통합 도구가 아니라 **Apollo로 운영되는 배포 계층**, **Rubix로 구현되는 보안 강화형 쿠버네티스 기반 실행 계층**, **MMDP로 대표되는 개방형 데이터·컴퓨트 계층**, 그리고 **Ontology를 중심으로 한 읽기·쓰기 운영 계층**이 결합된 데이터 운영 플랫폼이다. Palantir는 Foundry를 “데이터 관리, 로직 작성, Ontology 개발, 분석, 워크플로 개발”의 기반 플랫폼으로 설명하고, 표준 아키텍처를 Foundry+AIP+Apollo의 결합으로 제시한다. 또한 Foundry의 핵심은 Ontology이며, Ontology는 데이터·로직·액션·보안을 통합하는 시스템으로 설명된다. [핵심 URL: `https://palantir.com/docs/foundry/architecture-center/platforms/`, `https://palantir.com/docs/foundry/architecture-center/ontology-system/`, `https://www.palantir.com/platforms/foundry/`]
 
-기술 스택 측면에서 공개 문서가 확인해 주는 것은 분명하다. 데이터 처리 엔진으로는 **Spark**와 **Flink**가 명시되고, MMDP 문서에서는 추가로 **Apache DataFusion, Polars, DuckDB** 같은 단일 노드 엔진도 제시된다. 변환 로직 언어는 **SQL, Python, Java, Mesa**가 명시되며, 함수는 **TypeScript v1/v2와 Python**을 지원한다. 개발자 도구는 **Code Repositories, VS Code Workspaces, JupyterLab, RStudio Workbench, OSDK**로 구성되며, OSDK는 **TypeScript(NPM), Python(Pip/Conda), Java(Maven), OpenAPI**를 지원한다. 반면 내부 마이크로서비스가 어떤 언어와 DBMS 위에 구현되는지, OMS/OSS/Object DB의 구체적 저장 엔진이 무엇인지는 공개 문서상 **미지정**이다. [핵심 URL: `https://palantir.com/docs/foundry/optimizing-pipelines/spark-concepts/`, `https://palantir.com/docs/foundry/functions/getting-started/`, `https://palantir.com/docs/foundry/ontology-sdk/overview/`, `https://palantir.com/docs/foundry/architecture-center/multimodal-data-plane/`]
+기술 스택 측면에서 이 보고서는 Foundry-lite가 실제 채택하거나 비교 대상으로 유지하는 범위만 기술한다. 대용량 데이터 처리는 **Spark**, 단일 노드 실행은 **Apache DataFusion, Polars, DuckDB**를 공개 비교 대상으로 둔다. 변환 로직 언어는 **SQL, Python, Java, Mesa**가 명시되며, 함수는 **TypeScript v1/v2와 Python**을 지원한다. 개발자 도구는 **Code Repositories, VS Code Workspaces, JupyterLab, RStudio Workbench, OSDK**로 구성되며, OSDK는 **TypeScript(NPM), Python(Pip/Conda), Java(Maven), OpenAPI**를 지원한다. 반면 내부 마이크로서비스가 어떤 언어와 DBMS 위에 구현되는지, OMS/OSS/Object DB의 구체적 저장 엔진이 무엇인지는 공개 문서상 **미지정**이다. [핵심 URL: `https://palantir.com/docs/foundry/optimizing-pipelines/spark-concepts/`, `https://palantir.com/docs/foundry/functions/getting-started/`, `https://palantir.com/docs/foundry/ontology-sdk/overview/`, `https://palantir.com/docs/foundry/architecture-center/multimodal-data-plane/`]
 
 데이터 흐름은 대체로 다음과 같이 복원된다. 외부 시스템은 **Data Connection**의 source/worker/agent 모델을 통해 연결되고, 데이터는 **dataset, stream, virtual table, managed/virtual Iceberg table** 등의 형태로 유입된다. 이후 **Pipeline Builder** 또는 코드 기반 변환이 엔진 비종속 중간 계층을 통해 실행되고, 결과는 Ontology로 매핑되며, **Object Data Funnel**이 **OSv2**에 대한 배치/스트리밍 인덱싱을 담당한다. 운영 중 발생하는 사용자 결정은 **Actions**를 통해 객체 상태를 변경하고, 필요하면 materialization을 통해 “소스 데이터 + 유저 수정”이 반영된 최신 객체 스냅샷을 다시 dataset으로 내보낸다. 이 전 과정은 lineage, health checks, monitoring, audit logging으로 감싼다. [핵심 URL: `https://palantir.com/docs/foundry/data-connection/overview/`, `https://palantir.com/docs/foundry/pipeline-builder/overview/`, `https://palantir.com/docs/foundry/object-indexing/overview/`, `https://palantir.com/docs/foundry/object-edits/materializations/`]
 
 Palantir가 공개 문서에서 반복적으로 강조하는 엔지니어링 기법은 다음과 같다. **Treat data like code**라는 버전 관리 철학, 데이터·스토리지·컴퓨트의 **개방형 상호운용성**, **zero-trust** 기본값, **mandatory + discretionary access control** 조합, **policy-driven multi-tenant isolation**, **exactly-once 기본 스트리밍**, **live/replacement indexing pipelines**, **통합 lineage**, **데이터 품질 기대치와 health checks**, **SIEM 친화형 audit.3**, **release channels와 maintenance windows**, **Apollo의 pull-based autonomous deployment**, 그리고 **72시간 이내 컨테이너 순환** 같은 운영 보안 자동화다. [핵심 URL: `https://palantir.com/docs/foundry/security/overview/`, `https://palantir.com/docs/foundry/observability/overview/`, `https://palantir.com/docs/foundry/foundry-devops/overview/`, `https://palantir.com/docs/apollo/core/introduction/`, `https://palantir.com/docs/foundry/architecture-center/rubix/`]
 
-가장 중요한 주의점은, 공개 문서는 **“플랫폼 원리와 공개 API/서비스 경계”는 비교적 상세히 설명하지만, “내부 구현 세부”는 상당수 생략**한다는 점이다. 따라서 이 보고서에서는 확인 가능한 것만 기술했고, 명시가 없는 항목은 모두 **미지정**으로 표기했다. 특히 내부 메시지 버스, 서비스 메시의 구체 구현, Object Database의 실제 DB 제품, 쿠버네티스 배포판, Spark/Flink/Iceberg 버전, 내부 CI 러너 구조, 재해복구 수치 등은 공개 문서만으로 특정할 수 없다.
+가장 중요한 주의점은, 공개 문서는 **“플랫폼 원리와 공개 API/서비스 경계”는 비교적 상세히 설명하지만, “내부 구현 세부”는 상당수 생략**한다는 점이다. 따라서 이 보고서에서는 확인 가능한 것만 기술했고, 명시가 없는 항목은 모두 **미지정**으로 표기했다. 특히 내부 메시지 버스, 서비스 메시의 구체 구현, Object Database의 실제 DB 제품, 쿠버네티스 배포판, Spark/Iceberg 버전, 내부 CI 러너 구조, 재해복구 수치 등은 공개 문서만으로 특정할 수 없다.
 
 ## 조사 범위와 판독 기준
 
@@ -81,7 +81,7 @@ flowchart TB
         IT["Managed / Virtual Iceberg Tables"]
         PB["Pipeline Builder\n(engine-agnostic transform backend)"]
         CR["Code Repositories / Transforms / Functions / Compute Modules"]
-        ENG["Spark / Flink / DataFusion / Polars / DuckDB / BYO Containers"]
+        ENG["Spark / DataFusion / Polars / DuckDB / BYO Containers"]
     end
 
     subgraph Ontology["Ontology System"]
@@ -172,7 +172,7 @@ flowchart TB
 | 데이터 추상화 | Dataset | backing file system 위의 파일 컬렉션 래퍼; permissions/schema/versioning/updates 통합 지원 | `https://palantir.com/docs/foundry/data-integration/datasets/` |
 | 데이터 추상화 | Virtual table | 외부 테이블을 복제 없이 pointer로 참조; 보안과 오케스트레이션은 Foundry가 유지 | `https://palantir.com/docs/foundry/data-integration/virtual-tables/` |
 | 데이터 추상화 | Stream | checkpoint를 통해 fault tolerance를 제공하는 스트리밍 데이터 경로 | `https://palantir.com/docs/foundry/data-integration/streams/` |
-| 변환 계층 | Pipeline Builder | Foundry의 primary data integration app; Spark/Flink 기반, 엔진 비종속 변환 백엔드 | `https://palantir.com/docs/foundry/pipeline-builder/overview/` |
+| 변환 계층 | Pipeline Builder | Foundry의 primary data integration app; typed 중간 표현과 엔진 비종속 변환 백엔드 | `https://palantir.com/docs/foundry/pipeline-builder/overview/` |
 | 모델링 계층 | Ontology system | 데이터·로직·액션·보안을 통합하는 운영 계층 | `https://palantir.com/docs/foundry/architecture-center/ontology-system/` |
 | Ontology backend | OMS / OSS / Object DB / Actions / Funnel / Functions | Ontology 메타데이터, 질의, 저장, 쓰기 오케스트레이션, 인덱싱, 실행 로직 담당 | `https://palantir.com/docs/foundry/object-backend/overview/` |
 | 인덱싱 | Object Data Funnel | OSv2 인덱싱을 담당하는 microservice; batch/streaming funnel pipeline 오케스트레이션 | `https://palantir.com/docs/foundry/object-indexing/overview/` |
@@ -196,7 +196,7 @@ Foundry의 공개 기술 스택은 “한 가지 프레임워크로 모든 것�
 |---|---|---|---|
 | 데이터 형식 | **Apache Iceberg** | MMDP의 primary table format으로 명시; managed Iceberg와 virtual Iceberg 모두 지원 | Parquet/ORC 등 내부 기본 파일 포맷 정책은 문서상 미지정 |
 | 데이터 추상화 | **Datasets, Virtual Tables, Streams, Media Sets, Managed/Virtual Iceberg Tables** | Dataset은 backing FS 래퍼, Virtual Table은 external pointer, Stream은 checkpoint 기반 | backing file system의 실제 구현 제품은 미지정 |
-| 변환 엔진 | **Spark, Flink** | Pipeline Builder 아키텍처에 명시; Spark는 대용량 SQL/Python/Java/Mesa 변환의 기반 | 각 엔진의 버전/배포 옵션은 미지정 |
+| 변환 엔진 | **Spark** | 대용량 SQL/Python/Java/Mesa 변환의 공개 비교 기반 | 엔진 버전과 배포 옵션은 미지정 |
 | 추가 컴퓨트 엔진 | **Apache DataFusion, Polars, DuckDB** | MMDP의 single-node/high-performance engines로 명시 | 사용 시점·기본 우선순위는 미지정 |
 | BYO compute | **Compute Modules + Docker images** | 언어 무관 기존 코드베이스를 serverless Docker 이미지로 배포 가능 | 런타임 base image 표준, orchestrator 상세는 미지정 |
 | 변환 언어 | **SQL, Python, Java, Mesa** | Mesa는 proprietary Java-based DSL로 문서 명시 | Scala 등은 공개 근거상 미지정 |
@@ -218,7 +218,7 @@ Foundry의 공개 기술 스택은 “한 가지 프레임워크로 모든 것�
 
 ### Foundry-lite 설계 반영
 
-- [ ] v1 compute는 Spark/Flink가 아니라 [DuckDB canonical runner](./foundry_lite_development_plan_ko_sprintified.md#7-transform-engine-설계)로 제한한다.
+- [ ] v1 compute는 외부 분산 스트리밍 엔진이 아니라 [DuckDB canonical runner](./foundry_lite_development_plan_ko_sprintified.md#7-transform-engine-설계)로 제한한다.
 - [ ] Spark와 Iceberg production catalog는 Sprint 43~44 future scope로 둔다. Elasticsearch는 현재 adapter/projection proof가 있고, managed live cluster 운영은 [Sprint 42 이후 운영 과제](./foundry_lite_sprint_breakdown_ko.md#sprint-42--elasticsearch-adapter-for-search-heavy-object-types)로 둔다.
 - [ ] TypeScript/OpenAPI 기반 SDK 방향은 [OSDK-lite 설계](./foundry_lite_development_plan_ko_sprintified.md#16-osdk-lite-설계)와 [Sprint 35](./foundry_lite_sprint_breakdown_ko.md#sprint-35--generated-typescript-sdk와-web-sdk-전환)에 반영한다.
 - [ ] API/Worker/CLI 백엔드는 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 따라 Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy, DuckDB, Typer, local/direct workflow boundary 기준으로 구현한다. Alembic migration history와 Temporal Python SDK execution은 future scope다.
@@ -264,7 +264,7 @@ flowchart LR
 
 유입 데이터의 landing model은 하나가 아니다. **Dataset**은 backing filesystem 기반 저장 추상화이고, **Virtual Table**은 외부 시스템 테이블에 대한 포인터이며, **Streams**는 이벤트성 low-latency 처리 경로다. Virtual table은 외부 데이터를 Foundry로 먼저 저장하지 않고도 워크플로에 포함할 수 있게 해 주며, update detection을 통해 downstream builds나 object reindex를 트리거할 수 있다. Streams는 checkpoint를 따라 job graph 전체를 통과하는 fault tolerance 모델을 가진다. [URL: `https://palantir.com/docs/foundry/data-integration/datasets/`, `https://palantir.com/docs/foundry/data-integration/virtual-tables/`, `https://palantir.com/docs/foundry/data-integration/streams/`]
 
-다음 단계는 **변환과 오케스트레이션**이다. Pipeline Builder는 Foundry의 primary data integration app이며, Spark와 Flink를 사용하면서도 사용자가 특정 엔진 세부에 직접 묶이지 않도록 설계된다. Palantir 문서는 Pipeline Builder backend를 “logic creation and execution 사이의 intermediary”로 설명하고, 사용자가 원하는 파이프라인을 기술하면 backend가 transform code와 integrity checks를 생성한다고 밝힌다. 이 계층은 dataset뿐 아니라 object types, link types, streams, time-series, exports까지 목표로 삼는다. [URL: `https://palantir.com/docs/foundry/pipeline-builder/overview/`, `https://palantir.com/docs/foundry/pipeline-builder/transforms-overview/`]
+다음 단계는 **변환과 오케스트레이션**이다. Pipeline Builder는 Foundry의 primary data integration app이며, 여러 실행 엔진을 사용하면서도 사용자가 특정 엔진 세부에 직접 묶이지 않도록 설계된다. Palantir 문서는 Pipeline Builder backend를 “logic creation and execution 사이의 intermediary”로 설명하고, 사용자가 원하는 파이프라인을 기술하면 backend가 transform code와 integrity checks를 생성한다고 밝힌다. 이 계층은 dataset뿐 아니라 object types, link types, streams, time-series, exports까지 목표로 삼는다. [URL: `https://palantir.com/docs/foundry/pipeline-builder/overview/`, `https://palantir.com/docs/foundry/pipeline-builder/transforms-overview/`]
 
 그 다음은 **Ontology 인덱싱**이다. Object Indexing 문서에 따르면 Ontology에서 indexing은 Foundry datasource를 specialized databases에서 빠르게 조회할 수 있도록 만드는 과정이며, OSv2에서는 Object Data Funnel이 이를 맡는다. Funnel은 batch와 streaming 두 종류의 pipeline을 오케스트레이션한다. 배치 인덱싱의 경우 live pipeline이 서비스 중이어도 background replacement pipeline을 띄워 schema 변경이나 성능 재조정을 반영할 수 있고, replacement가 성공하면 교체된다. [URL: `https://palantir.com/docs/foundry/object-indexing/overview/`, `https://palantir.com/docs/foundry/object-indexing/funnel-batch-pipelines/`]
 
@@ -307,7 +307,7 @@ Foundry에서 공개적으로 확인되는 엔지니어링 프랙티스는 다�
 
 데이터 품질 프랙티스도 강하다. Pipeline Builder의 Data Expectations는 현재 output마다 **primary key**와 **row count** 기대치를 걸 수 있게 하고, 실패 시 build를 실패시킨다. Health Checks는 범용적이고, Trust in Data whitepaper는 이를 “timeliness, completeness, consistency, missing contents” 감시 수단으로 설명한다. Palantir의 철학은 “문제가 downstream에 나타난 뒤 수동 추적”이 아니라, lineage와 check를 이용해 **빨리 실패하고 영향 범위를 추적하는 것**에 가깝다. [URL: `https://palantir.com/docs/foundry/pipeline-builder/dataexpectations-overview/`, `https://palantir.com/docs/foundry/health-checks/checks-reference/`, `https://www.palantir.com/assets/xrfr7uokpv1b/621jZEFhAkzeFjj6fndeW/f8e96ca8a08ee8afb50ad61ea3ff10a0/Trust_in_Data_Whitepaper__US_.pdf`]
 
-확장성과 회복력 쪽에서는 Palantir가 꽤 구체적인 기법을 공개한다. MMDP는 autoscaling Spark/Flink와 hardened autoscaling Kubernetes-based compute mesh를 명시하고, Rubix는 intelligent workload distribution과 demand-sensing algorithms, continuous cost optimization을 언급한다. 또한 MMDP 문서는 **모든 컨테이너를 72시간 이내 파기·순환**한다고 밝히고, 이는 운영 보안과 node compromise persistence 억제를 동시에 노리는 기법이다. Ontology 인덱싱 측면에서는 live/replacement funnel pipelines가 schema change와 성능 이슈를 서비스 중단 없이 흡수한다. [URL: `https://palantir.com/docs/foundry/architecture-center/multimodal-data-plane/`, `https://palantir.com/docs/foundry/architecture-center/rubix/`, `https://palantir.com/docs/foundry/object-indexing/funnel-batch-pipelines/`]
+확장성과 회복력 쪽에서는 Palantir가 꽤 구체적인 기법을 공개한다. MMDP는 autoscaling distributed compute와 hardened autoscaling Kubernetes-based compute mesh를 명시하고, Rubix는 intelligent workload distribution과 demand-sensing algorithms, continuous cost optimization을 언급한다. 또한 MMDP 문서는 **모든 컨테이너를 72시간 이내 파기·순환**한다고 밝히고, 이는 운영 보안과 node compromise persistence 억제를 동시에 노리는 기법이다. Ontology 인덱싱 측면에서는 live/replacement funnel pipelines가 schema change와 성능 이슈를 서비스 중단 없이 흡수한다. [URL: `https://palantir.com/docs/foundry/architecture-center/multimodal-data-plane/`, `https://palantir.com/docs/foundry/architecture-center/rubix/`, `https://palantir.com/docs/foundry/object-indexing/funnel-batch-pipelines/`]
 
 멀티테넌시와 접근통제는 Foundry 설계의 매우 강한 축이다. 공개 문서에 따르면 enrollment는 하나 이상의 Organization으로 이루어지고, Organization은 사용자와 자원 사이의 **strict silos**를 강제한다. Spaces는 access requirements, filesystem, usage account, resource queue, role set을 가진다. 즉, tenant/isolation은 단순한 UI 분리만이 아니라 **보안 요구사항 + 파일시스템 + 리소스 큐 + 비용 계정** 수준까지 내려간다. 여기에 roles, markings, CBAC, guest membership, shared/private spaces, object/property security policies가 결합된다. [URL: `https://palantir.com/docs/foundry/administration/enrollments-and-organizations/`, `https://palantir.com/docs/foundry/platform-security-management/manage-orgs-and-spaces/`, `https://palantir.com/docs/foundry/security/cross-organization-collaboration/`, `https://palantir.com/docs/foundry/object-permissioning/object-security-policies/`]
 
@@ -342,7 +342,7 @@ Foundry에서 공개적으로 확인되는 엔지니어링 프랙티스는 다�
 
 ## 공개문서의 공백과 한계
 
-가장 크게 비어 있는 부분은 **내부 구현 세부**다. Palantir는 “microservices architecture”, “object databases”, “OSv2 canonical data store”, “Kubernetes-based compute mesh” 같은 설명까지는 공개하지만, 그 아래의 구체 기술명은 거의 공개하지 않는다. 따라서 아래 항목은 모두 공개 문서상 **미지정**이다. 내부 object DB 제품명, OMS/OSS 구현 언어, 서비스 간 메시징 시스템, 분산 캐시, 큐/이벤트 버스, service discovery, API gateway, secret store backend, disaster recovery 수치(RPO/RTO), SLO/SLA, Spark/Flink/Iceberg/Kubernetes 정확한 버전, 그리고 CI runner/Jemma의 전체 구조다. [URL: `https://palantir.com/docs/foundry/object-backend/overview/`, `https://palantir.com/docs/foundry/architecture-center/multimodal-data-plane/`, `https://palantir.com/docs/foundry/security/overview/`]
+가장 크게 비어 있는 부분은 **내부 구현 세부**다. Palantir는 “microservices architecture”, “object databases”, “OSv2 canonical data store”, “Kubernetes-based compute mesh” 같은 설명까지는 공개하지만, 그 아래의 구체 기술명은 거의 공개하지 않는다. 따라서 아래 항목은 모두 공개 문서상 **미지정**이다. 내부 object DB 제품명, OMS/OSS 구현 언어, 서비스 간 메시징 시스템, 분산 캐시, 큐/이벤트 버스, service discovery, API gateway, secret store backend, disaster recovery 수치(RPO/RTO), SLO/SLA, Spark/Iceberg/Kubernetes 정확한 버전, 그리고 CI runner/Jemma의 전체 구조다. [URL: `https://palantir.com/docs/foundry/object-backend/overview/`, `https://palantir.com/docs/foundry/architecture-center/multimodal-data-plane/`, `https://palantir.com/docs/foundry/security/overview/`]
 
 둘째, 일부 공개 자료는 **시점 주의**가 필요하다. 예를 들어 Foundry Technical Overview 백서는 2021/2022 시점 자료로, “200+ connectors”, “Preparation, Contour”, “Objects Gateway” 같은 표현을 사용한다. 이런 자료는 아키텍처 철학과 공개 기능 축을 이해하는 데 유용하지만, 2026년 현재의 정확한 제품 표면과 1:1로 대응한다고 보기는 어렵다. 따라서 본 보고서에서는 백서에서 나온 수치나 개념을 현재 docs로 재확인할 수 있는 경우에만 강화해서 사용했고, 재확인이 어려운 경우에는 “역사적·개념적 근거”로만 취급했다. [URL: `https://www.palantir.com/assets/xrfr7uokpv1b/mhoyY4c8vdVlJhulDStk2/a7340768109c8e8d79d00b4cb99d8e70/Whitepaper_-_Foundry_2022.pdf`, `https://palantir.com/docs/foundry/available-connectors/other-source-types/`]
 

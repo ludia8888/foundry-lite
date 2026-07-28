@@ -144,6 +144,35 @@ class FakeDatasetTransactionRepository:
         del transaction
         self.files_store.append(record.__dict__.copy())
 
+    def files_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_version_id: str,
+    ) -> list[dict[str, Any]]:
+        del transaction
+        records = [
+            row
+            for row in self.files_store
+            if row["tenant_id"] == tenant_id and row["dataset_version_id"] == dataset_version_id
+        ]
+        rows = [
+            {
+                "id": row["file_id"],
+                "tenant_id": row["tenant_id"],
+                "dataset_version_id": row["dataset_version_id"],
+                "uri": row["uri"],
+                "format": row["file_format"],
+                "row_count": row["row_count"],
+                "byte_size": row["byte_size"],
+                "content_hash": row["content_hash"],
+                "partition_values": row["partition_values"],
+            }
+            for row in records
+        ]
+        return sorted(rows, key=lambda row: (row["uri"], row["id"]))
+
     def insert_webhook_event_key(self, *, transaction: Any, record: WebhookEventKeyRecord) -> None:
         del transaction
         key = (
@@ -225,6 +254,35 @@ class FakeDatasetTransactionRepository:
             ):
                 return dict(row)
         return None
+
+    def committed_pipeline_output_transactions(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[dict[str, Any]]:
+        del transaction
+        versions = {row["version_id"]: row for row in self.versions_store}
+        rows = [
+            {
+                "transaction_id": row["id"],
+                "dataset_id": row["dataset_id"],
+                "dataset_ref": "raw.orders",
+                "version_id": row["committed_version_id"],
+                "version_number": versions[row["committed_version_id"]]["version_number"],
+                "manifest_uri": versions[row["committed_version_id"]]["manifest_uri"],
+                "row_count": versions[row["committed_version_id"]]["row_count"],
+                "schema_hash": "schema-hash-demo",
+                "metadata": row["metadata"],
+                "committed_at": row["committed_at"],
+            }
+            for row in self.transactions.values()
+            if row["tenant_id"] == tenant_id
+            and row["status"] == "COMMITTED"
+            and row["metadata"].get("pipelineRunId") == pipeline_run_id
+        ]
+        return sorted(rows, key=lambda row: (row["committed_at"], row["transaction_id"]))
 
     def committed_webhook_transaction_by_event(
         self,
@@ -566,6 +624,7 @@ class SqlAlchemyTransactionHarness:
     def add_dataset(self) -> None:
         with self.engine.begin() as transaction:
             transaction.execute(insert(db.datasets).values(**_dataset_values()))
+            transaction.execute(insert(db.dataset_schemas).values(**_dataset_schema_values()))
 
     def run_status(self, *, run_kind: DatasetRunKind, run_id: str) -> dict[str, Any] | None:
         table = _run_table(run_kind)
@@ -813,6 +872,17 @@ def _dataset_values() -> dict[str, Any]:
     }
 
 
+def _dataset_schema_values() -> dict[str, Any]:
+    return {
+        "id": "dss_orders_1",
+        "dataset_id": "ds_orders",
+        "version": 1,
+        "schema_json": {"columns": [{"name": "order_id", "type": "string"}]},
+        "schema_hash": "schema-hash-demo",
+        "created_at": "2026-06-10T00:00:00Z",
+    }
+
+
 def _run_table(run_kind: DatasetRunKind) -> Any:
     if run_kind == "sync":
         return db.sync_runs
@@ -928,6 +998,85 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_committed_pipeline_outputs_are_tenant_and_run_scoped(harness: TransactionHarness) -> None:
+    harness.add_dataset()
+
+    def commit_and_read(transaction: Any) -> list[dict[str, Any]]:
+        repository = harness.repository
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_pipeline"))
+        repository.insert_version(
+            transaction=transaction,
+            record=replace(_version_record("dstx_pipeline"), version_id="dsv_pipeline_1"),
+        )
+        repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_pipeline",
+            committed_version_id="dsv_pipeline_1",
+            schema_version=1,
+            committed_at="2026-07-28T00:00:00Z",
+            metadata={"pipelineRunId": "prun_1", "pipelineNodeId": "output"},
+        )
+        assert (
+            repository.committed_pipeline_output_transactions(
+                transaction=transaction,
+                tenant_id="tenant-other",
+                pipeline_run_id="prun_1",
+            )
+            == []
+        )
+        return repository.committed_pipeline_output_transactions(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            pipeline_run_id="prun_1",
+        )
+
+    rows = harness.call_in_transaction(commit_and_read)
+
+    assert rows == [
+        {
+            "transaction_id": "dstx_pipeline",
+            "dataset_id": "ds_orders",
+            "dataset_ref": "raw.orders",
+            "version_id": "dsv_pipeline_1",
+            "version_number": 1,
+            "manifest_uri": "memory://manifest.json",
+            "row_count": 3,
+            "schema_hash": "schema-hash-demo",
+            "metadata": {"pipelineRunId": "prun_1", "pipelineNodeId": "output"},
+            "committed_at": "2026-07-28T00:00:00Z",
+        }
+    ]
+
+
+def test_dataset_transaction_repository_contract_lists_exact_version_files_tenant_scoped(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_and_list(transaction: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        repository.insert_file(transaction=transaction, record=_file_record())
+        rows = repository.files_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            dataset_version_id="dsv_orders_1",
+        )
+        other_tenant = repository.files_for_version(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            dataset_version_id="dsv_orders_1",
+        )
+        return rows, other_tenant
+
+    rows, other_tenant = harness.call_in_transaction(insert_and_list)
+
+    assert len(rows) == 1
+    assert rows[0]["uri"] == "memory://part-00000.parquet"
+    assert rows[0]["format"] == "parquet"
+    assert rows[0]["content_hash"] == "hash-demo"
+    assert other_tenant == []
 
 
 def test_dataset_transaction_repository_contract_commit_requires_open_state(harness: TransactionHarness) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -124,7 +125,10 @@ def test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots(
     bucket = _make_bucket(minio_server)
     adapter = _adapter(tmp_path, minio_server, bucket)
 
-    first = _commit(adapter, _staged(adapter, tmp_path, ["O-1", "O-2"], [100, 200]), version_id="dsv_1")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        first = _commit(adapter, _staged(adapter, tmp_path, ["O-1", "O-2"], [100, 200]), version_id="dsv_1")
+    assert not any("Delete operation did not match any records" in str(item.message) for item in caught)
     manifest = adapter.load_manifest(first.manifest_uri)
     assert manifest["version_id"] == "dsv_1"
     assert manifest["branch"] == "main"

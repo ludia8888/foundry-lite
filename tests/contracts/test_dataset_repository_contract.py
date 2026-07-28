@@ -17,6 +17,10 @@ class DatasetRepositoryHarness(Protocol):
 
     def create_dataset(self, **kwargs: Any) -> None: ...
 
+    def active_dataset_by_ref(self, tenant_id: str, namespace: str, name: str) -> dict[str, Any] | None: ...
+
+    def dataset_by_id(self, tenant_id: str, dataset_id: str) -> dict[str, Any] | None: ...
+
 
 @dataclass
 class FakeDatasetRepository:
@@ -33,6 +37,22 @@ class FakeDatasetRepository:
         self.datasets.append({**kwargs, "id": kwargs["dataset_id"], "status": "active"})
 
     def find_active_dataset(self, *, tenant_id: str, namespace: str, name: str) -> dict[str, Any] | None:
+        return self.active_dataset_by_ref(
+            transaction=None,
+            tenant_id=tenant_id,
+            namespace=namespace,
+            name=name,
+        )
+
+    def active_dataset_by_ref(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        namespace: str,
+        name: str,
+    ) -> dict[str, Any] | None:
+        del transaction
         for dataset in self.datasets:
             if (
                 dataset["tenant_id"] == tenant_id
@@ -40,6 +60,19 @@ class FakeDatasetRepository:
                 and dataset["name"] == name
                 and dataset["status"] == "active"
             ):
+                return dict(dataset)
+        return None
+
+    def dataset_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> dict[str, Any] | None:
+        del transaction
+        for dataset in self.datasets:
+            if dataset["tenant_id"] == tenant_id and dataset["id"] == dataset_id:
                 return dict(dataset)
         return None
 
@@ -55,6 +88,17 @@ class FakeDatasetRepositoryHarness:
     def create_dataset(self, **kwargs: Any) -> None:
         self.repository.create_dataset(transaction=None, **kwargs)
 
+    def active_dataset_by_ref(self, tenant_id: str, namespace: str, name: str) -> dict[str, Any] | None:
+        return self.repository.active_dataset_by_ref(
+            transaction=None,
+            tenant_id=tenant_id,
+            namespace=namespace,
+            name=name,
+        )
+
+    def dataset_by_id(self, tenant_id: str, dataset_id: str) -> dict[str, Any] | None:
+        return self.repository.dataset_by_id(transaction=None, tenant_id=tenant_id, dataset_id=dataset_id)
+
 
 @dataclass
 class SqlAlchemyDatasetRepositoryHarness:
@@ -64,6 +108,23 @@ class SqlAlchemyDatasetRepositoryHarness:
     def create_dataset(self, **kwargs: Any) -> None:
         with self.engine.begin() as conn:
             self.repository.create_dataset(transaction=conn, **kwargs)
+
+    def active_dataset_by_ref(self, tenant_id: str, namespace: str, name: str) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            return self.repository.active_dataset_by_ref(
+                transaction=conn,
+                tenant_id=tenant_id,
+                namespace=namespace,
+                name=name,
+            )
+
+    def dataset_by_id(self, tenant_id: str, dataset_id: str) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            return self.repository.dataset_by_id(
+                transaction=conn,
+                tenant_id=tenant_id,
+                dataset_id=dataset_id,
+            )
 
 
 def _dataset_payload(dataset_id: str, *, tenant_id: str = "tenant-demo") -> dict[str, Any]:
@@ -112,6 +173,10 @@ def test_dataset_repository_contract_create_find_and_duplicate(harness: DatasetR
     assert found["partition_spec"] == ["region"]
     assert found["sort_order"] == ["order_id"]
     assert found["target_file_size_bytes"] == 134217728
+    assert harness.active_dataset_by_ref("tenant-demo", "raw", "orders") == found
+    assert harness.active_dataset_by_ref("tenant-other", "raw", "orders") is None
+    assert harness.dataset_by_id("tenant-demo", "ds_orders") == found
+    assert harness.dataset_by_id("tenant-other", "ds_orders") is None
 
     with pytest.raises(DatasetAlreadyExistsError):
         harness.create_dataset(**_dataset_payload("ds_duplicate"))

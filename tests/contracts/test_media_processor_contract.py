@@ -33,6 +33,7 @@ class _FakeMediaProcessor:
         return MediaProcessingResult(
             media_item_version_id=request.media_item_version_id,
             processing_spec_hash=request.processing_spec_hash,
+            processing_evidence={"processedDurationMs": 1200},
         )
 
 
@@ -62,4 +63,5 @@ def test_media_processor_pins_spec_hash_and_reports_support() -> None:
     )
     result = adapter.process(request)
     assert result.processing_spec_hash == "sha-1"
+    assert result.processing_evidence == {"processedDurationMs": 1200}
     assert adapter.failure_contract().adapter_profile == "fake-processor"

@@ -3,11 +3,35 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping
+from dataclasses import fields, is_dataclass
 from typing import Protocol
 
 
 class BundleFactory(Protocol):
     def __call__(self, **kwargs: object) -> object: ...
+
+
+def required_dependency[T](value: T | None, message: str) -> T:
+    if value is None:
+        raise TypeError(message)
+    return value
+
+
+def dependency_bundles(**bundles: object | None) -> dict[str, object | None]:
+    """Collect named dependency bundles without coupling this helper to bundle types."""
+    return bundles
+
+
+def preserve_media_processor_override(flat_overrides: MutableMapping[str, object]) -> None:
+    """Prevent a legacy processor override from being shadowed by an old registry."""
+    if "media_processor" in flat_overrides and "media_processor_registry" not in flat_overrides:
+        flat_overrides["media_processor_registry"] = None
+
+
+def assign_dependency_bundles(target: object, bundles: Mapping[str, object | None]) -> None:
+    """Assign validated bundles to a frozen compatibility facade."""
+    for name, bundle in bundles.items():
+        object.__setattr__(target, name, bundle)
 
 
 CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
@@ -28,6 +52,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "ontology_repository",
         "ontology_branch_repository",
         "pipeline_repository",
+        "pipeline_execution_repository",
         "resource_catalog_repository",
         "transform_repository",
         "materialization_repository",
@@ -61,6 +86,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "vision_embedding_model_adapter",
         "language_model_adapter",
         "model_registry_repository",
+        "semantic_row_cache_repository",
         "context_provider",
         "prompt_artifact_store",
         "citation_source_verifier",
@@ -73,6 +99,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "media_access_cache_repository",
         "media_storage",
         "media_processor",
+        "media_processor_registry",
         "media_preview_renderer",
         "external_media_reader",
         "content_index_adapter",
@@ -116,7 +143,9 @@ def apply_flat_dependency_overrides(
         bundle = bundles[bundle_name]
         if bundle is None:
             raise TypeError(f"CoreDependencies requires bundle '{bundle_name}' before flat overrides can apply")
-        values = {name: getattr(bundle, name) for name in field_names}
+        if not is_dataclass(bundle):
+            raise TypeError(f"CoreDependencies bundle '{bundle_name}' must be a dataclass")
+        values = {field.name: getattr(bundle, field.name) for field in fields(bundle)}
         values.update(changes)
         bundles[bundle_name] = bundle_factories[bundle_name](**values)
     if flat_overrides:

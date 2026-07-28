@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from foundry_lite.application.ports import (
+    TransactionContext,
     TransformCheck,
     TransformRecordDlqRetryResult,
     TransformRetryResult,
@@ -17,6 +18,7 @@ from foundry_lite.application.services.transform_definition_service import Trans
 from foundry_lite.application.services.transform_dlq_replay_service import TransformDlqReplayService
 from foundry_lite.application.services.transform_graph import TransformGraphService
 from foundry_lite.application.services.transform_run_service import TransformRunService
+from foundry_lite.application.services.transform_runs import TransformRunPlan
 from foundry_lite.application.services.transform_scheduler_service import TransformSchedulerService
 from foundry_lite.domain.context import RequestContext
 
@@ -107,6 +109,34 @@ class TransformService(CoreService):
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self.transform_run_service.run_transform(api_name, ctx=ctx)
+
+    def _prepare_pipeline_transform_run(
+        self,
+        ctx: RequestContext,
+        api_name: str,
+    ) -> TransformRunPlan:
+        return self.transform_run_service._prepare_pipeline_transform_run(ctx, api_name)
+
+    def _execute_pipeline_transform_run(
+        self,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        *,
+        after_transform_commit: Callable[[TransactionContext, CommitResult], None] | None = None,
+    ) -> CommitResult:
+        return self.transform_run_service._execute_pipeline_transform_run(
+            ctx,
+            plan,
+            after_transform_commit=after_transform_commit,
+        )
+
+    def _abort_pipeline_transform_run(
+        self,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        exc: Exception,
+    ) -> None:
+        self.transform_run_service._abort_pipeline_transform_run(ctx, plan, exc)
 
     def run_transform_graph(
         self,

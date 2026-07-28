@@ -10,6 +10,13 @@ import { StatusPill, type StatusIntent } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/button";
 
 import { asText, formatTimestamp, shortFingerprint } from "../pipeline-model";
+import {
+  pipelineRunOutputErrorLabel,
+  pipelineRunOutputRefLabel,
+  pipelineRunOutputs,
+  summarizePipelineRunOutputs,
+  type PipelineRunOutputEvidence,
+} from "../pipeline-run-model";
 import type { PipelineActions } from "../use-pipeline-actions";
 import { useSafeQuery } from "../use-safe-query";
 import { ScheduleCard } from "./ScheduleCard";
@@ -22,7 +29,9 @@ interface RunsPanelProps {
 
 const RUN_STATUS_INTENT: Record<string, StatusIntent> = {
   succeeded: "success",
+  partial: "warning",
   running: "info",
+  executing: "info",
   failed: "danger",
   cancelled: "warning",
 };
@@ -211,6 +220,8 @@ function RunEvidence({
   }
 
   const status = String(lastRun.status);
+  const outputs = pipelineRunOutputs(lastRun);
+  const outputSummary = summarizePipelineRunOutputs(outputs);
   const events = timelineEvents(timeline ?? { timeline: lastRun.timeline });
 
   return (
@@ -220,6 +231,16 @@ function RunEvidence({
         <StatusPill intent={RUN_STATUS_INTENT[status] ?? "neutral"}>
           {status}
         </StatusPill>
+        {outputSummary.committed > 0 ? (
+          <StatusPill intent="success">
+            committed {outputSummary.committed}
+          </StatusPill>
+        ) : null}
+        {outputSummary.failed > 0 ? (
+          <StatusPill intent="danger">
+            failed {outputSummary.failed}
+          </StatusPill>
+        ) : null}
         {status === "running" ? (
           <Button
             size="sm"
@@ -239,17 +260,18 @@ function RunEvidence({
         <EvidenceRow label="run id" value={lastRun.id} />
         <EvidenceRow label="version" value={asText(lastRun.versionId) ?? "-"} />
         <EvidenceRow
-          label="출력 데이터셋"
-          value={asText(lastRun.outputDatasetRef) ?? "-"}
+          label="출력 수"
+          value={String(outputSummary.total)}
         />
         <EvidenceRow
-          label="출력 버전"
-          value={asText(lastRun.outputVersionId) ?? "-"}
+          label="완료"
+          value={formatTimestamp(lastRun.completedAt)}
         />
         {lastRun.error ? (
           <EvidenceRow label="오류" value={JSON.stringify(lastRun.error)} />
         ) : null}
       </div>
+      <RunOutputsEvidence outputs={outputs} />
       <div className="flex items-center gap-2">
         <span className="section-label">timeline</span>
         <Button
@@ -284,6 +306,71 @@ function RunEvidence({
       </div>
     </div>
   );
+}
+
+function RunOutputsEvidence({
+  outputs,
+}: {
+  outputs: readonly PipelineRunOutputEvidence[];
+}) {
+  return (
+    <section className="space-y-1.5" aria-label="실행 출력 evidence">
+      <span className="section-label">outputs</span>
+      {outputs.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">
+          이 run에는 committed 또는 failed output evidence가 없습니다.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {outputs.map((output) => {
+            const error = pipelineRunOutputErrorLabel(output);
+            return (
+              <article
+                key={`${output.nodeId}:${output.artifactKind}`}
+                className="space-y-1 border border-[#D7DCE2] bg-card px-2.5 py-2 text-[11px]"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-mono font-semibold">
+                    {output.nodeId}
+                  </span>
+                  <StatusPill intent={outputStatusIntent(output.status)}>
+                    {output.status}
+                  </StatusPill>
+                  {output.isLegacyFallback ? (
+                    <StatusPill intent="neutral">legacy fallback</StatusPill>
+                  ) : null}
+                </div>
+                <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-0.5 font-mono">
+                  <span className="text-muted-foreground">artifact</span>
+                  <span className="truncate">{output.artifactKind}</span>
+                  <span className="text-muted-foreground">plane</span>
+                  <span className="truncate">{output.plane}</span>
+                  <span className="text-muted-foreground">ref</span>
+                  <span className="truncate">
+                    {pipelineRunOutputRefLabel(output)}
+                  </span>
+                  {error ? (
+                    <>
+                      <span className="text-destructive">error</span>
+                      <span className="break-words text-destructive">
+                        {error}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function outputStatusIntent(status: string): StatusIntent {
+  if (status.toUpperCase() === "COMMITTED") return "success";
+  if (status.toUpperCase() === "FAILED") return "danger";
+  return "warning";
 }
 
 function EvidenceRow({ label, value }: { label: string; value: string }) {

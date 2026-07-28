@@ -31,6 +31,9 @@ class FakeMetadataRepository:
     def ensure_tenant(self, *, tenant_id: str, name: str, created_at: str) -> None:
         self.tenants.setdefault(tenant_id, {"id": tenant_id, "name": name, "created_at": created_at})
 
+    def list_tenant_ids(self) -> list[str]:
+        return sorted(self.tenants)
+
     def ensure_user(
         self,
         *,
@@ -137,6 +140,23 @@ def test_metadata_repository_contract_idempotent_tenant_and_user_bootstrap(
 
     assert harness.tenant_count() == 1
     assert harness.user_count() == 1
+
+
+def test_metadata_repository_contract_lists_tenants_in_stable_order(
+    harness: MetadataRepositoryHarness,
+) -> None:
+    harness.repository.ensure_tenant(
+        tenant_id="tenant-z",
+        name="Tenant Z",
+        created_at="2026-06-11T00:00:00Z",
+    )
+    harness.repository.ensure_tenant(
+        tenant_id="tenant-a",
+        name="Tenant A",
+        created_at="2026-06-11T00:00:00Z",
+    )
+
+    assert harness.repository.list_tenant_ids() == ["tenant-a", "tenant-z"]
 
 
 def test_metadata_repository_contract_ensure_user_is_idempotent_under_race(

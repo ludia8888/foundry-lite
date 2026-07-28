@@ -5,7 +5,11 @@ from typing import cast
 import pytest
 from foundry_lite.application.ports import RuntimeRepository
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
-from foundry_lite.application.services.runtime_error_payloads import dead_letter_retry_plan, runtime_error_payload
+from foundry_lite.application.services.runtime_error_payloads import (
+    dead_letter_retry_plan,
+    record_runtime_cleanup_failure,
+    runtime_error_payload,
+)
 from foundry_lite.application.services.runtime_redaction import redact_sensitive
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
@@ -15,6 +19,31 @@ def test_runtime_error_payload_handles_generic_error_without_trace() -> None:
     payload = runtime_error_payload(ValueError("bad value"))
 
     assert payload == {"type": "ValueError", "message": "bad value", "details": {}}
+
+
+def test_runtime_error_payload_preserves_redacted_secondary_cleanup_evidence() -> None:
+    primary = RuntimeError("primary failure")
+    cleanup = RuntimeError("private cleanup failure")
+    record_runtime_cleanup_failure(
+        primary,
+        operation="mediaTransactionAbort",
+        cleanup_error=cleanup,
+    )
+
+    payload = runtime_error_payload(primary)
+
+    assert payload["type"] == "RuntimeError"
+    assert payload["message"] == "primary failure"
+    assert payload["details"] == {
+        "cleanupFailures": [
+            {
+                "operation": "mediaTransactionAbort",
+                "status": "FAILED",
+                "exceptionType": "RuntimeError",
+            }
+        ]
+    }
+    assert "private cleanup failure" not in str(payload)
 
 
 def test_runtime_error_payload_uses_request_context_when_run_is_missing() -> None:
@@ -77,6 +106,54 @@ def test_runtime_error_payload_prefers_explicit_correlation_for_adapter_error() 
     assert adapter_failure["retryable"] is True
     assert trace["correlation_id"] == "corr-1"
     assert "run_id" not in trace
+
+
+def test_runtime_error_payload_preserves_safe_model_stop_evidence() -> None:
+    failure = AdapterFailure(
+        adapter_profile="anthropic",
+        operation="complete",
+        kind="validation",
+        is_retryable=False,
+        operator_message="structured response ended before completion",
+        details={
+            "reason": "structured_output_incomplete",
+            "stopReason": "max_tokens",
+            "outputTokens": 800,
+            "providerRequestId": "msg_safe_identifier",
+        },
+    )
+
+    payload = runtime_error_payload(AdapterError(failure))
+
+    adapter_failure = cast(dict[str, object], payload["adapterFailure"])
+    details = cast(dict[str, object], adapter_failure["details"])
+    assert details == {
+        "reason": "structured_output_incomplete",
+        "stopReason": "max_tokens",
+        "outputTokens": 800,
+        "providerRequestId": "msg_safe_identifier",
+    }
+
+
+def test_runtime_error_payload_preserves_only_structurally_safe_prompt_pins() -> None:
+    payload = runtime_error_payload(
+        ValidationFailed(
+            "semantic trial failed",
+            details={
+                "promptVersionId": "contracts@7",
+                "promptMode": "layout_aware_vision",
+                "promptHash": f"sha256:{'a' * 64}",
+                "nested": {"promptHash": "sk-ant-raw-secret"},
+            },
+        )
+    )
+
+    assert payload["details"] == {
+        "promptVersionId": "contracts@7",
+        "promptMode": "layout_aware_vision",
+        "promptHash": f"sha256:{'a' * 64}",
+        "nested": {"promptHash": "***MASKED***"},
+    }
 
 
 def test_runtime_error_payload_scrubs_secrets_from_messages_and_details() -> None:

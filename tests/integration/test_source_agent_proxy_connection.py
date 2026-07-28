@@ -132,6 +132,7 @@ def test_managed_postgres_source_diagnostic_and_sync_use_live_agent_tunnel(tmp_p
                 ctx=ctx,
             )
             preview = foundry.datasets.preview("raw.agent_postgres_orders", ctx=ctx)
+            inspection = foundry.datasets.inspect("raw.agent_postgres_orders", ctx=ctx)
 
     probe = cast(Mapping[str, object], cast(Mapping[str, object], diagnostic["checks"])["probe"])
     diagnostic_network = cast(Mapping[str, object], probe["networkEvidence"])
@@ -154,8 +155,9 @@ def test_managed_postgres_source_diagnostic_and_sync_use_live_agent_tunnel(tmp_p
     assert preview[0]["id"] == 1
     assert preview[0]["status"] == "ready"
     assert preview[0]["amount"] == 1200
-    assert preview[0]["branch"] == "main"
-    assert str(preview[0]["version"]).startswith("dsv_")
+    assert set(preview[0]) == {"amount", "id", "status"}
+    assert inspection["version"]["branch"] == "main"
+    assert str(inspection["version"]["id"]).startswith("dsv_")
 
 
 def _foundry(tmp_path) -> FoundryLite:

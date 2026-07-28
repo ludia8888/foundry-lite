@@ -10,6 +10,7 @@ export FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER="${FOUNDRY_LITE_SECRET
 
 rm -rf "$FOUNDRY_LITE_HOME"
 uv run python - <<'PY' >/tmp/foundry-lite-e2e-seed.json
+import io
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ from foundry_lite.application.ports.external_writeback_adapter import (
     RemoteOutcomeStatus,
     WriteReceipt,
 )
+from foundry_lite.application.ports.media_processor import ProcessorSpec
 from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ExternalOutcomeUnknown
@@ -251,6 +253,59 @@ def seed_action_writeback_approval_release():
         return
     raise RuntimeError("expected AdjustMargin seed writeback to remain outcome_unknown")
 
+def seed_pdf_citation_source():
+    media_set = core.media.create_media_set(
+        ctx,
+        namespace="e2e_documents",
+        name="verified_citation_report",
+        schema_type="document",
+        primary_format="pdf",
+        allowed_input_formats=("pdf",),
+        classification="public",
+    )
+    transaction_id = core.media.open_transaction(
+        ctx,
+        media_set_id=media_set.media_set_id,
+        idempotency_key="e2e-verified-citation-report",
+    )
+    staged = core.media.upload(
+        ctx,
+        media_set_id=media_set.media_set_id,
+        media_transaction_id=transaction_id,
+        logical_path="/reports/Foundry-lite_AIP_Architecture_Report.pdf",
+        source=io.BytesIO(Path("docs/Foundry-lite_AIP_Architecture_Report.pdf").read_bytes()),
+        supplied_mime_type="application/pdf",
+        schema_type="document",
+        format="pdf",
+        security_envelope={
+            "tenantId": ctx.tenant_id,
+            "classification": "public",
+            "policyVersion": "policy-v1",
+        },
+    )
+    core.media.commit(ctx, media_transaction_id=transaction_id)
+    processed = core.media.process(
+        ctx,
+        media_item_version_id=staged.media_item_version_id,
+        spec=ProcessorSpec(
+            processor="pdf_layout_v1",
+            processor_version="1",
+            parameters={
+                "maxPages": 100,
+                "pageSelection": {"start": 1, "limit": 3},
+            },
+        ),
+    )
+    if processed.status.upper() != "COMMITTED" or processed.content_unit_count == 0:
+        raise RuntimeError(
+            "verified citation PDF processing failed: "
+            f"status={processed.status} units={processed.content_unit_count} error={processed.error}"
+        )
+    return {
+        "mediaItemVersionId": staged.media_item_version_id,
+        "mediaDerivativeId": processed.media_derivative_id,
+    }
+
 def seed_record_dlq(record_id, source_event_id, payload_hash):
     offset = int(source_event_id.rsplit(":", maxsplit=1)[-1])
     payload = {
@@ -304,6 +359,7 @@ seed_isolated_margin_order()
 seed_stale_conflict_order()
 seed_action_writeback_reconciliation()
 seed_action_writeback_approval_release()
+citation_source = seed_pdf_citation_source()
 print(
     json.dumps(
         {
@@ -315,12 +371,18 @@ print(
             "ontology": ontology,
             "orderIndex": order_index,
             "customerIndex": customer_index,
+            "citationMediaItemVersionId": citation_source["mediaItemVersionId"],
+            "citationMediaDerivativeId": citation_source["mediaDerivativeId"],
         },
         sort_keys=True,
     )
 )
 PY
 uv run python - <<'PY'
+import os
+import json
+from pathlib import Path
+
 import uvicorn
 
 from foundry_lite.application.ports.external_writeback_adapter import (
@@ -330,6 +392,7 @@ from foundry_lite.application.ports.external_writeback_adapter import (
     RemoteOutcomeStatus,
     WriteReceipt,
 )
+from foundry_lite.domain.context import demo_admin_context
 from foundry_lite_api import runtime
 from foundry_lite_api.main import app
 
@@ -348,5 +411,15 @@ class E2EExternalWritebackAdapter:
 
 api_runtime = runtime.initialize_api_runtime()
 api_runtime.foundry.actions._action.set_external_writeback_adapter(E2EExternalWritebackAdapter())
-uvicorn.run(app, host="127.0.0.1", port=8000)
+seed = json.loads(Path("/tmp/foundry-lite-e2e-seed.json").read_text(encoding="utf-8"))
+generation = "e2e-verified-citation-g1"
+ctx = demo_admin_context()
+api_runtime.foundry.media.rebuild_content_index(
+    ctx,
+    generation=generation,
+    source_media_item_version_ids=[seed["citationMediaItemVersionId"]],
+)
+api_runtime.foundry.media.promote_content_generation(ctx, expected_active="", generation=generation)
+api_port = int(os.environ.get("FOUNDRY_LITE_API_PORT", "8000"))
+uvicorn.run(app, host="127.0.0.1", port=api_port)
 PY

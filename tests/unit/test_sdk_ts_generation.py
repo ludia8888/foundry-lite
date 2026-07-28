@@ -133,10 +133,82 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type TransformSqlRegisterRequest = {" in generated
     assert "export type TransformSchedulerTickResult = {" in generated
     assert "export type PipelineGraph = {" in generated
+    assert "export type PipelineGraphV2 = Record<string, unknown> & {" in generated
+    assert "export type PipelinePreviewRun = Record<string, unknown> & {" in generated
+    assert "General table preview rows. Defaults to/capped at 500; Use LLM is capped at 50." in generated
+    assert "export type PipelineDeployment = Record<string, unknown> & {" in generated
+    assert "export type PipelineDeploymentResult = {" in generated
+    assert (
+        'export type PipelineRunStatus = "running" | "executing" | "succeeded" | "partial" | "failed" | "cancelled";'
+        in generated
+    )
+    assert 'export type PipelineRunOutputStatus = "COMMITTED" | "COMMIT_OUTCOME_UNKNOWN" | "FAILED";' in generated
+    assert 'export type PipelineRunOutputCommitKind = "SERVING_ASSET" | "GOVERNED_CANDIDATE";' in generated
+    pipeline_run_output_start = generated.index("export type PipelineRunOutput =")
+    pipeline_run_output_end = generated.index(
+        "export type PipelineRun =",
+        pipeline_run_output_start,
+    )
+    pipeline_run_output = generated[pipeline_run_output_start:pipeline_run_output_end]
+    assert "nodeId: string;" in pipeline_run_output
+    assert "artifactKind: PipelineArtifactKind;" in pipeline_run_output
+    assert "status: PipelineRunOutputStatus;" in pipeline_run_output
+    assert "commitKind: PipelineRunOutputCommitKind;" in pipeline_run_output
+    assert "isServing: boolean;" in pipeline_run_output
+    pipeline_run_start = generated.index("export type PipelineRun =")
+    pipeline_run_end = generated.index(
+        "export type PipelineSchedule =",
+        pipeline_run_start,
+    )
+    pipeline_run = generated[pipeline_run_start:pipeline_run_end]
+    assert "status: PipelineRunStatus;" in pipeline_run
+    assert "outputs: PipelineRunOutput[];" in pipeline_run
+    assert "nodeRuns: PipelineNodeRun[];" in pipeline_run
+    assert "artifacts: PipelineRunArtifact[];" in pipeline_run
+    assert "executionLeaseExpiresAt: string | null;" in pipeline_run
+    assert "executionHeartbeatAt: string | null;" in pipeline_run
+    assert "outputDatasetRef: string | null;" in pipeline_run
+    assert "export type PipelineNodeAttempt = Record<string, unknown> & {" in generated
+    assert "export type PipelineNodeRun = Record<string, unknown> & {" in generated
+    assert "export type PipelineArtifactManifestPayload = {" in generated
+    assert "manifest: PipelineArtifactManifestPayload;" in generated
+    assert "export type PipelineRunArtifact = Record<string, unknown> & {" in generated
+    assert (
+        'availability: "legacy_executable" | "graph_v2_executable" | "governed_candidate" | "validation_only";'
+    ) in generated
+    assert 'export type PipelineScheduleStatus = "active" | "paused";' in generated
+    assert "export type PipelineScheduleSpec = PipelineCronScheduleSpec | PipelineIntervalScheduleSpec;" in generated
+    assert "schedule: PipelineScheduleSpec;" in generated
+    assert "export type AipCitationNavigationResolveRequest = { navigationRef: string };" in generated
+    assert "export type CitationNavigationEvidence = {" in generated
+    assert "export type CitationNavigationResolution = {" in generated
+    assert "evidence: CitationNavigationEvidence | null;" in generated
+    assert "export type MediaProcessorDescriptor = Record<string, unknown> & {" in generated
+    assert "export type MediaContentUnit = {" in generated
+    assert "export type MediaContentUnitList = {" in generated
+    assert "media_derivative_id?: string | null;" in generated
+    assert "mediaDerivativeId?: string | null;" in generated
+    assert "sourceLocator?: Record<string, unknown> | null;" in generated
     assert "pipelines: {" in generated
+    assert "nodeTypes(): Promise<{ schemaVersion: 2; items: PipelineNodeDescriptorPayload[] }>;" in generated
     assert "updateGraph(branchId: string, payload: PipelineGraphUpdateRequest): Promise<PipelineBranch>;" in generated
     assert "suggestCasts(branchId: string, nodeId: string): Promise<Record<string, unknown>>;" in generated
-    assert "deploy(pipelineId: string, versionId: string, payload?: PipelineDeployRequest)" in generated
+    assert "create(branchId: string, payload: PipelinePreviewRunCreateRequest" in generated
+    assert "options: { idempotencyKey: string }): Promise<PipelinePreviewRun>;" in generated
+    assert (
+        "list(pipelineId: string, filters?: { limit?: number }): Promise<PipelineListResult<PipelineDeployment>>;"
+        in generated
+    )
+    assert "start(pipelineId: string, payload: PipelineRunStartRequest | undefined" in generated
+    assert "deploy(pipelineId: string, versionId: string, payload: PipelineDeployRequest | undefined" in generated
+    assert "options: { idempotencyKey: string }): Promise<PipelineDeploymentResult>;" in generated
+    assert "upsert(pipelineId: string, payload: PipelineScheduleUpsertRequest" in generated
+    assert "pause(pipelineId: string, options: { idempotencyKey: string }): Promise<PipelineSchedule>;" in generated
+    assert "resume(pipelineId: string, options: { idempotencyKey: string }): Promise<PipelineSchedule>;" in generated
+    assert (
+        "delete(pipelineId: string, options: { idempotencyKey: string }): Promise<Record<string, unknown>>;"
+        in generated
+    )
     assert "client.pipelines.branches.create" not in generated
     assert "aip: {" in generated
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
@@ -144,8 +216,16 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;" in generated
     assert "run(payload: AipEvalRunRequest): Promise<AipEvalRunResult>;" in generated
     assert "promote(payload: AipReleasePromotionRequest): Promise<AipReleasePromotionResult>;" in generated
+    assert (
+        "resolveNavigation(payload: AipCitationNavigationResolveRequest): Promise<CitationNavigationResolution>;"
+        in generated
+    )
     assert "media: {" in generated
     assert "sets: {" in generated
+    assert "processors: {" in generated
+    assert "list(): Promise<{ available: boolean; items: MediaProcessorDescriptor[] }>;" in generated
+    assert "readContent(mediaItemVersionId: string, options?: { signal?: AbortSignal }): Promise<Blob>;" in generated
+    assert "contentUnits(mediaDerivativeId: string, filters?: MediaContentUnitFilters):" in generated
     assert "upload(mediaSetId: string, mediaTransactionId: string, payload: MediaUploadRequest):" in generated
     assert "function mediaUploadFormData(payload: MediaUploadRequest): FormData" in generated
     assert "registerSql(payload: TransformSqlRegisterRequest): Promise<TransformRow>;" in generated
@@ -368,17 +448,19 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["aip"] == {
         "builder": ["validate", "run"],
         "agent": ["run"],
+        "citations": ["resolveNavigation"],
         "evals": ["run"],
         "releases": ["promote"],
     }
     assert ts_surface["media"] == {
         "sets": ["create", "get"],
         "transactions": ["open", "upload", "commit"],
-        "versions": ["process"],
-        "derivatives": ["get", "index"],
+        "versions": ["process", "readContent"],
+        "derivatives": ["get", "contentUnits", "index"],
         "content": ["search"],
         "visual": ["indexDerivative", "promoteGeneration", "search"],
         "processingRuns": ["list", "get"],
+        "processors": ["list"],
         "references": ["bind", "resolve"],
     }
     assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide", "executeApprovedAction"]}
@@ -418,12 +500,14 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
     assert ts_surface["pipelines"] == {
-        "_self": ["deploy"],
+        "_self": ["deploy", "nodeTypes", "trainedModels"],
         "branches": ["create", "list", "get", "updateGraph", "diff", "rebase", "propose", "abandon"],
         "graph": ["validate", "suggestCasts", "previewNode", "stats", "runTests"],
+        "deployments": ["list"],
+        "previewRuns": ["create", "get", "cancel"],
         "proposals": ["list", "get", "assign", "decide", "execute", "withdraw"],
         "runs": ["start", "get", "timeline", "cancel"],
-        "schedules": ["upsert", "get", "delete", "previewDue", "tick"],
+        "schedules": ["upsert", "get", "pause", "resume", "delete", "previewDue", "tick"],
         "versions": ["list", "get"],
     }
     assert ts_surface["operations"] == {
@@ -672,6 +756,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "export function assertFoundryLiteSdkFresh(catalog = null)",
         "OSDK_SDK_REGENERATION_REQUIRED",
         "media: {",
+        "processors: {",
+        "list: () => request(`/api/media/processors`)",
         "upload: (mediaSetId, mediaTransactionId, payload) => request(",
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "media.transactions.open")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "media.references.bind")',
@@ -680,6 +766,18 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "previewDue: (options = {}) => {",
         "request(`/api/transforms/scheduler/due${suffix}`)",
         "tick: (payload = {}) => request(`/api/transforms/scheduler/tick`, {",
+        "nodeTypes: () => request(`/api/pipelines/node-types`)",
+        "resolveNavigation: (payload) => request(`/api/aip/citations/navigation/resolve`",
+        "deployments: {",
+        "deployments${suffix}",
+        "previewRuns: {",
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.previewRuns.create")',
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.deploy")',
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.runs.start")',
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.upsert")',
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.pause")',
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.resume")',
+        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.delete")',
         "export function classifyFoundryLiteError(error)",
         "export function actionLockKey(actionName, objectId)",
         "export function createInFlightActionLock()",

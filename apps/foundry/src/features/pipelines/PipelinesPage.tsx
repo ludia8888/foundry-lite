@@ -12,6 +12,8 @@ import { BranchCreateDialog } from "./components/BranchCreateDialog";
 import { BuilderToolbar, type BuilderView } from "./components/BuilderToolbar";
 import { CanvasToolbar } from "./components/CanvasToolbar";
 import { NodeInspector } from "./components/NodeInspector";
+import { PipelineCapabilityCatalog } from "./components/PipelineCapabilityCatalog";
+import { PipelineNodeConfigurationBoard } from "./components/PipelineNodeConfigurationBoard";
 import {
   PipelineFlowCanvas,
   type CanvasFocusSignal,
@@ -22,7 +24,14 @@ import { PreviewPanel } from "./components/PreviewPanel";
 import { ProposalsPanel } from "./components/ProposalsPanel";
 import { ProposeDialog } from "./components/ProposeDialog";
 import { RunsPanel } from "./components/RunsPanel";
-import { asText } from "./pipeline-model";
+import {
+  asText,
+  importedTrainedModelRefs,
+  isDedicatedConfigurationNode,
+  isOutputNode,
+  nodeLabel,
+  trainedModelUsageNodeIds,
+} from "./pipeline-model";
 import { usePipelineActions } from "./use-pipeline-actions";
 import { usePipelineWorkbench } from "./use-pipeline-workbench";
 
@@ -32,6 +41,7 @@ export default function PipelinesPage() {
   const [activeView, setActiveView] = useState<BuilderView>("edit");
   const [interactionMode, setInteractionMode] =
     useState<CanvasInteractionMode>("pan");
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const [isBranchDialogOpen, setIsBranchDialogOpen] = useState(false);
   const [isProposeDialogOpen, setIsProposeDialogOpen] = useState(false);
   const [lastRun, setLastRun] = useState<PipelineRun | null>(null);
@@ -70,6 +80,15 @@ export default function PipelinesPage() {
     });
   }, [actions.saveGraph, workbench]);
 
+  const handleRebase = useCallback(() => {
+    const expectedFingerprint = asText(workbench.branch?.graphFingerprint);
+    if (!workbench.branchId || !expectedFingerprint) return;
+    void actions.rebaseBranch.execute({
+      branchId: workbench.branchId,
+      expectedFingerprint,
+    });
+  }, [actions.rebaseBranch, workbench.branch?.graphFingerprint, workbench.branchId]);
+
   const validNodeCount = useMemo(() => {
     const nodeCount = workbench.doc?.nodes.length ?? 0;
     const errorNodeCount = Object.keys(workbench.nodeIssues).length;
@@ -79,10 +98,23 @@ export default function PipelinesPage() {
   const outputNodes = useMemo(
     () =>
       (workbench.doc?.nodes ?? []).filter(
-        (node) => node.type === "output_dataset",
+        (node) => isOutputNode(node),
       ),
     [workbench.doc],
   );
+  const previewGraph = useMemo(
+    () => workbench.buildGraphForSave(),
+    [workbench.buildGraphForSave],
+  );
+  const trainedModelUsageByRef = useMemo(() => {
+    const refs = importedTrainedModelRefs(workbench.doc);
+    return Object.fromEntries(
+      refs.map((modelRef) => [
+        modelRef,
+        trainedModelUsageNodeIds(workbench.doc, modelRef),
+      ]),
+    );
+  }, [workbench.doc]);
 
   const handleFocusOutputNode = useCallback(
     (nodeId: string) => {
@@ -91,6 +123,10 @@ export default function PipelinesPage() {
     },
     [workbench],
   );
+  const handleViewChange = useCallback((view: BuilderView) => {
+    setIsCatalogOpen(false);
+    setActiveView(view);
+  }, []);
 
   if (workbench.builder.isLoading) {
     return (
@@ -115,7 +151,7 @@ export default function PipelinesPage() {
   const hasBranches = workbench.branches.length > 0;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="pipeline-builder-workspace flex h-full flex-col overflow-hidden">
       <BuilderToolbar
         branches={workbench.branches}
         branchId={workbench.branchId}
@@ -130,11 +166,15 @@ export default function PipelinesPage() {
         canPropose={Boolean(workbench.branchId) && !workbench.isDirty}
         canUndo={workbench.canUndo}
         canRedo={workbench.canRedo}
+        isBaseStale={workbench.diff?.baseStale === true}
+        isProtected={workbench.branch?.protection.requiresProposal === true}
+        isRebasing={actions.rebaseBranch.isRunning}
         onUndo={workbench.handleUndo}
         onRedo={workbench.handleRedo}
-        onViewChange={setActiveView}
+        onViewChange={handleViewChange}
         onSelectBranch={workbench.handleSelectBranch}
         onCreateBranch={() => setIsBranchDialogOpen(true)}
+        onRebase={handleRebase}
         onSave={handleSave}
         onPropose={() => setIsProposeDialogOpen(true)}
       />
@@ -142,6 +182,14 @@ export default function PipelinesPage() {
       {actions.saveGraph.error ? (
         <div className="border-b px-3 py-2">
           <ErrorState error={actions.saveGraph.error} onRetry={handleSave} />
+        </div>
+      ) : null}
+      {actions.rebaseBranch.error ? (
+        <div className="border-b px-3 py-2">
+          <ErrorState
+            error={actions.rebaseBranch.error}
+            onRetry={handleRebase}
+          />
         </div>
       ) : null}
 
@@ -175,14 +223,56 @@ export default function PipelinesPage() {
                     onRetry={() => void workbench.graphQuery.reload()}
                   />
                 </div>
+              ) : isCatalogOpen ? (
+                <PipelineCapabilityCatalog
+                  hasOutputNode={workbench.doc.nodes.some(
+                    (node) => isOutputNode(node),
+                  )}
+                  contextLabel={
+                    workbench.selectedNode
+                      ? nodeLabel(workbench.selectedNode)
+                      : "파이프라인 그래프"
+                  }
+                  importedTrainedModelRefs={importedTrainedModelRefs(
+                    workbench.doc,
+                  )}
+                  trainedModelUsageByRef={trainedModelUsageByRef}
+                  onImportTrainedModel={workbench.handleImportTrainedModel}
+                  onRemoveTrainedModel={workbench.handleRemoveTrainedModel}
+                  onAddDescriptor={workbench.handleAddDescriptorNode}
+                  onClose={() => setIsCatalogOpen(false)}
+                />
+              ) : isDedicatedConfigurationNode(workbench.selectedNode) &&
+                workbench.selectedNode ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <PipelineNodeConfigurationBoard
+                    key={workbench.selectedNode.id}
+                    node={workbench.selectedNode}
+                    branchId={workbench.branchId}
+                    graph={previewGraph}
+                    isGraphDirty={workbench.isDirty}
+                    onApply={workbench.handleUpdateNodeData}
+                    onClose={() => workbench.setSelectedNodeId(null)}
+                  />
+                  {![
+                    "transform.use_llm",
+                    "transform.trained_model",
+                  ].includes(workbench.selectedNode.descriptorId) ? (
+                    <BottomDock>
+                      <PreviewPanel
+                        branchId={workbench.branchId}
+                        graph={previewGraph}
+                        node={workbench.selectedNode}
+                        isGraphDirty={workbench.isDirty}
+                      />
+                    </BottomDock>
+                  ) : null}
+                </div>
               ) : (
                 <>
                   <CanvasToolbar
                     datasets={workbench.datasetsQuery.data ?? []}
                     isDatasetsLoading={workbench.datasetsQuery.isLoading}
-                    hasOutputNode={workbench.doc.nodes.some(
-                      (node) => node.type === "output_dataset",
-                    )}
                     hasSelection={workbench.selectedNodeIds.length > 0}
                     interactionMode={interactionMode}
                     onChangeInteractionMode={setInteractionMode}
@@ -195,9 +285,15 @@ export default function PipelinesPage() {
                     }
                     onAddTransform={workbench.handleAddTransformNode}
                     onAutoLayout={workbench.handleAutoLayout}
+                    onOpenCatalog={() => setIsCatalogOpen(true)}
                   />
                   <div className="flex min-h-0 flex-1">
                     <div className="relative min-w-0 flex-1">
+                      {workbench.connectionIssue ? (
+                        <div className="absolute top-2 left-1/2 z-20 max-w-xl -translate-x-1/2 border border-[#D9822B] bg-[#FFF4E8] px-3 py-2 text-[11px] text-[#7A4314] shadow-sm">
+                          {workbench.connectionIssue}
+                        </div>
+                      ) : null}
                       {workbench.doc.nodes.length === 0 ? (
                         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
                           <div className="pointer-events-auto">
@@ -226,12 +322,10 @@ export default function PipelinesPage() {
                     </div>
                     {workbench.selectedNode ? (
                       <NodeInspector
-                        branchId={workbench.branchId}
                         node={workbench.selectedNode}
                         issues={
                           workbench.nodeIssues[workbench.selectedNode.id] ?? []
                         }
-                        isGraphDirty={workbench.isDirty}
                         onUpdateNodeData={workbench.handleUpdateNodeData}
                         onClose={() => workbench.setSelectedNodeId(null)}
                       />
@@ -240,13 +334,19 @@ export default function PipelinesPage() {
                       outputNodes={outputNodes}
                       selectedNodeIds={workbench.selectedNodeIds}
                       onFocusNode={handleFocusOutputNode}
+                      onAddOutput={() => setIsCatalogOpen(true)}
                     />
                   </div>
+                  <BottomDock>
+                    <PreviewPanel
+                      branchId={workbench.branchId}
+                      graph={previewGraph}
+                      node={workbench.selectedNode}
+                      isGraphDirty={workbench.isDirty}
+                    />
+                  </BottomDock>
                 </>
               )}
-              <BottomDock>
-                <PreviewPanel node={workbench.selectedNode} />
-              </BottomDock>
             </>
           ) : null}
 

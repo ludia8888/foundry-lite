@@ -35,6 +35,7 @@ from foundry_lite.application.services.dataset.quality_helpers import (
 from foundry_lite.application.services.dataset.schema_evolution import (
     DatasetSchemaEvolutionResult,
     build_schema_evolution_result,
+    resolve_inferred_null_types,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.dataset.quality import default_primary_key_checks
@@ -54,6 +55,21 @@ class DatasetQualityRuntimeService(CoreService):
 
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         return self.compute_adapter.inspect_parquet(parquet_path, primary_key)
+
+    def _resolve_inferred_schema(
+        self,
+        conn: TransactionContext,
+        dataset: DatasetRow,
+        next_schema: DatasetSchemaJson,
+    ) -> DatasetSchemaJson:
+        dataset_id = str(dataset["id"])
+        latest_version = self.dataset_version_service._latest_version_by_dataset_id(
+            conn, dataset_id, allow_missing=True
+        )
+        if latest_version is None:
+            return next_schema
+        current = self.dataset_version_service._schema_for_version(dataset_id, latest_version["schema_version"])
+        return resolve_inferred_null_types(current["schema_json"], next_schema)
 
     def _ensure_schema(
         self,
@@ -112,10 +128,11 @@ class DatasetQualityRuntimeService(CoreService):
         if latest_version is None:
             return DatasetSchemaEvolutionResult(failure=None, metadata=None)
         current_schema = self.dataset_version_service._schema_for_version(dataset_id, latest_version["schema_version"])
+        resolved_schema = resolve_inferred_null_types(current_schema["schema_json"], next_schema)
         return build_schema_evolution_result(
             dataset_id=dataset_id,
             current_schema=current_schema,
-            next_schema=next_schema,
+            next_schema=resolved_schema,
             primary_key=list(dataset["primary_key"]),
             target_schema=target_schema,
         )

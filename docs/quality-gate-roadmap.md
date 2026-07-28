@@ -561,6 +561,69 @@ Self-test: `tests/unit/test_quality_data_platform_sprint_status.py`가 현재 re
 `tests/unit/test_quality_ci_workflows.py`는 이 게이트가 data-pattern matrix 이후, SDK generation
 이전에 static/release lane에서 실행됨을 검증한다.
 
+### Tier G14D — Pipeline Builder public-behavior parity matrix (✅ foundation gate 2026-07-16)
+
+`scripts/quality/check_pipeline_parity_matrix.py`는
+`docs/pipeline-builder-parity-matrix.json`이 Palantir 공식 공개 문서의 동작과 현재 checkout의
+코드·테스트·운영 증거를 과장 없이 연결하는지 검증한다. 비개발자식으로 말하면, Graph v2
+타입이나 DB 테이블이 생겼다는 이유만으로 "멀티모달 Pipeline Builder가 완성됐다"고 부르는
+문제를 막고, 실제 사용자 폐루프가 없는 항목은 `foundation` 또는 `planned`로 남기는
+안전장치다.
+
+검사 기준:
+
+- status vocabulary는 `current`, `foundation`, `planned`로 고정한다.
+- 외부 근거는 `https://www.palantir.com/docs/foundry/...` 공식 문서만 허용한다.
+- MMDP, typed Graph v2, named artifact port, descriptor catalog, execution evidence,
+  media processor registry, no-commit preview, async DAG, 다중 output, Document Intelligence,
+  Ontology/AIP handoff, 협업, Python isolation, streaming/geospatial 핵심 capability row가
+  모두 존재해야 한다.
+- `current`와 `foundation`은 실제 implementation path와 collect 가능한 pytest proof를
+  가져야 한다.
+- API, SDK, UI surface를 연결한 row는 그 repo path가 실제로 존재해야 한다.
+- `current`는 사용자가 확인할 durable/browser/operator evidence를 가져야 한다.
+- `foundation`과 `planned`는 남은 gap을 명시해야 한다.
+- `planned`는 구현 evidence를 current처럼 달 수 없다.
+- streaming 구현 제약은 Kafka, CDC, WebSocket, checkpoint, lease, fencing을 모두 명시해야 한다.
+- 활성 `libs`, `apps`, 핵심 Pipeline Builder 계획·상태·ADR 문서에는 선택 범위 밖 streaming engine이 다시 들어오면 안 된다.
+- 모든 row는 1~12 rollout phase와 완료 판정 문장을 가진다.
+- 결과는 `artifacts/quality/pipeline_builder_parity_matrix.json`에 남긴다.
+
+Self-test:
+`tests/unit/test_quality_pipeline_parity_matrix.py`가 현재 repo 통과, 필수 capability 누락,
+비공식 URL, evidence 없는 current, stale implementation/API surface/test, 잘못된 list와
+빈 완료 규칙, planned code claim, streaming boundary 누락, 제외된 engine 재도입,
+JSON report 생성을 검증한다.
+`tests/unit/test_quality_ci_workflows.py`는 이 게이트가
+`scripts/quality/run_static_checks.py`의 실제 `ci:gate` static inventory에 포함됨을 검증한다.
+
+G14D 실행 증거 inventory는 backend/static 7개
+(`quality:pipeline-graph-v2`, `quality:pipeline-artifact-execution`,
+`quality:pipeline-preview`, `quality:pipeline-multimodal`,
+`quality:pipeline-scheduler`, `quality:pipeline-python-isolation`,
+`quality:pipeline-builder-performance`)와 browser E2E 1개
+(`quality:pipeline-builder-e2e`)로 고정한다. E2E gate는 격리된 API `8016`과 Web `4186`을
+새로 시작하고 기존 서버 재사용을 끄므로, 사용자가 작업 중인 기본 포트 `8000`/`4173`을
+재사용하거나 종료하지 않는다.
+
+Python 격리는 static 계약만으로 완료라고 부르지 않는다.
+`quality:code-execution-image`가 runner와 transforms SDK를 포함한 non-root 이미지를 만들고,
+`quality:pipeline-python-isolation-live`가 실제 컨테이너에서 UID/GID, 환경 allowlist,
+network deny, read-only root filesystem, capability drop, no-new-privileges, timeout과
+typed/redacted failure를 검증한다. 이 live ratchet은 Docker가 준비되는 `runtime-full`
+lane에서 실행되며, coverage/flaky/impact lane도 Python transform 회귀 테스트 전에 같은
+이미지를 준비한다. production/staging runtime은 mutable tag를 거절하고
+`@sha256:` digest로 고정된 이미지 참조만 허용한다.
+
+성능 gate는 현재 실행 가능한 범위와 미래 기준을 섞지 않는다. 200-node/600-edge graph의
+validate/compile과 실제 50-row no-commit preview의 acknowledgement/execution p95는
+`current_enforced`로 측정·차단한다. 10,000 schedule `next_due_at` scan도 cron/timezone
+계산 결과, active/paused 상태, 만료 lease, fencing claim 조건을 사용하는 실제 repository
+query를 반복 측정해 p95 1초 미만을 강제한다. 따라서 report는
+`completionStatus=current_enforced`, `unprovenTargets=[]`를 사용한다. 이 기준은 bounded
+due scan의 DB query 성능 증거이며, 항상 실행되는 production worker 배포·장애 복구까지
+증명하는 것으로 과장하지 않는다.
+
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
 `scripts/quality/check_schema_revision_guard.py`는
@@ -2184,7 +2247,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 250개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 262개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

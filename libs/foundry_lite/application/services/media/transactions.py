@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from foundry_lite.application.ports import TransactionContext
@@ -20,6 +21,7 @@ class MediaCommitResult:
     media_transaction_id: str
     committed_version_ids: tuple[str, ...]
     head_version_id_by_item: dict[str, str | None]
+    committed_at: str | None
 
 
 class MediaTransactionService(CoreService):
@@ -59,39 +61,64 @@ class MediaTransactionService(CoreService):
             existing = self.media_repository.create_open_transaction(transaction=conn, record=record)
         return existing.media_transaction_id if existing is not None else media_transaction_id
 
-    def commit(self, ctx: RequestContext, *, media_transaction_id: str) -> MediaCommitResult:
+    def commit(
+        self,
+        ctx: RequestContext,
+        *,
+        media_transaction_id: str,
+        before_commit: Callable[[TransactionContext], None] | None = None,
+    ) -> MediaCommitResult:
         with self.engine.begin() as conn:
             tx = self._require_transaction(conn, ctx, media_transaction_id)
             if tx.status == "COMMITTED":
-                # Idempotent replay: the versions are already COMMITTED, no events re-emitted.
-                # Re-read them read-only — never re-run the STAGED->COMMITTED flip, or a version
-                # staged late under this already-committed transaction (TOCTOU residue) would be
-                # silently committed with no head advanced and no outbox event (Invariant 10).
-                committed = self.media_repository.fetch_committed_versions(
-                    transaction=conn, tenant_id=ctx.tenant_id, media_transaction_id=media_transaction_id
-                )
-                return self._result(media_transaction_id, committed, self._current_heads(conn, ctx, committed))
-            committed_at = _now()
-            committed = self.media_repository.commit_staged_versions(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                media_transaction_id=media_transaction_id,
-                committed_at=committed_at,
+                if before_commit is not None:
+                    before_commit(conn)
+                return self._committed_replay(conn, ctx, media_transaction_id)
+            return self._commit_open_transaction(conn, ctx, media_transaction_id, before_commit)
+
+    def _committed_replay(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        media_transaction_id: str,
+    ) -> MediaCommitResult:
+        committed = self.media_repository.fetch_committed_versions(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            media_transaction_id=media_transaction_id,
+        )
+        return self._result(media_transaction_id, committed, self._current_heads(conn, ctx, committed))
+
+    def _commit_open_transaction(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        media_transaction_id: str,
+        before_commit: Callable[[TransactionContext], None] | None,
+    ) -> MediaCommitResult:
+        committed_at = _now()
+        committed = self.media_repository.commit_staged_versions(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            media_transaction_id=media_transaction_id,
+            committed_at=committed_at,
+        )
+        heads = self._advance_heads(conn, ctx, committed, committed_at)
+        if before_commit is not None:
+            before_commit(conn)
+        tx_after = self.media_repository.commit_transaction(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            media_transaction_id=media_transaction_id,
+            committed_at=committed_at,
+        )
+        if tx_after is None or tx_after.status != "COMMITTED":
+            raise ConflictDetected(
+                "media transaction commit lost its OPEN state",
+                details={"media_transaction_id": media_transaction_id},
             )
-            heads = self._advance_heads(conn, ctx, committed, committed_at)
-            tx_after = self.media_repository.commit_transaction(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                media_transaction_id=media_transaction_id,
-                committed_at=committed_at,
-            )
-            if tx_after is None or tx_after.status != "COMMITTED":
-                raise ConflictDetected(
-                    "media transaction commit lost its OPEN state",
-                    details={"media_transaction_id": media_transaction_id},
-                )
-            self._emit_commit_events(conn, ctx, media_transaction_id, committed, heads)
-            return self._result(media_transaction_id, committed, heads)
+        self._emit_commit_events(conn, ctx, media_transaction_id, committed, heads)
+        return self._result(media_transaction_id, committed, heads)
 
     def abort(self, ctx: RequestContext, *, media_transaction_id: str, error: dict[str, object] | None = None) -> None:
         with self.engine.begin() as conn:
@@ -227,6 +254,10 @@ class MediaTransactionService(CoreService):
             media_transaction_id=media_transaction_id,
             committed_version_ids=tuple(version.media_item_version_id for version in committed),
             head_version_id_by_item=heads,
+            committed_at=max(
+                (version.committed_at for version in committed if version.committed_at is not None),
+                default=None,
+            ),
         )
 
 

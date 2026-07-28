@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Mapping
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,9 +18,11 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiSessionRecord,
 )
 from foundry_lite.application.ports.citation_source import (
+    CitationSourceEvidence,
     CitationSourceVerificationRequest,
     CitationSourceVerificationResult,
 )
+from foundry_lite.application.services.aip import citation_service as citation_service_module
 from foundry_lite.application.services.aip.citation_service import (
     CitationClaim,
     CitationResolveRequest,
@@ -151,6 +155,59 @@ def test_citation_service_requires_source_read_permission() -> None:
 
     assert excinfo.value.reason == "policy_denied"
     assert verifier.calls == 0
+
+
+def test_citation_navigation_resolve_rechecks_signed_evidence_and_returns_authoritative_locator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, repository = _seed_repository()
+    verifier = _SpyCitationSourceVerifier(evidence=_citation_evidence())
+    service = _service(engine, repository, verifier)
+    monkeypatch.setattr(
+        citation_service_module,
+        "_now",
+        lambda: datetime(2026, 6, 25, 0, 2, tzinfo=UTC),
+    )
+
+    citation = service.resolve(_CTX, _resolve_request()).citations[0]
+    resolved = service.resolve_navigation(_CTX, citation.signed_navigation_ref)
+
+    assert citation.display_payload["evidence"] == resolved.to_payload()["evidence"]
+    assert citation.display_payload["navigationPath"] == (
+        f"/sources/object/Order:O-1001?citation={citation.signed_navigation_ref}"
+    )
+    assert resolved.source_version == "object-version-1"
+    assert resolved.evidence == _citation_evidence()
+
+
+def test_citation_navigation_rejects_tamper_cross_tenant_expiry_and_stale_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, repository = _seed_repository()
+    verifier = _SpyCitationSourceVerifier(evidence=_citation_evidence())
+    service = _service(engine, repository, verifier)
+    citation = service.resolve(_CTX, _resolve_request()).citations[0]
+    token = citation.signed_navigation_ref
+
+    monkeypatch.setattr(citation_service_module, "_now", lambda: datetime(2026, 6, 25, 0, 2, tzinfo=UTC))
+    with pytest.raises(CitationServiceError, match="signature") as tampered:
+        service.resolve_navigation(_CTX, f"{token[:-1]}{'0' if token[-1] != '0' else '1'}")
+    with pytest.raises(CitationServiceError, match="tenant") as cross_tenant:
+        service.resolve_navigation(replace(_CTX, tenant_id="tenant-other"), token)
+
+    monkeypatch.setattr(citation_service_module, "_now", lambda: datetime(2026, 6, 25, 0, 6, tzinfo=UTC))
+    with pytest.raises(CitationServiceError, match="expired") as expired:
+        service.resolve_navigation(_CTX, token)
+
+    monkeypatch.setattr(citation_service_module, "_now", lambda: datetime(2026, 6, 25, 0, 2, tzinfo=UTC))
+    verifier.evidence = replace(_citation_evidence(), processor_version="2")
+    with pytest.raises(CitationServiceError, match="no longer matches") as stale:
+        service.resolve_navigation(_CTX, token)
+
+    assert tampered.value.reason == "invalid_navigation_signature"
+    assert cross_tenant.value.reason == "navigation_tenant_mismatch"
+    assert expired.value.reason == "navigation_expired"
+    assert stale.value.reason == "citation_source_stale"
 
 
 def test_local_runtime_composes_citation_service_with_ai_ledger_and_fake_source_verifier(
@@ -294,9 +351,16 @@ def _decode_navigation_payload(ref: str) -> Mapping[str, object]:
 class _SpyCitationSourceVerifier:
     profile_name = "spy-citation-source-verifier"
 
-    def __init__(self, *, source_version: str = "object-version-1", content_hash: str = "sha256:context") -> None:
+    def __init__(
+        self,
+        *,
+        source_version: str = "object-version-1",
+        content_hash: str = "sha256:context",
+        evidence: CitationSourceEvidence | None = None,
+    ) -> None:
         self.source_version = source_version
         self.content_hash = content_hash
+        self.evidence = evidence
         self.calls = 0
 
     def verify_source(
@@ -310,4 +374,29 @@ class _SpyCitationSourceVerifier:
             content_hash=self.content_hash,
             display_label=f"{request.source_resource_type}:{request.source_resource_id}@{self.source_version}",
             navigation_path=f"/sources/{request.source_resource_type}/{request.source_resource_id}",
+            evidence=self.evidence,
         )
+
+
+def _citation_evidence() -> CitationSourceEvidence:
+    return CitationSourceEvidence(
+        media_item_version_id="miv-pdf-1",
+        media_derivative_id="mder-layout-1",
+        content_unit_id="cu-layout-1",
+        page_number=2,
+        bbox={"x": 10, "y": 20, "width": 30, "height": 40, "pageWidth": 100, "pageHeight": 100},
+        timecode=None,
+        source_locator={
+            "pageNumber": 2,
+            "bbox": {"x": 10, "y": 20, "width": 30, "height": 40, "pageWidth": 100, "pageHeight": 100},
+            "coordinateSystem": "pdf_top_left_points",
+        },
+        derivative_kind="pdf_layout",
+        processor_name="pdf_layout_v1",
+        processor_version="1",
+        processor_spec_hash="sha256:spec",
+        model_name=None,
+        model_version=None,
+        params_hash="sha256:params",
+        security_envelope={"tenantId": "tenant-demo", "classification": "internal"},
+    )

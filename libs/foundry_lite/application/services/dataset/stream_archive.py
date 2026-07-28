@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from foundry_lite.application.ports import (
     DatasetRow,
     DeadLetterRecord,
+    ParquetFieldType,
     StreamAdapter,
     StreamArchiveConfig,
     StreamEvent,
@@ -48,6 +49,29 @@ STREAM_ARCHIVE_FIELDS = [
     "event_time_lag_seconds",
 ]
 CDC_STREAM_ARCHIVE_FIELDS = [*STREAM_ARCHIVE_FIELDS, "op", "pk_json", "before_json", "after_json", "ordering_json"]
+STREAM_ARCHIVE_FIELD_TYPES: Mapping[str, ParquetFieldType] = {
+    "event_id": "string",
+    "stream": "string",
+    "topic": "string",
+    "partition": "int64",
+    "offset": "int64",
+    "event_type": "string",
+    "event_key": "string",
+    "tenant_id": "string",
+    "request_id": "string",
+    "payload_json": "string",
+    "event_time": "string",
+    "source_time": "string",
+    "ingested_at": "string",
+    "processed_at": "string",
+    "late_data_status": "string",
+    "event_time_lag_seconds": "float64",
+    "op": "string",
+    "pk_json": "string",
+    "before_json": "string",
+    "after_json": "string",
+    "ordering_json": "string",
+}
 
 
 @dataclass(frozen=True)
@@ -249,6 +273,11 @@ def stream_archive_fields(stream: StreamArchiveConfig) -> list[str]:
     if stream.schema_strategy == "cdc_envelope_json":
         return list(CDC_STREAM_ARCHIVE_FIELDS)
     return list(STREAM_ARCHIVE_FIELDS)
+
+
+def stream_archive_field_types(stream: StreamArchiveConfig) -> Mapping[str, ParquetFieldType]:
+    """Return the stable logical schema even when a batch contains only nulls."""
+    return {field: STREAM_ARCHIVE_FIELD_TYPES[field] for field in stream_archive_fields(stream)}
 
 
 def stream_transaction_metadata(

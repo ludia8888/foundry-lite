@@ -60,6 +60,11 @@ def _unit(content_unit_id: str, *, ordinal: int, spec: str = "spec-1") -> Conten
         chunk_spec_hash=spec,
         security_envelope={"classification": "confidential"},
         page_number=ordinal + 1,
+        bbox={"x": 10, "y": 20, "width": 300, "height": 40, "unit": "pt"},
+        parent_content_unit_id="cu-parent",
+        source_locator={"pageNumber": ordinal + 1, "blockId": f"block-{ordinal}"},
+        structure={"kind": "paragraph", "level": 1},
+        confidence=0.97,
         created_at="2026-06-23T00:00:00Z",
     )
 
@@ -117,10 +122,36 @@ def test_content_units_insert_dedups_and_reads_in_order(
         # Replaying the same ordinal/chunk-spec is idempotent (no duplicate units).
         replay = repo.insert_content_units(transaction=conn, records=[_unit("cu-9", ordinal=0)])
         units = repo.get_content_units(transaction=conn, tenant_id="tenant-demo", derivative_id="mder-1")
+        resolved = repo.content_unit_by_id(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            content_unit_id="cu-1",
+        )
+        cross_tenant = repo.content_unit_by_id(
+            transaction=conn,
+            tenant_id="tenant-other",
+            content_unit_id="cu-1",
+        )
+        second_page = repo.get_content_units(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            derivative_id="mder-1",
+            after_ordinal=0,
+            page_number=2,
+            limit=1,
+        )
 
     assert inserted == 2
     assert replay == 0
     assert [unit.ordinal for unit in units] == [0, 1]
+    assert units[0].bbox == {"x": 10, "y": 20, "width": 300, "height": 40, "unit": "pt"}
+    assert units[0].parent_content_unit_id == "cu-parent"
+    assert units[0].source_locator == {"pageNumber": 1, "blockId": "block-0"}
+    assert units[0].structure == {"kind": "paragraph", "level": 1}
+    assert units[0].confidence == pytest.approx(0.97)
+    assert resolved is not None and resolved.content_unit_id == "cu-1"
+    assert cross_tenant is None
+    assert [unit.content_unit_id for unit in second_page] == ["cu-2"]
 
 
 def _run(

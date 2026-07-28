@@ -14,10 +14,10 @@ Each segment carries its time code (``start_ms``/``end_ms``) and optional speake
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import import_module
 from typing import Any
 
@@ -52,8 +52,16 @@ class TranscriptSegment:
     language: str | None = None
 
 
-# source_path -> ordered transcript segments (one per utterance/window).
-AsrEngine = Callable[[str], Sequence[TranscriptSegment]]
+@dataclass(frozen=True)
+class AsrProcessingBounds:
+    """Typed, processor-enforced limits carried by the pinned processing spec."""
+
+    max_duration_ms: int | None = None
+    requested_max_duration_ms: int | None = None
+
+
+# source_path + bounds -> ordered transcript segments (one per utterance/window).
+AsrEngine = Callable[[str, AsrProcessingBounds], Sequence[TranscriptSegment]]
 
 
 class AsrDocumentError(Exception):
@@ -64,11 +72,11 @@ class AsrDocumentError(Exception):
         self.reason = reason
 
 
-def _default_asr_engine(source_path: str) -> list[TranscriptSegment]:
+def _default_asr_engine(source_path: str, bounds: AsrProcessingBounds) -> list[TranscriptSegment]:
     # In-process default: no speech model is wired here, so deterministic unit tests inject a
     # fake and the seam stays covered. The real ``asr-whisper`` profile injects
     # ``_faster_whisper_asr_engine`` (L2) instead of relying on this default.
-    del source_path
+    del source_path, bounds
     raise AsrDocumentError("asr_engine_unavailable")
 
 
@@ -85,13 +93,23 @@ def _load_whisper_model() -> Any:
     return _whisper_model
 
 
-def _faster_whisper_asr_engine(source_path: str) -> list[TranscriptSegment]:
+def _faster_whisper_asr_engine(
+    source_path: str,
+    bounds: AsrProcessingBounds,
+) -> list[TranscriptSegment]:
     # Real engine (L2): lazily import faster-whisper so the module has no import-time speech
     # dependency. ``language="en"`` is pinned (auto-detect misclassifies short clips). A
     # decode/load error is an undecodable-audio validation failure.
     try:
         model = _load_whisper_model()
-        segments, _info = model.transcribe(source_path, language="en")
+        clip_timestamps: str | list[float] = "0"
+        if bounds.max_duration_ms is not None:
+            clip_timestamps = [0.0, bounds.max_duration_ms / 1000]
+        segments, _info = model.transcribe(
+            source_path,
+            language="en",
+            clip_timestamps=clip_timestamps,
+        )
         return [
             TranscriptSegment(
                 start_ms=round(segment.start * 1000),
@@ -141,7 +159,9 @@ class AsrProcessorAdapter:
     def process(self, request: MediaProcessingRequest) -> MediaProcessingResult:
         if request.source_path is None:
             raise self._error("validation", "asr processor requires a sandbox source_path", request, is_retryable=False)
-        segments = self._transcribe_within_timeout(request)
+        bounds = self._processing_bounds(request)
+        segments = _bounded_segments(self._transcribe_within_timeout(request, bounds), bounds)
+        structure = _bounds_structure(bounds)
         units = tuple(
             ProcessedContentUnit(
                 unit_kind="audio_segment",
@@ -152,6 +172,7 @@ class AsrProcessorAdapter:
                 end_ms=segment.end_ms,
                 speaker=segment.speaker,
                 language=segment.language,
+                structure=structure,
             )
             for index, segment in enumerate(segments)
         )
@@ -162,13 +183,24 @@ class AsrProcessorAdapter:
             content_hash=_content_hash(units),
             mime_type="text/plain",
             units=units,
+            processing_evidence=_processing_evidence(bounds, units),
         )
 
-    def _transcribe_within_timeout(self, request: MediaProcessingRequest) -> Sequence[TranscriptSegment]:
+    def _processing_bounds(self, request: MediaProcessingRequest) -> AsrProcessingBounds:
+        try:
+            return _asr_processing_bounds(request.spec.parameters)
+        except AsrDocumentError as exc:
+            raise self._error("validation", exc.reason, request, is_retryable=False) from exc
+
+    def _transcribe_within_timeout(
+        self,
+        request: MediaProcessingRequest,
+        bounds: AsrProcessingBounds,
+    ) -> Sequence[TranscriptSegment]:
         assert request.source_path is not None
         # Shared bounded pool: on timeout we abandon the worker (in-process whisper decode cannot
         # be cancelled) but reuse a fixed thread set, so repeated timeouts do not leak threads.
-        future = self._executor.submit(self._asr_engine, request.source_path)
+        future = self._executor.submit(self._asr_engine, request.source_path, bounds)
         try:
             return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
@@ -201,3 +233,74 @@ def _content_hash(units: tuple[ProcessedContentUnit, ...]) -> str:
         digest.update(unit.text_hash.encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()
+
+
+def _asr_processing_bounds(parameters: Mapping[str, object]) -> AsrProcessingBounds:
+    applied = _asr_bound_value(parameters.get("processingBounds"))
+    requested = _asr_bound_value(parameters.get("requestedProcessingBounds"))
+    return AsrProcessingBounds(
+        max_duration_ms=applied,
+        requested_max_duration_ms=requested,
+    )
+
+
+def _asr_bound_value(raw: object) -> int | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise AsrDocumentError("invalid_processing_bounds")
+    max_duration_ms = raw.get("maxDurationMs")
+    if max_duration_ms is None:
+        return None
+    if not isinstance(max_duration_ms, int) or isinstance(max_duration_ms, bool) or max_duration_ms <= 0:
+        raise AsrDocumentError("invalid_processing_bounds")
+    return max_duration_ms
+
+
+def _bounded_segments(
+    segments: Sequence[TranscriptSegment],
+    bounds: AsrProcessingBounds,
+) -> tuple[TranscriptSegment, ...]:
+    max_duration_ms = bounds.max_duration_ms
+    if max_duration_ms is None:
+        return tuple(segments)
+    return tuple(
+        replace(segment, end_ms=min(segment.end_ms, max_duration_ms))
+        for segment in segments
+        if segment.start_ms < max_duration_ms
+    )
+
+
+def _bounds_structure(bounds: AsrProcessingBounds) -> Mapping[str, object] | None:
+    if bounds.max_duration_ms is None:
+        return None
+    return {
+        "processingBounds": {
+            "maxDurationMs": bounds.max_duration_ms,
+            "isDurationBoundApplied": True,
+        }
+    }
+
+
+def _processing_evidence(
+    bounds: AsrProcessingBounds,
+    units: tuple[ProcessedContentUnit, ...],
+) -> Mapping[str, object]:
+    requested: dict[str, object] = {}
+    applied: dict[str, object] = {}
+    requested_max_duration_ms = bounds.requested_max_duration_ms or bounds.max_duration_ms
+    if requested_max_duration_ms is not None:
+        requested["maxDurationMs"] = requested_max_duration_ms
+    if bounds.max_duration_ms is not None:
+        applied["maxDurationMs"] = bounds.max_duration_ms
+    starts = [unit.start_ms for unit in units if unit.start_ms is not None]
+    ends = [unit.end_ms for unit in units if unit.end_ms is not None]
+    return {
+        "requested": requested,
+        "applied": applied,
+        "observed": {
+            "unitCount": len(units),
+            "maxStartMs": max(starts, default=None),
+            "maxEndMs": max(ends, default=None),
+        },
+    }

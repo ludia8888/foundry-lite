@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from foundry_lite.application.ports import (
@@ -22,6 +23,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import (
     CommitResult,
     StagedFileStats,
+    _json_hash,
     _new_id,
     _now,
 )
@@ -67,8 +69,9 @@ from foundry_lite.application.services.dataset.transaction_payloads import (
     multi_file_finalization_request,
     single_file_finalization_request,
 )
+from foundry_lite.application.services.dataset.transaction_state import require_open_transaction
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, ValidationFailed
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
@@ -273,7 +276,11 @@ class DatasetTransactionService(CoreService):
         *,
         branch: str,
     ) -> DatasetFinalizationCheck:
-        stats = self.dataset_quality_service._inspect_parquet(request.staged_parquet, request.target.primary_key)
+        inspected = self.dataset_quality_service._inspect_parquet(request.staged_parquet, request.target.primary_key)
+        schema_json = dict(
+            self.dataset_quality_service._resolve_inferred_schema(conn, request.target.row, inspected.schema_json)
+        )
+        stats = replace(inspected, schema_json=schema_json, schema_hash=_json_hash(schema_json))
         checked_candidate_hash = checked_manifest_hash(stats)
         schema_ref = self.dataset_quality_service._ensure_schema_reference(
             conn, request.target.row, stats.schema_json, stats.schema_hash
@@ -473,15 +480,7 @@ class DatasetTransactionService(CoreService):
         raise DatasetCommitBlocked("dataset checks failed", details={"failures": failure_list})
 
     def _require_open_transaction(self, conn: TransactionContext, transaction_id: str) -> DatasetTransactionRow:
-        tx = self.dataset_transaction_repository.transaction_by_id(transaction=conn, transaction_id=transaction_id)
-        if tx is None:
-            raise NotFound("dataset transaction not found", details={"transaction_id": transaction_id})
-        if tx["status"] != "OPEN":
-            raise ConflictDetected(
-                "dataset transaction is not open",
-                details={"transaction_id": transaction_id, "status": tx["status"]},
-            )
-        return tx
+        return require_open_transaction(self.dataset_transaction_repository, conn, transaction_id)
 
     def _abort_transaction_after_error(
         self,

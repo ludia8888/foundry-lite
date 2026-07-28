@@ -35,10 +35,12 @@ from foundry_lite.application.services.pipeline_payloads import (
     required_text,
     schedule_payload,
 )
-from foundry_lite.application.services.pipeline_run_service import (
-    _compiled_items,
-    _require_deployed,
-    _require_pipeline_match,
+from foundry_lite.application.services.pipeline_run_execution import _compiled_items
+from foundry_lite.application.services.pipeline_run_requests import (
+    require_deployed as _require_deployed,
+)
+from foundry_lite.application.services.pipeline_run_requests import (
+    require_pipeline_match as _require_pipeline_match,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
@@ -162,9 +164,9 @@ def test_pipeline_graph_helpers_bound_limits_and_report_shape_errors() -> None:
     assert node_by_id(graph, "cast")["type"] == "select_cast"
     assert source_dataset_refs(graph, "cast") == ["raw.orders"]
     assert topological_node_ids(graph) == ["orders", "cast", "out"]
-    assert bounded_preview_limit(None) == 20
+    assert bounded_preview_limit(None) == 500
     assert bounded_preview_limit(0) == 1
-    assert bounded_preview_limit(999) == 200
+    assert bounded_preview_limit(999) == 500
 
     with pytest.raises(ValidationFailed, match="preview limit must be an integer"):
         bounded_preview_limit("ten")
@@ -321,7 +323,7 @@ def test_pipeline_generated_sql_rejects_unsafe_refs_and_cast_types() -> None:
         == 'SELECT CAST("amount" AS DOUBLE) AS "amount_float" FROM {{ input(\'raw.orders\') }}'
     )
 
-    with pytest.raises(ValidationFailed, match="output_dataset node requires one input"):
+    with pytest.raises(ValidationFailed, match="output_dataset node requires exactly one input"):
         _generated_sql("output_dataset", {}, {})
     with pytest.raises(ValidationFailed, match="union node requires at least two inputs"):
         _generated_sql("union", {}, {"a": "raw.a"})
@@ -378,6 +380,45 @@ def test_pipeline_compiler_registers_python_and_generated_nodes_without_raw_path
         }
     ]
     assert transforms.sql_calls[-1]["sql"] == "SELECT * FROM {{ input('work.scored') }}"
+
+
+def test_pipeline_compiler_compiles_canonical_v2_tabular_graph_without_mutating_it() -> None:
+    compiler = PipelineCompilerService()
+    datasets = _DatasetRegistry()
+    transforms = _TransformRegistry()
+    compiler.bind_collaborators({"dataset_registry_service": datasets, "transform_service": transforms})
+    graph = _tabular_pipeline_graph_v2()
+
+    compiled = compiler.compile_graph(
+        pipeline_id="v2_orders",
+        version_id="version-2",
+        graph=graph,
+        ctx=RequestContext(tenant_id="tenant-a", actor_user_id="user-a"),
+    )
+
+    assert graph["nodes"][0].get("type") is None
+    assert [item["nodeId"] for item in compiled["transforms"]] == ["cast", "out"]
+    assert datasets.refs == ["work.v2_cast", "analytics.v2_orders"]
+    assert transforms.sql_calls[0]["inputs"] == {"orders": "raw.orders"}
+    assert transforms.sql_calls[-1]["sql"] == "SELECT \"amount\" FROM {{ input('work.v2_cast') }}"
+
+
+def test_pipeline_compiler_preserves_v2_named_join_port_roles() -> None:
+    compiler = PipelineCompilerService()
+    transforms = _TransformRegistry()
+    compiler.bind_collaborators({"dataset_registry_service": _DatasetRegistry(), "transform_service": transforms})
+
+    compiler.compile_graph(
+        pipeline_id="v2_join",
+        version_id="version-2",
+        graph=_joined_pipeline_graph_v2(),
+        ctx=RequestContext(tenant_id="tenant-a", actor_user_id="user-a"),
+    )
+
+    join_call = transforms.sql_calls[0]
+    assert join_call["inputs"] == {"z_left": "raw.left", "a_right": "raw.right"}
+    assert "{{ input('raw.left') }} AS left_input" in str(join_call["sql"])
+    assert "{{ input('raw.right') }} AS right_input" in str(join_call["sql"])
 
 
 def test_pipeline_compiler_rejects_bad_nodes_and_normalizes_generated_names() -> None:
@@ -474,7 +515,7 @@ def test_pipeline_validation_and_run_helpers_cover_failure_shapes() -> None:
     ]
     assert _compiled_items({"transforms": "not-a-list"}) == []
     assert _compiled_items({"transforms": [{"apiName": "run_a"}, {"nodeId": "missing"}, "bad"]}) == [
-        {"apiName": "run_a"}
+        {"nodeId": "missing"}
     ]
 
     with pytest.raises(ValidationFailed, match="output contract column type is required"):
@@ -539,13 +580,138 @@ def _python_pipeline_graph() -> dict[str, object]:
     )
 
 
+def _tabular_pipeline_graph_v2() -> dict[str, object]:
+    return {
+        "schemaVersion": 2,
+        "nodes": [
+            {
+                "id": "orders",
+                "kind": "source",
+                "descriptorId": "source.dataset",
+                "specVersion": 1,
+                "config": {"datasetRef": "raw.orders"},
+            },
+            {
+                "id": "cast",
+                "kind": "transform",
+                "descriptorId": "transform.select_cast",
+                "specVersion": 1,
+                "config": {
+                    "columns": [{"source": "amount", "name": "amount", "type": "DOUBLE"}],
+                    "outputDatasetRef": "work.v2_cast",
+                },
+            },
+            {
+                "id": "out",
+                "kind": "output",
+                "descriptorId": "output.dataset",
+                "specVersion": 1,
+                "config": {"outputDatasetRef": "analytics.v2_orders"},
+            },
+        ],
+        "edges": [
+            {
+                "id": "orders-cast",
+                "sourceNodeId": "orders",
+                "sourcePortId": "dataset",
+                "targetNodeId": "cast",
+                "targetPortId": "input",
+            },
+            {
+                "id": "cast-out",
+                "sourceNodeId": "cast",
+                "sourcePortId": "dataset",
+                "targetNodeId": "out",
+                "targetPortId": "input",
+            },
+        ],
+        "layout": {},
+        "outputContract": {"columns": [_column("amount", "double")]},
+        "tests": [],
+        "schedule": None,
+    }
+
+
+def _joined_pipeline_graph_v2() -> dict[str, object]:
+    graph = _tabular_pipeline_graph_v2()
+    graph["nodes"] = [
+        {
+            "id": node_id,
+            "kind": "source",
+            "descriptorId": "source.dataset",
+            "specVersion": 1,
+            "config": {"datasetRef": dataset_ref},
+        }
+        for node_id, dataset_ref in (("z_left", "raw.left"), ("a_right", "raw.right"))
+    ] + [
+        {
+            "id": "join",
+            "kind": "transform",
+            "descriptorId": "transform.join",
+            "specVersion": 1,
+            "config": {
+                "leftKey": "id",
+                "rightKey": "id",
+                "joinType": "inner",
+                "outputDatasetRef": "work.joined",
+            },
+        },
+        {
+            "id": "out",
+            "kind": "output",
+            "descriptorId": "output.dataset",
+            "specVersion": 1,
+            "config": {"outputDatasetRef": "analytics.joined"},
+        },
+    ]
+    graph["edges"] = [
+        _v2_edge("right", "a_right", "dataset", "join", "right"),
+        _v2_edge("left", "z_left", "dataset", "join", "left"),
+        _v2_edge("out", "join", "dataset", "out", "input"),
+    ]
+    return graph
+
+
+def _v2_edge(edge_id: str, source: str, source_port: str, target: str, target_port: str) -> dict[str, object]:
+    return {
+        "id": edge_id,
+        "sourceNodeId": source,
+        "sourcePortId": source_port,
+        "targetNodeId": target,
+        "targetPortId": target_port,
+    }
+
+
 class _DatasetRegistry:
     def __init__(self) -> None:
         self.refs: list[str] = []
+        self.datasets: dict[str, dict[str, object]] = {}
 
-    def ensure_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+    def ensure_dataset(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        classification: str | None = None,
+    ) -> dict[str, object]:
         self.refs.append(dataset_ref)
-        return {"id": dataset_ref, "ctx": ctx is not None}
+        row = {
+            "id": dataset_ref,
+            "ctx": ctx is not None,
+            "classification": classification or "INTERNAL",
+        }
+        self.datasets[dataset_ref] = row
+        return row
+
+    def get_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.datasets.get(
+            dataset_ref,
+            {"id": dataset_ref, "ctx": ctx is not None, "classification": "INTERNAL"},
+        )
+
+    def find_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, object] | None:
+        del ctx
+        return self.datasets.get(dataset_ref)
 
 
 class _TransformRegistry:

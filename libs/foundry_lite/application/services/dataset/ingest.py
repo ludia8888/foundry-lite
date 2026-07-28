@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     ConnectorNetworkRoute,
     DatasetRow,
     DeadLetterRecordRow,
+    ParquetFieldType,
     RestSourceConfig,
     StreamAdapter,
     StreamArchiveConfig,
@@ -30,6 +31,10 @@ from foundry_lite.application.services.dataset.protocols import (
     mark_sync_run_committed,
     require_dataset_write_open,
 )
+from foundry_lite.application.services.dataset.rows_batch_commit import (
+    DatasetCommitGuard,
+    finalize_rows_batch,
+)
 from foundry_lite.application.services.dataset.stream_archive_commit import (
     commit_stream_archive,
     latest_committed_stream_transaction,
@@ -38,6 +43,7 @@ from foundry_lite.application.services.dataset.stream_archive_commit import (
     record_stream_read_failure,
     stream_cursor_offset,
 )
+from foundry_lite.application.services.dataset.webhook_signature_context import webhook_signature_context
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -130,37 +136,6 @@ class DatasetIngestService(CoreService):
             raise blocked
         raise InvariantViolation("dataset upload finalization did not return a commit result")
 
-    def _finalize_rows_batch(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        plan: UploadSyncPlan,
-        staged: Path,
-        transaction_metadata: Mapping[str, object],
-    ) -> CommitResult:
-        blocked: DatasetCommitBlocked | None = None
-        with self.engine.begin() as conn:
-            try:
-                return self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="source_rows_batch_commit",
-                    outbox_event_type="dataset.version.committed",
-                    transaction_metadata=transaction_metadata,
-                    after_persist=lambda commit_conn, result: mark_sync_run_committed(
-                        self.dataset_transaction_repository, commit_conn, ctx, plan.run_id, result
-                    ),
-                )
-            except DatasetCommitBlocked as exc:
-                blocked = exc
-        if blocked is not None:
-            raise blocked
-        raise InvariantViolation("source rows batch finalization did not return a commit result")
-
     def sync_connector_snapshot(
         self,
         dataset_ref: str,
@@ -201,6 +176,7 @@ class DatasetIngestService(CoreService):
         tx_type: str = "APPEND",
         source_type: str = "source.batch",
         transaction_metadata: Mapping[str, object] | None = None,
+        before_commit: DatasetCommitGuard | None = None,
     ) -> CommitResult | None:
         ctx = ctx or RequestContext()
         if not rows:
@@ -208,8 +184,36 @@ class DatasetIngestService(CoreService):
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
         require_dataset_write_open(self.runtime_service, ctx, "sync_rows_batch", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+        plan = self._start_rows_batch_plan(ctx, dataset, dataset_ref, sync_name, tx_type, source_type)
+        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
+        try:
+            self._rows_to_parquet(rows, staged, [str(field) for field in fieldnames])
+            return finalize_rows_batch(
+                self.engine,
+                self.dataset_transaction_service,
+                self.dataset_transaction_repository,
+                ctx,
+                dataset,
+                plan.transaction_id,
+                plan.run_id,
+                staged,
+                transaction_metadata or {},
+                before_commit,
+            )
+        except Exception as exc:
+            self._abort_upload_after_error(ctx, plan.transaction_id, plan.run_id, exc, "source.sync_rows_batch")
+
+    def _start_rows_batch_plan(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        dataset_ref: str,
+        sync_name: str | None,
+        tx_type: str,
+        source_type: str,
+    ) -> UploadSyncPlan:
         with self.engine.begin() as conn:
-            plan = self._start_connector_sync_run(
+            return self._start_connector_sync_run(
                 conn,
                 ctx,
                 dataset,
@@ -219,12 +223,6 @@ class DatasetIngestService(CoreService):
                 tx_type=tx_type,
                 source_type=source_type,
             )
-        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
-        try:
-            self._rows_to_parquet(rows, staged, [str(field) for field in fieldnames])
-            return self._finalize_rows_batch(ctx, dataset, plan, staged, transaction_metadata or {})
-        except Exception as exc:
-            self._abort_upload_after_error(ctx, plan.transaction_id, plan.run_id, exc, "source.sync_rows_batch")
 
     def ingest_webhook_event(
         self,
@@ -254,7 +252,7 @@ class DatasetIngestService(CoreService):
             signature_timestamp=signature_timestamp,
             secret=secret,
             event_id=event_id,
-            signature_context=_webhook_signature_context(
+            signature_context=webhook_signature_context(
                 ctx,
                 dataset_ref=dataset_ref,
                 connector_name=connector_name,
@@ -470,24 +468,12 @@ class DatasetIngestService(CoreService):
     ) -> None:
         mark_sync_run_committed(self.dataset_transaction_repository, conn, ctx, run_id, result)
 
-    def _rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
-        self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)
-
-
-def _webhook_signature_context(
-    ctx: RequestContext,
-    *,
-    dataset_ref: str,
-    connector_name: str,
-    resource_name: str,
-    require_service_principal_signature: bool,
-) -> webhook_ingest.WebhookSignatureContext | None:
-    if not require_service_principal_signature:
-        return None
-    return webhook_ingest.WebhookSignatureContext(
-        tenant_id=ctx.tenant_id,
-        actor_user_id=ctx.actor_user_id,
-        dataset_ref=dataset_ref,
-        connector_name=connector_name,
-        resource_name=resource_name,
-    )
+    def _rows_to_parquet(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+        *,
+        field_types: Mapping[str, ParquetFieldType] | None = None,
+    ) -> None:
+        self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames, field_types=field_types)

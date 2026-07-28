@@ -26,6 +26,10 @@ from foundry_lite.application.services.aip.builder_runtime import (
     BuilderRuntimeResult,
     BuilderRuntimeService,
 )
+from foundry_lite.application.services.aip.citation_service import (
+    CitationNavigationResolveResult,
+    CitationService,
+)
 from foundry_lite.application.services.aip.eval_service import (
     EvalCaseInput,
     EvalRunRequest,
@@ -62,6 +66,7 @@ class AipWorkspace:
         logic_runtime: LogicRuntimeService,
         evals: EvalService,
         visual_builder: VisualBuilderService,
+        citation: CitationService,
     ) -> None:
         self._agent_runtime = agent_runtime
         self._action_proposal = action_proposal
@@ -70,6 +75,7 @@ class AipWorkspace:
         self._logic_runtime = logic_runtime
         self._evals = evals
         self._visual_builder = visual_builder
+        self._citation = citation
 
     def propose_action(
         self,
@@ -260,6 +266,14 @@ class AipWorkspace:
         ctx: RequestContext | None = None,
     ) -> AgentRuntimeResult:
         return self._agent_runtime.run(ctx or RequestContext(), _agent_runtime_request_from_payload(payload))
+
+    def resolve_citation_navigation(
+        self,
+        *,
+        navigation_ref: str,
+        ctx: RequestContext | None = None,
+    ) -> CitationNavigationResolveResult:
+        return self._citation.resolve_navigation(ctx or RequestContext(), navigation_ref)
 
 
 def _builder_request_from_payload(payload: Mapping[str, object]) -> VisualBuilderDraftRequest:

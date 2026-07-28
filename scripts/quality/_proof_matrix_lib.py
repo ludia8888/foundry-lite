@@ -38,6 +38,14 @@ REQUIRED_PROOF_CLASSES = (
 
 _TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+(test_[A-Za-z0-9_]+)\s*\(", re.MULTILINE)
 _TEST_NAME_RE = re.compile(r"test_[A-Za-z0-9_]+")
+_PLAYWRIGHT_TEST_RE = re.compile(
+    r"""\btest(?:\.(?:only|skip|fixme))?\s*\(\s*
+        (?P<quote>["'`])
+        (?P<title>(?:\\.|(?!(?P=quote)).)*?)
+        (?P=quote)\s*,
+    """,
+    re.DOTALL | re.VERBOSE,
+)
 
 
 @dataclass(frozen=True)
@@ -90,13 +98,15 @@ def infra_ratchet_text() -> str:
 
 
 def all_test_names(root: Path = ROOT) -> set[str]:
-    """Collect pytest-visible test names, falling back to static defs if collection fails."""
+    """Collect pytest names and Playwright titles used by proof contracts."""
 
     command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:tach", str(root / "tests")]
     completed = subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)  # nosec B603
     if completed.returncode == 0:
-        return _parse_collected_test_names(f"{completed.stdout}\n{completed.stderr}")
-    return _static_test_names(root)
+        python_tests = _parse_collected_test_names(f"{completed.stdout}\n{completed.stderr}")
+    else:
+        python_tests = _static_test_names(root)
+    return python_tests | _playwright_test_titles(root)
 
 
 def _parse_collected_test_names(output: str) -> set[str]:
@@ -116,6 +126,19 @@ def _static_test_names(root: Path = ROOT) -> set[str]:
     tests_dir = root / "tests"
     for path in tests_dir.rglob("*.py"):
         names.update(_TEST_DEF_RE.findall(path.read_text(encoding="utf-8")))
+    return names
+
+
+def _playwright_test_titles(root: Path = ROOT) -> set[str]:
+    """Collect literal Playwright test titles from TypeScript E2E specs."""
+
+    names: set[str] = set()
+    tests_dir = root / "tests"
+    if not tests_dir.is_dir():
+        return names
+    for spec_path in tests_dir.rglob("*.spec.ts"):
+        source = spec_path.read_text(encoding="utf-8")
+        names.update(match.group("title") for match in _PLAYWRIGHT_TEST_RE.finditer(source))
     return names
 
 

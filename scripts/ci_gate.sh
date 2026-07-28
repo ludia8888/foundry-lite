@@ -48,6 +48,46 @@ maybe_run_testcontainers_preflight() {
 }
 
 RUNTIME_GATE_STEP=""
+CODE_EXECUTION_IMAGE_READY=0
+TRAINED_MODEL_IMAGE_READY=0
+
+ensure_code_execution_image() {
+  if [[ "${CODE_EXECUTION_IMAGE_READY}" == "1" ]]; then
+    return
+  fi
+
+  local configured_image="${FOUNDRY_LITE_CODE_EXECUTION_IMAGE:-}"
+  if [[ -n "${configured_image}" ]]; then
+    echo "== Preflight: isolated Python image ${configured_image} =="
+    if ! docker image inspect "${configured_image}" > /dev/null 2>&1; then
+      echo "ERROR: configured FOUNDRY_LITE_CODE_EXECUTION_IMAGE is not available locally." >&2
+      exit 1
+    fi
+  else
+    echo "== Preflight: build isolated Python execution image =="
+    pnpm --silent quality:code-execution-image
+  fi
+  CODE_EXECUTION_IMAGE_READY=1
+}
+
+ensure_trained_model_image() {
+  if [[ "${TRAINED_MODEL_IMAGE_READY}" == "1" ]]; then
+    return
+  fi
+
+  local configured_image="${FOUNDRY_LITE_TRAINED_MODEL_IMAGE:-}"
+  if [[ -n "${configured_image}" ]]; then
+    echo "== Preflight: trained-model sidecar image ${configured_image} =="
+    if ! docker image inspect "${configured_image}" > /dev/null 2>&1; then
+      echo "ERROR: configured FOUNDRY_LITE_TRAINED_MODEL_IMAGE is not available locally." >&2
+      exit 1
+    fi
+  else
+    echo "== Preflight: build trained-model sidecar image =="
+    pnpm --silent quality:trained-model-sidecar-image
+  fi
+  TRAINED_MODEL_IMAGE_READY=1
+}
 
 run_runtime_step() {
   RUNTIME_GATE_STEP="$1"
@@ -93,6 +133,7 @@ run_static_gate() {
 
 run_coverage_gate() {
   maybe_run_testcontainers_preflight
+  ensure_code_execution_image
 
   echo "== Dynamic: pytest with branch coverage =="
   # pytest-randomly is auto-loaded and shuffles test order per run, exposing
@@ -121,6 +162,7 @@ run_coverage_gate() {
 
 run_flaky_gate() {
   maybe_run_testcontainers_preflight
+  ensure_code_execution_image
 
   local iterations="${FOUNDRY_LITE_FLAKY_ITERATIONS:-3}"
   echo "== Dynamic: flaky pytest detector (${iterations} repeated random + parallel runs) =="
@@ -138,6 +180,7 @@ run_flaky_gate() {
 
 run_impact_gate() {
   maybe_run_testcontainers_preflight
+  ensure_code_execution_image
 
   echo "== Local: impact-scoped pytest via Tach =="
   # Local feedback should answer "did this change break its reachable tests?"
@@ -171,9 +214,14 @@ run_runtime_gate() {
 
 run_runtime_full_gate() {
   maybe_run_testcontainers_preflight
+  ensure_code_execution_image
+  ensure_trained_model_image
   rm -f artifacts/quality/runtime_lane_failure.json
   run_runtime_contract_gates
   trap 'runtime_gate_failed "$?"' ERR
+
+  run_runtime_step "Python code isolation live ratchet" pnpm --silent quality:pipeline-python-isolation-live
+  run_runtime_step "Trained-model sidecar live ratchet" pnpm --silent quality:pipeline-trained-model-sidecar-live
 
   run_runtime_step "Record DLQ replay ratchet" pnpm --silent quality:record-dlq-replay
 
@@ -361,8 +409,10 @@ run_runtime_dynamic_steps() {
 
 run_e2e_gate() {
   echo "== Dynamic: Playwright E2E =="
+  ensure_trained_model_image
   export FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY="${FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY:-ci-prompt-artifact-key}"
   pnpm exec playwright test
+  pnpm --silent quality:pipeline-builder-e2e
 }
 
 run_all_gate() {

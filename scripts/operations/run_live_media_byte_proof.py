@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.content_index import HybridContentQuery
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord
-from foundry_lite.application.ports.media_processor import ProcessorSpec
+from foundry_lite.application.ports.media_processor import MediaProcessorAdapter, ProcessorSpec
 from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
 from foundry_lite.application.services.media.indexing import MediaIndexingService
 from foundry_lite.application.services.media.processing import MediaProcessingService
@@ -35,6 +35,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffprobe_video_probe_runner,
 )
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
@@ -329,10 +330,11 @@ def _processing(
     derivative_repository: SqlAlchemyMediaDerivativeRepository,
     storage: LocalMediaStorageAdapter,
     runtime: _FakeRuntime,
-    processor: object,
+    processor: MediaProcessorAdapter,
 ) -> MediaProcessingService:
     service = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=media_repository,
         media_derivative_repository=derivative_repository,
         media_storage=storage,

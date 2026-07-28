@@ -32,6 +32,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaAccessCacheRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from PIL import Image
 
 _THUMBNAIL = "thumbnail"
@@ -101,7 +102,7 @@ def env(tmp_path: Path) -> _Env:
     upload = MediaUploadService(engine=engine, media_repository=repo, media_storage=storage)
     transaction = MediaTransactionService(engine=engine, media_repository=repo, media_storage=storage)
     transaction.bind_collaborators({"runtime_service": runtime})
-    ctx = RequestContext()
+    ctx = RequestContext(roles=("admin",))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(
@@ -133,7 +134,11 @@ def env(tmp_path: Path) -> _Env:
     )
     transaction.commit(ctx, media_transaction_id=tx)
     with engine.begin() as conn:
-        version = repo.get_media_item_versions(transaction=conn, ids=[staged.media_item_version_id])[0]
+        version = repo.get_media_item_versions(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ids=[staged.media_item_version_id],
+        )[0]
     return _Env(
         ctx=ctx,
         engine=engine,
@@ -227,12 +232,39 @@ def test_access_pattern_renderer_unavailable_fails_closed(env: _Env) -> None:
         service.preview(env.ctx, media_item_version_id=env.version_id, access_pattern=_THUMBNAIL)
 
 
+def test_access_pattern_rejects_bytes_changed_after_storage_stat(
+    env: _Env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renderer = _RecordingRenderer()
+    monkeypatch.setattr(
+        env.storage,
+        "open_stream",
+        lambda _blob_key: io.BytesIO(b"tampered"),
+    )
+
+    with pytest.raises(InvariantViolation) as captured:
+        _service(env, renderer).preview(
+            env.ctx,
+            media_item_version_id=env.version_id,
+            access_pattern=_THUMBNAIL,
+        )
+
+    assert captured.value.details["reason"] == "stream_size_mismatch"
+    assert renderer.calls == 0
+
+
 def test_reference_resolve_never_reads_access_cache(env: _Env) -> None:
     # Populate a cache, then poison it; resolving the reference must still return the committed
     # source bytes' hash, proving reference resolution reads the source, never the cache.
     service = _service(env, _RecordingRenderer(content=b"DIFFERENT-PREVIEW-BYTES"))
     service.preview(env.ctx, media_item_version_id=env.version_id, access_pattern=_THUMBNAIL)
-    reference = MediaReferenceService(engine=env.engine, media_repository=env.repo, media_storage=env.storage)
+    reference = MediaReferenceService(
+        engine=env.engine,
+        policy=PolicyService(),
+        media_repository=env.repo,
+        media_storage=env.storage,
+    )
     resolved = reference.resolve(env.ctx, media_item_version_id=env.version_id)
     assert resolved.version.content_hash == env.source_hash
     assert resolved.reference.content_hash == env.source_hash

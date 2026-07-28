@@ -28,6 +28,12 @@ DEFAULT_ITERATIONS = 3
 PYTEST_RANDOMLY_SEED_MAX = 2**32 - 1
 STDIO_TAIL_LINES = 120
 SUMMARY_TOKEN = re.compile(r"\d+\s+(?:passed|failed|error|errors|skipped|xfailed|xpassed|warnings?|deselected)")
+SUMMARY_LINE = re.compile(
+    r"^\s*=*\s*"
+    r"(?P<summary>\d+\s+(?:passed|failed|error|errors|skipped|xfailed|xpassed|warnings?|deselected)"
+    r"(?:,\s*\d+\s+(?:passed|failed|error|errors|skipped|xfailed|xpassed|warnings?|deselected))*)"
+    r"(?:\s+in\s+.+?)?\s*=*\s*$"
+)
 
 
 @dataclass(frozen=True)
@@ -57,10 +63,11 @@ def _tail_lines(value: str, *, limit: int = STDIO_TAIL_LINES) -> list[str]:
 
 
 def _pytest_summary(stdout: str, stderr: str) -> str:
-    for line in reversed(_tail_lines(f"{stdout}\n{stderr}", limit=80)):
-        tokens = SUMMARY_TOKEN.findall(line)
-        if tokens:
-            return ", ".join(tokens)
+    del stderr
+    for line in reversed(_tail_lines(stdout, limit=80)):
+        match = SUMMARY_LINE.fullmatch(line)
+        if match is not None:
+            return ", ".join(SUMMARY_TOKEN.findall(match.group("summary")))
     return "<no pytest summary>"
 
 

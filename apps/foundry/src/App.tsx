@@ -14,6 +14,12 @@ const DataConnectionPage = lazy(
 );
 const DatasetsPage = lazy(() => import("@/features/datasets/DatasetsPage"));
 const PipelinesPage = lazy(() => import("@/features/pipelines/PipelinesPage"));
+const DocumentIntelligencePage = lazy(
+  () =>
+    import(
+      "@/features/document-intelligence/DocumentIntelligencePage"
+    ),
+);
 const LineagePage = lazy(() => import("@/features/lineage/LineagePage"));
 const CodeRepositoriesPage = lazy(
   () => import("@/features/code/CodeRepositoriesPage"),
@@ -57,6 +63,10 @@ export function App() {
               />
               <Route path="datasets/*" element={<DatasetsPage />} />
               <Route path="pipelines/*" element={<PipelinesPage />} />
+              <Route
+                path="document-intelligence/*"
+                element={<DocumentIntelligencePage />}
+              />
               <Route path="lineage/*" element={<LineagePage />} />
               <Route path="code/*" element={<CodeRepositoriesPage />} />
               <Route path="ontology/*" element={<OntologyPage />} />

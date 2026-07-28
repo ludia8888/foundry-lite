@@ -1954,14 +1954,9 @@ def test_api_transform_sql_register_and_run_creates_output_dataset(foundry, tmp_
     assert run.status_code == 200
     assert run.json()["dataset_ref"] == output_ref
     assert preview.status_code == 200
-    assert preview.json() == [
-        {
-            "order_id": "O-1",
-            "amount": 17,
-            "branch": "main",
-            "version": run.json()["version_id"],
-        }
-    ]
+    # Preview exposes the committed user schema only. Hive-style branch/version
+    # segments in a local storage path are internal routing metadata, not columns.
+    assert preview.json() == [{"order_id": "O-1", "amount": 17}]
 
 
 def test_api_transform_scheduler_preview_and_tick(monkeypatch) -> None:

@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
+from foundry_lite.application.ports.media_repository import MediaItemVersionRecord
 from foundry_lite.application.services.aip.agent_runtime_citations import (
     citation_error_payload,
     resolve_agent_answer_citations,
@@ -457,6 +458,43 @@ def test_agent_runtime_packs_document_context_into_ai_ledger(foundry: Any) -> No
     assert row["content_hash"].startswith("sha256:")
 
 
+def test_agent_runtime_document_citation_carries_verified_pdf_locator(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    _seed_agent_document_context(foundry)
+    monkeypatch.setenv("FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER", "agent-document-citation-secret")
+    foundry._services.model_gateway.language_model_adapter = _CitingLanguageModel()
+
+    result = foundry.aip.run_agent_payload(
+        payload={
+            **_payload(),
+            "agentRunId": "agent-runtime-document-citation",
+            "userMessage": "Summarize the expedited payment terms.",
+            "stateJson": {},
+            "modelAllowedClassifications": ["internal"],
+        },
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "succeeded"
+    citation = result.to_payload()["citations"][0]
+    evidence = citation["evidence"]
+    assert citation["sourceResourceType"] == "content_unit"
+    assert citation["navigationPath"].startswith("/document-intelligence?citation=")
+    assert evidence["mediaItemVersionId"] == "miv-agent-doc-1"
+    assert evidence["contentUnitId"] == "cu-agent-doc-1"
+    assert evidence["pageNumber"] == 7
+    assert evidence["bbox"]["pageWidth"] == 600
+    assert evidence["modelVersion"] is None
+    resolved = foundry.aip.resolve_citation_navigation(
+        navigation_ref=citation["navigationRef"],
+        ctx=_CTX,
+    )
+    assert resolved.evidence is not None
+    assert resolved.evidence.content_unit_id == "cu-agent-doc-1"
+
+
 def test_agent_runtime_rejects_forged_model_citation_before_success(foundry: Any, monkeypatch: Any) -> None:
     prepare_indexed_demo(foundry)
     monkeypatch.setenv("FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER", "agent-runtime-citation-secret")
@@ -865,8 +903,44 @@ def _direct_vendor_tool_spec_payload() -> dict[str, object]:
 
 def _seed_agent_document_context(foundry: Any) -> None:
     derivative_id = "mder-agent-doc-1"
-    envelope = {"tenantId": _CTX.tenant_id, "classification": "internal"}
+    envelope = {
+        "tenantId": _CTX.tenant_id,
+        "classification": "internal",
+        "policyVersion": "policy-v1",
+    }
+    bbox = {
+        "x": 60,
+        "y": 160,
+        "width": 180,
+        "height": 80,
+        "pageWidth": 600,
+        "pageHeight": 800,
+        "unit": "pt",
+    }
     with foundry.engine.begin() as conn:
+        foundry._services.media.catalog.media_repository.insert_version(
+            transaction=conn,
+            record=MediaItemVersionRecord(
+                media_item_version_id="miv-agent-doc-1",
+                tenant_id=_CTX.tenant_id,
+                media_item_id="mi-agent-doc-1",
+                media_transaction_id="mtx-agent-doc-1",
+                version_number=1,
+                blob_key="media/agent/document.pdf",
+                content_hash="sha256:agent-document-bytes",
+                byte_size=1024,
+                supplied_mime_type="application/pdf",
+                sniffed_mime_type="application/pdf",
+                schema_type="document",
+                format="pdf",
+                probe_metadata={},
+                security_envelope=dict(envelope),
+                source_ref=None,
+                status="COMMITTED",
+                created_at="2026-06-25T00:00:00Z",
+                committed_at="2026-06-25T00:00:01Z",
+            ),
+        )
         foundry._services.media.retrieval.media_derivative_repository.create_derivative_or_get_existing(
             transaction=conn,
             record=MediaDerivativeRecord(
@@ -900,6 +974,12 @@ def _seed_agent_document_context(foundry: Any) -> None:
                     chunk_spec_hash="agent-doc-chunk-v1",
                     security_envelope=dict(envelope),
                     page_number=7,
+                    bbox=dict(bbox),
+                    source_locator={
+                        "pageNumber": 7,
+                        "bbox": dict(bbox),
+                        "coordinateSystem": "pdf_top_left_points",
+                    },
                     created_at="2026-06-25T00:00:00Z",
                 )
             ],

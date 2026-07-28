@@ -193,10 +193,25 @@ class LocalDatasetStorageAdapter:
         return self.data_file_paths(manifest_uri, partition_filter=partition_filter)
 
     def _data_file_path(self, manifest_file: DatasetManifestFile) -> Path:
-        path = self._path_for(manifest_file["uri"])
+        path = self._storage_data_path(manifest_file["uri"])
         if not path.exists():
             raise FileNotFoundError(str(path))
+        self._verify_manifest_file(path, manifest_file)
         return path
+
+    def _storage_data_path(self, uri: str) -> Path:
+        path = self._path_for(uri).resolve()
+        try:
+            path.relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError("dataset manifest file is outside the configured storage root") from exc
+        return path
+
+    def _verify_manifest_file(self, path: Path, manifest_file: DatasetManifestFile) -> None:
+        if path.stat().st_size != manifest_file["byte_size"]:
+            raise ValueError("dataset manifest byte size does not match committed data file")
+        if _file_hash(path) != manifest_file["content_hash"]:
+            raise ValueError("dataset manifest content hash does not match committed data file")
 
     def _verify_committed_manifest(
         self,

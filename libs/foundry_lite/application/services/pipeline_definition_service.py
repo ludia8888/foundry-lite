@@ -5,13 +5,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.pipeline_repository import PipelineBranchRow, PipelineRepository
+from foundry_lite.application.ports.pipeline_repository import (
+    PipelineBranchRow,
+    PipelineRepository,
+    PipelineVersionRow,
+)
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_graph_model import (
-    empty_pipeline_graph,
     pipeline_graph_fingerprint,
-    validate_pipeline_graph,
+)
+from foundry_lite.application.services.pipeline_graph_normalizer import (
+    empty_pipeline_graph_v2,
+    normalize_pipeline_graph,
+)
+from foundry_lite.application.services.pipeline_graph_three_way_merge import (
+    merge_pipeline_graphs,
 )
 from foundry_lite.application.services.pipeline_payloads import (
     bounded_pipeline_limit,
@@ -51,7 +60,18 @@ class PipelineDefinitionService(CoreService):
         clean_pipeline_id = required_text(pipeline_id, "pipelineId")
         clean_name = required_text(name, "name")
         with self.engine.begin() as conn:
-            record = branch_record(ctx, pipeline_id=clean_pipeline_id, name=clean_name, now=_now())
+            latest = self.pipeline_repository.latest_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                pipeline_id=clean_pipeline_id,
+            )
+            record = branch_record(
+                ctx,
+                pipeline_id=clean_pipeline_id,
+                name=clean_name,
+                latest=latest,
+                now=_now(),
+            )
             row = self.pipeline_repository.insert_branch_if_name_free(transaction=conn, record=record)
             if row is None:
                 return self._replay_or_reject_create(conn, ctx, clean_pipeline_id, clean_name)
@@ -94,8 +114,7 @@ class PipelineDefinitionService(CoreService):
         self.runtime_service._require_or_audit(ctx, "pipeline:write", _RESOURCE_TYPE, branch_id)
         self._require_write_open(ctx, "update_pipeline_graph", branch_id)
         required_text(expected_fingerprint, "expectedFingerprint")
-        graph_dict = dict(graph)
-        validate_pipeline_graph(graph_dict)
+        canonical_graph = dict(normalize_pipeline_graph(graph))
         with self.engine.begin() as conn:
             before = self._require_branch(conn, ctx, branch_id)
             after = self.pipeline_repository.update_branch_graph(
@@ -103,8 +122,9 @@ class PipelineDefinitionService(CoreService):
                 tenant_id=ctx.tenant_id,
                 branch_id=branch_id,
                 expected_fingerprint=expected_fingerprint,
-                graph=graph_dict,
-                graph_fingerprint=pipeline_graph_fingerprint(graph_dict),
+                graph=canonical_graph,
+                graph_fingerprint=pipeline_graph_fingerprint(canonical_graph),
+                graph_schema_version=2,
                 updated_at=_now(),
             )
             if after is None:
@@ -123,7 +143,7 @@ class PipelineDefinitionService(CoreService):
                 tenant_id=ctx.tenant_id,
                 pipeline_id=str(branch["pipeline_id"]),
             )
-        latest_graph = latest["graph"] if latest is not None else empty_pipeline_graph()
+        latest_graph = latest["graph"] if latest is not None else empty_pipeline_graph_v2()
         return {
             "branchId": branch["id"],
             "pipelineId": branch["pipeline_id"],
@@ -152,7 +172,7 @@ class PipelineDefinitionService(CoreService):
                 tenant_id=ctx.tenant_id,
                 pipeline_id=str(before["pipeline_id"]),
             )
-            base_graph = latest["graph"] if latest is not None else empty_pipeline_graph()
+            base_graph, canonical_graph = _three_way_rebase_graphs(latest, before)
             after = self.pipeline_repository.rebase_branch(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -160,8 +180,9 @@ class PipelineDefinitionService(CoreService):
                 expected_fingerprint=expected_fingerprint,
                 base_version_id=latest["id"] if latest is not None else None,
                 base_graph=base_graph,
-                graph=dict(before["graph"]),
-                graph_fingerprint=str(before["graph_fingerprint"]),
+                graph=canonical_graph,
+                graph_fingerprint=pipeline_graph_fingerprint(canonical_graph),
+                graph_schema_version=2,
                 rebased_at=_now(),
                 updated_at=_now(),
             )
@@ -300,6 +321,27 @@ def _graph_diff(base: Mapping[str, object], graph: Mapping[str, object]) -> dict
         "graphFingerprint": graph_fp,
         "summary": {"nodeCount": len(_list(base, "nodes")), "newNodeCount": len(_list(graph, "nodes"))},
     }
+
+
+def _three_way_rebase_graphs(
+    latest: PipelineVersionRow | None,
+    branch: PipelineBranchRow,
+) -> tuple[dict[str, object], dict[str, object]]:
+    latest_graph = normalize_pipeline_graph(latest["graph"]) if latest is not None else empty_pipeline_graph_v2()
+    base_graph = normalize_pipeline_graph(branch["base_graph"])
+    branch_graph = normalize_pipeline_graph(branch["graph"])
+    result = merge_pipeline_graphs(base_graph, branch_graph, latest_graph)
+    if result.conflicts:
+        raise ConflictDetected(
+            "pipeline branch has three-way rebase conflicts",
+            details={
+                "branchId": branch["id"],
+                "baseVersionId": branch["base_version_id"],
+                "latestVersionId": latest["id"] if latest is not None else None,
+                "conflicts": list(result.conflicts),
+            },
+        )
+    return dict(latest_graph), dict(normalize_pipeline_graph(result.graph))
 
 
 def _list(graph: Mapping[str, object], key: str) -> list[object]:

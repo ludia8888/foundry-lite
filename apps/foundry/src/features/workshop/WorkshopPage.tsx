@@ -10,6 +10,7 @@ import {
 } from "@foundry-lite/sdk/react";
 import { Eye, Info, Pencil, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 
 import { ErrorState } from "@/components/shared/ErrorState";
 import { LoadingState } from "@/components/shared/LoadingState";
@@ -77,6 +78,11 @@ export default function WorkshopPage() {
   const runnable = useMemo(
     () => isRunnableApp(definition.page),
     [definition.page],
+  );
+  const isOntologyMissing = Boolean(
+    workspace.error &&
+      !workspace.catalog &&
+      isActiveOntologyMissingError(workspace.error),
   );
   const isDirty =
     hasUnsavedChanges ||
@@ -173,23 +179,7 @@ export default function WorkshopPage() {
     );
   }
 
-  if (
-    workspace.error &&
-    !workspace.catalog &&
-    isActiveOntologyMissingError(workspace.error)
-  ) {
-    return (
-      <div className="space-y-4 p-4">
-        <PageHeader
-          title="Workshop"
-          description="객체 뷰 조합으로 최소 업무 앱 구성"
-        />
-        <OntologyRequiredState />
-      </div>
-    );
-  }
-
-  if (workspace.error && !workspace.catalog) {
+  if (workspace.error && !workspace.catalog && !isOntologyMissing) {
     return (
       <div className="space-y-4 p-4">
         <PageHeader
@@ -216,6 +206,8 @@ export default function WorkshopPage() {
           </span>
           {workspace.versionLabel ? (
             <StatusPill intent="neutral">{workspace.versionLabel}</StatusPill>
+          ) : isOntologyMissing ? (
+            <StatusPill intent="warning">온톨로지 미연결</StatusPill>
           ) : null}
         </div>
 
@@ -289,10 +281,22 @@ export default function WorkshopPage() {
           {resource ? ` · ${resource.rid}` : ""}. 미구현 위젯은 팔레트에서
           future 배지로 표시됩니다.
         </span>
+        {isOntologyMissing ? (
+          <Link
+            to="/ontology"
+            className="text-[11px] font-semibold text-[#215db0] hover:underline"
+          >
+            객체·액션 바인딩을 위해 Ontology 연결
+          </Link>
+        ) : null}
         {persistenceError ? (
           <StatusPill intent="danger">저장 동기화 오류</StatusPill>
         ) : null}
-        {runnable ? (
+        {isOntologyMissing ? (
+          <StatusPill intent="warning">
+            빌더 편집 가능 · 런타임은 Ontology 필요
+          </StatusPill>
+        ) : runnable ? (
           <StatusPill intent="success">최소 업무 앱 구성 완료</StatusPill>
         ) : (
           <StatusPill intent="warning">
@@ -311,6 +315,8 @@ export default function WorkshopPage() {
             onSelectSection={setSelectedSectionId}
             onChange={handleDefinitionChange}
           />
+        ) : isOntologyMissing ? (
+          <OntologyRequiredState className="h-full" />
         ) : (
           <RuntimeMode
             page={definition.page}

@@ -3,10 +3,20 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from foundry_lite.application.services.pipeline_preview_recovery import (
+    PipelinePreviewRecoveryCursor,
+    recoverable_pipeline_previews,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
+from foundry_lite.infrastructure.repositories.metadata_repository import (
+    SqlAlchemyMetadataRepository,
+)
+from foundry_lite.infrastructure.repositories.pipeline_execution_repository import (
+    SqlAlchemyPipelineExecutionRepository,
+)
 from foundry_lite.security.tenant_context import tenant_context
-from sqlalchemy import create_engine, insert, select, text
+from sqlalchemy import create_engine, event, insert, select, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -76,6 +86,42 @@ def test_installed_rls_hook_uses_current_request_tenant(postgres_fixture) -> Non
     assert demo_rows == ["dataset-demo"]
     assert no_tenant_rows == []
     assert other_rows == ["dataset-other"]
+
+
+def test_preview_recovery_enumerates_tenants_and_binds_rls_context(postgres_fixture) -> None:
+    engine = postgres_fixture.engine
+    role_name = f"foundry_lite_preview_recovery_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    _seed_cross_tenant_rows(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(db.pipeline_preview_runs),
+            [
+                _preview_row("preview-demo", "tenant-demo"),
+                _preview_row("preview-other", "tenant-other"),
+            ],
+        )
+
+    worker_engine = create_engine(engine.url, future=True, pool_size=1, max_overflow=0)
+    install_postgres_rls_tenant_context(worker_engine)
+    event.listen(worker_engine, "begin", _set_rls_test_role(role_name))
+    try:
+        rows = recoverable_pipeline_previews(
+            worker_engine,
+            SqlAlchemyPipelineExecutionRepository(worker_engine),
+            SqlAlchemyMetadataRepository(worker_engine, allow_schema_mutation=False),
+            PipelinePreviewRecoveryCursor(),
+            as_of="2026-07-28T00:00:00.000000Z",
+            limit=10,
+        )
+    finally:
+        worker_engine.dispose()
+
+    assert _rls_forced(engine, db.pipeline_preview_runs.name)
+    assert {(row["tenant_id"], row["id"]) for row in rows} == {
+        ("tenant-demo", "preview-demo"),
+        ("tenant-other", "preview-other"),
+    }
 
 
 def _grant_rls_role(engine: Engine, role_name: str) -> None:
@@ -160,6 +206,42 @@ def _object_row(row_id: str, tenant_id: str) -> dict[str, object]:
         "created_at": "2026-06-12T00:00:00Z",
         "updated_at": "2026-06-12T00:00:00Z",
     }
+
+
+def _preview_row(row_id: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": row_id,
+        "tenant_id": tenant_id,
+        "pipeline_id": f"pipeline-{tenant_id}",
+        "branch_id": f"branch-{tenant_id}",
+        "status": "QUEUED",
+        "graph": {"schemaVersion": 2, "nodes": [], "edges": []},
+        "graph_fingerprint": f"graph-{tenant_id}",
+        "target_node_id": None,
+        "limits": {},
+        "outputs": [],
+        "artifacts": [],
+        "idempotency_key": f"preview-key-{tenant_id}",
+        "request_fingerprint": f"request-{tenant_id}",
+        "is_commit_forbidden": True,
+        "execution_context": {"actorUserId": f"user-{tenant_id}", "roles": ["data_engineer"]},
+        "execution_lease_token": None,
+        "execution_lease_expires_at": None,
+        "execution_heartbeat_at": None,
+        "cancel_requested_at": None,
+        "error": None,
+        "created_by": f"user-{tenant_id}",
+        "created_at": "2026-07-28T00:00:00.000000Z",
+        "started_at": None,
+        "completed_at": None,
+    }
+
+
+def _set_rls_test_role(role_name: str):
+    def set_role(conn: Connection) -> None:
+        conn.execute(text(f"SET LOCAL ROLE {_role_identifier(conn, role_name)}"))
+
+    return set_role
 
 
 def _rls_enabled(engine: Engine, table_name: str) -> bool:

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
 from foundry_lite.application.ports.embedding_model import EmbeddingVector
+from foundry_lite.domain.classification import normalize_classification
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,8 @@ def is_classification_cleared(classification: str, allowed_classifications: tupl
     """
     if allowed_classifications is None:
         return True
-    return classification in allowed_classifications
+    normalized_allowed = {normalize_classification(value) for value in allowed_classifications}
+    return normalize_classification(classification) in normalized_allowed
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,13 @@ class ContentSearchHit:
     source_media_item_version_id: str
     content_unit_id: str
     index_generation: str
+    media_derivative_id: str | None = None
     page_number: int | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    bbox: Mapping[str, object] | None = None
+    timecode: Mapping[str, object] | None = None
+    source_locator: Mapping[str, object] | None = None
     text_hash: str | None = None
     text: str = ""
     chunk_spec_hash: str = ""

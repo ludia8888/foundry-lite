@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetTransactionRow,
     DeadLetterRecord,
+    ParquetFieldType,
     StreamArchiveConfig,
     StreamEvent,
     SyncRunRecord,
@@ -31,6 +32,7 @@ from foundry_lite.application.services.dataset.stream_archive import (
     ensure_stream_archive_batch_writable,
     prepare_stream_archive_batch,
     read_stream_archive_events,
+    stream_archive_field_types,
     stream_archive_fields,
     stream_cursor_offset,
     stream_dead_letter_record,
@@ -106,7 +108,12 @@ class StreamArchiveCommitBoundary(Protocol):
     ) -> UploadSyncPlan: ...
 
     def _rows_to_parquet(
-        self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+        *,
+        field_types: Mapping[str, ParquetFieldType] | None = None,
     ) -> None: ...
 
     def _abort_stream_after_error(
@@ -196,7 +203,7 @@ def write_stream_archive_batch(
         except ValidationFailed:
             persist_stream_dead_letters(service, ctx, dataset, stream, plan, batch.dead_letters)
             raise
-        service._rows_to_parquet(batch.rows, staged, stream_archive_fields(stream))
+        _write_stream_archive_parquet(service, stream, staged, batch.rows)
         metadata = stream_commit_metadata(dataset, stream, events, committed_transaction, batch.rows)
         return finalize_stream_archive_commit(
             engine=service.engine,
@@ -216,6 +223,20 @@ def write_stream_archive_batch(
     except Exception as exc:
         service._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
         raise
+
+
+def _write_stream_archive_parquet(
+    service: StreamArchiveCommitBoundary,
+    stream: StreamArchiveConfig,
+    staged: Path,
+    rows: Sequence[Mapping[str, object]],
+) -> None:
+    service._rows_to_parquet(
+        rows,
+        staged,
+        stream_archive_fields(stream),
+        field_types=stream_archive_field_types(stream),
+    )
 
 
 def stream_dead_letter_inserter(service: StreamArchiveCommitBoundary) -> InsertStreamDeadLetters:

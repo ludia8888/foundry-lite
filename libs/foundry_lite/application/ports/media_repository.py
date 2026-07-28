@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
 MediaTransactionStatus = str
 MediaItemVersionStatus = str
+
+
+class PipelineMediaCommitVersionRow(TypedDict):
+    """One committed Media Set output version used for stale-run recovery."""
+
+    transaction_id: str
+    media_set_id: str
+    media_set_ref: str
+    transaction_committed_at: str
+    media_item_version_id: str
+    version_committed_at: str
+    source_ref: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -122,6 +134,15 @@ class MediaItemVersionRecord:
     has_legal_hold: bool = False
 
 
+@dataclass(frozen=True)
+class MediaSetSelectionRecord:
+    """One immutable version selected from a tenant-scoped Media Set."""
+
+    media_set_id: str
+    logical_path: str
+    version: MediaItemVersionRecord
+
+
 class MediaRepository(Protocol):
     """DB boundary for the media catalog, transactions, items, and immutable versions.
 
@@ -212,10 +233,27 @@ class MediaRepository(Protocol):
         """Return one tenant-scoped immutable version by id."""
         ...
 
+    def select_media_set_versions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        media_set_id: str,
+        media_item_version_ids: list[str] | None = None,
+        logical_path_prefix: str | None = None,
+        limit: int = 20,
+    ) -> list[MediaSetSelectionRecord]:
+        """Select committed current heads or exact committed versions from one Media Set."""
+        ...
+
     def get_media_item_versions(
-        self, *, transaction: TransactionContext, ids: list[str]
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ids: list[str],
     ) -> list[MediaItemVersionRecord]:
-        """Return immutable version rows for the given ids (batch-first)."""
+        """Return tenant-scoped immutable version rows for the given ids (batch-first)."""
         ...
 
     def next_version_number(self, *, transaction: TransactionContext, media_item_id: str) -> int:
@@ -232,6 +270,22 @@ class MediaRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
     ) -> list[MediaItemVersionRecord]:
         """Return a transaction's already-COMMITTED versions read-only (for idempotent commit replay)."""
+        ...
+
+    def committed_pipeline_output_versions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[PipelineMediaCommitVersionRow]:
+        """Return every version in committed transactions attributed to one Pipeline run."""
+        ...
+
+    def fetch_transaction_versions(
+        self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
+    ) -> list[MediaItemVersionRecord]:
+        """Return every immutable version owned by one tenant-scoped media transaction."""
         ...
 
     def fetch_unreachable_staged_versions(

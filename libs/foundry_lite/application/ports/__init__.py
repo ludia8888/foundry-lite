@@ -48,8 +48,10 @@ from foundry_lite.application.ports.backup_artifact_store import (
     BackupArtifactStore,
 )
 from foundry_lite.application.ports.compute_adapter import (
+    BoundedParquetRead,
     ComputeAdapter,
     InputFilePaths,
+    ParquetFieldType,
     PythonTransformPlan,
     SqlTransformPlan,
     TabularRow,
@@ -133,8 +135,8 @@ from foundry_lite.application.ports.dataset_storage import (
     StoredDatasetCommit,
 )
 from foundry_lite.application.ports.dataset_transaction_repository import (
-    DatasetFilePartitionValues,
     DatasetFileRecord,
+    DatasetFileRow,
     DatasetRunError,
     DatasetRunKind,
     DatasetTransactionMetadata,
@@ -153,6 +155,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     DeadLetterRecordRetryResult,
     DeadLetterRecordRow,
     DeadLetterRecordStatus,
+    PipelineDatasetCommitRow,
     SyncRunRecord,
     SyncRunRow,
 )
@@ -302,6 +305,7 @@ from foundry_lite.application.ports.osdk_application_repository import (
 from foundry_lite.application.ports.pipeline_repository import (
     PipelineBranchRecord,
     PipelineBranchRow,
+    PipelineExecutionLeaseFence,
     PipelineProposalRecord,
     PipelineProposalRow,
     PipelineRepository,

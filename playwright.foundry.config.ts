@@ -3,6 +3,14 @@ import { defineConfig, devices } from "@playwright/test";
 const configuredWorkers = Number.parseInt(process.env.E2E_FOUNDRY_WORKERS ?? "1", 10);
 const workers =
   Number.isFinite(configuredWorkers) && configuredWorkers > 0 ? configuredWorkers : 1;
+const foundryBaseUrl = (
+  process.env.FOUNDRY_LITE_E2E_WEB_BASE_URL ?? "http://127.0.0.1:4173"
+).replace(/\/+$/, "");
+const foundryApiBaseUrl = (
+  process.env.FOUNDRY_LITE_E2E_API_BASE_URL ?? "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
+const shouldReuseExistingServer =
+  process.env.FOUNDRY_LITE_E2E_REUSE_EXISTING === "1";
 
 export default defineConfig({
   testDir: "tests/e2e-foundry",
@@ -20,7 +28,7 @@ export default defineConfig({
     ["json", { outputFile: "artifacts/playwright/foundry-results.json" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: foundryBaseUrl,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -35,14 +43,16 @@ export default defineConfig({
     {
       command:
         'FOUNDRY_LITE_HOME="$PWD/.foundry-lite-foundry-e2e" bash scripts/e2e_start_api.sh',
-      url: "http://127.0.0.1:8000/healthz",
-      reuseExistingServer: !process.env.CI,
-      timeout: 45_000,
+      url: `${foundryApiBaseUrl}/healthz`,
+      reuseExistingServer: shouldReuseExistingServer,
+      // This suite uses the same full seeded API runtime as the generic E2E
+      // suite, so it must keep the same cold-runner readiness budget.
+      timeout: 120_000,
     },
     {
       command: "pnpm --filter @foundry-lite/foundry dev --host 127.0.0.1",
-      url: "http://127.0.0.1:4173",
-      reuseExistingServer: !process.env.CI,
+      url: foundryBaseUrl,
+      reuseExistingServer: shouldReuseExistingServer,
       timeout: 45_000,
     },
   ],

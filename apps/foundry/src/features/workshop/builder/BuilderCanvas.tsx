@@ -19,14 +19,16 @@ import {
   type AppWidget,
   type WidgetKind,
 } from "../lib/app-model";
-import { WidgetPalettePopover } from "./WidgetPalettePopover";
+import { WidgetPalette } from "./WidgetPalette";
 
 interface BuilderCanvasProps {
   page: AppPage;
   objectViews: FoundryLiteOntologyObjectView[];
   actionViews: FoundryLiteOntologyActionView[];
   selectedSectionId: string | null;
+  selectedWidgetId: string | null;
   onSelectSection: (sectionId: string) => void;
+  onSelectWidget: (sectionId: string, widgetId: string) => void;
   onAddWidget: (sectionId: string, kind: WidgetKind) => void;
   onRemoveWidget: (sectionId: string, widgetId: string) => void;
   onBindWidgetObject: (
@@ -47,14 +49,18 @@ function WidgetCard({
   widget,
   objectViews,
   actionViews,
+  isSelected,
   onRemove,
+  onSelect,
   onBindObject,
   onBindAction,
 }: {
   widget: AppWidget;
   objectViews: FoundryLiteOntologyObjectView[];
   actionViews: FoundryLiteOntologyActionView[];
+  isSelected: boolean;
   onRemove: () => void;
+  onSelect: () => void;
   onBindObject: (objectApiName: string) => void;
   onBindAction: (actionApiName: string) => void;
 }) {
@@ -62,23 +68,41 @@ function WidgetCard({
     widget.kind === "objectTable" || widget.kind === "objectDetail";
   const needsAction = widget.kind === "actionForm";
   return (
-    <div className="rounded border border-[#c9d3ea] bg-[#f7f9fc] p-2 text-left shadow-[0_1px_1px_rgba(17,20,24,0.04)]">
+    <div
+      className={cn(
+        "rounded border bg-[#f7f9fc] p-2 text-left shadow-[0_1px_1px_rgba(17,20,24,0.04)]",
+        isSelected
+          ? "border-[#2d72d2] ring-1 ring-[#2d72d2]"
+          : "border-[#c9d3ea]",
+      )}
+    >
       <div className="flex items-center gap-1.5">
-        <span className="rounded bg-[#2d72d2] px-1.5 py-px text-[10px] font-semibold text-white">
+        <button
+          type="button"
+          aria-label={`${WIDGET_LABELS[widget.kind]} 위젯 선택`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect();
+          }}
+          className="rounded bg-[#2d72d2] px-1.5 py-px text-[10px] font-semibold text-white outline-none focus-visible:ring-2 focus-visible:ring-[#2d72d2]/40"
+        >
           {WIDGET_LABELS[widget.kind]}
-        </span>
+        </button>
         <button
           type="button"
           aria-label="위젯 제거"
           className="ml-auto rounded p-0.5 text-[#8f99a8] hover:bg-muted/60 hover:text-foreground"
-          onClick={onRemove}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove();
+          }}
         >
           <X className="size-3" />
         </button>
       </div>
       {needsObject ? (
         <select
-          value={widget.objectApiName ?? ""}
+          value={widget.config.objectApiName ?? ""}
           onChange={(event) => onBindObject(event.target.value)}
           className="mt-1.5 h-7 w-full rounded border border-[#d5dce1] bg-white px-1.5 text-[11px] text-[#1c2127] focus:border-[#2d72d2] focus:outline-none"
         >
@@ -94,7 +118,7 @@ function WidgetCard({
       ) : null}
       {needsAction ? (
         <select
-          value={widget.actionApiName ?? ""}
+          value={widget.config.actionApiName ?? ""}
           onChange={(event) => onBindAction(event.target.value)}
           className="mt-1.5 h-7 w-full rounded border border-[#d5dce1] bg-white px-1.5 text-[11px] text-[#1c2127] focus:border-[#2d72d2] focus:outline-none"
         >
@@ -170,7 +194,9 @@ function SectionColumn({
   isSelected,
   objectViews,
   actionViews,
+  selectedWidgetId,
   onSelect,
+  onSelectWidget,
   onAddWidget,
   onRemoveWidget,
   onBindObject,
@@ -182,7 +208,9 @@ function SectionColumn({
   isSelected: boolean;
   objectViews: FoundryLiteOntologyObjectView[];
   actionViews: FoundryLiteOntologyActionView[];
+  selectedWidgetId: string | null;
   onSelect: () => void;
+  onSelectWidget: (widgetId: string) => void;
   onAddWidget: (kind: WidgetKind) => void;
   onRemoveWidget: (widgetId: string) => void;
   onBindObject: (widgetId: string, objectApiName: string) => void;
@@ -208,7 +236,9 @@ function SectionColumn({
             widget={widget}
             objectViews={objectViews}
             actionViews={actionViews}
+            isSelected={selectedWidgetId === widget.id}
             onRemove={() => onRemoveWidget(widget.id)}
+            onSelect={() => onSelectWidget(widget.id)}
             onBindObject={(objectApiName) =>
               onBindObject(widget.id, objectApiName)
             }
@@ -223,15 +253,18 @@ function SectionColumn({
         className="mt-2 space-y-1.5"
         onClick={(event) => event.stopPropagation()}
       >
-        <WidgetPalettePopover onSelect={onAddWidget}>
-          <button
-            type="button"
-            className="flex h-8 w-full items-center justify-center gap-1.5 rounded border-2 border-dashed border-[#2d72d2] bg-[#f2f7fd] text-[12px] font-medium text-[#215db0] hover:bg-[#e8f0fb]"
-          >
-            <Plus className="size-3.5" />
-            위젯 추가
-          </button>
-        </WidgetPalettePopover>
+        <WidgetPalette
+          onPick={onAddWidget}
+          trigger={
+            <button
+              type="button"
+              className="flex h-8 w-full items-center justify-center gap-1.5 rounded border-2 border-dashed border-[#2d72d2] bg-[#f2f7fd] text-[12px] font-medium text-[#215db0] hover:bg-[#e8f0fb]"
+            >
+              <Plus className="size-3.5" />
+              위젯 추가
+            </button>
+          }
+        />
         <LayoutTemplatePopover onApply={onApplyLayout} />
       </div>
     </div>
@@ -244,7 +277,9 @@ export function BuilderCanvas({
   objectViews,
   actionViews,
   selectedSectionId,
+  selectedWidgetId,
   onSelectSection,
+  onSelectWidget,
   onAddWidget,
   onRemoveWidget,
   onBindWidgetObject,
@@ -275,7 +310,11 @@ export function BuilderCanvas({
             isSelected={selectedSectionId === section.id}
             objectViews={objectViews}
             actionViews={actionViews}
+            selectedWidgetId={selectedWidgetId}
             onSelect={() => onSelectSection(section.id)}
+            onSelectWidget={(widgetId) =>
+              onSelectWidget(section.id, widgetId)
+            }
             onAddWidget={(kind) => onAddWidget(section.id, kind)}
             onRemoveWidget={(widgetId) => onRemoveWidget(section.id, widgetId)}
             onBindObject={(widgetId, objectApiName) =>

@@ -117,8 +117,8 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Tesseract OCR and FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg
+      - name: Install Tesseract OCR, Poppler, and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
 
       - name: Cache faster-whisper tiny model
         uses: actions/cache@v4
@@ -182,8 +182,8 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Tesseract OCR and FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg
+      - name: Install Tesseract OCR, Poppler, and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
 
       - name: Cache faster-whisper tiny model
         uses: actions/cache@v4
@@ -246,6 +246,33 @@ jobs:
 
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install and verify document and media processors
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
+          command -v tesseract
+          command -v pdftoppm
+          command -v pdfimages
+          command -v ffprobe
+
+      # The seeded browser runtime exercises AI/content paths during API
+      # startup. Downloading these models inside Playwright's webServer
+      # readiness window makes a cold GitHub runner fail before tests begin.
+      - name: Cache faster-whisper and fastembed models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
+
+      - name: Pre-fetch faster-whisper tiny model
+        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
+
+      - name: Pre-fetch fastembed embedding model
+        run: uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
+      - name: Pre-fetch fastembed CLIP vision/text models
+        run: uv run python -c "from fastembed import ImageEmbedding, TextEmbedding; ImageEmbedding('Qdrant/clip-ViT-B-32-vision'); TextEmbedding('Qdrant/clip-ViT-B-32-text')"
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium

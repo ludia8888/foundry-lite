@@ -511,6 +511,7 @@ export function InspectorPanel({
     <InspectorShell title="페이지" subtitle={page.pageId}>
       <Field label="이름">
         <Input
+          aria-label="페이지 이름"
           className="h-8 text-[12px]"
           value={page.name}
           onChange={(event) =>

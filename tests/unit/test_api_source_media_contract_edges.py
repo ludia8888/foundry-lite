@@ -120,8 +120,50 @@ class _FakeMedia:
     def process(self, *_args, **_kwargs):
         return _Payload(id="process-1")
 
+    def source_read(self, *_args, **kwargs):
+        assert kwargs["should_proxy"] is True
+        byte_range = kwargs.get("byte_range")
+        version = SimpleNamespace(
+            sniffed_mime_type="application/pdf",
+            content_hash="sha256:source",
+            byte_size=8,
+        )
+        resolved = SimpleNamespace(version=version)
+        grant = SimpleNamespace(url=None, stream=BytesIO(b"%PDFdata"))
+        return SimpleNamespace(resolved=resolved, grant=grant, byte_range=byte_range)
+
     def resolve_derivative(self, *_args, **_kwargs):
         return _Payload(id="derivative-1")
+
+    def list_derivative_content_units(self, *_args, **_kwargs):
+        unit = SimpleNamespace(
+            content_unit_id="content-unit-1",
+            source_media_item_version_id="media-version-1",
+            derivative_id="media-derivative-1",
+            unit_kind="layout_block",
+            ordinal=0,
+            text="Heading",
+            text_hash="sha256:heading",
+            page_number=1,
+            start_ms=None,
+            end_ms=None,
+            bbox={"x": 10, "y": 20, "width": 80, "height": 12},
+            parent_content_unit_id=None,
+            source_locator={"pageNumber": 1},
+            structure={"role": "heading_1", "isHeuristic": True},
+            confidence=0.79,
+            speaker=None,
+            language=None,
+            security_envelope={"classification": "internal"},
+            embedding=(),
+            created_at="2026-07-16T00:00:00Z",
+        )
+        return SimpleNamespace(
+            media_derivative_id="media-derivative-1",
+            source_media_item_version_id="media-version-1",
+            items=(unit,),
+            next_cursor=None,
+        )
 
     def index_derivative(self, *_args, **_kwargs):
         return _Payload(id="index-1")
@@ -315,7 +357,18 @@ def test_api_media_and_aip_routes_delegate_with_serialized_payloads(monkeypatch)
         )["id"]
         == "process-1"
     )
+    source_response = api_main.read_media_version_content(
+        request,
+        "media-version-1",
+        range_header="bytes=0-3",
+    )
+    assert source_response.status_code == 206
+    assert source_response.headers["content-range"] == "bytes 0-3/8"
+    assert source_response.headers["content-length"] == "4"
     assert api_main.get_media_derivative(request, "media-derivative-1")["id"] == "derivative-1"
+    content_units = api_main.list_media_derivative_content_units(request, "media-derivative-1")
+    assert content_units["items"][0]["structure"] == {"role": "heading_1", "isHeuristic": True}
+    assert content_units["items"][0]["bbox"] == {"x": 10, "y": 20, "width": 80, "height": 12}
     assert (
         api_main.index_media_derivative(
             request, "media-derivative-1", api_main.MediaIndexDerivativeRequest(generation="g1")

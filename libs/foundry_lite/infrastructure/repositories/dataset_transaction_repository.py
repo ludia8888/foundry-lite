@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports import (
     DatasetFileRecord,
+    DatasetFileRow,
     DatasetRunError,
     DatasetRunKind,
     DatasetTransactionMetadata,
@@ -21,6 +22,7 @@ from foundry_lite.application.ports import (
     DeadLetterRecord,
     DeadLetterRecordRow,
     DeadLetterRecordStatus,
+    PipelineDatasetCommitRow,
     SyncRunRecord,
     SyncRunRow,
     WebhookEventKeyRecord,
@@ -195,6 +197,29 @@ class SqlAlchemyDatasetTransactionRepository:
             )
         )
 
+    def files_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_version_id: str,
+    ) -> list[DatasetFileRow]:
+        rows = (
+            transaction.execute(
+                select(db.dataset_files)
+                .where(
+                    and_(
+                        db.dataset_files.c.tenant_id == tenant_id,
+                        db.dataset_files.c.dataset_version_id == dataset_version_id,
+                    )
+                )
+                .order_by(db.dataset_files.c.uri, db.dataset_files.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetFileRow, dict(row)) for row in rows]
+
     def insert_webhook_event_key(self, *, transaction: Any, record: WebhookEventKeyRecord) -> None:
         savepoint = transaction.begin_nested()
         try:
@@ -291,6 +316,60 @@ class SqlAlchemyDatasetTransactionRepository:
             .first()
         )
         return cast(DatasetTransactionRow, dict(row)) if row else None
+
+    def committed_pipeline_output_transactions(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[PipelineDatasetCommitRow]:
+        dataset_ref = (db.datasets.c.namespace + "." + db.datasets.c.name).label("dataset_ref")
+        rows = (
+            transaction.execute(
+                select(
+                    db.dataset_transactions.c.id.label("transaction_id"),
+                    db.dataset_transactions.c.dataset_id,
+                    dataset_ref,
+                    db.dataset_transactions.c.committed_version_id.label("version_id"),
+                    db.dataset_versions.c.version_number,
+                    db.dataset_versions.c.manifest_uri,
+                    db.dataset_versions.c.row_count,
+                    db.dataset_schemas.c.schema_hash,
+                    db.dataset_transactions.c.metadata,
+                    db.dataset_transactions.c.committed_at,
+                )
+                .join(db.datasets, db.datasets.c.id == db.dataset_transactions.c.dataset_id)
+                .join(
+                    db.dataset_versions,
+                    and_(
+                        db.dataset_versions.c.id == db.dataset_transactions.c.committed_version_id,
+                        db.dataset_versions.c.dataset_id == db.dataset_transactions.c.dataset_id,
+                    ),
+                )
+                .join(
+                    db.dataset_schemas,
+                    and_(
+                        db.dataset_schemas.c.dataset_id == db.dataset_transactions.c.dataset_id,
+                        db.dataset_schemas.c.version == db.dataset_versions.c.schema_version,
+                    ),
+                )
+                .where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.datasets.c.tenant_id == tenant_id,
+                        db.dataset_versions.c.tenant_id == tenant_id,
+                        db.dataset_transactions.c.status == "COMMITTED",
+                        db.dataset_transactions.c.committed_version_id.is_not(None),
+                        db.dataset_transactions.c.metadata["pipelineRunId"].as_string() == pipeline_run_id,
+                    )
+                )
+                .order_by(db.dataset_transactions.c.committed_at, db.dataset_transactions.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(PipelineDatasetCommitRow, dict(row)) for row in rows]
 
     def committed_webhook_transaction_by_event(
         self,

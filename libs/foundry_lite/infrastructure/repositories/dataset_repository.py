@@ -64,21 +64,57 @@ class SqlAlchemyDatasetRepository:
 
     def find_active_dataset(self, *, tenant_id: str, namespace: str, name: str) -> DatasetRow | None:
         with self.engine.begin() as conn:
-            row = (
-                conn.execute(
-                    select(db.datasets).where(
-                        and_(
-                            db.datasets.c.tenant_id == tenant_id,
-                            db.datasets.c.namespace == namespace,
-                            db.datasets.c.name == name,
-                            db.datasets.c.status == "active",
-                        )
+            return self.active_dataset_by_ref(
+                transaction=conn,
+                tenant_id=tenant_id,
+                namespace=namespace,
+                name=name,
+            )
+
+    def active_dataset_by_ref(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        namespace: str,
+        name: str,
+    ) -> DatasetRow | None:
+        row = (
+            transaction.execute(
+                select(db.datasets).where(
+                    and_(
+                        db.datasets.c.tenant_id == tenant_id,
+                        db.datasets.c.namespace == namespace,
+                        db.datasets.c.name == name,
+                        db.datasets.c.status == "active",
                     )
                 )
-                .mappings()
-                .first()
             )
-            return cast(DatasetRow, dict(row)) if row else None
+            .mappings()
+            .first()
+        )
+        return cast(DatasetRow, dict(row)) if row else None
+
+    def dataset_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> DatasetRow | None:
+        row = (
+            transaction.execute(
+                select(db.datasets).where(
+                    and_(
+                        db.datasets.c.tenant_id == tenant_id,
+                        db.datasets.c.id == dataset_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetRow, dict(row)) if row else None
 
     def list_active_datasets(self, *, tenant_id: str) -> list[DatasetRow]:
         with self.engine.begin() as conn:

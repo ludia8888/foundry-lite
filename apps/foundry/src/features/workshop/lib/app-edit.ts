@@ -3,6 +3,7 @@ import {
   createPage,
   createSection,
   createVariable,
+  withAppPages,
   type AppDefinition,
   type AppOverlay,
   type AppPage,
@@ -22,7 +23,7 @@ function mapPages(
   definition: AppDefinition,
   updater: (page: AppPage) => AppPage,
 ): AppDefinition {
-  return { ...definition, pages: definition.pages.map(updater) };
+  return withAppPages(definition, definition.pages.map(updater));
 }
 
 /** 헤더 슬롯·페이지·오버레이의 모든 섹션 배열에 매퍼를 적용한다. */
@@ -38,18 +39,19 @@ function mapAllSections(
     center: mappedSlots.find((section) => section.id === center.id) ?? center,
     right: mappedSlots.find((section) => section.id === right.id) ?? right,
   };
-  return {
+  const updated = {
     ...definition,
     header: { ...definition.header, slots },
-    pages: definition.pages.map((page) => ({
-      ...page,
-      sections: mapSections(page.sections),
-    })),
     overlays: definition.overlays.map((overlay) => ({
       ...overlay,
       sections: mapSections(overlay.sections),
     })),
   };
+  const pages = definition.pages.map((page) => ({
+    ...page,
+    sections: mapSections(page.sections),
+  }));
+  return withAppPages(updated, pages);
 }
 
 export function updatePage(
@@ -94,10 +96,15 @@ export function setWidgetConfig(
   widgetId: string,
   patch: Partial<WidgetConfig>,
 ): AppDefinition {
-  return updateWidget(definition, widgetId, (widget) => ({
-    ...widget,
-    config: { ...widget.config, ...patch },
-  }));
+  return updateWidget(definition, widgetId, (widget) => {
+    const config = { ...widget.config, ...patch };
+    return {
+      ...widget,
+      config,
+      objectApiName: config.objectApiName ?? null,
+      actionApiName: config.actionApiName ?? null,
+    };
+  });
 }
 
 export function addWidget(
@@ -233,18 +240,35 @@ export function addSection(
   const section = createSection("Section", layout);
   const next: AppDefinition = {
     ...definition,
-    pages: definition.pages.map((page) =>
-      page.id === containerId
-        ? { ...page, sections: [...page.sections, section] }
-        : page,
-    ),
     overlays: definition.overlays.map((overlay) =>
       overlay.id === containerId
         ? { ...overlay, sections: [...overlay.sections, section] }
         : overlay,
     ),
   };
-  return { definition: next, section };
+  const pages = definition.pages.map((page) =>
+    page.id === containerId
+      ? { ...page, sections: [...page.sections, section] }
+      : page,
+  );
+  return { definition: withAppPages(next, pages), section };
+}
+
+export function replaceContainerSections(
+  definition: AppDefinition,
+  containerId: string,
+  sections: AppSection[],
+): AppDefinition {
+  const updated = {
+    ...definition,
+    overlays: definition.overlays.map((overlay) =>
+      overlay.id === containerId ? { ...overlay, sections } : overlay,
+    ),
+  };
+  const pages = definition.pages.map((page) =>
+    page.id === containerId ? { ...page, sections } : page,
+  );
+  return withAppPages(updated, pages);
 }
 
 export function removeSection(
@@ -262,7 +286,7 @@ export function addPage(definition: AppDefinition): {
 } {
   const page = createPage(`Page ${definition.pages.length + 1}`, false);
   return {
-    definition: { ...definition, pages: [...definition.pages, page] },
+    definition: withAppPages(definition, [...definition.pages, page]),
     page,
   };
 }
@@ -276,7 +300,7 @@ export function removePage(
   if (!pages.some((page) => page.isDefault) && pages[0]) {
     pages[0] = { ...pages[0], isDefault: true };
   }
-  return { ...definition, pages };
+  return withAppPages(definition, pages);
 }
 
 export function renamePage(

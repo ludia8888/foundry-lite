@@ -70,10 +70,18 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   const generatedSdkAction = page.waitForRequest((request) => {
     return request.method() === "POST" && request.url().includes("/api/actions/ApproveOrder/apply");
   });
+  const refreshedPendingSets = page.waitForResponse((response) => {
+    return (
+      response.request().method() === "GET" &&
+      response.url().includes("/api/object-sets?objectType=Order")
+    );
+  });
   await page.locator("#approveBtn").click();
   await expect((await generatedSdkAction).headers()["idempotency-key"]).toMatch(/^ApproveOrder-O-1001-/);
+  await expect((await refreshedPendingSets).ok()).toBe(true);
   await expect(page.locator("#metricStatus")).toHaveText("APPROVED");
   await expect(page.locator("#metricVersion")).toHaveText("2");
+  await expect(page.locator("#setResult")).toContainText('"O-2999"');
   const pendingSetPayload = JSON.parse(await page.locator("#setResult").innerText()) as {
     items?: Array<{ objectIds?: string[] }>;
     objectIds?: string[];

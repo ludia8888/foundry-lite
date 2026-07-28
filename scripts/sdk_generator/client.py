@@ -496,6 +496,12 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    agent: {",
             "      run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;",
             "    };",
+            "    citations: {",
+            (
+                "      resolveNavigation(payload: AipCitationNavigationResolveRequest): "
+                "Promise<CitationNavigationResolution>;"
+            ),
+            "    };",
             "    evals: {",
             "      run(payload: AipEvalRunRequest): Promise<AipEvalRunResult>;",
             "    };",
@@ -521,9 +527,14 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    };",
             "    versions: {",
             "      process(mediaItemVersionId: string, payload: MediaProcessRequest): Promise<MediaProcessingOutcome>;",
+            ("      readContent(mediaItemVersionId: string, options?: { signal?: AbortSignal }): Promise<Blob>;"),
             "    };",
             "    derivatives: {",
             "      get(mediaDerivativeId: string): Promise<MediaDerivative>;",
+            (
+                "      contentUnits(mediaDerivativeId: string, filters?: MediaContentUnitFilters): "
+                "Promise<MediaContentUnitList>;"
+            ),
             (
                 "      index(mediaDerivativeId: string, payload: MediaIndexDerivativeRequest): "
                 "Promise<MediaIndexingOutcome>;"
@@ -544,6 +555,9 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "      list(filters?: MediaProcessingRunFilters): Promise<MediaProcessingRun[]>;",
             "      get(mediaProcessingRunId: string): Promise<MediaProcessingRun>;",
             "    };",
+            "    processors: {",
+            "      list(): Promise<{ available: boolean; items: MediaProcessorDescriptor[] }>;",
+            "    };",
             "    references: {",
             (
                 "      bind(payload: MediaBindReferenceRequest, options: { idempotencyKey: string }): "
@@ -559,6 +573,8 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    tick(payload?: TransformSchedulerTickRequest): Promise<TransformSchedulerTickResult>;",
             "  };",
             "  pipelines: {",
+            "    nodeTypes(): Promise<{ schemaVersion: 2; items: PipelineNodeDescriptorPayload[] }>;",
+            "    trainedModels(): Promise<{ available: boolean; items: TrainedModelDescriptor[]; count: number }>;",
             "    branches: {",
             (
                 "      create(payload: PipelineBranchCreateRequest, options: { idempotencyKey: string }): "
@@ -603,20 +619,45 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             ),
             "      get(versionId: string): Promise<PipelineVersion>;",
             "    };",
+            "    deployments: {",
             (
-                "    deploy(pipelineId: string, versionId: string, payload?: PipelineDeployRequest): "
-                "Promise<Record<string, unknown>>;"
+                "      list(pipelineId: string, filters?: { limit?: number }): "
+                "Promise<PipelineListResult<PipelineDeployment>>;"
+            ),
+            "    };",
+            "    previewRuns: {",
+            (
+                "      create(branchId: string, payload: PipelinePreviewRunCreateRequest, "
+                "options: { idempotencyKey: string }): Promise<PipelinePreviewRun>;"
+            ),
+            "      get(previewRunId: string): Promise<PipelinePreviewRun>;",
+            "      cancel(previewRunId: string): Promise<PipelinePreviewRun>;",
+            "    };",
+            (
+                "    deploy(pipelineId: string, versionId: string, payload: PipelineDeployRequest | undefined, "
+                "options: { idempotencyKey: string }): Promise<PipelineDeploymentResult>;"
             ),
             "    runs: {",
-            "      start(pipelineId: string, payload?: PipelineRunStartRequest): Promise<PipelineRun>;",
+            (
+                "      start(pipelineId: string, payload: PipelineRunStartRequest | undefined, "
+                "options: { idempotencyKey: string }): Promise<PipelineRun>;"
+            ),
             "      get(runId: string): Promise<PipelineRun>;",
             "      timeline(runId: string): Promise<Record<string, unknown>>;",
             "      cancel(runId: string): Promise<PipelineRun>;",
             "    };",
             "    schedules: {",
-            "      upsert(pipelineId: string, payload: PipelineScheduleUpsertRequest): Promise<PipelineSchedule>;",
+            (
+                "      upsert(pipelineId: string, payload: PipelineScheduleUpsertRequest, "
+                "options: { idempotencyKey: string }): Promise<PipelineSchedule>;"
+            ),
             "      get(pipelineId: string): Promise<PipelineSchedule | null>;",
-            "      delete(pipelineId: string): Promise<Record<string, unknown>>;",
+            ("      pause(pipelineId: string, options: { idempotencyKey: string }): Promise<PipelineSchedule>;"),
+            ("      resume(pipelineId: string, options: { idempotencyKey: string }): Promise<PipelineSchedule>;"),
+            (
+                "      delete(pipelineId: string, options: { idempotencyKey: string }): "
+                "Promise<Record<string, unknown>>;"
+            ),
             "      previewDue(options?: { maxRuns?: number }): Promise<PipelineListResult<PipelineSchedule>>;",
             "      tick(options?: { maxRuns?: number }): Promise<Record<string, unknown>>;",
             "    };",
@@ -1766,7 +1807,10 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "export function createFoundryLiteClient"
             "(clientOptions: FoundryLiteClientOptions): FoundryLiteGeneratedClient {"
         ),
-        "  async function request<T>(path: string, init?: FoundryLiteRequestInit): Promise<T> {",
+        (
+            "  async function fetchWithContext(path: string, init?: FoundryLiteRequestInit): "
+            "Promise<{ response: Response; requestId: string }> {"
+        ),
         "    const fetcher = clientOptions.fetchImpl ?? fetch;",
         "    const { requestId: explicitRequestId, ...requestInit } = init ?? {};",
         '    const requestId = explicitRequestId ?? clientOptions.requestIdFactory?.() ?? createRequestId("sdk");',
@@ -1780,9 +1824,13 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "        ...(requestInit.headers ?? {}),",
         "      },",
         "    });",
-        "    const body = await response.json().catch(() => ({}));",
+        "    return { response, requestId };",
+        "  }",
+        "",
+        "  async function requireSuccessfulResponse(path: string, response: Response, requestId: string) {",
         '    const responseRequestId = response.headers.get("X-Request-ID") ?? requestId;',
         "    if (!response.ok) {",
+        "      const body = await response.json().catch(() => ({}));",
         "      const error = apiErrorFromResponse(body, response.status, responseRequestId);",
         "      clientOptions.onResponse?.({",
         "        path,",
@@ -1795,7 +1843,19 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "      throw error;",
         "    }",
         "    clientOptions.onResponse?.({ path, status: response.status, ok: true, requestId: responseRequestId });",
+        "  }",
+        "",
+        "  async function request<T>(path: string, init?: FoundryLiteRequestInit): Promise<T> {",
+        "    const { response, requestId } = await fetchWithContext(path, init);",
+        "    await requireSuccessfulResponse(path, response, requestId);",
+        "    const body = await response.json().catch(() => ({}));",
         "    return body as T;",
+        "  }",
+        "",
+        "  async function requestBlob(path: string, init?: FoundryLiteRequestInit): Promise<Blob> {",
+        "    const { response, requestId } = await fetchWithContext(path, init);",
+        "    await requireSuccessfulResponse(path, response, requestId);",
+        "    return response.blob();",
         "  }",
         "",
         "  return {",
@@ -3206,6 +3266,14 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "            body: JSON.stringify(payload),",
         "          }),",
         "      },",
+        "      citations: {",
+        "        resolveNavigation: (payload: AipCitationNavigationResolveRequest) =>",
+        "          request<CitationNavigationResolution>(`/api/aip/citations/navigation/resolve`, {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "      },",
         "      evals: {",
         "        run: (payload: AipEvalRunRequest) =>",
         "          request<AipEvalRunResult>(`/api/aip/evals/run`, {",
@@ -3275,10 +3343,25 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "              body: JSON.stringify(payload),",
         "            },",
         "          ),",
+        "        readContent: (mediaItemVersionId: string, options: { signal?: AbortSignal } = {}) =>",
+        "          requestBlob(",
+        "            `/api/media/versions/${encodeURIComponent(mediaItemVersionId)}/content`,",
+        "            { signal: options.signal },",
+        "          ),",
         "      },",
         "      derivatives: {",
         "        get: (mediaDerivativeId: string) =>",
         "          request<MediaDerivative>(`/api/media/derivatives/${encodeURIComponent(mediaDerivativeId)}`),",
+        "        contentUnits: (mediaDerivativeId: string, filters: MediaContentUnitFilters = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.afterOrdinal !== undefined) params.set('afterOrdinal', String(filters.afterOrdinal));",
+        "          if (filters.pageNumber !== undefined) params.set('pageNumber', String(filters.pageNumber));",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<MediaContentUnitList>(",
+        "            `/api/media/derivatives/${encodeURIComponent(mediaDerivativeId)}/content-units${suffix}`,",
+        "          );",
+        "        },",
         "        index: (mediaDerivativeId: string, payload: MediaIndexDerivativeRequest) =>",
         "          request<MediaIndexingOutcome>(",
         "            `/api/media/derivatives/${encodeURIComponent(mediaDerivativeId)}/index`,",
@@ -3335,6 +3418,11 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "            `/api/media/processing-runs/${encodeURIComponent(mediaProcessingRunId)}`,",
         "          ),",
         "      },",
+        "      processors: {",
+        "        list: () => request<{ available: boolean; items: MediaProcessorDescriptor[] }>(",
+        "          `/api/media/processors`,",
+        "        ),",
+        "      },",
         "      references: {",
         "        bind: (payload: MediaBindReferenceRequest, options: { idempotencyKey: string }) =>",
         "          request<MediaReferenceBinding>(`/api/media/references/bind`, {",
@@ -3383,6 +3471,12 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "        }),",
         "    },",
         "    pipelines: {",
+        "      nodeTypes: () =>",
+        "        request<{ schemaVersion: 2; items: PipelineNodeDescriptorPayload[] }>(`/api/pipelines/node-types`),",
+        "      trainedModels: () =>",
+        "        request<{ available: boolean; items: TrainedModelDescriptor[]; count: number }>(",
+        "          `/api/pipelines/trained-models`,",
+        "        ),",
         "      branches: {",
         "        create: (payload: PipelineBranchCreateRequest, options: { idempotencyKey: string }) =>",
         "          request<PipelineBranch>(`/api/pipelines/branches`, {",
@@ -3527,20 +3621,69 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "        get: (versionId: string) =>",
         "          request<PipelineVersion>(`/api/pipelines/versions/${encodeURIComponent(versionId)}`),",
         "      },",
-        "      deploy: (pipelineId: string, versionId: string, payload: PipelineDeployRequest = {}) =>",
-        "        request<Record<string, unknown>>(",
+        "      deployments: {",
+        "        list: (pipelineId: string, filters: { limit?: number } = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<PipelineListResult<PipelineDeployment>>(",
+        "            `/api/pipelines/${encodeURIComponent(pipelineId)}/deployments${suffix}`,",
+        "          );",
+        "        },",
+        "      },",
+        "      previewRuns: {",
+        (
+            "        create: (branchId: string, payload: PipelinePreviewRunCreateRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "          request<PipelinePreviewRun>(",
+        "            `/api/pipelines/branches/${encodeURIComponent(branchId)}/preview-runs`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "pipelines.previewRuns.create"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        get: (previewRunId: string) =>",
+        "          request<PipelinePreviewRun>(`/api/pipelines/preview-runs/${encodeURIComponent(previewRunId)}`),",
+        "        cancel: (previewRunId: string) =>",
+        "          request<PipelinePreviewRun>(",
+        "            `/api/pipelines/preview-runs/${encodeURIComponent(previewRunId)}/cancel`,",
+        '            { method: "POST" },',
+        "          ),",
+        "      },",
+        (
+            "      deploy: (pipelineId: string, versionId: string, payload: PipelineDeployRequest = {}, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "        request<PipelineDeploymentResult>(",
         "          `/api/pipelines/${encodeURIComponent(pipelineId)}/deploy/${encodeURIComponent(versionId)}`,",
         "          {",
         '            method: "POST",',
-        '            headers: { "Content-Type": "application/json" },',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        ('              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "pipelines.deploy"),'),
+        "            },",
         "            body: JSON.stringify(payload),",
         "          },",
         "        ),",
         "      runs: {",
-        "        start: (pipelineId: string, payload: PipelineRunStartRequest = {}) =>",
+        (
+            "        start: (pipelineId: string, payload: PipelineRunStartRequest = {}, "
+            "options: { idempotencyKey: string }) =>"
+        ),
         "          request<PipelineRun>(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs`, {",
         '            method: "POST",',
-        '            headers: { "Content-Type": "application/json" },',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        ('              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "pipelines.runs.start"),'),
+        "            },",
         "            body: JSON.stringify(payload),",
         "          }),",
         "        get: (runId: string) => request<PipelineRun>(`/api/pipelines/runs/${encodeURIComponent(runId)}`),",
@@ -3552,17 +3695,58 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "          }),",
         "      },",
         "      schedules: {",
-        "        upsert: (pipelineId: string, payload: PipelineScheduleUpsertRequest) =>",
+        (
+            "        upsert: (pipelineId: string, payload: PipelineScheduleUpsertRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
         "          request<PipelineSchedule>(`/api/pipelines/${encodeURIComponent(pipelineId)}/schedule`, {",
         '            method: "PUT",',
-        '            headers: { "Content-Type": "application/json" },',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "pipelines.schedules.upsert"),'
+        ),
+        "            },",
         "            body: JSON.stringify(payload),",
         "          }),",
         "        get: (pipelineId: string) =>",
         "          request<PipelineSchedule | null>(`/api/pipelines/${encodeURIComponent(pipelineId)}/schedule`),",
-        "        delete: (pipelineId: string) =>",
+        "        pause: (pipelineId: string, options: { idempotencyKey: string }) =>",
+        "          request<PipelineSchedule>(",
+        "            `/api/pipelines/${encodeURIComponent(pipelineId)}/schedule/pause`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        (
+            '                "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "pipelines.schedules.pause"),'
+        ),
+        "              },",
+        "            },",
+        "          ),",
+        "        resume: (pipelineId: string, options: { idempotencyKey: string }) =>",
+        "          request<PipelineSchedule>(",
+        "            `/api/pipelines/${encodeURIComponent(pipelineId)}/schedule/resume`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        (
+            '                "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "pipelines.schedules.resume"),'
+        ),
+        "              },",
+        "            },",
+        "          ),",
+        "        delete: (pipelineId: string, options: { idempotencyKey: string }) =>",
         "          request<Record<string, unknown>>(`/api/pipelines/${encodeURIComponent(pipelineId)}/schedule`, {",
         '            method: "DELETE",',
+        "            headers: {",
+        (
+            '              "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "pipelines.schedules.delete"),'
+        ),
+        "            },",
         "          }),",
         "        previewDue: (options: { maxRuns?: number } = {}) => {",
         "          const params = new URLSearchParams();",

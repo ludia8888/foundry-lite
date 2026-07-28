@@ -6,8 +6,9 @@ from dataclasses import asdict
 from typing import cast
 
 from fastapi import APIRouter, Request
+from foundry_lite.application.services.aip.citation_service import CitationServiceError
 from foundry_lite.application.services.aip.eval_types import AiEvalError, EvalCaseInput
-from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
+from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, ValidationFailed
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
@@ -16,6 +17,7 @@ from foundry_lite_api.schemas import (
     AipAgentRunRequest,
     AipBuilderRunRequest,
     AipBuilderValidateRequest,
+    AipCitationNavigationResolveRequest,
     AipEvalCaseRequest,
     AipEvalRunRequest,
     AipReleasePromotionRequest,
@@ -50,6 +52,25 @@ def run_aip_agent(request: Request, payload: AipAgentRunRequest) -> JsonObject:
         ctx=_ctx(request),
     )
     return result.to_payload()
+
+
+@router.post("/api/aip/citations/navigation/resolve")
+def resolve_aip_citation_navigation(
+    request: Request,
+    payload: AipCitationNavigationResolveRequest,
+) -> JsonObject:
+    try:
+        result = runtime.foundry.aip.resolve_citation_navigation(
+            navigation_ref=payload.navigation_ref,
+            ctx=_ctx(request),
+        )
+        return result.to_payload()
+    except CitationServiceError as exc:
+        denied = PermissionDenied(
+            "citation navigation could not be verified",
+            details={"reason": exc.reason},
+        )
+        raise _handle_error(denied, request) from exc
 
 
 @router.post("/api/aip/evals/run")

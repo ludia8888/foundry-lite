@@ -15,6 +15,7 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureKind,
     AdapterFailureMode,
 )
+from foundry_lite.application.ports.code_execution import CodeExecutionAdapter
 from foundry_lite.application.ports.compute_adapter import (
     PythonTransformPlan,
     SqlTransformPlan,
@@ -44,7 +45,13 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
 
     profile_name = "spark"
 
-    def __init__(self, *, session: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        session: Any | None = None,
+        code_execution_adapter: CodeExecutionAdapter | None = None,
+    ) -> None:
+        super().__init__(code_execution_adapter=code_execution_adapter)
         self._session = session
 
     @property

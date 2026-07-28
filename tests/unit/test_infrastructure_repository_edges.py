@@ -111,7 +111,16 @@ def _set_protected_adapter_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_SEARCH_PROFILE", "elasticsearch")
     monkeypatch.setenv("FOUNDRY_LITE_STREAM_PROFILE", "kafka")
     monkeypatch.setenv("FOUNDRY_LITE_WORKFLOW_PROFILE", "temporal")
+    monkeypatch.setenv("FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE", "anthropic")
     monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", "foundry-lite-test")
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_CODE_EXECUTION_IMAGE",
+        f"registry.example/foundry-python@sha256:{'a' * 64}",
+    )
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_TRAINED_MODEL_IMAGE",
+        f"registry.example/foundry-model@sha256:{'b' * 64}",
+    )
 
 
 def test_protected_runtime_profile_disables_create_all_schema_mutation(
@@ -123,6 +132,14 @@ def test_protected_runtime_profile_disables_create_all_schema_mutation(
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
     monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, "production-operations-cursor-secret")
     monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "prod-operations-key-2026-06")
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_CODE_EXECUTION_IMAGE",
+        f"registry.example/foundry-python@sha256:{'a' * 64}",
+    )
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_TRAINED_MODEL_IMAGE",
+        f"registry.example/foundry-model@sha256:{'b' * 64}",
+    )
     dependencies = _create_core_dependencies(
         runtime_profile=RuntimeProfile.from_value("production"),
         db_url="sqlite:///:memory:",

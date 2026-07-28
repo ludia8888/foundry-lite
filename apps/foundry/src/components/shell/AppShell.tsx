@@ -15,6 +15,11 @@ export function AppShell() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { pathname } = useLocation();
+  const isImmersiveBuilder =
+    pathname === "/pipelines" ||
+    pathname.startsWith("/pipelines/") ||
+    pathname === "/document-intelligence" ||
+    pathname.startsWith("/document-intelligence/");
 
   useEffect(() => {
     const screen = getScreenByRoute(pathname);
@@ -25,6 +30,22 @@ export function AppShell() {
       route: pathname,
     });
   }, [pathname]);
+
+  if (isImmersiveBuilder) {
+    return (
+      <div className="h-full min-w-0 bg-background">
+        <main className="h-full min-h-0 overflow-hidden">
+          <Suspense fallback={<LoadingState className="p-6" />}>
+            <Outlet />
+          </Suspense>
+        </main>
+        <CommandPalette
+          isOpen={isSearchOpen}
+          onOpenChange={setIsSearchOpen}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full">

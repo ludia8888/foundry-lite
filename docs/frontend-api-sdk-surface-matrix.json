@@ -487,6 +487,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.citations.resolveNavigation",
+      "route": "POST /api/aip/citations/navigation/resolve",
+      "productArea": "aip-citation-navigation",
+      "sdkSurface": "aip.citations.resolveNavigation",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Citation navigation accepts only a signed opaque navigationRef, re-verifies tenant-scoped committed evidence server-side, and returns source version, content hash, page, bbox, timecode, processor/model pins, and security envelope without trusting URL coordinates.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.evals.run",
       "route": "POST /api/aip/evals/run",
       "productArea": "aip-evals-release",
@@ -584,12 +596,36 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "media.versions.readContent",
+      "route": "GET /api/media/versions/{media_item_version_id}/content",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.versions.readContent",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The authenticated SDK read preserves bearer token and request context, resolves only an immutable committed media version after media-read and classification-clearance checks, verifies storage hash and size, and returns bytes for a caller-owned blob preview.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "media.derivatives.get",
       "route": "GET /api/media/derivatives/{media_derivative_id}",
       "productArea": "media-content-plane",
       "sdkSurface": "media.derivatives.get",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Committed derivative reads expose the processing output pinned to its source media version and processor spec hash.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.derivatives.contentUnits",
+      "route": "GET /api/media/derivatives/{media_derivative_id}/content-units",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.derivatives.contentUnits",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Document Intelligence reads a tenant-scoped, ordinal-paginated projection of committed content units with page, bbox, source locator, structure, confidence, and timecode evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -674,6 +710,18 @@
       "sdkSurface": "media.processingRuns.get",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Media processing run detail returns the specific run evidence, derivative pointer, and typed failure reason for an operator drill-down.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.processors.list",
+      "route": "GET /api/media/processors",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.processors.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The server-owned processor catalog exposes exact processor, adapter, model, format, output, preview, and resource capability metadata without browser hard-coding.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -949,6 +997,26 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "pipelines.nodeTypes",
+      "route": "GET /api/pipelines/node-types",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.nodeTypes",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The server-owned Graph v2 descriptor catalog exposes named ports, artifact kinds, configuration fields, specification versions, and honest runtime availability.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.trainedModels",
+      "route": "GET /api/pipelines/trained-models",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.trainedModels",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The reusable trained-model catalog exposes model API input and output schemas, branch-latest resolution, batch-only execution, resource coordinates, and the explicit preview limitation.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "pipelines.branches.create",
       "route": "POST /api/pipelines/branches",
       "productArea": "pipeline-builder",
@@ -1081,6 +1149,37 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "pipelines.previewRuns.create",
+      "route": "POST /api/pipelines/branches/{branch_id}/preview-runs",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.previewRuns.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Preview creation accepts an unsaved Graph v2 draft, persists bounded no-commit evidence, and requires Idempotency-Key before asynchronous execution starts.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.previewRuns.get",
+      "route": "GET /api/pipelines/preview-runs/{preview_run_id}",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.previewRuns.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Preview detail exposes status, bounded outputs, artifacts, error evidence, and the explicit commitForbidden and servingVersionCreated boundary.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.previewRuns.cancel",
+      "route": "POST /api/pipelines/preview-runs/{preview_run_id}/cancel",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.previewRuns.cancel",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Preview cancellation preserves the durable preview row while requesting a terminal non-serving cancellation state.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "pipelines.proposals.list",
       "route": "GET /api/pipelines/proposals",
       "productArea": "pipeline-builder",
@@ -1176,8 +1275,11 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.runs.cancel",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Run cancel is permission checked and records terminal cancellation evidence.",
-      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "operatorEvidence": "Run cancel is permission checked and can win only before the atomic running-to-executing claim. A successful pre-execution cancel records terminal cancellation evidence; once execution is claimed, cancel fails closed so a cancelled run cannot later publish committed output.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes",
+        "test_pipeline_builder_graph_preview_review_deploy_and_run"
+      ],
       "proofClass": "sdk-request-contract"
     },
     {
@@ -1186,7 +1288,7 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.schedules.previewDue",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Schedule preview lists bounded due pipeline schedules without starting runs.",
+      "operatorEvidence": "Schedule preview evaluates persisted nextDueAt, active state, and expired lease conditions without starting runs or mutating scheduler state.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },
@@ -1196,7 +1298,7 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.schedules.tick",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Schedule tick starts bounded deployed-version runs through the pipeline run service.",
+      "operatorEvidence": "Schedule tick atomically claims due rows with a lease and monotonic fencing token, then starts one deployed-version run per deterministic schedule slot idempotency key.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },
@@ -1211,12 +1313,23 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "pipelines.deployments.list",
+      "route": "GET /api/pipelines/{pipeline_id}/deployments",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.deployments.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Deployment history exposes immutable compiled plans, compiler and model or processor pins, promotion identity, fingerprints, and rollback lineage for one pipeline.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "pipelines.deploy",
       "route": "POST /api/pipelines/{pipeline_id}/deploy/{version_id}",
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.deploy",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Deploy compiles an approved version and marks it runnable for schedules and manual runs.",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Deploy requires Idempotency-Key, compiles an approved version into an immutable deployment record, and replays the same request without creating a duplicate deployment.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },
@@ -1226,7 +1339,8 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.runs.start",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Run start only accepts deployed versions and records pipeline run timeline evidence.",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Run start requires Idempotency-Key, only accepts deployed versions, and records pipeline run timeline evidence without duplicating the requested build.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },
@@ -1236,7 +1350,8 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.schedules.upsert",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Schedule upsert binds one pipeline to a deployed version and schedule payload.",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Schedule upsert requires Idempotency-Key, validates cron or interval plus IANA timezone, binds a deployed version, and persists nextDueAt, status, failure policy, and audit/outbox evidence.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },
@@ -1246,7 +1361,29 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.schedules.get",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Schedule get returns current enabled schedule state for the deploy screen.",
+      "operatorEvidence": "Schedule get returns the current typed definition, active or paused state, next due slot, lease/fencing state, and last failure evidence for the deploy screen.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.pause",
+      "route": "POST /api/pipelines/{pipeline_id}/schedule/pause",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.pause",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Schedule pause requires Idempotency-Key, preserves the typed definition and next slot evidence, clears any outstanding lease, and stops new automatic claims.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.resume",
+      "route": "POST /api/pipelines/{pipeline_id}/schedule/resume",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.resume",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Schedule resume requires Idempotency-Key, resets the next trigger anchor from current time, clears failure count, and returns active state without rewriting the deployed version.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },
@@ -1256,7 +1393,8 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.schedules.delete",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Schedule delete removes future automatic starts without deleting versions or runs.",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Schedule delete requires Idempotency-Key, replays the original result for the same operator intent, and removes future automatic starts without deleting versions or runs.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },

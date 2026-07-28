@@ -9,6 +9,7 @@ exactly one place that maps a principal to the classifications it may see.
 
 from __future__ import annotations
 
+from foundry_lite.domain.classification import CLASSIFICATION_RANKS, classification_rank
 from foundry_lite.domain.context import RequestContext
 
 # Ordered media-classification lattice (low -> high sensitivity). "" is the unclassified
@@ -16,13 +17,13 @@ from foundry_lite.domain.context import RequestContext
 # below the clearance its roles grant. Unknown classifications have no level and are therefore
 # never cleared for a non-full-clearance caller (fail-closed).
 # "secret" here is a classification label, not a credential.
-_CLASSIFICATION_LEVEL: dict[str, int] = {"": 0, "public": 0, "internal": 1, "confidential": 2, "secret": 3}  # nosec B105
+_CLASSIFICATION_NAMES = ("", "public", "internal", "confidential", "secret")  # nosec B105
 
 # Role -> maximum clearance level. A role that is absent here contributes the public baseline
 # (level 0), so an unprivileged caller can never see restricted media.
 _ROLE_CLEARANCE_LEVEL: dict[str, int] = {"admin": 3, "data_engineer": 2, "ops_manager": 2, "finance": 2}
 
-_FULL_CLEARANCE_LEVEL = max(_CLASSIFICATION_LEVEL.values())
+_FULL_CLEARANCE_LEVEL = max(CLASSIFICATION_RANKS.values())
 
 
 def allowed_media_classifications(ctx: RequestContext) -> tuple[str, ...] | None:
@@ -36,7 +37,11 @@ def allowed_media_classifications(ctx: RequestContext) -> tuple[str, ...] | None
     level = max((_ROLE_CLEARANCE_LEVEL.get(role, 0) for role in ctx.roles), default=0)
     if level >= _FULL_CLEARANCE_LEVEL:
         return None
-    return tuple(name for name, name_level in _CLASSIFICATION_LEVEL.items() if name_level <= level)
+    return tuple(
+        name
+        for name in _CLASSIFICATION_NAMES
+        if (name_level := classification_rank(name)) is not None and name_level <= level
+    )
 
 
 __all__ = ["allowed_media_classifications"]

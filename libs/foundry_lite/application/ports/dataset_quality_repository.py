@@ -272,6 +272,16 @@ class DatasetQualityRepository(Protocol):
         """Return the newest schema row for a dataset, or None when no schemas exist."""
         ...
 
+    def schema_by_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        dataset_id: str,
+        schema_version: int,
+    ) -> DatasetSchemaRow | None:
+        """Return the exact schema referenced by a committed dataset version."""
+        ...
+
     def insert_schema(self, *, transaction: TransactionContext, record: DatasetSchemaRecord) -> None:
         """Persist one dataset schema row inside the caller transaction."""
         ...

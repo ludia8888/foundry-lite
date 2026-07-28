@@ -169,11 +169,12 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         media=(
             OperationClientSurface("sets", ("create", "get")),
             OperationClientSurface("transactions", ("open", "upload", "commit")),
-            OperationClientSurface("versions", ("process",)),
-            OperationClientSurface("derivatives", ("get", "index")),
+            OperationClientSurface("versions", ("process", "readContent")),
+            OperationClientSurface("derivatives", ("get", "contentUnits", "index")),
             OperationClientSurface("content", ("search",)),
             OperationClientSurface("visual", ("indexDerivative", "promoteGeneration", "search")),
             OperationClientSurface("processingRuns", ("list", "get")),
+            OperationClientSurface("processors", ("list",)),
             OperationClientSurface("references", ("bind", "resolve")),
         ),
         objects=tuple(
@@ -199,6 +200,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         aip=(
             OperationClientSurface("builder", ("validate", "run")),
             OperationClientSurface("agent", ("run",)),
+            OperationClientSurface("citations", ("resolveNavigation",)),
             OperationClientSurface("evals", ("run",)),
             OperationClientSurface("releases", ("promote",)),
         ),
@@ -211,9 +213,14 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("graph", ("validate", "suggestCasts", "previewNode", "stats", "runTests")),
             OperationClientSurface("proposals", ("list", "get", "assign", "decide", "execute", "withdraw")),
             OperationClientSurface("versions", ("list", "get")),
+            OperationClientSurface("deployments", ("list",)),
+            OperationClientSurface("previewRuns", ("create", "get", "cancel")),
             OperationClientSurface("runs", ("start", "get", "timeline", "cancel")),
-            OperationClientSurface("schedules", ("upsert", "get", "delete", "previewDue", "tick")),
-            OperationClientSurface("_self", ("deploy",)),
+            OperationClientSurface(
+                "schedules",
+                ("upsert", "get", "pause", "resume", "delete", "previewDue", "tick"),
+            ),
+            OperationClientSurface("_self", ("deploy", "nodeTypes", "trainedModels")),
         ),
         operations=(
             OperationClientSurface("admin", ("overview", "taskPlan")),

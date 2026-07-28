@@ -16,6 +16,10 @@ class MetadataRepository(Protocol):
         """Create a tenant row if it is missing."""
         ...
 
+    def list_tenant_ids(self) -> list[str]:
+        """List tenant identifiers for explicitly tenant-bound background scans."""
+        ...
+
     def ensure_user(
         self,
         *,

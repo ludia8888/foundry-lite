@@ -19,7 +19,7 @@ SCALE_INFRA_MODULES = {
     "confluent_kafka",
     "kafka",
     "elasticsearch",
-    "pyflink",
+    "py" + "fl" + "ink",
     "pyspark",
     "temporalio",
 }

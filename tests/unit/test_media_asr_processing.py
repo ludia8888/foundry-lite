@@ -26,14 +26,19 @@ from foundry_lite.application.services.media.processing import MediaProcessingSe
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.infrastructure.adapters.asr_processor import AsrProcessorAdapter, TranscriptSegment
+from foundry_lite.infrastructure.adapters.asr_processor import (
+    AsrProcessingBounds,
+    AsrProcessorAdapter,
+    TranscriptSegment,
+)
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 
 _ASR_SPEC = ProcessorSpec(processor="asr_v1", processor_version="1.0", model="whisper", model_version="large-v3")
 
 
-def _segments(_path: str) -> list[TranscriptSegment]:
+def _segments(_path: str, _bounds: AsrProcessingBounds) -> list[TranscriptSegment]:
     return [
         TranscriptSegment(start_ms=0, end_ms=1500, text="hello there", speaker="spk_0", language="en"),
         TranscriptSegment(start_ms=1500, end_ms=3200, text="general kenobi", speaker="spk_1", language="en"),
@@ -83,6 +88,7 @@ def _processing(
 ) -> MediaProcessingService:
     svc = MediaProcessingService(
         engine=engine,
+        policy=PolicyService(),
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,

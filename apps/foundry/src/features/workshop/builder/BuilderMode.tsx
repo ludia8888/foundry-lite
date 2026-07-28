@@ -2,18 +2,33 @@ import type {
   FoundryLiteOntologyActionView,
   FoundryLiteOntologyObjectView,
 } from "@foundry-lite/sdk/react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
-  defaultSectionStyle,
+  createSection,
   createWidget,
   type AppDefinition,
   type AppPage,
-  type AppSection,
   type WidgetKind,
 } from "../lib/app-model";
+import {
+  addWidget,
+  removeWidget,
+  replaceContainerSections,
+  setWidgetConfig,
+} from "../lib/app-edit";
+import { buildWidgetSuggestion } from "../lib/ontology-context";
+import { templateById } from "../lib/templates";
+import { widgetDefinition } from "../lib/widget-catalog";
 import { BuilderCanvas } from "./BuilderCanvas";
-import { BuilderSettingsPanel } from "./BuilderSettingsPanel";
-import { BuilderStructurePanel } from "./BuilderStructurePanel";
+import { InspectorPanel } from "./InspectorPanel";
+import {
+  findOverlay,
+  findPage,
+  type BuilderSelection,
+} from "./selection";
+import { StructurePanel } from "./StructurePanel";
+import { TemplateGallery } from "./TemplateGallery";
 
 interface BuilderModeProps {
   definition: AppDefinition;
@@ -24,20 +39,44 @@ interface BuilderModeProps {
   onChange: (definition: AppDefinition) => void;
 }
 
-function updateSection(
-  page: AppPage,
-  sectionId: string,
-  updater: (section: AppSection) => AppSection,
+function canvasPage(
+  definition: AppDefinition,
+  activeContainerId: string,
 ): AppPage {
+  const page = findPage(definition, activeContainerId);
+  if (page) return page;
+  const overlay = findOverlay(definition, activeContainerId);
+  if (!overlay) return definition.page;
   return {
-    ...page,
-    sections: page.sections.map((section) =>
-      section.id === sectionId ? updater(section) : section,
-    ),
+    id: overlay.id,
+    name: overlay.name,
+    pageId: overlay.id,
+    isDefault: false,
+    backgroundColor: "transparent",
+    layoutDirection: "columns",
+    sections: overlay.sections,
   };
 }
 
-/** 빌더 모드: 좌 구조 · 중앙 캔버스 · 우 설정 3-컬럼. 앱 정의는 불변 업데이트. */
+function resizedSections(page: AppPage, count: number) {
+  if (count >= page.sections.length) {
+    const additions = Array.from({
+      length: count - page.sections.length,
+    }).map(() => createSection("Section"));
+    return [...page.sections, ...additions];
+  }
+  const kept = page.sections.slice(0, count);
+  const overflow = page.sections
+    .slice(count)
+    .flatMap((section) => section.widgets);
+  return kept.map((section, index) =>
+    index === kept.length - 1
+      ? { ...section, widgets: [...section.widgets, ...overflow] }
+      : section,
+  );
+}
+
+/** Full Workshop builder: hierarchy, multimode canvas, templates, and typed inspector. */
 export function BuilderMode({
   definition,
   objectViews,
@@ -46,136 +85,151 @@ export function BuilderMode({
   onSelectSection,
   onChange,
 }: BuilderModeProps) {
-  const { page } = definition;
+  const [activeContainerId, setActiveContainerId] = useState(
+    definition.page.id,
+  );
+  const [selection, setSelection] = useState<BuilderSelection>(
+    { type: "page", pageId: definition.page.id },
+  );
+  const [isTemplateGalleryOpen, setIsTemplateGalleryOpen] = useState(false);
+  const page = useMemo(
+    () => canvasPage(definition, activeContainerId),
+    [activeContainerId, definition],
+  );
 
-  const patchPage = (patch: Partial<AppPage>) => {
-    onChange({ ...definition, page: { ...page, ...patch } });
+  useEffect(() => {
+    const exists =
+      definition.pages.some((candidate) => candidate.id === activeContainerId) ||
+      definition.overlays.some(
+        (candidate) => candidate.id === activeContainerId,
+      );
+    if (!exists) {
+      setActiveContainerId(definition.page.id);
+      setSelection({ type: "page", pageId: definition.page.id });
+    }
+  }, [activeContainerId, definition]);
+
+  const select = (next: BuilderSelection) => {
+    setSelection(next);
+    if (next?.type === "section") onSelectSection(next.sectionId);
+    if (next?.type === "widget") onSelectSection(next.sectionId);
   };
 
   const handleAddWidget = (sectionId: string, kind: WidgetKind) => {
-    // 신규 위젯: 단일 객체 타입/액션이면 기본 바인딩해 곧바로 실동작하게 한다.
-    const defaultObject =
-      objectViews.length === 1 ? objectViews[0].apiName : null;
-    const defaultAction =
-      actionViews.length === 1 ? actionViews[0].apiName : null;
-    const boundObject =
-      kind === "actionForm" && defaultAction
-        ? (actionViews.find((view) => view.apiName === defaultAction)
-            ?.targetObjectApiName ?? defaultObject)
-        : defaultObject;
+    const suggestion = buildWidgetSuggestion(objectViews, actionViews);
     const widget = createWidget(
       kind,
-      boundObject,
-      kind === "actionForm" ? defaultAction : null,
+      widgetDefinition(kind).defaultConfig(suggestion),
     );
-    patchPage({
-      sections: updateSection(page, sectionId, (section) => ({
-        ...section,
-        widgets: [...section.widgets, widget],
-      })).sections,
-    });
-    onSelectSection(sectionId);
+    onChange(addWidget(definition, sectionId, widget));
+    select({ type: "widget", sectionId, widgetId: widget.id });
   };
 
-  const handleRemoveWidget = (sectionId: string, widgetId: string) => {
-    patchPage({
-      sections: updateSection(page, sectionId, (section) => ({
-        ...section,
-        widgets: section.widgets.filter((widget) => widget.id !== widgetId),
-      })).sections,
-    });
+  const handleRemoveWidget = (widgetId: string) => {
+    onChange(removeWidget(definition, widgetId));
+    if (selection?.type === "widget" && selection.widgetId === widgetId) {
+      select(null);
+    }
   };
 
-  const handleBindObject = (
-    sectionId: string,
-    widgetId: string,
-    objectApiName: string,
-  ) => {
-    patchPage({
-      sections: updateSection(page, sectionId, (section) => ({
-        ...section,
-        widgets: section.widgets.map((widget) =>
-          widget.id === widgetId ? { ...widget, objectApiName } : widget,
-        ),
-      })).sections,
-    });
+  const handleBindObject = (widgetId: string, objectApiName: string) => {
+    onChange(setWidgetConfig(definition, widgetId, { objectApiName }));
   };
 
-  const handleBindAction = (
-    sectionId: string,
-    widgetId: string,
-    actionApiName: string,
-  ) => {
+  const handleBindAction = (widgetId: string, actionApiName: string) => {
     const targetObjectApiName =
       actionViews.find((view) => view.apiName === actionApiName)
         ?.targetObjectApiName ?? null;
-    patchPage({
-      sections: updateSection(page, sectionId, (section) => ({
-        ...section,
-        widgets: section.widgets.map((widget) =>
-          widget.id === widgetId
-            ? {
-                ...widget,
-                actionApiName,
-                objectApiName: targetObjectApiName ?? widget.objectApiName,
-              }
-            : widget,
-        ),
-      })).sections,
-    });
+    onChange(
+      setWidgetConfig(definition, widgetId, {
+        actionApiName,
+        objectApiName: targetObjectApiName,
+      }),
+    );
   };
 
-  const handleApplyLayout = (columns: number) => {
-    const current = page.sections;
-    if (columns === current.length) return;
-    let sections = current;
-    if (columns > current.length) {
-      const additions = Array.from({ length: columns - current.length }).map(
-        (_, index) => ({
-          id: `sec-${Date.now()}-${index}`,
-          title: "Section",
-          layout: "flow" as const,
-          style: defaultSectionStyle(),
-          widgets: [],
-        }),
-      );
-      sections = [...current, ...additions];
-    } else {
-      // 초과 섹션의 위젯을 마지막 유지 섹션으로 병합해 데이터 손실을 막는다.
-      const kept = current.slice(0, columns);
-      const overflowWidgets = current
-        .slice(columns)
-        .flatMap((section) => section.widgets);
-      sections = kept.map((section, index) =>
-        index === kept.length - 1
-          ? { ...section, widgets: [...section.widgets, ...overflowWidgets] }
-          : section,
-      );
-    }
-    patchPage({ sections });
+  const handleApplyLayout = (count: number) => {
+    if (count === page.sections.length) return;
+    onChange(
+      replaceContainerSections(
+        definition,
+        activeContainerId,
+        resizedSections(page, count),
+      ),
+    );
   };
+
+  const handleTemplatePick = (templateId: string) => {
+    const template = templateById(templateId);
+    if (!template) return;
+    const next = template.build(objectViews, actionViews);
+    const defaultPage = next.page;
+    onChange(next);
+    setActiveContainerId(defaultPage.id);
+    select({ type: "page", pageId: defaultPage.id });
+    const firstSection = defaultPage.sections[0];
+    if (firstSection) onSelectSection(firstSection.id);
+  };
+
+  const selectedWidgetId =
+    selection?.type === "widget" ? selection.widgetId : null;
+  const currentSectionId =
+    selection?.type === "section"
+      ? selection.sectionId
+      : selection?.type === "widget"
+        ? selection.sectionId
+        : selectedSectionId;
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[240px_1fr_280px] divide-x divide-[#d5dce1]">
-      <BuilderStructurePanel
-        definition={definition}
-        objectTypeCount={objectViews.length}
-        selectedSectionId={selectedSectionId}
-        onSelectSection={onSelectSection}
+    <>
+      <div className="grid h-full min-h-0 grid-cols-[260px_1fr_320px] divide-x divide-[#d5dce1]">
+        <StructurePanel
+          definition={definition}
+          activeContainerId={activeContainerId}
+          selection={selection}
+          onChange={onChange}
+          onSelect={select}
+          onActiveContainer={setActiveContainerId}
+          onOpenTemplates={() => setIsTemplateGalleryOpen(true)}
+        />
+        <BuilderCanvas
+          page={page}
+          objectViews={objectViews}
+          actionViews={actionViews}
+          selectedSectionId={currentSectionId}
+          selectedWidgetId={selectedWidgetId}
+          onSelectSection={(sectionId) =>
+            select({ type: "section", sectionId })
+          }
+          onSelectWidget={(sectionId, widgetId) =>
+            select({ type: "widget", sectionId, widgetId })
+          }
+          onAddWidget={handleAddWidget}
+          onRemoveWidget={(_sectionId, widgetId) =>
+            handleRemoveWidget(widgetId)
+          }
+          onBindWidgetObject={(_sectionId, widgetId, objectApiName) =>
+            handleBindObject(widgetId, objectApiName)
+          }
+          onBindWidgetAction={(_sectionId, widgetId, actionApiName) =>
+            handleBindAction(widgetId, actionApiName)
+          }
+          onApplyLayout={handleApplyLayout}
+        />
+        <InspectorPanel
+          definition={definition}
+          selection={selection}
+          objectViews={objectViews}
+          actionViews={actionViews}
+          onChange={onChange}
+          onSelect={select}
+        />
+      </div>
+      <TemplateGallery
+        open={isTemplateGalleryOpen}
+        onOpenChange={setIsTemplateGalleryOpen}
+        onPick={handleTemplatePick}
       />
-      <BuilderCanvas
-        page={page}
-        objectViews={objectViews}
-        actionViews={actionViews}
-        selectedSectionId={selectedSectionId}
-        onSelectSection={onSelectSection}
-        onAddWidget={handleAddWidget}
-        onRemoveWidget={handleRemoveWidget}
-        onBindWidgetObject={handleBindObject}
-        onBindWidgetAction={handleBindAction}
-        onApplyLayout={handleApplyLayout}
-      />
-      <BuilderSettingsPanel page={page} onChange={patchPage} />
-    </div>
+    </>
   );
 }

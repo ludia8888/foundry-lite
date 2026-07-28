@@ -66,8 +66,8 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Tesseract OCR and FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg
+      - name: Install Tesseract OCR, Poppler, and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
 
       - name: Cache faster-whisper and fastembed models
         uses: actions/cache@v4

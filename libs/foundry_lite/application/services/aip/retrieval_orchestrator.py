@@ -23,6 +23,11 @@ from foundry_lite.application.ports.context_provider import (
     ContextRetrievalRequest,
     RetrievedContextItem,
 )
+from foundry_lite.application.services.media.document_context_evidence import (
+    document_context_from_hit,
+    document_context_hash,
+    document_context_text,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, NotFound
 
@@ -203,10 +208,11 @@ def _document_item(
     retrieval_method: str,
     relevance_score: float,
 ) -> RetrievedContextItem:
-    text = _document_text(hit)
+    evidence = document_context_from_hit(hit)
+    text = document_context_text(evidence)
     source_ref = f"content-unit://{hit.source_media_item_version_id}/{hit.content_unit_id}"
     source_version = hit.source_media_item_version_id
-    content_hash = _hash_text(text)
+    content_hash = document_context_hash(evidence)
     return RetrievedContextItem(
         context_id=f"ctx-{_short_hash(source_ref, source_version, content_hash)}",
         kind="document",
@@ -229,22 +235,6 @@ def _object_text(payload: Mapping[str, object]) -> str:
         "properties": payload.get("properties", {}),
     }
     return _json_block(visible_payload)
-
-
-def _document_text(hit: ContentSearchHit) -> str:
-    return _json_block(
-        {
-            "contentUnitId": hit.content_unit_id,
-            "sourceMediaItemVersionId": hit.source_media_item_version_id,
-            "indexGeneration": hit.index_generation,
-            "pageNumber": hit.page_number,
-            "startMs": hit.start_ms,
-            "endMs": hit.end_ms,
-            "chunkSpecHash": hit.chunk_spec_hash,
-            "textHash": hit.text_hash,
-            "text": hit.text,
-        }
-    )
 
 
 def _pack_items(

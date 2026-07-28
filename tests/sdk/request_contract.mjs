@@ -39,6 +39,7 @@ function okResponse(body = {}) {
     status: 200,
     headers: responseHeaders({ "X-Request-ID": RESPONSE_REQUEST_ID }),
     json: async () => body,
+    blob: async () => new Blob([JSON.stringify(body)], { type: "application/json" }),
   };
 }
 
@@ -385,7 +386,7 @@ async function expectSdkCall(surfaceId, invoke, expectation) {
   responseQueue.push(okResponse({ surfaceId }));
   const beforeCalls = calls.length;
   const beforeTelemetry = telemetry.length;
-  await invoke();
+  const result = await invoke();
   assert.equal(calls.length, beforeCalls + 1, surfaceId);
   assert.equal(telemetry.length, beforeTelemetry + 1, surfaceId);
   const call = calls.at(-1);
@@ -401,6 +402,7 @@ async function expectSdkCall(surfaceId, invoke, expectation) {
     surfaceId,
   );
   coveredSurfaceIds.add(surfaceId);
+  return result;
 }
 
 function assertMissingIdempotencyFailFast(surfaceId, invoke, operationName) {
@@ -994,6 +996,19 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.citations.resolveNavigation",
+  () =>
+    client.aip.citations.resolveNavigation({
+      navigationRef: "flite-citation-nav.v1.signed",
+    }),
+  {
+    path: "/api/aip/citations/navigation/resolve",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { navigationRef: "flite-citation-nav.v1.signed" },
+  },
+);
+await expectSdkCall(
   "aip.evals.run",
   () =>
     client.aip.evals.run({
@@ -1239,9 +1254,29 @@ await expectSdkCall(
     },
   },
 );
+const mediaContent = await expectSdkCall(
+  "media.versions.readContent",
+  () => client.media.versions.readContent("media-version/1"),
+  {
+    path: "/api/media/versions/media-version%2F1/content",
+  },
+);
+assert.equal(mediaContent.type, "application/json");
 await expectSdkCall("media.derivatives.get", () => client.media.derivatives.get("media-derivative/1"), {
   path: "/api/media/derivatives/media-derivative%2F1",
 });
+await expectSdkCall(
+  "media.derivatives.contentUnits",
+  () =>
+    client.media.derivatives.contentUnits("media-derivative/1", {
+      afterOrdinal: 4,
+      pageNumber: 2,
+      limit: 100,
+    }),
+  {
+    path: "/api/media/derivatives/media-derivative%2F1/content-units?afterOrdinal=4&pageNumber=2&limit=100",
+  },
+);
 await expectSdkCall(
   "media.derivatives.index",
   () => client.media.derivatives.index("media-derivative/1", { generation: "media-g1" }),
@@ -1301,6 +1336,9 @@ await expectSdkCall(
 );
 await expectSdkCall("media.processing-runs.get", () => client.media.processingRuns.get("media-run/1"), {
   path: "/api/media/processing-runs/media-run%2F1",
+});
+await expectSdkCall("media.processors.list", () => client.media.processors.list(), {
+  path: "/api/media/processors",
 });
 await expectSdkCall(
   "media.references.bind",
@@ -1481,8 +1519,8 @@ assertMissingIdempotencyFailFast(
 await expectSdkCall("objects.generic.get", () => client.objects.generic.get("Order Item", "order/1", { explain: true }), {
   path: "/api/objects/Order%20Item/order%2F1?explain=true",
 });
-await expectSdkCall("objects.generic.links", () => client.objects.generic.links("Order", "order/1", "customer/link"), {
-  path: "/api/objects/Order/order%2F1/links/customer%2Flink",
+await expectSdkCall("objects.generic.links", () => client.objects.generic.links("Order", "order/1", "customer/edge"), {
+  path: "/api/objects/Order/order%2F1/links/customer%2Fedge",
 });
 await expectSdkCall("objects.generic.query", () => client.objects.generic.query("Order Item", { limit: 10, search: "rush" }), {
   path: "/api/objects/Order%20Item/query",
@@ -2058,6 +2096,46 @@ const pipelineGraph = {
   tests: [],
   schedule: null,
 };
+const pipelineGraphV2 = {
+  schemaVersion: 2,
+  nodes: [
+    {
+      id: "raw",
+      kind: "source",
+      descriptorId: "source.dataset",
+      specVersion: 1,
+      config: { datasetRef: "raw.orders" },
+    },
+    {
+      id: "out",
+      kind: "output",
+      descriptorId: "output.dataset",
+      specVersion: 1,
+      config: { outputDatasetRef: "preview.orders" },
+    },
+  ],
+  edges: [
+    {
+      id: "raw-to-out",
+      sourceNodeId: "raw",
+      sourcePortId: "dataset",
+      targetNodeId: "out",
+      targetPortId: "input",
+    },
+  ],
+  layout: {},
+  outputContract: {},
+  tests: [],
+  schedule: null,
+};
+await expectSdkCall("pipelines.nodeTypes", () => client.pipelines.nodeTypes(), {
+  path: "/api/pipelines/node-types",
+});
+await expectSdkCall(
+  "pipelines.trainedModels",
+  () => client.pipelines.trainedModels(),
+  { path: "/api/pipelines/trained-models" },
+);
 await expectSdkCall(
   "pipelines.branches.create",
   () => client.pipelines.branches.create({ pipelineId: "supply-chain", name: "join-orders" }, { idempotencyKey: "idem-pb" }),
@@ -2152,6 +2230,33 @@ await expectSdkCall("pipelines.graph.runTests", () => client.pipelines.graph.run
   path: "/api/pipelines/branches/branch%2F1/tests/run",
   method: "POST",
 });
+await expectSdkCall(
+  "pipelines.previewRuns.create",
+  () =>
+    client.pipelines.previewRuns.create(
+      "branch/1",
+      { graph: pipelineGraphV2, targetNodeId: "out", limits: { tableRows: 50 } },
+      { idempotencyKey: "idem-preview" },
+    ),
+  {
+    path: "/api/pipelines/branches/branch%2F1/preview-runs",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-preview" },
+    body: { graph: pipelineGraphV2, targetNodeId: "out", limits: { tableRows: 50 } },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.previewRuns.create",
+  () => client.pipelines.previewRuns.create("branch/1", { graph: pipelineGraphV2 }),
+  "pipelines.previewRuns.create",
+);
+await expectSdkCall("pipelines.previewRuns.get", () => client.pipelines.previewRuns.get("preview/1"), {
+  path: "/api/pipelines/preview-runs/preview%2F1",
+});
+await expectSdkCall("pipelines.previewRuns.cancel", () => client.pipelines.previewRuns.cancel("preview/1"), {
+  path: "/api/pipelines/preview-runs/preview%2F1/cancel",
+  method: "POST",
+});
 await expectSdkCall("pipelines.proposals.list", () => client.pipelines.proposals.list({ status: "approved", limit: 5 }), {
   path: "/api/pipelines/proposals?status=approved&limit=5",
 });
@@ -2193,21 +2298,53 @@ await expectSdkCall("pipelines.versions.get", () => client.pipelines.versions.ge
   path: "/api/pipelines/versions/version%2F1",
 });
 await expectSdkCall(
+  "pipelines.deployments.list",
+  () => client.pipelines.deployments.list("supply-chain", { limit: 7 }),
+  {
+    path: "/api/pipelines/supply-chain/deployments?limit=7",
+  },
+);
+await expectSdkCall(
   "pipelines.deploy",
-  () => client.pipelines.deploy("supply-chain", "version/1", { options: { mode: "manual" } }),
+  () =>
+    client.pipelines.deploy(
+      "supply-chain",
+      "version/1",
+      { options: { mode: "manual" } },
+      { idempotencyKey: "idem-deploy" },
+    ),
   {
     path: "/api/pipelines/supply-chain/deploy/version%2F1",
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-deploy" },
     body: { options: { mode: "manual" } },
   },
 );
-await expectSdkCall("pipelines.runs.start", () => client.pipelines.runs.start("supply-chain", { versionId: "version/1" }), {
-  path: "/api/pipelines/supply-chain/runs",
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: { versionId: "version/1" },
-});
+assertMissingIdempotencyFailFast(
+  "pipelines.deploy",
+  () => client.pipelines.deploy("supply-chain", "version/1", { options: { mode: "manual" } }),
+  "pipelines.deploy",
+);
+await expectSdkCall(
+  "pipelines.runs.start",
+  () =>
+    client.pipelines.runs.start(
+      "supply-chain",
+      { versionId: "version/1", parameters: { mode: "full" }, targetNodeIds: ["out"] },
+      { idempotencyKey: "idem-pipeline-run" },
+    ),
+  {
+    path: "/api/pipelines/supply-chain/runs",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-pipeline-run" },
+    body: { versionId: "version/1", parameters: { mode: "full" }, targetNodeIds: ["out"] },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.runs.start",
+  () => client.pipelines.runs.start("supply-chain", { versionId: "version/1" }),
+  "pipelines.runs.start",
+);
 await expectSdkCall("pipelines.runs.get", () => client.pipelines.runs.get("run/1"), {
   path: "/api/pipelines/runs/run%2F1",
 });
@@ -2221,25 +2358,90 @@ await expectSdkCall("pipelines.runs.cancel", () => client.pipelines.runs.cancel(
 await expectSdkCall(
   "pipelines.schedules.upsert",
   () =>
-    client.pipelines.schedules.upsert("supply-chain", {
-      versionId: "version/1",
-      schedule: { cron: "*/5 * * * *" },
-      enabled: true,
-    }),
+    client.pipelines.schedules.upsert(
+      "supply-chain",
+      {
+        versionId: "version/1",
+        schedule: {
+          triggerType: "cron",
+          timezone: "Asia/Seoul",
+          cronExpression: "*/5 * * * *",
+          autoPauseAfterFailures: 3,
+        },
+        enabled: true,
+      },
+      { idempotencyKey: "idem-pipeline-schedule" },
+    ),
   {
     path: "/api/pipelines/supply-chain/schedule",
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: { versionId: "version/1", schedule: { cron: "*/5 * * * *" }, enabled: true },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-pipeline-schedule" },
+    body: {
+      versionId: "version/1",
+      schedule: {
+        triggerType: "cron",
+        timezone: "Asia/Seoul",
+        cronExpression: "*/5 * * * *",
+        autoPauseAfterFailures: 3,
+      },
+      enabled: true,
+    },
   },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.schedules.upsert",
+  () =>
+    client.pipelines.schedules.upsert("supply-chain", {
+      versionId: "version/1",
+      schedule: { triggerType: "interval", timezone: "UTC", intervalSeconds: 60 },
+    }),
+  "pipelines.schedules.upsert",
 );
 await expectSdkCall("pipelines.schedules.get", () => client.pipelines.schedules.get("supply-chain"), {
   path: "/api/pipelines/supply-chain/schedule",
 });
-await expectSdkCall("pipelines.schedules.delete", () => client.pipelines.schedules.delete("supply-chain"), {
-  path: "/api/pipelines/supply-chain/schedule",
-  method: "DELETE",
-});
+await expectSdkCall(
+  "pipelines.schedules.pause",
+  () => client.pipelines.schedules.pause("supply-chain", { idempotencyKey: "idem-pipeline-schedule-pause" }),
+  {
+    path: "/api/pipelines/supply-chain/schedule/pause",
+    method: "POST",
+    headers: { "Idempotency-Key": "idem-pipeline-schedule-pause" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.schedules.pause",
+  () => client.pipelines.schedules.pause("supply-chain"),
+  "pipelines.schedules.pause",
+);
+await expectSdkCall(
+  "pipelines.schedules.resume",
+  () => client.pipelines.schedules.resume("supply-chain", { idempotencyKey: "idem-pipeline-schedule-resume" }),
+  {
+    path: "/api/pipelines/supply-chain/schedule/resume",
+    method: "POST",
+    headers: { "Idempotency-Key": "idem-pipeline-schedule-resume" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.schedules.resume",
+  () => client.pipelines.schedules.resume("supply-chain"),
+  "pipelines.schedules.resume",
+);
+await expectSdkCall(
+  "pipelines.schedules.delete",
+  () => client.pipelines.schedules.delete("supply-chain", { idempotencyKey: "idem-pipeline-schedule-delete" }),
+  {
+    path: "/api/pipelines/supply-chain/schedule",
+    method: "DELETE",
+    headers: { "Idempotency-Key": "idem-pipeline-schedule-delete" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.schedules.delete",
+  () => client.pipelines.schedules.delete("supply-chain"),
+  "pipelines.schedules.delete",
+);
 await expectSdkCall("pipelines.schedules.previewDue", () => client.pipelines.schedules.previewDue({ maxRuns: 3 }), {
   path: "/api/pipelines/scheduler/due?maxRuns=3",
 });

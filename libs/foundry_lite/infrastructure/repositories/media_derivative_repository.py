@@ -198,18 +198,28 @@ class SqlAlchemyMediaDerivativeRepository:
             inserted += 1
         return inserted
 
-    def get_content_units(self, *, transaction: Any, tenant_id: str, derivative_id: str) -> list[ContentUnitRecord]:
-        rows = (
-            transaction.execute(
-                select(db.content_units)
-                .where(
-                    and_(db.content_units.c.tenant_id == tenant_id, db.content_units.c.derivative_id == derivative_id)
-                )
-                .order_by(db.content_units.c.ordinal)
-            )
-            .mappings()
-            .all()
-        )
+    def get_content_units(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        derivative_id: str,
+        after_ordinal: int | None = None,
+        page_number: int | None = None,
+        limit: int | None = None,
+    ) -> list[ContentUnitRecord]:
+        conditions = [
+            db.content_units.c.tenant_id == tenant_id,
+            db.content_units.c.derivative_id == derivative_id,
+        ]
+        if after_ordinal is not None:
+            conditions.append(db.content_units.c.ordinal > after_ordinal)
+        if page_number is not None:
+            conditions.append(db.content_units.c.page_number == page_number)
+        query = select(db.content_units).where(and_(*conditions)).order_by(db.content_units.c.ordinal)
+        if limit is not None:
+            query = query.limit(limit)
+        rows = transaction.execute(query).mappings().all()
         return [_content_unit_from_row(row) for row in rows]
 
     def get_content_units_by_ids(self, *, transaction: Any, ids: list[str]) -> list[ContentUnitRecord]:
@@ -217,6 +227,27 @@ class SqlAlchemyMediaDerivativeRepository:
             return []
         rows = transaction.execute(select(db.content_units).where(db.content_units.c.id.in_(ids))).mappings().all()
         return [_content_unit_from_row(row) for row in rows]
+
+    def content_unit_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        content_unit_id: str,
+    ) -> ContentUnitRecord | None:
+        row = (
+            transaction.execute(
+                select(db.content_units).where(
+                    and_(
+                        db.content_units.c.tenant_id == tenant_id,
+                        db.content_units.c.id == content_unit_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return _content_unit_from_row(row) if row else None
 
     def get_committed_content_units_for_versions(
         self, *, transaction: Any, tenant_id: str, source_media_item_version_ids: list[str]
@@ -386,6 +417,10 @@ def _content_unit_values(record: ContentUnitRecord) -> dict[str, object | None]:
         "start_ms": record.start_ms,
         "end_ms": record.end_ms,
         "bbox": record.bbox,
+        "parent_content_unit_id": record.parent_content_unit_id,
+        "source_locator": record.source_locator,
+        "structure": record.structure,
+        "confidence": record.confidence,
         "speaker": record.speaker,
         "language": record.language,
         "embedding": list(record.embedding) if record.embedding else None,
@@ -405,16 +440,50 @@ def _content_unit_from_row(row: Any) -> ContentUnitRecord:
         derivative_id=str(row["derivative_id"]),
         unit_kind=str(row["unit_kind"]),
         ordinal=int(row["ordinal"]),
-        page_number=int(row["page_number"]) if row["page_number"] is not None else None,
-        start_ms=int(row["start_ms"]) if row["start_ms"] is not None else None,
-        end_ms=int(row["end_ms"]) if row["end_ms"] is not None else None,
-        bbox=cast("dict[str, object]", dict(row["bbox"])) if row["bbox"] is not None else None,
-        speaker=str(row["speaker"]) if row["speaker"] is not None else None,
-        language=str(row["language"]) if row["language"] is not None else None,
-        embedding=tuple(float(value) for value in row["embedding"]) if row["embedding"] else (),
+        page_number=_optional_int(row["page_number"]),
+        start_ms=_optional_int(row["start_ms"]),
+        end_ms=_optional_int(row["end_ms"]),
+        bbox=_optional_json_object(row["bbox"]),
+        parent_content_unit_id=_optional_text(row["parent_content_unit_id"]),
+        source_locator=_optional_json_object(row["source_locator"]),
+        structure=_optional_json_object(row["structure"]),
+        confidence=_optional_float(row["confidence"]),
+        speaker=_optional_text(row["speaker"]),
+        language=_optional_text(row["language"]),
+        embedding=_embedding_values(row["embedding"]),
         text=str(row["text"]),
         text_hash=str(row["text_hash"]),
         chunk_spec_hash=str(row["chunk_spec_hash"]),
         security_envelope=cast("dict[str, object]", dict(row["security_envelope"])),
         created_at=str(row["created_at"]),
     )
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _optional_json_object(value: Any) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return cast("dict[str, object]", dict(value))
+
+
+def _embedding_values(value: Any) -> tuple[float, ...]:
+    if not value:
+        return ()
+    return tuple(float(item) for item in value)

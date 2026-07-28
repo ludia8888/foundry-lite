@@ -70,18 +70,44 @@ class TransformRunService(CoreService):
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
-        require_transform_write_open(self.runtime_service, ctx, "run_transform", "transform", api_name)
-        result, _plan = self.run_transform_internal(ctx, api_name)
+        plan = self._prepare_pipeline_transform_run(ctx, api_name)
+        result = self._execute_pipeline_transform_run(ctx, plan)
         return result
 
     def run_transform_internal(self, ctx: RequestContext, api_name: str) -> tuple[CommitResult, TransformRunPlan]:
-        plan = self._start_transform_run(ctx, api_name)
+        plan = self._prepare_pipeline_transform_run(ctx, api_name)
+        result = self._execute_pipeline_transform_run(ctx, plan)
+        return result, plan
+
+    def _prepare_pipeline_transform_run(self, ctx: RequestContext, api_name: str) -> TransformRunPlan:
+        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
+        require_transform_write_open(self.runtime_service, ctx, "run_transform", "transform", api_name)
+        return self._start_transform_run(ctx, api_name)
+
+    def _execute_pipeline_transform_run(
+        self,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        *,
+        after_transform_commit: TransformCommitHook | None = None,
+    ) -> CommitResult:
         staged = self.dataset_transaction_service._staging_file(
             plan.output_dataset, plan.transaction_id, "part-00000.parquet"
         )
-        result = self.execute_and_finalize_plan(ctx, plan, staged)
-        return result, plan
+        return self.execute_and_finalize_plan(
+            ctx,
+            plan,
+            staged,
+            after_transform_commit=after_transform_commit,
+        )
+
+    def _abort_pipeline_transform_run(
+        self,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        exc: Exception,
+    ) -> None:
+        self.abort_transform_run(ctx, plan, exc)
 
     def retry_transform_run(
         self,
@@ -112,6 +138,7 @@ class TransformRunService(CoreService):
         staged: Path,
         *,
         should_audit_retry: bool = False,
+        after_transform_commit: TransformCommitHook | None = None,
     ) -> CommitResult:
         try:
             execution = self.execute_transform_plan(plan, staged)
@@ -123,6 +150,7 @@ class TransformRunService(CoreService):
                 execution,
                 dead_letter_ids,
                 should_audit_retry=should_audit_retry,
+                after_transform_commit=after_transform_commit,
             )
         except Exception as exc:
             self.abort_transform_run(ctx, plan, exc)

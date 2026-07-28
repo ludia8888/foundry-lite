@@ -468,11 +468,14 @@ class IcebergDatasetStorageAdapter:
         self._evolve_schema_if_needed(identifier, arrow_table.schema)
         table = self._reload(identifier)
         # Each Foundry version is the complete content for that version, so SNAPSHOT
-        # semantics (overwrite) apply and the new current snapshot is this version.
-        table.overwrite(
-            arrow_table,
-            snapshot_properties=_snapshot_properties(version_id, dataset_ref, branch, schema_hash, created_at),
-        )
+        # semantics apply and the new current snapshot is this version. A newly
+        # created table has nothing to replace; append avoids PyIceberg's no-op
+        # delete warning while producing the same initial snapshot.
+        snapshot_properties = _snapshot_properties(version_id, dataset_ref, branch, schema_hash, created_at)
+        if table.current_snapshot() is None:
+            table.append(arrow_table, snapshot_properties=snapshot_properties)
+        else:
+            table.overwrite(arrow_table, snapshot_properties=snapshot_properties)
         snapshot = self._reload(identifier).current_snapshot()
         if snapshot is None:
             raise ValueError("Iceberg overwrite did not produce a snapshot")

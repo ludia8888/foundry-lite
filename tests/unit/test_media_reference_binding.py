@@ -276,7 +276,12 @@ def test_bind_denied_when_media_is_above_caller_clearance(env: _Env) -> None:
 
 
 def test_resolve_masks_reference_outside_clearance(env: _Env) -> None:
-    version = env.commit_version(logical_path="/a.pdf", body=b"%PDF-1.4 a", idem="t1")
+    version = env.commit_version(
+        logical_path="/a.pdf",
+        body=b"%PDF-1.4 a",
+        idem="t1",
+        classification="CONFIDENTIAL",
+    )
     env.binding.bind(
         env.ctx,
         holder_type="Order",

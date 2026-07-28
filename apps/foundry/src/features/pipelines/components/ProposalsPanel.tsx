@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { DataTable, type DataTableColumn } from "@/components/shared/DataTable";
 import { StatusPill, type StatusIntent } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 import { asText, formatTimestamp } from "../pipeline-model";
 import type { PipelineActions } from "../use-pipeline-actions";
@@ -12,6 +13,7 @@ import { ProposalDiffPanel } from "./ProposalDiffPanel";
 
 const PROPOSAL_STATUS_INTENT: Record<string, StatusIntent> = {
   submitted: "info",
+  in_review: "warning",
   approved: "success",
   rejected: "danger",
   executed: "success",
@@ -20,6 +22,7 @@ const PROPOSAL_STATUS_INTENT: Record<string, StatusIntent> = {
 
 const PROPOSAL_STATUS_LABEL: Record<string, string> = {
   submitted: "검토 대기",
+  in_review: "검토 중",
   approved: "승인됨",
   rejected: "반려됨",
   executed: "적용됨",
@@ -111,6 +114,11 @@ export function ProposalsPanel({ proposals, actions }: ProposalsPanelProps) {
               결정 실패 · {actions.decideProposal.error.code}
             </StatusPill>
           ) : null}
+          {actions.assignProposal.error ? (
+            <StatusPill intent="danger">
+              할당 실패 · {actions.assignProposal.error.code}
+            </StatusPill>
+          ) : null}
           {actions.executeProposal.error ? (
             <StatusPill intent="danger">
               적용 실패 · {actions.executeProposal.error.code}
@@ -155,12 +163,76 @@ function ProposalRowActions({
   proposal: PipelineProposal;
   actions: PipelineActions;
 }) {
+  const [reviewerUserId, setReviewerUserId] = useState("");
   const isBusy =
+    actions.assignProposal.isRunning ||
     actions.decideProposal.isRunning ||
     actions.executeProposal.isRunning ||
     actions.withdrawProposal.isRunning;
 
-  if (proposal.status === "submitted") {
+  if (proposal.isStale === true) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="max-w-48 truncate text-[10px] text-warning">
+          stale · {proposal.staleReasons.join(", ")}
+        </span>
+        {["submitted", "in_review", "approved"].includes(
+          proposal.status,
+        ) ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[10px]"
+            disabled={isBusy}
+            onClick={() =>
+              void actions.withdrawProposal.execute({
+                proposalId: proposal.id,
+              })
+            }
+          >
+            stale 제안 철회
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (["submitted", "in_review"].includes(proposal.status)) {
+    if (!proposal.assignedTo) {
+      return (
+        <div className="flex min-w-64 items-center gap-1">
+          <Input
+            aria-label={`${proposal.title} reviewer user id`}
+            placeholder="reviewer user id"
+            className="h-6 rounded-[2px] px-2 text-[10px]"
+            value={reviewerUserId}
+            onChange={(event) => setReviewerUserId(event.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 shrink-0 px-2 text-[10px]"
+            disabled={isBusy || reviewerUserId.trim().length === 0}
+            onClick={() =>
+              void actions.assignProposal.execute({
+                proposalId: proposal.id,
+                assigneeUserId: reviewerUserId.trim(),
+              })
+            }
+          >
+            리뷰어 지정
+          </Button>
+        </div>
+      );
+    }
+    if (proposal.canCurrentUserReview !== true) {
+      return (
+        <div className="text-[10px] text-muted-foreground">
+          <div className="font-mono">reviewer={String(proposal.assignedTo)}</div>
+          <div>별도 reviewer의 결정 대기</div>
+        </div>
+      );
+    }
     return (
       <div className="flex gap-1">
         <Button

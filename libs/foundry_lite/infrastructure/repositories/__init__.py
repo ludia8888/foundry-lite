@@ -37,9 +37,15 @@ from foundry_lite.infrastructure.repositories.object_set_repository import SqlAl
 from foundry_lite.infrastructure.repositories.ontology_branch_repository import SqlAlchemyOntologyBranchRepository
 from foundry_lite.infrastructure.repositories.ontology_repository import SqlAlchemyOntologyRepository
 from foundry_lite.infrastructure.repositories.osdk_application_repository import SqlAlchemyOsdkApplicationRepository
+from foundry_lite.infrastructure.repositories.pipeline_execution_repository import (
+    SqlAlchemyPipelineExecutionRepository,
+)
 from foundry_lite.infrastructure.repositories.pipeline_repository import SqlAlchemyPipelineRepository
 from foundry_lite.infrastructure.repositories.resource_catalog_repository import SqlAlchemyResourceCatalogRepository
 from foundry_lite.infrastructure.repositories.runtime_repository import SqlAlchemyRuntimeRepository
+from foundry_lite.infrastructure.repositories.semantic_row_cache_repository import (
+    SqlAlchemySemanticRowCacheRepository,
+)
 from foundry_lite.infrastructure.repositories.source_management_repository import SqlAlchemySourceManagementRepository
 from foundry_lite.infrastructure.repositories.source_registry_repository import SqlAlchemySourceRegistryRepository
 from foundry_lite.infrastructure.repositories.transform_repository import SqlAlchemyTransformRepository
@@ -71,10 +77,12 @@ __all__ = [
     "SqlAlchemyOntologyRepository",
     "SqlAlchemyOsdkApplicationRepository",
     "SqlAlchemyPipelineRepository",
+    "SqlAlchemyPipelineExecutionRepository",
     "SqlAlchemyOAuthSessionRepository",
     "SqlAlchemyResourceCatalogRepository",
     "SqlAlchemyErasureRepository",
     "SqlAlchemyRuntimeRepository",
+    "SqlAlchemySemanticRowCacheRepository",
     "SqlAlchemySourceRegistryRepository",
     "SqlAlchemySourceManagementRepository",
     "SqlAlchemyTransformRepository",
