@@ -41,6 +41,7 @@ class TrainedModelInvocation:
     expected_model_version: str | None = None
     expected_revision: str | None = None
     expected_executable_reference: str | None = None
+    pinned_definition: TrainedModelDefinition | None = None
 
 
 @dataclass(frozen=True, slots=True)

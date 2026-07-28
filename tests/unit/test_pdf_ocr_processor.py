@@ -121,6 +121,31 @@ def test_pdf_ocr_invalid_language_is_typed_and_does_not_invoke_runtime(tmp_path:
     assert "sourcePath" not in failure.details
 
 
+@pytest.mark.parametrize(
+    ("parameters", "reason"),
+    [
+        ({"maxPages": 10_001}, "max_pages_out_of_range"),
+        ({"pageSelection": {"start": 1, "limit": 10_001}}, "page_selection_limit_exceeded"),
+    ],
+)
+def test_pdf_ocr_rejects_page_bounds_before_invoking_runtime(
+    tmp_path: Path,
+    parameters: dict[str, object],
+    reason: str,
+) -> None:
+    source = tmp_path / "scanned.pdf"
+    source.write_bytes(b"fake")
+    adapter = PdfOcrProcessorAdapter(
+        rasterizer=lambda *_args: pytest.fail("invalid page bounds must fail before rasterization"),
+    )
+
+    with pytest.raises(AdapterError) as exc_info:
+        adapter.process(_request(str(source), **parameters))
+
+    assert exc_info.value.failure.kind == "validation"
+    assert exc_info.value.failure.details["reason"] == reason
+
+
 def test_pdf_ocr_runtime_timeout_is_retryable_and_page_scoped(tmp_path: Path) -> None:
     source = tmp_path / "scanned.pdf"
     source.write_bytes(b"fake")

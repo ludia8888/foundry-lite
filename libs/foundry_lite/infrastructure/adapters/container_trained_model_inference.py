@@ -85,7 +85,7 @@ class ContainerTrainedModelInferenceAdapter:
     def infer(self, invocation: TrainedModelInvocation) -> TrainedModelInferenceResult:
         resolved = self._resolve_spec(invocation.model_ref, invocation.branch, invocation.fallback_branches)
         spec = _execution_spec(self.config, resolved, invocation.expected_executable_reference)
-        definition = _resolved_definition(spec)
+        definition = invocation.pinned_definition or _resolved_definition(spec)
         require_trained_model_invocation_pin(invocation, definition)
         payload = _request_payload(invocation)
         request_bytes = _bounded_request_bytes(payload, self)

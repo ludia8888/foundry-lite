@@ -44,6 +44,14 @@ class TransformExecutionResult:
 
 
 @dataclass(frozen=True)
+class BoundedParquetRead:
+    """Rows plus measured decoded JSON bytes from one bounded Parquet read."""
+
+    rows: tuple[TabularRow, ...]
+    decoded_byte_count: int
+
+
+@dataclass(frozen=True)
 class SqlTransformPlan:
     """Logical plan for a SQL-based transform.
 
@@ -111,6 +119,16 @@ class ComputeAdapter(Protocol):
 
     def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:
         """Read all rows from a Parquet file as JSON-ready dictionaries."""
+        ...
+
+    def rows_from_parquet_bounded(
+        self,
+        parquet_path: Path,
+        *,
+        max_rows: int,
+        max_decoded_bytes: int,
+    ) -> BoundedParquetRead:
+        """Read only when Parquet metadata and decoded rows fit both hard limits."""
         ...
 
     def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[TabularRow]:

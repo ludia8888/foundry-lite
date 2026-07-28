@@ -164,6 +164,20 @@ class _RecordingComputeAdapter:
         self.read_paths.append(parquet_path)
         return self.delegate.rows_from_parquet(parquet_path)
 
+    def rows_from_parquet_bounded(
+        self,
+        parquet_path: Path,
+        *,
+        max_rows: int,
+        max_decoded_bytes: int,
+    ):
+        self.read_paths.append(parquet_path)
+        return self.delegate.rows_from_parquet_bounded(
+            parquet_path,
+            max_rows=max_rows,
+            max_decoded_bytes=max_decoded_bytes,
+        )
+
 
 @dataclass
 class _ReaderHarness:
@@ -228,6 +242,29 @@ def test_exact_committed_dataset_version_reader_rejects_oversized_source_before_
 
     assert raised.value.details["reason"] == reason
     assert harness.compute.read_paths == []
+
+
+def test_exact_committed_dataset_version_reader_maps_decoded_parquet_limit_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _reader_harness(tmp_path)
+
+    def reject_decode(*_args: object, **_kwargs: object) -> None:
+        from foundry_lite.domain.errors import ValidationFailed
+
+        raise ValidationFailed(
+            "parquet read bound exceeded",
+            details={"limitKind": "decoded_bytes", "actual": 101, "maximum": 100},
+        )
+
+    monkeypatch.setattr(harness.compute, "rows_from_parquet_bounded", reject_decode)
+
+    with pytest.raises(ExactDatasetVersionReadFailed) as raised:
+        harness.reader.read(_CTX, request=harness.request)
+
+    assert raised.value.details["reason"] == "source_decoded_limit_exceeded"
+    assert raised.value.details["readError"]["limitKind"] == "decoded_bytes"
 
 
 def test_exact_committed_dataset_version_reader_rejects_manifest_registry_tampering(

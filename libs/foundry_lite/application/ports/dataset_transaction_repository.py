@@ -10,13 +10,17 @@ from foundry_lite.application.dataset_file_contracts import (
     DatasetFileRecord,
     DatasetFileRow,
 )
+from foundry_lite.application.dataset_transaction_read_models import (
+    DatasetTransactionMetadata,
+    DatasetTransactionRow,
+    PipelineDatasetCommitRow,
+)
 from foundry_lite.application.dataset_webhook_events import WebhookEventKeyRecord
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 DatasetRunKind = Literal["sync", "transform", "materialization"]
 DeadLetterRecordStatus = Literal["QUARANTINED", "REPLAY_REQUESTED", "REPLAYING", "RESOLVED", "DISCARDED"]
 DeadLetterRecordReplayStatus = Literal["NOT_REQUESTED", "REQUESTED", "REPLAYING", "SUCCEEDED", "FAILED", "DISCARDED"]
-DatasetTransactionMetadata = Mapping[str, object]
 DatasetRunError = Mapping[str, object]
 DeadLetterRecordPayload = Mapping[str, object]
 
@@ -117,22 +121,6 @@ class DeadLetterRecord:
 
 class DatasetVersionConflictError(Exception):
     """Raised when a dataset version number is already committed."""
-
-
-class DatasetTransactionRow(TypedDict):
-    id: str
-    tenant_id: str
-    dataset_id: str
-    branch: str
-    tx_type: str
-    status: str
-    base_version_id: str | None
-    committed_version_id: str | None
-    schema_version: int | None
-    created_by: str
-    created_at: str
-    committed_at: str | None
-    metadata: DatasetTransactionMetadata
 
 
 class DeadLetterRecordRow(TypedDict):
@@ -325,6 +313,16 @@ class DatasetTransactionRepository(Protocol):
         committed_version_id: str,
     ) -> DatasetTransactionRow | None:
         """Return the committed dataset transaction that produced one dataset version."""
+        ...
+
+    def committed_pipeline_output_transactions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[PipelineDatasetCommitRow]:
+        """Return committed Dataset outputs durably attributed to one Pipeline run."""
         ...
 
     def committed_webhook_transaction_by_event(

@@ -42,11 +42,12 @@ class LocalTrainedModelInferenceAdapter:
         )
 
     def infer(self, invocation: TrainedModelInvocation) -> TrainedModelInferenceResult:
-        definition = self.resolve(
+        current_definition = self.resolve(
             invocation.model_ref,
             branch=invocation.branch,
             fallback_branches=invocation.fallback_branches,
         )
+        definition = invocation.pinned_definition or current_definition
         require_trained_model_invocation_pin(invocation, definition)
         rows = tuple(_score_transaction(row) for row in invocation.rows)
         return TrainedModelInferenceResult(

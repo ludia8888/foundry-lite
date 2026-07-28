@@ -40,7 +40,7 @@ from foundry_lite.application.services.pipeline_dataset_version_read_validation 
     validate_exact_dataset_rows,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import InvariantViolation
+from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 from foundry_lite.security.policy import PolicyService
 
 MAX_PIPELINE_DATASET_SOURCE_ROWS = 100_000
@@ -161,9 +161,27 @@ class ExactCommittedDatasetVersionReader(CoreService):
         paths: Sequence[Path],
     ) -> tuple[TabularRow, ...]:
         rows: list[TabularRow] = []
+        decoded_byte_count = 0
         try:
             for path in paths:
-                rows.extend(self.compute_adapter.rows_from_parquet(path))
+                read = self.compute_adapter.rows_from_parquet_bounded(
+                    path,
+                    max_rows=MAX_PIPELINE_DATASET_SOURCE_ROWS - len(rows),
+                    max_decoded_bytes=MAX_PIPELINE_DATASET_SOURCE_BYTES - decoded_byte_count,
+                )
+                rows.extend(read.rows)
+                decoded_byte_count += read.decoded_byte_count
+        except ValidationFailed as exc:
+            reason = (
+                "source_decoded_limit_exceeded"
+                if exc.details.get("limitKind") in {"rows", "decoded_bytes"}
+                else "source_rows_unreadable"
+            )
+            raise exact_dataset_version_request_failure(
+                request,
+                reason,
+                readError=dict(exc.details),
+            ) from exc
         except Exception as exc:
             raise exact_dataset_version_request_failure(
                 request,

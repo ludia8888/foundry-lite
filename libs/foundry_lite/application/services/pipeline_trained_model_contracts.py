@@ -79,6 +79,25 @@ def trained_model_definition_payload(definition: TrainedModelDefinition) -> Json
     }
 
 
+def trained_model_definition_snapshot(definition: TrainedModelDefinition) -> JsonObject:
+    return {
+        "modelRef": definition.model_ref,
+        "displayName": definition.display_name,
+        "branch": definition.branch,
+        "version": definition.version,
+        "revision": definition.revision,
+        "executableReference": definition.executable_reference,
+        "inputFields": [_snapshot_field_payload(field) for field in definition.input_fields],
+        "outputFields": [_snapshot_field_payload(field) for field in definition.output_fields],
+        "cpuCores": definition.cpu_cores,
+        "memoryMiB": definition.memory_mib,
+        "gpuType": definition.gpu_type,
+        "startupTimeoutSeconds": definition.startup_timeout_seconds,
+        "previewSupported": definition.is_preview_supported,
+        "executionModes": list(definition.execution_modes),
+    }
+
+
 def validate_trained_model_config(
     config: Mapping[str, object],
     definition: TrainedModelDefinition,
@@ -170,6 +189,10 @@ def _field_payload(field: TrainedModelField) -> JsonObject:
         "type": field.data_type,
         "required": field.is_required,
     }
+
+
+def _snapshot_field_payload(field: TrainedModelField) -> JsonObject:
+    return {"name": field.name, "dataType": field.data_type, "required": field.is_required}
 
 
 def _mapping(config: Mapping[str, object], field: str) -> Mapping[str, object]:

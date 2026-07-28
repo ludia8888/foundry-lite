@@ -136,9 +136,14 @@ def test_container_sidecar_executes_deployment_digest_when_current_branch_image_
         _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
         return ContainerCommandResult(0)
 
+    current_definition = replace(
+        TRANSACTION_RISK_DEFINITION,
+        version="2026.08.1",
+        revision="container-risk-model-r2",
+    )
     adapter = ContainerTrainedModelInferenceAdapter(
         ContainerTrainedModelConfig(
-            specs=(ContainerTrainedModelSpec(TRANSACTION_RISK_DEFINITION, current_image),),
+            specs=(ContainerTrainedModelSpec(current_definition, current_image),),
             workspace_root=tmp_path,
             is_image_digest_required=True,
         ),
@@ -150,11 +155,17 @@ def test_container_sidecar_executes_deployment_digest_when_current_branch_image_
         expected_model_version="2026.07.1",
         expected_revision="container-risk-model-r1",
         expected_executable_reference=deployed_image,
+        pinned_definition=replace(
+            TRANSACTION_RISK_DEFINITION,
+            executable_reference=deployed_image,
+        ),
     )
 
     result = adapter.infer(invocation)
 
     assert result.definition.executable_reference == deployed_image
+    assert result.definition.version == "2026.07.1"
+    assert result.definition.revision == "container-risk-model-r1"
     assert deployed_image in commands[-1]
     assert current_image not in commands[-1]
 

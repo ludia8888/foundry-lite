@@ -21,7 +21,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.fake_language_model import FakeLanguageModel
 from foundry_lite.infrastructure.adapters.model_media_resolver import RepositoryModelMediaResolver
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 
 class _StructuredLanguageModel(FakeLanguageModel):
@@ -149,6 +149,13 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
     assert replay["status"] == "executing"
     with foundry.engine.begin() as transaction:
         transaction.execute(
+            delete(db.pipeline_run_artifacts).where(
+                db.pipeline_run_artifacts.c.tenant_id == ctx.tenant_id,
+                db.pipeline_run_artifacts.c.run_id == row["id"],
+                db.pipeline_run_artifacts.c.node_id == "output",
+            )
+        )
+        transaction.execute(
             update(db.pipeline_runs)
             .where(
                 db.pipeline_runs.c.tenant_id == ctx.tenant_id,
@@ -166,6 +173,7 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
     assert reconciled["outputDatasetRef"] == output_ref
     assert reconciled["outputVersionId"] == output_version_id
     assert reconciled["outputs"][0]["ref"]["versionId"] == output_version_id
+    assert reconciled["outputs"][0]["ref"]["transactionId"]
     assert "terminal evidence requires reconciliation" in reconciled["error"]["message"]
     assert len(_dataset_version_ids(foundry, ctx, output_ref)) == 1
     assert any(

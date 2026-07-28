@@ -48,6 +48,7 @@ from foundry_lite.application.ports.backup_artifact_store import (
     BackupArtifactStore,
 )
 from foundry_lite.application.ports.compute_adapter import (
+    BoundedParquetRead,
     ComputeAdapter,
     InputFilePaths,
     ParquetFieldType,
@@ -154,6 +155,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     DeadLetterRecordRetryResult,
     DeadLetterRecordRow,
     DeadLetterRecordStatus,
+    PipelineDatasetCommitRow,
     SyncRunRecord,
     SyncRunRow,
 )

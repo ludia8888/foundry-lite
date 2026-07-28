@@ -67,6 +67,7 @@ def _model_ref(value: object, index: int) -> ModelRef:
         revision=_pin_text(value, "revision", index),
         parameters_fingerprint=_pin_text(value, "parametersFingerprint", index),
         executable_reference=_pin_text(value, "executableReference", index),
+        definition_snapshot=_pin_object(value, "definitionSnapshot", index),
     )
 
 
@@ -78,6 +79,18 @@ def _pin_text(value: Mapping[str, object], field: str, index: int) -> str:
             details={"index": index, "field": field},
         )
     return item.strip()
+
+
+def _pin_object(value: Mapping[str, object], field: str, index: int) -> Mapping[str, object]:
+    item = value.get(field)
+    if item is None:
+        return {}
+    if not isinstance(item, Mapping):
+        raise ValidationFailed(
+            "pipeline execution-plan model pin field must be an object",
+            details={"index": index, "field": field},
+        )
+    return item
 
 
 def _selected_node_ids(

@@ -52,6 +52,7 @@ class ModelRef:
     revision: str
     parameters_fingerprint: str
     executable_reference: str
+    definition_snapshot: Mapping[str, object] = MappingProxyType({})
 
     def __post_init__(self) -> None:
         _require_text(self.model_id, "model id")
@@ -60,6 +61,9 @@ class ModelRef:
         _require_text(self.revision, "model revision")
         _require_text(self.parameters_fingerprint, "model parameters fingerprint")
         _require_text(self.executable_reference, "model executable reference")
+        if self.provider == "trained_model" and not self.definition_snapshot:
+            raise ValidationFailed("trained model definition snapshot is required")
+        object.__setattr__(self, "definition_snapshot", _freeze_object(self.definition_snapshot))
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +351,7 @@ def _model_payload(model: ModelRef) -> dict[str, object]:
         "revision": model.revision,
         "parametersFingerprint": model.parameters_fingerprint,
         "executableReference": model.executable_reference,
+        "definitionSnapshot": thaw_json_value(model.definition_snapshot),
     }
 
 

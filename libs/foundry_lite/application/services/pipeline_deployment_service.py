@@ -28,6 +28,7 @@ from foundry_lite.application.services.pipeline_source_contracts import Pipeline
 from foundry_lite.application.services.pipeline_trained_model_contracts import (
     require_trained_model_import,
     trained_model_branch_config,
+    trained_model_definition_snapshot,
     validate_trained_model_config,
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
@@ -124,6 +125,7 @@ class PipelineDeploymentService(CoreService):
                     revision=definition.revision,
                     parameters_fingerprint=_json_hash(dict(config)),
                     executable_reference=definition.executable_reference,
+                    definition_snapshot=trained_model_definition_snapshot(definition),
                 )
             )
         return tuple(refs)

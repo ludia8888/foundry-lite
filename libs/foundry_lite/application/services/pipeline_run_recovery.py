@@ -9,6 +9,10 @@ from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from uuid import uuid4
 
+from foundry_lite.application.ports.dataset_transaction_repository import (
+    DatasetTransactionRepository,
+    PipelineDatasetCommitRow,
+)
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineExecutionRepository,
     PipelineRunArtifactRow,
@@ -45,6 +49,17 @@ class PipelineExpiredExecutionState:
     output_version_id: str | None
     outputs: tuple[dict[str, object], ...]
     error: dict[str, object]
+
+
+@dataclass(frozen=True)
+class RecoveredPipelineOutput:
+    node_id: str
+    artifact_kind: str
+    plane: str
+    status: str
+    is_serving: bool
+    ref: Mapping[str, object]
+    evidence_id: str
 
 
 class PipelineTerminalCommitError(RuntimeError):
@@ -162,6 +177,7 @@ def expire_stale_pipeline_run(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
     execution_repository: PipelineExecutionRepository,
+    dataset_transaction_repository: DatasetTransactionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
@@ -171,11 +187,15 @@ def expire_stale_pipeline_run(
         return False
     completed_at = _timestamp_text(datetime.now(UTC))
     with transaction_manager.begin() as transaction:
-        state = _expired_execution_state(transaction, execution_repository, runtime_service, ctx, row)
-        timeline: list[dict[str, object]] = [
-            *row["timeline"],
-            {"event": state.event, "at": _now(), "error": state.error},
-        ]
+        state = _expired_execution_state(
+            transaction,
+            execution_repository,
+            dataset_transaction_repository,
+            runtime_service,
+            ctx,
+            row,
+        )
+        timeline = _expired_timeline(row, state)
         after = repository.expire_run_execution(
             transaction=transaction,
             tenant_id=ctx.tenant_id,
@@ -195,20 +215,28 @@ def expire_stale_pipeline_run(
     return after is not None
 
 
+def _expired_timeline(
+    row: PipelineRunRow,
+    state: PipelineExpiredExecutionState,
+) -> list[dict[str, object]]:
+    return [*row["timeline"], {"event": state.event, "at": _now(), "error": state.error}]
+
+
 def _expired_execution_state(
     transaction: TransactionContext,
     repository: PipelineExecutionRepository,
+    dataset_transaction_repository: DatasetTransactionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
 ) -> PipelineExpiredExecutionState:
-    artifacts = _committed_output_artifacts(transaction, repository, ctx, row)
-    if not artifacts:
+    outputs_found = _committed_outputs(transaction, repository, dataset_transaction_repository, ctx, row)
+    if not outputs_found:
         error = dict(runtime_service._error_payload(stale_pipeline_run_error(row), ctx, run_id=str(row["id"])))
         return PipelineExpiredExecutionState(PIPELINE_RUN_FAILED, "pipeline.run.failed", None, None, (), error)
-    outputs = tuple(_reconciled_output(artifact) for artifact in artifacts)
-    dataset_ref, version_id = _single_serving_dataset_fields(artifacts)
-    error = dict(runtime_service._error_payload(_reconciliation_error(row, artifacts), ctx, run_id=str(row["id"])))
+    outputs = tuple(_reconciled_output(output) for output in outputs_found)
+    dataset_ref, version_id = _single_serving_dataset_fields(outputs_found)
+    error = dict(runtime_service._error_payload(_reconciliation_error(row, outputs_found), ctx, run_id=str(row["id"])))
     return PipelineExpiredExecutionState(
         PIPELINE_RUN_PARTIAL,
         "pipeline.run.reconciliation_required",
@@ -219,47 +247,110 @@ def _expired_execution_state(
     )
 
 
-def _committed_output_artifacts(
+def _committed_outputs(
     transaction: TransactionContext,
     repository: PipelineExecutionRepository,
+    dataset_transaction_repository: DatasetTransactionRepository,
     ctx: RequestContext,
     row: PipelineRunRow,
-) -> list[PipelineRunArtifactRow]:
+) -> list[RecoveredPipelineOutput]:
     node_rows = repository.node_runs_for_run(
         transaction=transaction,
         tenant_id=ctx.tenant_id,
         run_id=str(row["id"]),
     )
     output_node_ids = {item["node_id"] for item in node_rows if item["descriptor_id"].startswith("output.")}
-    artifacts = repository.artifacts_for_run(
+    artifacts = [
+        _artifact_output(item)
+        for item in repository.artifacts_for_run(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            run_id=str(row["id"]),
+        )
+        if item["node_id"] in output_node_ids and item["status"] == "COMMITTED"
+    ]
+    transactions = dataset_transaction_repository.committed_pipeline_output_transactions(
         transaction=transaction,
         tenant_id=ctx.tenant_id,
-        run_id=str(row["id"]),
+        pipeline_run_id=str(row["id"]),
     )
-    return [item for item in artifacts if item["node_id"] in output_node_ids and item["status"] == "COMMITTED"]
+    recovered = _missing_dataset_outputs(transactions, output_node_ids, {_output_key(item) for item in artifacts})
+    return [*artifacts, *recovered]
 
 
-def _reconciled_output(artifact: PipelineRunArtifactRow) -> dict[str, object]:
+def _missing_dataset_outputs(
+    rows: list[PipelineDatasetCommitRow],
+    output_node_ids: set[str],
+    seen: set[tuple[str, str, str | None]],
+) -> list[RecoveredPipelineOutput]:
+    recovered: list[RecoveredPipelineOutput] = []
+    for row in rows:
+        output = _dataset_commit_output(row, output_node_ids)
+        if output is not None and _output_key(output) not in seen:
+            recovered.append(output)
+            seen.add(_output_key(output))
+    return recovered
+
+
+def _artifact_output(artifact: PipelineRunArtifactRow) -> RecoveredPipelineOutput:
+    return RecoveredPipelineOutput(
+        node_id=artifact["node_id"],
+        artifact_kind=artifact["artifact_kind"],
+        plane=artifact["plane"],
+        status=artifact["status"],
+        is_serving=artifact["is_serving"],
+        ref=artifact["artifact_ref"],
+        evidence_id=artifact["id"],
+    )
+
+
+def _dataset_commit_output(
+    row: PipelineDatasetCommitRow,
+    output_node_ids: set[str],
+) -> RecoveredPipelineOutput | None:
+    node_id = _optional_text(row["metadata"].get("pipelineNodeId"))
+    if node_id is None or node_id not in output_node_ids:
+        return None
+    return RecoveredPipelineOutput(
+        node_id=node_id,
+        artifact_kind="dataset_version",
+        plane="dataset",
+        status="COMMITTED",
+        is_serving=True,
+        ref={
+            "datasetRef": row["dataset_ref"],
+            "versionId": row["version_id"],
+            "transactionId": row["transaction_id"],
+        },
+        evidence_id=row["transaction_id"],
+    )
+
+
+def _output_key(output: RecoveredPipelineOutput) -> tuple[str, str, str | None]:
+    return output.node_id, output.artifact_kind, _optional_text(output.ref.get("versionId"))
+
+
+def _reconciled_output(artifact: RecoveredPipelineOutput) -> dict[str, object]:
     return {
-        "nodeId": artifact["node_id"],
-        "artifactKind": artifact["artifact_kind"],
-        "plane": artifact["plane"],
-        "status": artifact["status"],
-        "commitKind": "SERVING_ASSET" if artifact["is_serving"] else "GOVERNED_CANDIDATE",
-        "isServing": artifact["is_serving"],
-        "ref": dict(artifact["artifact_ref"]),
+        "nodeId": artifact.node_id,
+        "artifactKind": artifact.artifact_kind,
+        "plane": artifact.plane,
+        "status": artifact.status,
+        "commitKind": "SERVING_ASSET" if artifact.is_serving else "GOVERNED_CANDIDATE",
+        "isServing": artifact.is_serving,
+        "ref": dict(artifact.ref),
     }
 
 
 def _single_serving_dataset_fields(
-    artifacts: list[PipelineRunArtifactRow],
+    artifacts: list[RecoveredPipelineOutput],
 ) -> tuple[str | None, str | None]:
     matches = [
-        artifact for artifact in artifacts if artifact["artifact_kind"] == "dataset_version" and artifact["is_serving"]
+        artifact for artifact in artifacts if artifact.artifact_kind == "dataset_version" and artifact.is_serving
     ]
     if len(matches) != 1:
         return None, None
-    ref = matches[0]["artifact_ref"]
+    ref = matches[0].ref
     dataset_ref = ref.get("datasetRef")
     version_id = ref.get("versionId")
     return _optional_text(dataset_ref), _optional_text(version_id)
@@ -267,13 +358,13 @@ def _single_serving_dataset_fields(
 
 def _reconciliation_error(
     row: PipelineRunRow,
-    artifacts: list[PipelineRunArtifactRow],
+    artifacts: list[RecoveredPipelineOutput],
 ) -> InvariantViolation:
     return InvariantViolation(
         "pipeline outputs committed but terminal evidence requires reconciliation",
         details={
             "run_id": row["id"],
-            "artifact_ids": [artifact["id"] for artifact in artifacts],
+            "commit_evidence_ids": [artifact.evidence_id for artifact in artifacts],
             "execution_lease_expires_at": row["execution_lease_expires_at"],
         },
     )

@@ -44,6 +44,7 @@ from foundry_lite.infrastructure.adapters.pdf_page_selection import (
 
 _DERIVATIVE_KIND = "pdf_ocr"
 _DEFAULT_MAX_PAGES = 5000
+_MAX_PAGES = 10_000
 _DEFAULT_TIMEOUT_SECONDS = 120
 _DEFAULT_DPI = 150
 _MIN_DPI = 72
@@ -244,8 +245,10 @@ def _normalized_parameters(request: MediaProcessingRequest) -> _PdfOcrParameters
         selection = pdf_page_selection(parameters)
     except PdfPageSelectionError as exc:
         raise PdfOcrDocumentError(str(exc)) from exc
+    if selection.limit is not None and selection.limit > _MAX_PAGES:
+        raise PdfOcrDocumentError("page_selection_limit_exceeded")
     return _PdfOcrParameters(
-        max_pages=_positive_int(parameters.get("maxPages"), _DEFAULT_MAX_PAGES),
+        max_pages=_max_pages(parameters.get("maxPages")),
         selection=selection,
         dpi=_bounded_int(parameters.get("dpi"), _DEFAULT_DPI, _MIN_DPI, _MAX_DPI),
         languages=_ocr_languages(parameters.get("languages")),
@@ -600,8 +603,12 @@ def _content_hash(units: Sequence[ProcessedContentUnit]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _positive_int(value: object, default: int) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else default
+def _max_pages(value: object) -> int:
+    if value is None:
+        return _DEFAULT_MAX_PAGES
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= _MAX_PAGES:
+        raise PdfOcrDocumentError("max_pages_out_of_range")
+    return value
 
 
 def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:

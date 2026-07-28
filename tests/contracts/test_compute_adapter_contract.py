@@ -33,10 +33,17 @@ def test_compute_adapter_contract_csv_parquet_preview_inspect_and_rows(
     adapter.csv_to_parquet(csv_path, parquet_path)
     preview = adapter.preview_parquet(parquet_path, limit=1)
     rows = adapter.rows_from_parquet(parquet_path)
+    bounded = adapter.rows_from_parquet_bounded(
+        parquet_path,
+        max_rows=2,
+        max_decoded_bytes=10_000,
+    )
     stats = adapter.inspect_parquet(parquet_path, ["order_id"])
 
     assert preview == [{"order_id": "O-1", "status": "PENDING", "amount": 10}]
     assert [row["order_id"] for row in rows] == ["O-1", "O-2"]
+    assert bounded.rows == tuple(rows)
+    assert bounded.decoded_byte_count > 0
     assert stats.row_count == 2
     assert stats.schema_json["primary_key"] == ["order_id"]
     assert stats.schema_json["columns"][0]["nullable"] is False
@@ -220,6 +227,29 @@ def test_duckdb_rows_to_parquet_validates_shape_and_cleans_partial_output(
         adapter.rows_to_parquet([{"value": 1}], partial_path, ["value"])
     assert captured.value.details["errorType"] == "ArrowInvalid"
     assert not partial_path.exists()
+
+
+def test_duckdb_bounded_parquet_read_rejects_highly_compressed_decoded_payload(
+    tmp_path: Path,
+) -> None:
+    adapter = DuckDBComputeAdapter()
+    parquet_path = tmp_path / "compressed.parquet"
+    adapter.rows_to_parquet(
+        [{"payload": "x" * 100_000} for _ in range(20)],
+        parquet_path,
+        ["payload"],
+    )
+
+    with pytest.raises(ValidationFailed, match="read bound") as raised:
+        adapter.rows_from_parquet_bounded(
+            parquet_path,
+            max_rows=100,
+            max_decoded_bytes=50_000,
+        )
+
+    assert raised.value.details["limitKind"] == "decoded_bytes"
+    assert raised.value.details["actual"] > raised.value.details["maximum"]
+    assert raised.value.details["compressedByteCount"] < raised.value.details["actual"]
 
 
 def test_compute_adapter_contract_detects_duplicate_composite_tuple(

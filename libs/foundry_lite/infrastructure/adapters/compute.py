@@ -20,6 +20,7 @@ from foundry_lite.application.ports.adapter_failure import (
 )
 from foundry_lite.application.ports.code_execution import CodeExecutionAdapter
 from foundry_lite.application.ports.compute_adapter import (
+    BoundedParquetRead,
     InputFilePaths,
     ParquetFieldType,
     PythonTransformPlan,
@@ -119,6 +120,36 @@ class DuckDBComputeAdapter:
             return [_tabular_row(dict(zip(names, row, strict=True))) for row in result.fetchall()]
         finally:
             con.close()
+
+    def rows_from_parquet_bounded(
+        self,
+        parquet_path: Path,
+        *,
+        max_rows: int,
+        max_decoded_bytes: int,
+    ) -> BoundedParquetRead:
+        metadata_decoded_bytes = _require_parquet_read_bound(parquet_path, max_rows, max_decoded_bytes)
+        rows: list[TabularRow] = []
+        decoded_byte_count = 0
+        con = duckdb.connect()
+        try:
+            result = con.execute("select * from read_parquet(?)", [str(parquet_path)])
+            names = [str(column[0]) for column in result.description]
+            while batch := result.fetchmany(1_000):
+                for raw_row in batch:
+                    row = _tabular_row(dict(zip(names, raw_row, strict=True)))
+                    rows.append(row)
+                    decoded_byte_count += _decoded_row_byte_count(row)
+                    _require_decoded_result_bound(
+                        parquet_path,
+                        len(rows),
+                        decoded_byte_count,
+                        max_rows,
+                        max_decoded_bytes,
+                    )
+        finally:
+            con.close()
+        return BoundedParquetRead(tuple(rows), max(metadata_decoded_bytes, decoded_byte_count))
 
     def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[TabularRow]:
         con = duckdb.connect()
@@ -560,6 +591,61 @@ def _typed_parquet_failure(
             "errorType": type(exc).__name__,
         },
     )
+
+
+def _require_parquet_read_bound(
+    parquet_path: Path,
+    max_rows: int,
+    max_decoded_bytes: int,
+) -> int:
+    if max_rows < 0 or max_decoded_bytes < 0:
+        raise ValidationFailed("parquet read bounds must not be negative")
+    metadata = pq.ParquetFile(parquet_path).metadata
+    if metadata.num_rows > max_rows:
+        raise _parquet_bound_failure("rows", metadata.num_rows, max_rows, parquet_path)
+    decoded_bytes = sum(
+        max(metadata.row_group(group).column(column).total_uncompressed_size, 0)
+        for group in range(metadata.num_row_groups)
+        for column in range(metadata.num_columns)
+    )
+    decoded_bytes += metadata.num_rows * max(metadata.num_columns, 1) * 16
+    if decoded_bytes > max_decoded_bytes:
+        raise _parquet_bound_failure("decoded_bytes", decoded_bytes, max_decoded_bytes, parquet_path)
+    return decoded_bytes
+
+
+def _require_decoded_result_bound(
+    parquet_path: Path,
+    row_count: int,
+    decoded_byte_count: int,
+    max_rows: int,
+    max_decoded_bytes: int,
+) -> None:
+    if row_count > max_rows:
+        raise _parquet_bound_failure("rows", row_count, max_rows, parquet_path)
+    if decoded_byte_count > max_decoded_bytes:
+        raise _parquet_bound_failure("decoded_bytes", decoded_byte_count, max_decoded_bytes, parquet_path)
+
+
+def _parquet_bound_failure(
+    limit_kind: str,
+    actual: int,
+    maximum: int,
+    parquet_path: Path,
+) -> ValidationFailed:
+    return ValidationFailed(
+        "parquet read bound exceeded",
+        details={
+            "limitKind": limit_kind,
+            "actual": actual,
+            "maximum": maximum,
+            "compressedByteCount": parquet_path.stat().st_size,
+        },
+    )
+
+
+def _decoded_row_byte_count(row: Mapping[str, object]) -> int:
+    return len(json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode())
 
 
 def _tabular_row(value: object) -> TabularRow:

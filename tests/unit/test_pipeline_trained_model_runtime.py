@@ -18,7 +18,11 @@ from foundry_lite.application.services.pipeline_trained_model_contracts import (
     require_trained_model_import,
     trained_model_branch_config,
     trained_model_definition_payload,
+    trained_model_definition_snapshot,
     validate_trained_model_config,
+)
+from foundry_lite.application.services.pipeline_trained_model_snapshot import (
+    trained_model_definition_from_snapshot,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2RuntimeArtifact,
@@ -85,6 +89,43 @@ def test_trained_model_runtime_rejects_executable_drift_from_deployment_pin(
     assert (
         raised.value.details["actual"]["executableReference"] == "local://demo.transaction-risk@container-risk-model-r1"
     )
+
+
+def test_trained_model_runtime_uses_deployed_definition_after_branch_advances() -> None:
+    node = _trained_model_node()
+    adapter = LocalTrainedModelInferenceAdapter()
+    advanced = replace(
+        adapter.resolve("demo.transaction-risk", branch="master"),
+        version="2026.08.1",
+        revision="container-risk-model-r2",
+        executable_reference="local://demo.transaction-risk@container-risk-model-r2",
+    )
+    adapter.resolve = lambda *_args, **_kwargs: advanced  # type: ignore[method-assign]
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=adapter,
+        run_id="prun_historical_model",
+        model_refs=(_model_pin(node.config),),
+    )
+
+    result = runtime.execute(node, {"input": (_source_artifact(),)})
+
+    assert result.manifest["modelPin"] == {
+        "modelRef": "demo.transaction-risk",
+        "branch": "master",
+        "resolvedVersion": "2026.07.1",
+        "revision": "container-risk-model-r1",
+        "executableReference": "local://demo.transaction-risk@container-risk-model-r1",
+    }
+
+
+def test_trained_model_definition_snapshot_round_trips_and_rejects_malformed_data() -> None:
+    definition = _definition()
+
+    assert trained_model_definition_from_snapshot(trained_model_definition_snapshot(definition)) == definition
+    with pytest.raises(ValidationFailed, match="snapshot") as raised:
+        trained_model_definition_from_snapshot({"modelRef": definition.model_ref})
+
+    assert raised.value.details["field"] == "displayName"
 
 
 def test_trained_model_config_requires_unique_output_aliases() -> None:
@@ -315,6 +356,11 @@ def _trained_model_node() -> PipelineV2RuntimeNode:
 
 
 def _model_pin(config: Mapping[str, object]) -> ModelRef:
+    definition = LocalTrainedModelInferenceAdapter().resolve(
+        "demo.transaction-risk",
+        branch="feature/model-api",
+        fallback_branches=("master",),
+    )
     return ModelRef(
         model_id="demo.transaction-risk",
         model_version="2026.07.1",
@@ -322,6 +368,7 @@ def _model_pin(config: Mapping[str, object]) -> ModelRef:
         revision="container-risk-model-r1",
         parameters_fingerprint=_json_hash(dict(config)),
         executable_reference="local://demo.transaction-risk@container-risk-model-r1",
+        definition_snapshot=trained_model_definition_snapshot(definition),
     )
 
 

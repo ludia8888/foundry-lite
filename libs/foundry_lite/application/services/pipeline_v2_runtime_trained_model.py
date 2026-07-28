@@ -19,6 +19,9 @@ from foundry_lite.application.services.pipeline_trained_model_contracts import (
     trained_model_branch_config,
     validate_trained_model_config,
 )
+from foundry_lite.application.services.pipeline_trained_model_snapshot import (
+    trained_model_definition_from_snapshot,
+)
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2RuntimeArtifact,
     PipelineV2RuntimeNode,
@@ -53,7 +56,7 @@ class PipelineV2TrainedModelRuntime:
         model_ref = _required_text(node.config, "modelRef")
         pin = _required_model_pin(node, model_ref, self._model_refs)
         branch, fallbacks = trained_model_branch_config(node.config)
-        definition = self._adapter.resolve(model_ref, branch=branch, fallback_branches=fallbacks)
+        definition = trained_model_definition_from_snapshot(pin.definition_snapshot)
         require_trained_model_definition_pin(
             model_ref=model_ref,
             expected_model_version=pin.model_version,
@@ -71,6 +74,7 @@ class PipelineV2TrainedModelRuntime:
             expected_model_version=pin.model_version,
             expected_revision=pin.revision,
             expected_executable_reference=pin.executable_reference,
+            pinned_definition=definition,
         )
         result = self._adapter.infer(invocation)
         require_trained_model_invocation_pin(invocation, result.definition)

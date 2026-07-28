@@ -31,6 +31,7 @@ from foundry_lite.application.services.pipeline_run_contract_types import (
     PIPELINE_RUN_EXECUTING,
     ConflictDetected,
     DatasetRepository,
+    DatasetTransactionRepository,
     DatasetVersionRepository,
     InvariantViolation,
     NotFound,
@@ -62,6 +63,7 @@ class PipelineRunService(CoreService):
         "pipeline_repository",
         "pipeline_execution_repository",
         "dataset_repository",
+        "dataset_transaction_repository",
         "dataset_version_repository",
     )
     required_collaborators = (
@@ -71,6 +73,7 @@ class PipelineRunService(CoreService):
         "transform_service",
     )
     dataset_repository: DatasetRepository
+    dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
     pipeline_compiler_service: PipelineCompilerService
     pipeline_graph_v2_run_coordinator_service: PipelineGraphV2RunCoordinatorService
@@ -132,6 +135,7 @@ class PipelineRunService(CoreService):
                     self.engine,
                     self.pipeline_repository,
                     self.pipeline_execution_repository,
+                    self.dataset_transaction_repository,
                     self.runtime_service,
                     ctx,
                     row,

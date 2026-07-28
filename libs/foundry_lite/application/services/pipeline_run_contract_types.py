@@ -2,6 +2,7 @@
 
 from foundry_lite.application.ports import (
     DatasetRepository,
+    DatasetTransactionRepository,
     DatasetVersionRepository,
     TransactionContext,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "PIPELINE_RUN_SUCCEEDED",
     "ConflictDetected",
     "DatasetRepository",
+    "DatasetTransactionRepository",
     "DatasetVersionRepository",
     "InvariantViolation",
     "NotFound",

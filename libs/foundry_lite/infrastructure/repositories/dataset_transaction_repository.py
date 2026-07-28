@@ -22,6 +22,7 @@ from foundry_lite.application.ports import (
     DeadLetterRecord,
     DeadLetterRecordRow,
     DeadLetterRecordStatus,
+    PipelineDatasetCommitRow,
     SyncRunRecord,
     SyncRunRow,
     WebhookEventKeyRecord,
@@ -315,6 +316,40 @@ class SqlAlchemyDatasetTransactionRepository:
             .first()
         )
         return cast(DatasetTransactionRow, dict(row)) if row else None
+
+    def committed_pipeline_output_transactions(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[PipelineDatasetCommitRow]:
+        dataset_ref = (db.datasets.c.namespace + "." + db.datasets.c.name).label("dataset_ref")
+        rows = (
+            transaction.execute(
+                select(
+                    db.dataset_transactions.c.id.label("transaction_id"),
+                    db.dataset_transactions.c.dataset_id,
+                    dataset_ref,
+                    db.dataset_transactions.c.committed_version_id.label("version_id"),
+                    db.dataset_transactions.c.metadata,
+                    db.dataset_transactions.c.committed_at,
+                )
+                .join(db.datasets, db.datasets.c.id == db.dataset_transactions.c.dataset_id)
+                .where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.dataset_transactions.c.status == "COMMITTED",
+                        db.dataset_transactions.c.committed_version_id.is_not(None),
+                        db.dataset_transactions.c.metadata["pipelineRunId"].as_string() == pipeline_run_id,
+                    )
+                )
+                .order_by(db.dataset_transactions.c.committed_at, db.dataset_transactions.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(PipelineDatasetCommitRow, dict(row)) for row in rows]
 
     def committed_webhook_transaction_by_event(
         self,
