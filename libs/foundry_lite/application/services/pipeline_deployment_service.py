@@ -123,6 +123,7 @@ class PipelineDeploymentService(CoreService):
                     provider="trained_model",
                     revision=definition.revision,
                     parameters_fingerprint=_json_hash(dict(config)),
+                    executable_reference=definition.executable_reference,
                 )
             )
         return tuple(refs)

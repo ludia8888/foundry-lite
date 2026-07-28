@@ -126,7 +126,7 @@ def _validate_model_specs(specs: tuple[ContainerTrainedModelSpec, ...]) -> None:
 
 
 def _validate_digest_pins(config: ContainerTrainedModelConfig) -> None:
-    has_unpinned_image = any(not _is_digest_pinned(spec.image_reference) for spec in config.specs)
+    has_unpinned_image = any(not is_digest_pinned_model_image(spec.image_reference) for spec in config.specs)
     if config.is_image_digest_required and has_unpinned_image:
         raise ValueError("protected trained-model images must be pinned by sha256 digest")
 
@@ -203,7 +203,7 @@ def _docker_source(source: Path) -> Path:
     return resolved
 
 
-def _is_digest_pinned(image_reference: str) -> bool:
+def is_digest_pinned_model_image(image_reference: str) -> bool:
     marker = "@sha256:"
     if marker not in image_reference:
         return False

@@ -17,6 +17,7 @@ from foundry_lite.application.services.pipeline_graph_model import pipeline_grap
 from foundry_lite.application.services.pipeline_graph_normalizer import normalize_pipeline_graph
 from foundry_lite.application.services.pipeline_payloads import run_record
 from foundry_lite.application.services.pipeline_plan_compiler import PipelinePlanCompiler
+from foundry_lite.application.services.pipeline_run_recovery import PipelineExecutionLeaseLost
 from foundry_lite.application.services.pipeline_run_requests import run_request_fingerprint
 from foundry_lite.application.services.pipeline_schedule_runtime import (
     parse_schedule_timestamp,
@@ -367,7 +368,7 @@ def test_pipeline_unexpected_failure_preserves_execution_claim_timeline(
     ]
 
 
-def test_pipeline_lease_loss_fences_dataset_commit_and_terminalizes_run(
+def test_pipeline_lease_loss_fences_commit_until_expired_owner_recovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -399,17 +400,40 @@ def test_pipeline_lease_loss_fences_dataset_commit_and_terminalizes_run(
 
     monkeypatch.setattr(foundry.pipeline_repository, "renew_run_execution_lease", lambda **_kwargs: None)
 
-    run = foundry.pipelines.run(
+    with pytest.raises(PipelineExecutionLeaseLost, match="lost before commit"):
+        foundry.pipelines.run(
+            "historical_v1",
+            version_id="legacy-version",
+            idempotency_key="lease-loss-fences-commit",
+            ctx=ctx,
+        )
+    with foundry.engine.begin() as transaction:
+        versions_after = transaction.execute(select(func.count()).select_from(db.dataset_versions)).scalar_one()
+        row = foundry.pipeline_repository.run_by_idempotency_key(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            idempotency_key="lease-loss-fences-commit",
+        )
+        assert row is not None
+        assert row["status"] == "executing"
+        transaction.execute(
+            update(db.pipeline_runs)
+            .where(
+                db.pipeline_runs.c.tenant_id == ctx.tenant_id,
+                db.pipeline_runs.c.id == row["id"],
+            )
+            .values(execution_lease_expires_at="2000-01-01T00:00:00Z")
+        )
+
+    recovered = foundry.pipelines.run(
         "historical_v1",
         version_id="legacy-version",
         idempotency_key="lease-loss-fences-commit",
         ctx=ctx,
     )
-    with foundry.engine.begin() as transaction:
-        versions_after = transaction.execute(select(func.count()).select_from(db.dataset_versions)).scalar_one()
 
-    assert run["status"] == "failed"
-    assert run["error"]["message"] == "pipeline execution lease was lost before commit"
+    assert recovered["status"] == "failed"
+    assert recovered["error"]["message"] == "expired pipeline execution lease was recovered as terminal failure"
     assert versions_after == versions_before
 
 

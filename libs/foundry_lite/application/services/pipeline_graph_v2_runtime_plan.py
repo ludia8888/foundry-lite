@@ -66,6 +66,7 @@ def _model_ref(value: object, index: int) -> ModelRef:
         provider=_pin_text(value, "provider", index),
         revision=_pin_text(value, "revision", index),
         parameters_fingerprint=_pin_text(value, "parametersFingerprint", index),
+        executable_reference=_pin_text(value, "executableReference", index),
     )
 
 

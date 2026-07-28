@@ -36,9 +36,11 @@ from foundry_lite.application.services.pipeline_payloads import (
     schedule_payload,
 )
 from foundry_lite.application.services.pipeline_run_execution import _compiled_items
-from foundry_lite.application.services.pipeline_run_service import (
-    _require_deployed,
-    _require_pipeline_match,
+from foundry_lite.application.services.pipeline_run_requests import (
+    require_deployed as _require_deployed,
+)
+from foundry_lite.application.services.pipeline_run_requests import (
+    require_pipeline_match as _require_pipeline_match,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed

@@ -242,6 +242,7 @@ def test_execution_contracts_pin_compute_model_schedule_and_no_commit_preview() 
         provider="local",
         revision="sha256:model",
         parameters_fingerprint="sha256:params",
+        executable_reference="local://bge-small@sha256:model",
     )
     schedule = PipelineScheduleSpec(
         trigger_kind="cron",
@@ -337,7 +338,7 @@ def test_compute_and_model_pins_change_the_plan_fingerprint() -> None:
     pinned = compiler.compile(
         _legacy_tabular_graph(),
         compute_profile=ComputeProfile("duckdb", "duckdb", "1.3.2"),
-        model_refs=[ModelRef("model", "1", "local", "rev-1", "sha256:params")],
+        model_refs=[ModelRef("model", "1", "local", "rev-1", "sha256:params", "local://model@rev-1")],
     )
 
     assert base.plan_fingerprint != pinned.plan_fingerprint

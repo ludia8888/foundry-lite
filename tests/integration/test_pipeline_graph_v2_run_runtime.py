@@ -21,7 +21,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.fake_language_model import FakeLanguageModel
 from foundry_lite.infrastructure.adapters.model_media_resolver import RepositoryModelMediaResolver
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 
 class _StructuredLanguageModel(FakeLanguageModel):
@@ -147,7 +147,31 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
         ctx=ctx,
     )
     assert replay["status"] == "executing"
+    with foundry.engine.begin() as transaction:
+        transaction.execute(
+            update(db.pipeline_runs)
+            .where(
+                db.pipeline_runs.c.tenant_id == ctx.tenant_id,
+                db.pipeline_runs.c.id == row["id"],
+            )
+            .values(execution_lease_expires_at="2000-01-01T00:00:00Z")
+        )
+    reconciled = foundry.pipelines.run(
+        pipeline_id,
+        idempotency_key="run-graph-v2-terminal-reconciliation",
+        ctx=ctx,
+    )
+    output_version_id = _dataset_version_ids(foundry, ctx, output_ref)[0]
+    assert reconciled["status"] == "partial"
+    assert reconciled["outputDatasetRef"] == output_ref
+    assert reconciled["outputVersionId"] == output_version_id
+    assert reconciled["outputs"][0]["ref"]["versionId"] == output_version_id
+    assert "terminal evidence requires reconciliation" in reconciled["error"]["message"]
     assert len(_dataset_version_ids(foundry, ctx, output_ref)) == 1
+    assert any(
+        event["event_type"] == "pipeline.reconciliation_required" and event["resource_id"] == row["id"]
+        for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    )
 
 
 def test_graph_v2_geospatial_source_commits_governed_series_output(tmp_path: Path) -> None:

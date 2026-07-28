@@ -21,6 +21,7 @@ class TrainedModelDefinition:
     branch: str
     version: str
     revision: str
+    executable_reference: str
     input_fields: tuple[TrainedModelField, ...]
     output_fields: tuple[TrainedModelField, ...]
     cpu_cores: float = 1.0
@@ -39,6 +40,7 @@ class TrainedModelInvocation:
     rows: tuple[Mapping[str, object], ...]
     expected_model_version: str | None = None
     expected_revision: str | None = None
+    expected_executable_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

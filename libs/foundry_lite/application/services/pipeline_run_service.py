@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services import pipeline_run_recovery
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_execution_plan_backfill import (
     ensure_pipeline_execution_plan,
@@ -39,20 +40,10 @@ from foundry_lite.application.services.pipeline_run_contract_types import (
     RequestContext,
     TransactionContext,
 )
-from foundry_lite.application.services.pipeline_run_recovery import (
-    PipelineExecutionLeaseGuard,
-    PipelineTerminalCommitError,
-    expire_stale_pipeline_run,
-    new_pipeline_execution_lease,
-    pipeline_execution_heartbeat,
-    replayed_pipeline_run_action,
-)
 from foundry_lite.application.services.pipeline_run_requests import (
     deployed_pipeline_version,
     new_run_record,
-    require_deployed,
     require_idempotent_run,
-    require_pipeline_match,
     run_request_fingerprint,
 )
 from foundry_lite.application.services.pipeline_run_terminal import (
@@ -60,9 +51,6 @@ from foundry_lite.application.services.pipeline_run_terminal import (
     fail_pipeline_run,
     succeed_pipeline_run,
 )
-
-_require_deployed = require_deployed
-_require_pipeline_match = require_pipeline_match
 
 
 class PipelineRunService(CoreService):
@@ -138,15 +126,25 @@ class PipelineRunService(CoreService):
     ) -> dict[str, object]:
         if not is_created:
             require_idempotent_run(row, request_fingerprint)
-            action = replayed_pipeline_run_action(row)
+            action = pipeline_run_recovery.replayed_pipeline_run_action(row)
             if action == "fail_stale":
-                expire_stale_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row)
+                pipeline_run_recovery.expire_stale_pipeline_run(
+                    self.engine,
+                    self.pipeline_repository,
+                    self.pipeline_execution_repository,
+                    self.runtime_service,
+                    ctx,
+                    row,
+                )
                 return self.get_run(str(row["id"]), ctx=ctx)
             if action == "read":
                 return self.get_run(str(row["id"]), ctx=ctx)
         try:
             return self._execute_run(ctx, row, version)
-        except PipelineTerminalCommitError:
+        except (
+            pipeline_run_recovery.PipelineExecutionLeaseLost,
+            pipeline_run_recovery.PipelineTerminalCommitError,
+        ):
             raise
         except Exception as exc:
             fail_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row, exc)
@@ -259,7 +257,7 @@ class PipelineRunService(CoreService):
         claimed = self._claim_run_execution(ctx, row)
         if claimed is None:
             return self.get_run(str(row["id"]), ctx=ctx)
-        with pipeline_execution_heartbeat(
+        with pipeline_run_recovery.pipeline_execution_heartbeat(
             self.engine,
             self.pipeline_repository,
             ctx,
@@ -272,7 +270,7 @@ class PipelineRunService(CoreService):
         ctx: RequestContext,
         row: PipelineRunRow,
         version: PipelineVersionRow,
-        execution_lease_guard: PipelineExecutionLeaseGuard,
+        execution_lease_guard: pipeline_run_recovery.PipelineExecutionLeaseGuard,
     ) -> dict[str, object]:
         if is_graph_v2_execution_plan(version["execution_plan"]):
             run_id = self.pipeline_graph_v2_run_coordinator_service.execute(
@@ -289,7 +287,7 @@ class PipelineRunService(CoreService):
         ctx: RequestContext,
         row: PipelineRunRow,
         version: PipelineVersionRow,
-        execution_lease_guard: PipelineExecutionLeaseGuard,
+        execution_lease_guard: pipeline_run_recovery.PipelineExecutionLeaseGuard,
     ) -> dict[str, object]:
         evidence = self._node_evidence(ctx, row, version, execution_lease_guard)
         compiled = self.pipeline_compiler_service.compile_graph(
@@ -322,7 +320,7 @@ class PipelineRunService(CoreService):
         timeline: list[dict[str, object]],
         execution: PipelineRunExecution,
         evidence: PipelineNodeExecutionEvidence,
-        execution_lease_guard: PipelineExecutionLeaseGuard,
+        execution_lease_guard: pipeline_run_recovery.PipelineExecutionLeaseGuard,
     ) -> dict[str, object]:
         if execution.error is not None:
             complete_unsuccessful_pipeline_run(
@@ -358,7 +356,7 @@ class PipelineRunService(CoreService):
         row: PipelineRunRow,
     ) -> PipelineRunRow | None:
         run_id = str(row["id"])
-        lease = new_pipeline_execution_lease()
+        lease = pipeline_run_recovery.new_pipeline_execution_lease()
         timeline: list[dict[str, object]] = [
             *row["timeline"],
             {"event": "pipeline.run.execution_claimed", "at": lease.heartbeat_at, "leaseExpiresAt": lease.expires_at},
@@ -396,7 +394,7 @@ class PipelineRunService(CoreService):
         ctx: RequestContext,
         row: PipelineRunRow,
         version: PipelineVersionRow,
-        execution_lease_guard: PipelineExecutionLeaseGuard,
+        execution_lease_guard: pipeline_run_recovery.PipelineExecutionLeaseGuard,
     ) -> PipelineNodeExecutionEvidence:
         plan = version["execution_plan"]
         if plan is None:
@@ -421,7 +419,7 @@ class PipelineRunService(CoreService):
         row: PipelineRunRow,
         version: PipelineVersionRow,
         evidence: PipelineNodeExecutionEvidence,
-        execution_lease_guard: PipelineExecutionLeaseGuard,
+        execution_lease_guard: pipeline_run_recovery.PipelineExecutionLeaseGuard,
     ) -> PipelineNodeCommitterRegistry:
         plan = version["execution_plan"]
         if plan is None:

@@ -58,6 +58,7 @@ class PipelineV2TrainedModelRuntime:
             model_ref=model_ref,
             expected_model_version=pin.model_version,
             expected_revision=pin.revision,
+            expected_executable_reference=pin.executable_reference,
             definition=definition,
         )
         validate_trained_model_config(node.config, definition)
@@ -69,6 +70,7 @@ class PipelineV2TrainedModelRuntime:
             rows=mapped,
             expected_model_version=pin.model_version,
             expected_revision=pin.revision,
+            expected_executable_reference=pin.executable_reference,
         )
         result = self._adapter.infer(invocation)
         require_trained_model_invocation_pin(invocation, result.definition)
@@ -83,7 +85,13 @@ def _required_model_pin(
 ) -> ModelRef:
     config_fingerprint = _json_hash(dict(node.config))
     matches = {
-        (pin.model_version, pin.provider, pin.revision, pin.parameters_fingerprint): pin
+        (
+            pin.model_version,
+            pin.provider,
+            pin.revision,
+            pin.parameters_fingerprint,
+            pin.executable_reference,
+        ): pin
         for pin in model_refs
         if pin.model_id == model_ref and pin.parameters_fingerprint == config_fingerprint
     }
@@ -120,6 +128,7 @@ def _artifact(
         "branch": definition.branch,
         "resolvedVersion": definition.version,
         "revision": definition.revision,
+        "executableReference": definition.executable_reference,
     }
     return PipelineV2RuntimeArtifact(
         node_id=node.node_id,

@@ -57,19 +57,21 @@ def test_trained_model_runtime_maps_expressions_and_aliases_output() -> None:
         "branch": "master",
         "resolvedVersion": "2026.07.1",
         "revision": "container-risk-model-r1",
+        "executableReference": "local://demo.transaction-risk@container-risk-model-r1",
     }
     assert result.manifest["previewSupported"] is False
     assert invocations[0].expected_model_version == "2026.07.1"
     assert invocations[0].expected_revision == "container-risk-model-r1"
+    assert invocations[0].expected_executable_reference == "local://demo.transaction-risk@container-risk-model-r1"
 
 
-def test_trained_model_runtime_rejects_definition_drift_from_deployment_pin(
+def test_trained_model_runtime_rejects_executable_drift_from_deployment_pin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     node = _trained_model_node()
     adapter = LocalTrainedModelInferenceAdapter()
     monkeypatch.setattr(adapter, "infer", lambda _invocation: pytest.fail("drifted model must not execute"))
-    stale_pin = replace(_model_pin(node.config), revision="previous-revision")
+    stale_pin = replace(_model_pin(node.config), executable_reference="local://previous-executable@sha256:old")
     runtime = PipelineV2TrainedModelRuntime(
         adapter=adapter,
         run_id="prun_model_drift",
@@ -79,8 +81,10 @@ def test_trained_model_runtime_rejects_definition_drift_from_deployment_pin(
     with pytest.raises(ValidationFailed, match="execution-plan pin") as raised:
         runtime.execute(node, {"input": (_source_artifact(),)})
 
-    assert raised.value.details["expected"]["revision"] == "previous-revision"
-    assert raised.value.details["actual"]["revision"] == "container-risk-model-r1"
+    assert raised.value.details["expected"]["executableReference"] == "local://previous-executable@sha256:old"
+    assert (
+        raised.value.details["actual"]["executableReference"] == "local://demo.transaction-risk@container-risk-model-r1"
+    )
 
 
 def test_trained_model_config_requires_unique_output_aliases() -> None:
@@ -278,6 +282,7 @@ def _definition() -> TrainedModelDefinition:
         branch="master",
         version="1",
         revision="r1",
+        executable_reference="local://demo.risk@r1",
         input_fields=(
             TrainedModelField("amount", "double"),
             TrainedModelField("country", "string", is_required=False),
@@ -316,6 +321,7 @@ def _model_pin(config: Mapping[str, object]) -> ModelRef:
         provider="trained_model",
         revision="container-risk-model-r1",
         parameters_fingerprint=_json_hash(dict(config)),
+        executable_reference="local://demo.transaction-risk@container-risk-model-r1",
     )
 
 

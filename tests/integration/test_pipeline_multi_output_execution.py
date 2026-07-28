@@ -14,7 +14,7 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 
 @dataclass(frozen=True)
@@ -448,8 +448,30 @@ def test_committed_legacy_outputs_survive_success_terminal_persistence_failure(
         ctx=fixture.ctx,
     )
     assert replay["status"] == "executing"
+    _expire_run_lease(fixture, str(row["id"]))
+
+    reconciled = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-success-terminal-reconciliation",
+        ctx=fixture.ctx,
+    )
+    assert reconciled["status"] == "partial"
+    assert reconciled["outputDatasetRef"] is None
+    assert reconciled["outputVersionId"] is None
+    recovered_outputs = {str(item["nodeId"]): item for item in reconciled["outputs"]}
+    assert recovered_outputs["output_a"]["ref"]["datasetRef"] == fixture.first_output_ref
+    assert recovered_outputs["output_a"]["ref"]["versionId"] == _only_dataset_version_id(
+        fixture, fixture.first_output_ref
+    )
+    assert recovered_outputs["output_b"]["ref"]["datasetRef"] == fixture.second_output_ref
+    assert recovered_outputs["output_b"]["ref"]["versionId"] == _only_dataset_version_id(
+        fixture, fixture.second_output_ref
+    )
+    assert {item["status"] for item in recovered_outputs.values()} == {"COMMITTED"}
+    assert "terminal evidence requires reconciliation" in reconciled["error"]["message"]
     assert len(_dataset_version_ids(fixture, fixture.first_output_ref)) == 1
     assert len(_dataset_version_ids(fixture, fixture.second_output_ref)) == 1
+    assert _pipeline_audit_count(fixture, str(row["id"]), "pipeline.reconciliation_required") == 1
 
 
 def _deploy_multi_output_pipeline(
@@ -769,6 +791,14 @@ def _pipeline_failure_audit_count(
     fixture: _DeployedMultiOutputPipeline,
     run_id: str,
 ) -> int:
+    return _pipeline_audit_count(fixture, run_id, "pipeline.failed")
+
+
+def _pipeline_audit_count(
+    fixture: _DeployedMultiOutputPipeline,
+    run_id: str,
+    event_type: str,
+) -> int:
     with fixture.foundry.engine.begin() as conn:
         count = (
             cast(Any, conn)
@@ -778,9 +808,21 @@ def _pipeline_failure_audit_count(
                 .where(
                     db.audit_events.c.tenant_id == fixture.ctx.tenant_id,
                     db.audit_events.c.resource_id == run_id,
-                    db.audit_events.c.event_type == "pipeline.failed",
+                    db.audit_events.c.event_type == event_type,
                 )
             )
             .scalar_one()
         )
     return int(count)
+
+
+def _expire_run_lease(fixture: _DeployedMultiOutputPipeline, run_id: str) -> None:
+    with fixture.foundry.engine.begin() as conn:
+        cast(Any, conn).execute(
+            update(db.pipeline_runs)
+            .where(
+                db.pipeline_runs.c.tenant_id == fixture.ctx.tenant_id,
+                db.pipeline_runs.c.id == run_id,
+            )
+            .values(execution_lease_expires_at="2000-01-01T00:00:00Z")
+        )

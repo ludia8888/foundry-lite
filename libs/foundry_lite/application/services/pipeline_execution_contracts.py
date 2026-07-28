@@ -51,6 +51,7 @@ class ModelRef:
     provider: str
     revision: str
     parameters_fingerprint: str
+    executable_reference: str
 
     def __post_init__(self) -> None:
         _require_text(self.model_id, "model id")
@@ -58,6 +59,7 @@ class ModelRef:
         _require_text(self.provider, "model provider")
         _require_text(self.revision, "model revision")
         _require_text(self.parameters_fingerprint, "model parameters fingerprint")
+        _require_text(self.executable_reference, "model executable reference")
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +346,7 @@ def _model_payload(model: ModelRef) -> dict[str, object]:
         "provider": model.provider,
         "revision": model.revision,
         "parametersFingerprint": model.parameters_fingerprint,
+        "executableReference": model.executable_reference,
     }
 
 

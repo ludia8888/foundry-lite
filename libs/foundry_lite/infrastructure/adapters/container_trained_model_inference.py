@@ -10,6 +10,7 @@ import subprocess  # nosec B404
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -31,7 +32,7 @@ from foundry_lite.application.ports.trained_model_inference import (
 from foundry_lite.application.services.pipeline_trained_model_contracts import (
     require_trained_model_invocation_pin,
 )
-from foundry_lite.domain.errors import NotFound
+from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
     ContainerCommandResult,
     ContainerCommandRunner,
@@ -40,6 +41,7 @@ from foundry_lite.infrastructure.adapters.container_trained_model_runtime import
     ContainerTrainedModelConfig,
     ContainerTrainedModelSpec,
     default_model_command_runner,
+    is_digest_pinned_model_image,
     model_client_environment,
     model_container_command,
     model_workspace_root,
@@ -78,11 +80,13 @@ class ContainerTrainedModelInferenceAdapter:
         branch: str,
         fallback_branches: Sequence[str] = (),
     ) -> TrainedModelDefinition:
-        return self._resolve_spec(model_ref, branch, fallback_branches).definition
+        return _resolved_definition(self._resolve_spec(model_ref, branch, fallback_branches))
 
     def infer(self, invocation: TrainedModelInvocation) -> TrainedModelInferenceResult:
-        spec = self._resolve_spec(invocation.model_ref, invocation.branch, invocation.fallback_branches)
-        require_trained_model_invocation_pin(invocation, spec.definition)
+        resolved = self._resolve_spec(invocation.model_ref, invocation.branch, invocation.fallback_branches)
+        spec = _execution_spec(self.config, resolved, invocation.expected_executable_reference)
+        definition = _resolved_definition(spec)
+        require_trained_model_invocation_pin(invocation, definition)
         payload = _request_payload(invocation)
         request_bytes = _bounded_request_bytes(payload, self)
         with tempfile.TemporaryDirectory(
@@ -103,7 +107,7 @@ class ContainerTrainedModelInferenceAdapter:
             response = _read_result(result_path, result, self)
         rows, runtime = _successful_response(response, result, self)
         return TrainedModelInferenceResult(
-            definition=spec.definition,
+            definition=definition,
             rows=rows,
             runtime_evidence=_runtime_evidence(runtime, spec, self.config),
         )
@@ -197,6 +201,21 @@ def _request_payload(invocation: TrainedModelInvocation) -> dict[str, object]:
         "fallbackBranches": list(invocation.fallback_branches),
         "rows": [dict(row) for row in invocation.rows],
     }
+
+
+def _resolved_definition(spec: ContainerTrainedModelSpec) -> TrainedModelDefinition:
+    return replace(spec.definition, executable_reference=spec.image_reference)
+
+
+def _execution_spec(
+    config: ContainerTrainedModelConfig,
+    resolved: ContainerTrainedModelSpec,
+    expected_executable_reference: str | None,
+) -> ContainerTrainedModelSpec:
+    executable_reference = (expected_executable_reference or resolved.image_reference).strip()
+    if config.is_image_digest_required and not is_digest_pinned_model_image(executable_reference):
+        raise ValidationFailed("protected trained-model execution pin must be a sha256 image digest")
+    return replace(resolved, image_reference=executable_reference)
 
 
 def _bounded_request_bytes(

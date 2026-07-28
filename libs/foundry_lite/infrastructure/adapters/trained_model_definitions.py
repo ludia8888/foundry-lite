@@ -11,6 +11,7 @@ TRANSACTION_RISK_DEFINITION = TrainedModelDefinition(
     branch="master",
     version="2026.07.1",
     revision="container-risk-model-r1",
+    executable_reference="local://demo.transaction-risk@container-risk-model-r1",
     input_fields=(
         TrainedModelField("amount", "double"),
         TrainedModelField("country", "string", is_required=False),

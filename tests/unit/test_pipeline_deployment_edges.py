@@ -55,6 +55,7 @@ def _definition() -> TrainedModelDefinition:
         branch="master",
         version="7",
         revision="rev-7",
+        executable_reference="local://demo.risk@rev-7",
         input_fields=(TrainedModelField("amount", "double"),),
         output_fields=(TrainedModelField("riskScore", "double"),),
     )

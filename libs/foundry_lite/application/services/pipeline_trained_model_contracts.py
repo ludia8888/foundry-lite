@@ -98,6 +98,7 @@ def require_trained_model_invocation_pin(
         model_ref=invocation.model_ref,
         expected_model_version=invocation.expected_model_version,
         expected_revision=invocation.expected_revision,
+        expected_executable_reference=invocation.expected_executable_reference,
         definition=definition,
     )
 
@@ -107,15 +108,18 @@ def require_trained_model_definition_pin(
     model_ref: str,
     expected_model_version: str | None,
     expected_revision: str | None,
+    expected_executable_reference: str | None,
     definition: TrainedModelDefinition,
 ) -> None:
     expected = {
         "modelVersion": expected_model_version,
         "revision": expected_revision,
+        "executableReference": expected_executable_reference,
     }
     actual = {
         "modelVersion": definition.version,
         "revision": definition.revision,
+        "executableReference": definition.executable_reference,
     }
     mismatches = {key: value for key, value in expected.items() if value is not None and actual[key] != value}
     if mismatches:

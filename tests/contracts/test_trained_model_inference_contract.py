@@ -126,23 +126,60 @@ def test_container_sidecar_prefers_requested_branch_over_earlier_fallback_spec(t
     assert "registry.example/model:fallback" not in commands[-1]
 
 
-def test_container_sidecar_rejects_deployment_pin_drift_before_starting_container(tmp_path: Path) -> None:
+def test_container_sidecar_executes_deployment_digest_when_current_branch_image_changes(tmp_path: Path) -> None:
+    deployed_image = f"registry.example/model@sha256:{'a' * 64}"
+    current_image = f"registry.example/model@sha256:{'b' * 64}"
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        commands.append(tuple(command))
+        _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
+        return ContainerCommandResult(0)
+
     adapter = ContainerTrainedModelInferenceAdapter(
-        ContainerTrainedModelConfig(workspace_root=tmp_path),
-        command_runner=lambda *_args: pytest.fail("drifted model must not start a container"),
+        ContainerTrainedModelConfig(
+            specs=(ContainerTrainedModelSpec(TRANSACTION_RISK_DEFINITION, current_image),),
+            workspace_root=tmp_path,
+            is_image_digest_required=True,
+        ),
+        command_runner=runner,
         environ={},
     )
     invocation = replace(
         _container_invocation(),
         expected_model_version="2026.07.1",
-        expected_revision="previous-revision",
+        expected_revision="container-risk-model-r1",
+        expected_executable_reference=deployed_image,
     )
 
-    with pytest.raises(ValidationFailed, match="execution-plan pin") as raised:
-        adapter.infer(invocation)
+    result = adapter.infer(invocation)
 
-    assert raised.value.details["expected"]["revision"] == "previous-revision"
-    assert raised.value.details["actual"]["revision"] == "container-risk-model-r1"
+    assert result.definition.executable_reference == deployed_image
+    assert deployed_image in commands[-1]
+    assert current_image not in commands[-1]
+
+
+def test_container_sidecar_rejects_non_digest_deployment_pin_in_protected_runtime(tmp_path: Path) -> None:
+    current_image = f"registry.example/model@sha256:{'b' * 64}"
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(
+            specs=(ContainerTrainedModelSpec(TRANSACTION_RISK_DEFINITION, current_image),),
+            workspace_root=tmp_path,
+            is_image_digest_required=True,
+        ),
+        command_runner=lambda *_args: pytest.fail("unpinned model must not start a container"),
+        environ={},
+    )
+
+    with pytest.raises(ValidationFailed, match="sha256 image digest"):
+        adapter.infer(
+            replace(
+                _container_invocation(),
+                expected_model_version="2026.07.1",
+                expected_revision="container-risk-model-r1",
+                expected_executable_reference="registry.example/model:mutable",
+            )
+        )
 
 
 def test_container_sidecar_serializes_every_advertised_scalar_input_type(tmp_path: Path) -> None:

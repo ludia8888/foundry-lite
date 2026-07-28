@@ -14,7 +14,11 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineTestResultRecord,
     PipelineVersionRecord,
 )
-from foundry_lite.application.state_transitions import PIPELINE_RUN_FAILED, PIPELINE_RUN_SUCCEEDED
+from foundry_lite.application.state_transitions import (
+    PIPELINE_RUN_FAILED,
+    PIPELINE_RUN_PARTIAL,
+    PIPELINE_RUN_SUCCEEDED,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.pipeline_repository import SqlAlchemyPipelineRepository
 from sqlalchemy import create_engine, update
@@ -315,6 +319,10 @@ def test_pipeline_run_execution_lease_contract(tmp_path: Path) -> None:
             run_id=run["id"],
             execution_lease_token="lease-a",
             expired_at="2026-07-05T00:08:59Z",
+            transition=PIPELINE_RUN_FAILED,
+            output_dataset_ref=None,
+            output_version_id=None,
+            outputs=[],
             timeline=[{"event": "pipeline.run.failed"}],
             error={"message": "premature"},
             completed_at="2026-07-05T00:08:59Z",
@@ -325,8 +333,12 @@ def test_pipeline_run_execution_lease_contract(tmp_path: Path) -> None:
             run_id=run["id"],
             execution_lease_token="lease-a",
             expired_at="2026-07-05T00:09:00Z",
-            timeline=[{"event": "pipeline.run.failed"}],
-            error={"message": "expired"},
+            transition=PIPELINE_RUN_PARTIAL,
+            output_dataset_ref="clean.orders",
+            output_version_id="version-1",
+            outputs=[{"nodeId": "output", "status": "COMMITTED"}],
+            timeline=[{"event": "pipeline.run.reconciliation_required"}],
+            error={"message": "reconciliation required"},
             completed_at="2026-07-05T00:09:00Z",
         )
 
@@ -336,7 +348,10 @@ def test_pipeline_run_execution_lease_contract(tmp_path: Path) -> None:
     assert renewed["execution_lease_expires_at"] == "2026-07-05T00:09:00Z"
     assert premature is None
     assert expired is not None
-    assert expired["status"] == "failed"
+    assert expired["status"] == "partial"
+    assert expired["output_dataset_ref"] == "clean.orders"
+    assert expired["output_version_id"] == "version-1"
+    assert expired["outputs"] == [{"nodeId": "output", "status": "COMMITTED"}]
     assert expired["execution_lease_token"] is None
 
 

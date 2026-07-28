@@ -27,7 +27,7 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineVersionRow,
 )
 from foundry_lite.application.ports.transaction_context import StatusTransition
-from foundry_lite.application.state_transitions import PIPELINE_RUN_EXECUTING, PIPELINE_RUN_FAILED
+from foundry_lite.application.state_transitions import PIPELINE_RUN_EXECUTING
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_guarded_update, cas_status_update
 
@@ -542,6 +542,10 @@ class SqlAlchemyPipelineRepository:
         run_id: str,
         execution_lease_token: str,
         expired_at: str,
+        transition: StatusTransition,
+        output_dataset_ref: str | None,
+        output_version_id: str | None,
+        outputs: list[dict[str, object]],
         timeline: list[dict[str, object]],
         error: dict[str, object],
         completed_at: str,
@@ -551,9 +555,12 @@ class SqlAlchemyPipelineRepository:
             db.pipeline_runs,
             tenant_id=tenant_id,
             row_id=run_id,
-            transition=PIPELINE_RUN_FAILED,
+            transition=transition,
             values=_with_cleared_execution_lease(
                 {
+                    "output_dataset_ref": output_dataset_ref,
+                    "output_version_id": output_version_id,
+                    "outputs": outputs,
                     "timeline": timeline,
                     "error": error,
                     "completed_at": completed_at,
