@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelField,
+    TrainedModelInvocation,
 )
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -87,6 +88,41 @@ def validate_trained_model_config(
     _require_input_mappings(definition, input_mappings)
     _require_output_mappings(definition, output_mappings)
     _require_supported_types(definition)
+
+
+def require_trained_model_invocation_pin(
+    invocation: TrainedModelInvocation,
+    definition: TrainedModelDefinition,
+) -> None:
+    require_trained_model_definition_pin(
+        model_ref=invocation.model_ref,
+        expected_model_version=invocation.expected_model_version,
+        expected_revision=invocation.expected_revision,
+        definition=definition,
+    )
+
+
+def require_trained_model_definition_pin(
+    *,
+    model_ref: str,
+    expected_model_version: str | None,
+    expected_revision: str | None,
+    definition: TrainedModelDefinition,
+) -> None:
+    expected = {
+        "modelVersion": expected_model_version,
+        "revision": expected_revision,
+    }
+    actual = {
+        "modelVersion": definition.version,
+        "revision": definition.revision,
+    }
+    mismatches = {key: value for key, value in expected.items() if value is not None and actual[key] != value}
+    if mismatches:
+        raise ValidationFailed(
+            "resolved trained model does not match the deployed execution-plan pin",
+            details={"modelRef": model_ref, "expected": expected, "actual": actual},
+        )
 
 
 def map_trained_model_inputs(

@@ -20,6 +20,10 @@ from foundry_lite.application.services.pipeline_graph_v2_run_completion import (
     PipelineGraphV2TerminalState,
     graph_v2_terminal_state,
 )
+from foundry_lite.application.services.pipeline_run_recovery import (
+    PipelineExecutionLeaseLost,
+    PipelineTerminalCommitError,
+)
 from foundry_lite.application.services.runtime_evidence_boundary import (
     RuntimeEvidenceBoundary,
 )
@@ -92,6 +96,21 @@ class PipelineGraphV2RunCoordinatorService(CoreService):
         return str(matching["id"])
 
     def _commit_terminal(
+        self,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+        version: PipelineVersionRow,
+        terminal: PipelineGraphV2TerminalState,
+        execution_lease_guard: PipelineExecutionLeaseFence,
+    ) -> str:
+        try:
+            return self._persist_terminal(ctx, row, version, terminal, execution_lease_guard)
+        except PipelineExecutionLeaseLost:
+            raise
+        except Exception as exc:
+            raise PipelineTerminalCommitError("pipeline Graph v2 terminal transaction failed") from exc
+
+    def _persist_terminal(
         self,
         ctx: RequestContext,
         row: PipelineRunRow,

@@ -28,6 +28,9 @@ from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelInferenceResult,
     TrainedModelInvocation,
 )
+from foundry_lite.application.services.pipeline_trained_model_contracts import (
+    require_trained_model_invocation_pin,
+)
 from foundry_lite.domain.errors import NotFound
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
     ContainerCommandResult,
@@ -79,6 +82,7 @@ class ContainerTrainedModelInferenceAdapter:
 
     def infer(self, invocation: TrainedModelInvocation) -> TrainedModelInferenceResult:
         spec = self._resolve_spec(invocation.model_ref, invocation.branch, invocation.fallback_branches)
+        require_trained_model_invocation_pin(invocation, spec.definition)
         payload = _request_payload(invocation)
         request_bytes = _bounded_request_bytes(payload, self)
         with tempfile.TemporaryDirectory(

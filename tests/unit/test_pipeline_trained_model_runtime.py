@@ -1,12 +1,16 @@
 """Graph v2 trained-model mapping, execution, and model-pin evidence."""
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 import pytest
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelField,
+    TrainedModelInvocation,
 )
+from foundry_lite.application.primitives import _json_hash
+from foundry_lite.application.services.pipeline_execution_contracts import ModelRef
 from foundry_lite.application.services.pipeline_trained_model_contracts import (
     imported_trained_model_refs,
     map_trained_model_inputs,
@@ -30,23 +34,18 @@ from foundry_lite.infrastructure.adapters.local_trained_model_inference import (
 
 
 def test_trained_model_runtime_maps_expressions_and_aliases_output() -> None:
+    invocations: list[TrainedModelInvocation] = []
+
+    class RecordingAdapter(LocalTrainedModelInferenceAdapter):
+        def infer(self, invocation: TrainedModelInvocation):
+            invocations.append(invocation)
+            return super().infer(invocation)
+
+    node = _trained_model_node()
     runtime = PipelineV2TrainedModelRuntime(
-        adapter=LocalTrainedModelInferenceAdapter(),
+        adapter=RecordingAdapter(),
         run_id="prun_model_1",
-    )
-    node = PipelineV2RuntimeNode(
-        node_id="model",
-        kind="transform",
-        descriptor_id="transform.trained_model",
-        spec_version=1,
-        runtime_capability="trained_model_batch_runtime",
-        config={
-            "modelRef": "demo.transaction-risk",
-            "modelBranch": "feature/model-api",
-            "fallbackBranches": ["master"],
-            "inputMappings": {"amount": "$usd_amount", "country": "$country"},
-            "outputMappings": {"riskScore": "risk_score", "decision": "decision"},
-        },
+        model_refs=(_model_pin(node.config),),
     )
 
     result = runtime.execute(node, {"input": (_source_artifact(),)})
@@ -60,6 +59,28 @@ def test_trained_model_runtime_maps_expressions_and_aliases_output() -> None:
         "revision": "container-risk-model-r1",
     }
     assert result.manifest["previewSupported"] is False
+    assert invocations[0].expected_model_version == "2026.07.1"
+    assert invocations[0].expected_revision == "container-risk-model-r1"
+
+
+def test_trained_model_runtime_rejects_definition_drift_from_deployment_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = _trained_model_node()
+    adapter = LocalTrainedModelInferenceAdapter()
+    monkeypatch.setattr(adapter, "infer", lambda _invocation: pytest.fail("drifted model must not execute"))
+    stale_pin = replace(_model_pin(node.config), revision="previous-revision")
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=adapter,
+        run_id="prun_model_drift",
+        model_refs=(stale_pin,),
+    )
+
+    with pytest.raises(ValidationFailed, match="execution-plan pin") as raised:
+        runtime.execute(node, {"input": (_source_artifact(),)})
+
+    assert raised.value.details["expected"]["revision"] == "previous-revision"
+    assert raised.value.details["actual"]["revision"] == "container-risk-model-r1"
 
 
 def test_trained_model_config_requires_unique_output_aliases() -> None:
@@ -268,6 +289,33 @@ def _definition() -> TrainedModelDefinition:
         cpu_cores=2.0,
         memory_mib=1024,
         startup_timeout_seconds=30,
+    )
+
+
+def _trained_model_node() -> PipelineV2RuntimeNode:
+    return PipelineV2RuntimeNode(
+        node_id="model",
+        kind="transform",
+        descriptor_id="transform.trained_model",
+        spec_version=1,
+        runtime_capability="trained_model_batch_runtime",
+        config={
+            "modelRef": "demo.transaction-risk",
+            "modelBranch": "feature/model-api",
+            "fallbackBranches": ["master"],
+            "inputMappings": {"amount": "$usd_amount", "country": "$country"},
+            "outputMappings": {"riskScore": "risk_score", "decision": "decision"},
+        },
+    )
+
+
+def _model_pin(config: Mapping[str, object]) -> ModelRef:
+    return ModelRef(
+        model_id="demo.transaction-risk",
+        model_version="2026.07.1",
+        provider="trained_model",
+        revision="container-risk-model-r1",
+        parameters_fingerprint=_json_hash(dict(config)),
     )
 
 

@@ -16,7 +16,7 @@ from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelInferencePort,
     TrainedModelInvocation,
 )
-from foundry_lite.domain.errors import NotFound
+from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.infrastructure.adapters import (
     container_trained_model_inference as container_model,
 )
@@ -124,6 +124,25 @@ def test_container_sidecar_prefers_requested_branch_over_earlier_fallback_spec(t
     assert result.definition.revision == "requested"
     assert "registry.example/model:requested" in commands[-1]
     assert "registry.example/model:fallback" not in commands[-1]
+
+
+def test_container_sidecar_rejects_deployment_pin_drift_before_starting_container(tmp_path: Path) -> None:
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(workspace_root=tmp_path),
+        command_runner=lambda *_args: pytest.fail("drifted model must not start a container"),
+        environ={},
+    )
+    invocation = replace(
+        _container_invocation(),
+        expected_model_version="2026.07.1",
+        expected_revision="previous-revision",
+    )
+
+    with pytest.raises(ValidationFailed, match="execution-plan pin") as raised:
+        adapter.infer(invocation)
+
+    assert raised.value.details["expected"]["revision"] == "previous-revision"
+    assert raised.value.details["actual"]["revision"] == "container-risk-model-r1"
 
 
 def test_container_sidecar_serializes_every_advertised_scalar_input_type(tmp_path: Path) -> None:

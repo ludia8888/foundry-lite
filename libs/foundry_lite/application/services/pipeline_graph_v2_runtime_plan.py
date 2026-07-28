@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from foundry_lite.application.services.pipeline_execution_contracts import ModelRef
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2RuntimeEdge,
     PipelineV2RuntimeNode,
@@ -21,6 +22,7 @@ class PipelineGraphV2RuntimePlan:
     nodes: tuple[PipelineV2RuntimeNode, ...]
     edges: tuple[PipelineV2RuntimeEdge, ...]
     source_contracts: Mapping[str, PipelineV2SourceContract]
+    model_refs: tuple[ModelRef, ...]
 
 
 def pipeline_graph_v2_runtime_plan(
@@ -42,7 +44,39 @@ def pipeline_graph_v2_runtime_plan(
         nodes=selected_nodes,
         edges=selected_edges,
         source_contracts={node_id: contract for node_id, contract in contracts.items() if node_id in selected},
+        model_refs=_model_refs(plan),
     )
+
+
+def _model_refs(plan: Mapping[str, object]) -> tuple[ModelRef, ...]:
+    raw_refs = plan.get("modelRefs")
+    if raw_refs is None:
+        return ()
+    if not isinstance(raw_refs, list):
+        raise ValidationFailed("pipeline execution-plan modelRefs must be a list")
+    return tuple(_model_ref(value, index) for index, value in enumerate(raw_refs))
+
+
+def _model_ref(value: object, index: int) -> ModelRef:
+    if not isinstance(value, Mapping):
+        raise ValidationFailed("pipeline execution-plan modelRef must be an object", details={"index": index})
+    return ModelRef(
+        model_id=_pin_text(value, "modelId", index),
+        model_version=_pin_text(value, "modelVersion", index),
+        provider=_pin_text(value, "provider", index),
+        revision=_pin_text(value, "revision", index),
+        parameters_fingerprint=_pin_text(value, "parametersFingerprint", index),
+    )
+
+
+def _pin_text(value: Mapping[str, object], field: str, index: int) -> str:
+    item = value.get(field)
+    if not isinstance(item, str) or not item.strip():
+        raise ValidationFailed(
+            "pipeline execution-plan model pin field is required",
+            details={"index": index, "field": field},
+        )
+    return item.strip()
 
 
 def _selected_node_ids(

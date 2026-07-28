@@ -289,9 +289,11 @@ def test_execution_contracts_pin_compute_model_schedule_and_no_commit_preview() 
         compute_profile=compute,
         model_refs=[model],
     )
+    runtime_plan = pipeline_graph_v2_runtime_plan(pipeline_execution_plan_payload(plan))
 
     assert plan.compute_profile == compute
     assert plan.model_refs == (model,)
+    assert runtime_plan.model_refs == (model,)
     assert schedule.trigger_config["labels"] == ("hourly",)
     assert manifest.metadata["lineage"] == ("source", "output")
     assert pipeline_artifact_manifest_payload(manifest) == {

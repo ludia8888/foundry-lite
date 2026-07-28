@@ -411,6 +411,47 @@ def test_pipeline_failed_and_skipped_evidence_rolls_back_with_terminal_run(
     assert _pipeline_failure_audit_count(fixture, str(run["id"])) == 0
 
 
+def test_committed_legacy_outputs_survive_success_terminal_persistence_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _deploy_multi_output_pipeline(tmp_path, "success_terminal_reconciliation")
+    repository = fixture.foundry._services.pipelines.run.pipeline_repository
+    original_terminal = repository.update_run_terminal
+
+    def fail_success_terminal(*, transition, **kwargs):
+        if transition.to_status == "succeeded":
+            raise RuntimeError("forced success terminal persistence failure")
+        return original_terminal(transition=transition, **kwargs)
+
+    monkeypatch.setattr(repository, "update_run_terminal", fail_success_terminal)
+
+    with pytest.raises(RuntimeError, match="success terminal transaction failed"):
+        fixture.foundry.pipelines.run(
+            fixture.pipeline_id,
+            idempotency_key="run-success-terminal-reconciliation",
+            ctx=fixture.ctx,
+        )
+
+    row = _run_by_idempotency_key(fixture, "run-success-terminal-reconciliation")
+    detail = fixture.foundry.pipelines.get_run(str(row["id"]), ctx=fixture.ctx)
+    assert detail["status"] == "executing"
+    assert _node_runs_by_id(detail)["output_a"]["status"] == "succeeded"
+    assert _node_runs_by_id(detail)["output_b"]["status"] == "succeeded"
+    assert _only_dataset_version_id(fixture, fixture.first_output_ref)
+    assert _only_dataset_version_id(fixture, fixture.second_output_ref)
+    assert _pipeline_failure_audit_count(fixture, str(row["id"])) == 0
+
+    replay = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-success-terminal-reconciliation",
+        ctx=fixture.ctx,
+    )
+    assert replay["status"] == "executing"
+    assert len(_dataset_version_ids(fixture, fixture.first_output_ref)) == 1
+    assert len(_dataset_version_ids(fixture, fixture.second_output_ref)) == 1
+
+
 def _deploy_multi_output_pipeline(
     tmp_path: Path,
     slug: str,

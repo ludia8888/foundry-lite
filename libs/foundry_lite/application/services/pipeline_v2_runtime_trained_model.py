@@ -9,10 +9,13 @@ from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelInferencePort,
     TrainedModelInvocation,
 )
-from foundry_lite.application.primitives import _now
+from foundry_lite.application.primitives import _json_hash, _now
+from foundry_lite.application.services.pipeline_execution_contracts import ModelRef
 from foundry_lite.application.services.pipeline_trained_model_contracts import (
     map_trained_model_inputs,
     merge_trained_model_outputs,
+    require_trained_model_definition_pin,
+    require_trained_model_invocation_pin,
     trained_model_branch_config,
     validate_trained_model_config,
 )
@@ -24,7 +27,7 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     single_input_artifact,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_security import inherited_runtime_security
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 
 
 class PipelineV2TrainedModelRuntime:
@@ -35,9 +38,11 @@ class PipelineV2TrainedModelRuntime:
         *,
         adapter: TrainedModelInferencePort,
         run_id: str,
+        model_refs: Sequence[ModelRef],
     ) -> None:
         self._adapter = adapter
         self._run_id = run_id
+        self._model_refs = tuple(model_refs)
 
     def execute(
         self,
@@ -46,13 +51,59 @@ class PipelineV2TrainedModelRuntime:
     ) -> PipelineV2RuntimeArtifact:
         source = single_input_artifact(node, inputs)
         model_ref = _required_text(node.config, "modelRef")
+        pin = _required_model_pin(node, model_ref, self._model_refs)
         branch, fallbacks = trained_model_branch_config(node.config)
         definition = self._adapter.resolve(model_ref, branch=branch, fallback_branches=fallbacks)
+        require_trained_model_definition_pin(
+            model_ref=model_ref,
+            expected_model_version=pin.model_version,
+            expected_revision=pin.revision,
+            definition=definition,
+        )
         validate_trained_model_config(node.config, definition)
         mapped = map_trained_model_inputs(source.items, node.config, definition)
-        result = self._adapter.infer(TrainedModelInvocation(model_ref, branch, fallbacks, mapped))
+        invocation = TrainedModelInvocation(
+            model_ref=model_ref,
+            branch=branch,
+            fallback_branches=fallbacks,
+            rows=mapped,
+            expected_model_version=pin.model_version,
+            expected_revision=pin.revision,
+        )
+        result = self._adapter.infer(invocation)
+        require_trained_model_invocation_pin(invocation, result.definition)
         rows = merge_trained_model_outputs(source.items, result.rows, node.config, result.definition)
         return _artifact(node, source, inputs, rows, result.runtime_evidence, result.definition, self._run_id)
+
+
+def _required_model_pin(
+    node: PipelineV2RuntimeNode,
+    model_ref: str,
+    model_refs: Sequence[ModelRef],
+) -> ModelRef:
+    config_fingerprint = _json_hash(dict(node.config))
+    matches = {
+        (pin.model_version, pin.provider, pin.revision, pin.parameters_fingerprint): pin
+        for pin in model_refs
+        if pin.model_id == model_ref and pin.parameters_fingerprint == config_fingerprint
+    }
+    if len(matches) != 1:
+        raise InvariantViolation(
+            "deployed trained-model node has no unique matching execution-plan pin",
+            details={
+                "nodeId": node.node_id,
+                "modelRef": model_ref,
+                "parametersFingerprint": config_fingerprint,
+                "matchingPinCount": len(matches),
+            },
+        )
+    pin = next(iter(matches.values()))
+    if pin.provider != "trained_model":
+        raise InvariantViolation(
+            "deployed trained-model node pin has an unexpected provider",
+            details={"nodeId": node.node_id, "modelRef": model_ref, "provider": pin.provider},
+        )
+    return pin
 
 
 def _artifact(

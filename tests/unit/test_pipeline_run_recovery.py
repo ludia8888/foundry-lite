@@ -4,14 +4,22 @@ from typing import cast
 
 import foundry_lite.application.services.pipeline_run_recovery as pipeline_run_recovery
 import pytest
-from foundry_lite.application.ports.pipeline_repository import PipelineRepository, PipelineRunRow
+from foundry_lite.application.ports import PipelineExecutionLeaseFence
+from foundry_lite.application.ports.pipeline_repository import (
+    PipelineRepository,
+    PipelineRunRow,
+    PipelineVersionRow,
+)
 from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.services.pipeline_run_recovery import (
     PipelineExecutionLeaseLost,
+    PipelineTerminalCommitError,
     is_stale_pipeline_execution,
     pipeline_execution_heartbeat,
     replayed_pipeline_run_action,
 )
+from foundry_lite.application.services.pipeline_run_terminal import succeed_pipeline_run
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.security.tenant_context import current_tenant_id
 
@@ -40,6 +48,25 @@ def test_only_expired_execution_lease_is_stale() -> None:
 def test_queued_replay_executes_while_terminal_replay_only_reads() -> None:
     assert replayed_pipeline_run_action({"status": "running"}) == "execute"
     assert replayed_pipeline_run_action({"status": "succeeded"}) == "read"
+
+
+def test_success_terminal_transaction_failure_requires_reconciliation() -> None:
+    row = cast(PipelineRunRow, {"id": "run-committed-output"})
+    version = cast(PipelineVersionRow, {"id": "version-1"})
+
+    with pytest.raises(PipelineTerminalCommitError, match="success terminal transaction failed"):
+        succeed_pipeline_run(
+            cast(TransactionManager, _FailingTransactionManager()),
+            cast(PipelineRepository, object()),
+            cast(RuntimeEvidenceBoundary, object()),
+            RequestContext(tenant_id="tenant-a"),
+            row,
+            version,
+            {},
+            [],
+            [],
+            cast(PipelineExecutionLeaseFence, object()),
+        )
 
 
 def test_execution_heartbeat_renews_the_durable_lease(monkeypatch) -> None:
@@ -86,6 +113,11 @@ class _TransactionManager:
     def begin(self) -> "_Transaction":
         self.tenant_ids.append(current_tenant_id())
         return _Transaction()
+
+
+class _FailingTransactionManager:
+    def begin(self) -> object:
+        raise RuntimeError("terminal database unavailable after output commit")
 
 
 class _Transaction:

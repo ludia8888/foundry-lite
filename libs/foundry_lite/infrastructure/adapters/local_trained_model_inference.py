@@ -9,6 +9,9 @@ from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelInferenceResult,
     TrainedModelInvocation,
 )
+from foundry_lite.application.services.pipeline_trained_model_contracts import (
+    require_trained_model_invocation_pin,
+)
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.infrastructure.adapters.trained_model_definitions import (
     TRANSACTION_RISK_DEFINITION,
@@ -44,6 +47,7 @@ class LocalTrainedModelInferenceAdapter:
             branch=invocation.branch,
             fallback_branches=invocation.fallback_branches,
         )
+        require_trained_model_invocation_pin(invocation, definition)
         rows = tuple(_score_transaction(row) for row in invocation.rows)
         return TrainedModelInferenceResult(
             definition=definition,

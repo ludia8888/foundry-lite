@@ -92,6 +92,64 @@ def test_graph_v2_stream_checkpoint_builds_reproducible_dataset_output(tmp_path:
     assert foundry.datasets.preview(output_ref, ctx=ctx)[0]["order_id"] == "O-1"
 
 
+def test_graph_v2_committed_output_survives_success_terminal_persistence_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = _foundry_with_language_model(tmp_path, _StructuredLanguageModel({"unused": True}))
+    ctx = demo_admin_context()
+    pipeline_id = "graph_v2_terminal_reconciliation"
+    source_ref = "raw.graph_v2_terminal_reconciliation"
+    output_ref = "clean.graph_v2_terminal_reconciliation"
+    source_version_id = _commit_dataset_source(foundry, ctx, tmp_path, source_ref)
+    _register_stream_checkpoint(foundry, ctx, source_ref, source_version_id)
+    graph = _stream_copy_graph("orders_live", output_ref)
+    version = _execute_graph_version(foundry, ctx, pipeline_id=pipeline_id, graph=graph)
+    foundry.pipelines.deploy(
+        pipeline_id,
+        str(version["id"]),
+        idempotency_key="deploy-graph-v2-terminal-reconciliation",
+        ctx=ctx,
+    )
+    repository = foundry._services.pipelines.run.pipeline_repository
+    original_terminal = repository.update_run_terminal
+
+    def fail_success_terminal(*, transition, **kwargs):
+        if transition.to_status == "succeeded":
+            raise RuntimeError("forced Graph v2 success terminal persistence failure")
+        return original_terminal(transition=transition, **kwargs)
+
+    monkeypatch.setattr(repository, "update_run_terminal", fail_success_terminal)
+
+    with pytest.raises(RuntimeError, match="Graph v2 terminal transaction failed"):
+        foundry.pipelines.run(
+            pipeline_id,
+            idempotency_key="run-graph-v2-terminal-reconciliation",
+            ctx=ctx,
+        )
+
+    with foundry.engine.begin() as transaction:
+        row = repository.run_by_idempotency_key(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            idempotency_key="run-graph-v2-terminal-reconciliation",
+        )
+    assert row is not None
+    detail = foundry.pipelines.get_run(str(row["id"]), ctx=ctx)
+    assert detail["status"] == "executing"
+    assert (
+        _artifacts_by_node(detail)["output"]["artifactRef"]["versionId"]
+        == _dataset_version_ids(foundry, ctx, output_ref)[0]
+    )
+    replay = foundry.pipelines.run(
+        pipeline_id,
+        idempotency_key="run-graph-v2-terminal-reconciliation",
+        ctx=ctx,
+    )
+    assert replay["status"] == "executing"
+    assert len(_dataset_version_ids(foundry, ctx, output_ref)) == 1
+
+
 def test_graph_v2_geospatial_source_commits_governed_series_output(tmp_path: Path) -> None:
     foundry = _foundry_with_language_model(tmp_path, _StructuredLanguageModel({"unused": True}))
     ctx = demo_admin_context()

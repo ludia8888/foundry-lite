@@ -37,6 +37,8 @@ class TrainedModelInvocation:
     branch: str
     fallback_branches: tuple[str, ...]
     rows: tuple[Mapping[str, object], ...]
+    expected_model_version: str | None = None
+    expected_revision: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

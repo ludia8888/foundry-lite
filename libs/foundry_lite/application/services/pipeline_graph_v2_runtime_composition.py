@@ -60,5 +60,6 @@ def build_pipeline_graph_v2_dispatcher(
         trained_models=PipelineV2TrainedModelRuntime(
             adapter=service.trained_model_inference_port,
             run_id=run_id,
+            model_refs=plan.model_refs,
         ),
     )

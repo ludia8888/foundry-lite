@@ -38,6 +38,37 @@ def succeed_pipeline_run(
     outputs: list[JsonObject],
     execution_lease_guard: PipelineExecutionLeaseFence,
 ) -> None:
+    try:
+        _persist_successful_run(
+            transaction_manager,
+            repository,
+            runtime_service,
+            ctx,
+            row,
+            version,
+            compiled,
+            timeline,
+            outputs,
+            execution_lease_guard,
+        )
+    except PipelineExecutionLeaseLost:
+        raise
+    except Exception as exc:
+        raise PipelineTerminalCommitError("pipeline success terminal transaction failed") from exc
+
+
+def _persist_successful_run(
+    transaction_manager: TransactionManager,
+    repository: PipelineRepository,
+    runtime_service: RuntimeEvidenceBoundary,
+    ctx: RequestContext,
+    row: PipelineRunRow,
+    version: PipelineVersionRow,
+    compiled: Mapping[str, object],
+    timeline: list[JsonObject],
+    outputs: list[JsonObject],
+    execution_lease_guard: PipelineExecutionLeaseFence,
+) -> None:
     output_dataset_ref, output_version_id = legacy_output_fields(compiled, outputs)
     with transaction_manager.begin() as transaction:
         execution_lease_guard.require_active(transaction)
@@ -53,15 +84,16 @@ def succeed_pipeline_run(
             error=None,
             completed_at=_now(),
         )
-        if after is not None:
-            _audit_terminal(
-                runtime_service,
-                transaction,
-                ctx,
-                "succeeded",
-                str(row["id"]),
-                {"version_id": version["id"]},
-            )
+        if after is None:
+            raise ConflictDetected("pipeline run success terminal state changed concurrently")
+        _audit_terminal(
+            runtime_service,
+            transaction,
+            ctx,
+            "succeeded",
+            str(row["id"]),
+            {"version_id": version["id"]},
+        )
 
 
 def complete_unsuccessful_pipeline_run(
