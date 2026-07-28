@@ -260,7 +260,13 @@ def _poppler_rasterize(
     dpi: int,
     timeout_seconds: int,
 ) -> Sequence[RasterizedPdfPage]:
-    page_numbers = _selected_pdf_page_numbers(source_path, max_pages, selection)
+    deadline = time.monotonic() + timeout_seconds
+    page_numbers = _selected_pdf_page_numbers(
+        source_path,
+        max_pages,
+        selection,
+        _remaining_seconds(deadline),
+    )
     if not page_numbers:
         return ()
     executable = shutil.which("pdftoppm")
@@ -268,7 +274,7 @@ def _poppler_rasterize(
         raise PdfOcrDocumentError("pdftoppm_unavailable", kind="unavailable")
     prefix = str(Path(output_dir) / "page")
     command = _pdftoppm_command(executable, source_path, prefix, page_numbers, dpi)
-    _run_pdftoppm(command, timeout_seconds)
+    _run_pdftoppm(command, _remaining_seconds(deadline))
     return _rasterized_pages(Path(output_dir), page_numbers)
 
 
@@ -276,17 +282,51 @@ def _selected_pdf_page_numbers(
     source_path: str,
     max_pages: int,
     selection: PdfPageSelection,
+    timeout_seconds: int,
 ) -> list[int]:
-    pypdf = import_module("pypdf")
-    try:
-        reader = pypdf.PdfReader(source_path)
-    except Exception as exc:  # noqa: BLE001 - normalized corrupt-PDF failure
-        raise PdfOcrDocumentError("corrupt_pdf") from exc
-    if reader.is_encrypted:
+    page_count, is_encrypted = _pdf_page_metadata(source_path, timeout_seconds)
+    if is_encrypted:
         raise PdfOcrDocumentError("encrypted_pdf")
-    if len(reader.pages) > max_pages:
+    if page_count > max_pages:
         raise PdfOcrDocumentError("page_limit_exceeded")
-    return [index + 1 for index in selected_page_indexes(len(reader.pages), selection)]
+    return [index + 1 for index in selected_page_indexes(page_count, selection)]
+
+
+def _pdf_page_metadata(source_path: str, timeout_seconds: int) -> tuple[int, bool]:
+    executable = shutil.which("pdfinfo")
+    if executable is None:
+        raise PdfOcrDocumentError("pdfinfo_unavailable", kind="unavailable")
+    try:
+        result = subprocess.run(  # nosec B603 - fixed Poppler binary and one sandbox-owned source path.
+            [executable, source_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_seconds, 1),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PdfOcrDocumentError(
+            "pdf_page_discovery_timeout",
+            kind="timeout",
+            is_retryable=True,
+        ) from exc
+    except OSError as exc:
+        raise PdfOcrDocumentError("pdfinfo_unavailable", kind="unavailable") from exc
+    if result.returncode != 0:
+        if "password" in result.stderr.lower():
+            raise PdfOcrDocumentError("encrypted_pdf")
+        raise PdfOcrDocumentError("corrupt_pdf")
+    metadata = _pdfinfo_fields(result.stdout)
+    pages = metadata.get("Pages")
+    if pages is None or not pages.isdigit() or int(pages) < 1:
+        raise PdfOcrDocumentError("corrupt_pdf")
+    return int(pages), metadata.get("Encrypted", "no").strip().lower() != "no"
+
+
+def _pdfinfo_fields(output: str) -> dict[str, str]:
+    return {
+        key.strip(): value.strip() for line in output.splitlines() if ":" in line for key, value in [line.split(":", 1)]
+    }
 
 
 def _pdftoppm_command(

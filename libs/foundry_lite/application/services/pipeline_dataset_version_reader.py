@@ -43,6 +43,9 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
 from foundry_lite.security.policy import PolicyService
 
+MAX_PIPELINE_DATASET_SOURCE_ROWS = 100_000
+MAX_PIPELINE_DATASET_SOURCE_BYTES = 256 * 1024 * 1024
+
 
 class ExactCommittedDatasetVersionReader(CoreService):
     """Read only a deployment-pinned committed version; never resolve ``latest``."""
@@ -84,6 +87,7 @@ class ExactCommittedDatasetVersionReader(CoreService):
             version_id=str(resolved.version["id"]),
         )
         validate_exact_dataset_metadata(ctx, request, resolved)
+        _require_materialization_bound(request, resolved.version)
         manifest = self._load_manifest(request, resolved.version)
         validate_exact_dataset_manifest(request, resolved, manifest, self.dataset_storage.profile_name)
         paths = self._file_paths(request, resolved.version)
@@ -167,6 +171,26 @@ class ExactCommittedDatasetVersionReader(CoreService):
                 errorType=type(exc).__name__,
             ) from exc
         return tuple(dict(row) for row in rows)
+
+
+def _require_materialization_bound(
+    request: ExactDatasetVersionReadRequest,
+    version: DatasetVersionRow,
+) -> None:
+    if version["row_count"] > MAX_PIPELINE_DATASET_SOURCE_ROWS:
+        raise exact_dataset_version_request_failure(
+            request,
+            "source_row_limit_exceeded",
+            actualRowCount=version["row_count"],
+            maxRowCount=MAX_PIPELINE_DATASET_SOURCE_ROWS,
+        )
+    if version["byte_size"] > MAX_PIPELINE_DATASET_SOURCE_BYTES:
+        raise exact_dataset_version_request_failure(
+            request,
+            "source_byte_limit_exceeded",
+            actualByteSize=version["byte_size"],
+            maxByteSize=MAX_PIPELINE_DATASET_SOURCE_BYTES,
+        )
 
 
 def _storage_failure(

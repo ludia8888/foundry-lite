@@ -195,40 +195,70 @@ def test_pdf_ocr_poppler_selection_and_command_edges(
     expected = (RasterizedPdfPage(2, "page-2.png", 1, 1),)
     monkeypatch.setattr(pdf_ocr, "_rasterized_pages", lambda *_args: expected)
     assert pdf_ocr._poppler_rasterize("a.pdf", str(tmp_path), 10, selection, 200, 7) == expected
-    assert commands[0] == (
-        ["/usr/bin/pdftoppm", "-f", "2", "-l", "3", "-r", "200", "-png", "a.pdf", str(tmp_path / "page")],
-        7,
+    assert commands[0][0] == [
+        "/usr/bin/pdftoppm",
+        "-f",
+        "2",
+        "-l",
+        "3",
+        "-r",
+        "200",
+        "-png",
+        "a.pdf",
+        str(tmp_path / "page"),
+    ]
+    assert 1 <= commands[0][1] <= 7
+
+
+def test_pdf_ocr_page_discovery_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    selection = PdfPageSelection(start=1, limit=2)
+    monkeypatch.setattr(pdf_ocr, "_pdf_page_metadata", lambda *_args: (3, False))
+    assert pdf_ocr._selected_pdf_page_numbers("a.pdf", 3, selection, 5) == [1, 2]
+    with pytest.raises(PdfOcrDocumentError, match="page_limit_exceeded"):
+        pdf_ocr._selected_pdf_page_numbers("a.pdf", 2, selection, 5)
+    monkeypatch.setattr(pdf_ocr, "_pdf_page_metadata", lambda *_args: (3, True))
+    with pytest.raises(PdfOcrDocumentError, match="encrypted_pdf"):
+        pdf_ocr._selected_pdf_page_numbers("a.pdf", 3, selection, 5)
+
+
+@pytest.mark.parametrize(
+    ("effect", "reason"),
+    [
+        (subprocess.TimeoutExpired("pdfinfo", 1), "pdf_page_discovery_timeout"),
+        (OSError("missing"), "pdfinfo_unavailable"),
+    ],
+)
+def test_pdf_ocr_page_discovery_process_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    effect: Exception,
+    reason: str,
+) -> None:
+    monkeypatch.setattr(pdf_ocr.shutil, "which", lambda _name: "/usr/bin/pdfinfo")
+    monkeypatch.setattr(pdf_ocr.subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(effect))
+
+    with pytest.raises(PdfOcrDocumentError, match=reason):
+        pdf_ocr._pdf_page_metadata("a.pdf", 1)
+
+
+def test_pdf_ocr_page_discovery_parses_bounded_poppler_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pdf_ocr.shutil, "which", lambda _name: "/usr/bin/pdfinfo")
+    monkeypatch.setattr(
+        pdf_ocr.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="Pages: 7\nEncrypted: no\n", stderr=""),
     )
 
+    assert pdf_ocr._pdf_page_metadata("a.pdf", 3) == (7, False)
 
-def test_pdf_ocr_pdf_reader_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    selection = PdfPageSelection(start=1, limit=2)
-
-    class _Reader:
-        def __init__(self, _source: str) -> None:
-            self.is_encrypted = False
-            self.pages = [object(), object(), object()]
-
-    monkeypatch.setattr(pdf_ocr, "import_module", lambda _name: SimpleNamespace(PdfReader=_Reader))
-    assert pdf_ocr._selected_pdf_page_numbers("a.pdf", 3, selection) == [1, 2]
-    with pytest.raises(PdfOcrDocumentError, match="page_limit_exceeded"):
-        pdf_ocr._selected_pdf_page_numbers("a.pdf", 2, selection)
-
-    class _EncryptedReader(_Reader):
-        def __init__(self, source: str) -> None:
-            super().__init__(source)
-            self.is_encrypted = True
-
-    monkeypatch.setattr(pdf_ocr, "import_module", lambda _name: SimpleNamespace(PdfReader=_EncryptedReader))
+    monkeypatch.setattr(
+        pdf_ocr.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr="Incorrect password"),
+    )
     with pytest.raises(PdfOcrDocumentError, match="encrypted_pdf"):
-        pdf_ocr._selected_pdf_page_numbers("a.pdf", 3, selection)
-
-    def broken_reader(_source: str) -> None:
-        raise RuntimeError("corrupt")
-
-    monkeypatch.setattr(pdf_ocr, "import_module", lambda _name: SimpleNamespace(PdfReader=broken_reader))
-    with pytest.raises(PdfOcrDocumentError, match="corrupt_pdf"):
-        pdf_ocr._selected_pdf_page_numbers("a.pdf", 3, selection)
+        pdf_ocr._pdf_page_metadata("a.pdf", 3)
 
 
 @pytest.mark.parametrize(

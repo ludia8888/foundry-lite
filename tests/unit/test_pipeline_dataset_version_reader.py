@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     DatasetTransactionRow,
     DatasetVersionRow,
 )
+from foundry_lite.application.services import pipeline_dataset_version_reader
 from foundry_lite.application.services.pipeline_dataset_version_read_contracts import (
     ExactDatasetVersionReadFailed,
     ExactDatasetVersionReadRequest,
@@ -203,6 +204,29 @@ def test_exact_committed_dataset_version_reader_rejects_uncommitted_version(
         harness.reader.read(_CTX, request=harness.request)
 
     assert raised.value.details["reason"] == "source_version_not_committed"
+    assert harness.compute.read_paths == []
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "reason"),
+    [
+        ("MAX_PIPELINE_DATASET_SOURCE_ROWS", "source_row_limit_exceeded"),
+        ("MAX_PIPELINE_DATASET_SOURCE_BYTES", "source_byte_limit_exceeded"),
+    ],
+)
+def test_exact_committed_dataset_version_reader_rejects_oversized_source_before_file_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    reason: str,
+) -> None:
+    harness = _reader_harness(tmp_path)
+    monkeypatch.setattr(pipeline_dataset_version_reader, limit_name, 1)
+
+    with pytest.raises(ExactDatasetVersionReadFailed) as raised:
+        harness.reader.read(_CTX, request=harness.request)
+
+    assert raised.value.details["reason"] == reason
     assert harness.compute.read_paths == []
 
 
