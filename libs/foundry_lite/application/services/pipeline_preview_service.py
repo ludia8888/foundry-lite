@@ -216,7 +216,8 @@ class PipelinePreviewService(CoreService):
             )
             if row is None:
                 row = self._require_preview(conn, ctx, preview_run_id)
-            self._audit_preview(conn, ctx, row, "cancel_requested")
+            else:
+                self._audit_preview(conn, ctx, row, "cancel_requested")
         return _preview_payload(row)
 
     def _insert_or_replay_preview(

@@ -15,6 +15,7 @@ from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
+from foundry_lite.security.tenant_context import tenant_context
 
 _EXECUTION_LEASE_DURATION = timedelta(minutes=2)
 _HEARTBEAT_INTERVAL_SECONDS = 30.0
@@ -60,7 +61,7 @@ class PipelineExecutionLeaseGuard:
         self.raise_if_failed()
         try:
             if transaction is None:
-                with self._transaction_manager.begin() as owned_transaction:
+                with tenant_context(self._ctx.tenant_id), self._transaction_manager.begin() as owned_transaction:
                     self._renew(owned_transaction)
             else:
                 self._renew(transaction)

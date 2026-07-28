@@ -13,6 +13,7 @@ from foundry_lite.application.services.pipeline_run_recovery import (
     replayed_pipeline_run_action,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.security.tenant_context import current_tenant_id
 
 
 def test_only_expired_execution_lease_is_stale() -> None:
@@ -44,11 +45,12 @@ def test_queued_replay_executes_while_terminal_replay_only_reads() -> None:
 def test_execution_heartbeat_renews_the_durable_lease(monkeypatch) -> None:
     renewed = Event()
     repository = _LeaseRenewalRepository(renewed)
+    transaction_manager = _TransactionManager()
     monkeypatch.setattr(pipeline_run_recovery, "_HEARTBEAT_INTERVAL_SECONDS", 0.001)
     row = cast(PipelineRunRow, {"id": "run-a", "execution_lease_token": "lease-a"})
 
     with pipeline_execution_heartbeat(
-        cast(TransactionManager, _TransactionManager()),
+        cast(TransactionManager, transaction_manager),
         cast(PipelineRepository, repository),
         RequestContext(tenant_id="tenant-a"),
         row,
@@ -57,6 +59,7 @@ def test_execution_heartbeat_renews_the_durable_lease(monkeypatch) -> None:
 
     assert repository.tokens
     assert set(repository.tokens) == {"lease-a"}
+    assert set(transaction_manager.tenant_ids) == {"tenant-a"}
 
 
 def test_execution_heartbeat_fences_commits_immediately_after_renewal_loss(monkeypatch) -> None:
@@ -77,7 +80,11 @@ def test_execution_heartbeat_fences_commits_immediately_after_renewal_loss(monke
 
 
 class _TransactionManager:
+    def __init__(self) -> None:
+        self.tenant_ids: list[str | None] = []
+
     def begin(self) -> "_Transaction":
+        self.tenant_ids.append(current_tenant_id())
         return _Transaction()
 
 

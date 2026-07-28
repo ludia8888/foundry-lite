@@ -68,6 +68,9 @@ class _PreviewRepository:
 
     def request_preview_cancel(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
         self.cancel_requests += 1
+        if self.row is not None and self.row["status"] in {"QUEUED", "RUNNING"}:
+            self.row = cast(PipelinePreviewRunRow, {**self.row, "status": "CANCEL_REQUESTED"})
+            return self.row
         return None
 
     def update_preview_terminal(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
@@ -168,11 +171,21 @@ def test_pipeline_preview_cancel_is_idempotent_for_terminal_and_concurrent_rows(
     queued_service = _service(queued_repository)
     queued = queued_service.cancel_preview_run("preview-1", ctx=RequestContext())
 
-    assert queued["status"] == "QUEUED"
+    assert queued["status"] == "CANCEL_REQUESTED"
     assert queued_repository.cancel_requests == 1
     assert cast(_Runtime, queued_service.runtime_service).audits[0]["event_type"] == (
         "pipeline.preview.cancel_requested"
     )
+
+    requested_repository = _PreviewRepository(_row("CANCEL_REQUESTED"))
+    requested_service = _service(requested_repository)
+
+    first_retry = requested_service.cancel_preview_run("preview-1", ctx=RequestContext())
+    second_retry = requested_service.cancel_preview_run("preview-1", ctx=RequestContext())
+
+    assert first_retry["status"] == second_retry["status"] == "CANCEL_REQUESTED"
+    assert requested_repository.cancel_requests == 2
+    assert cast(_Runtime, requested_service.runtime_service).audits == []
 
 
 def test_pipeline_preview_terminal_update_reloads_concurrent_winner() -> None:
