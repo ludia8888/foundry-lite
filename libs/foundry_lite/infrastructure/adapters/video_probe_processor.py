@@ -30,7 +30,7 @@ import re
 import signal
 import subprocess  # nosec B404 - fixed ffmpeg/ffprobe arg list, no shell, sandbox path only
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
@@ -258,11 +258,22 @@ _FFMPEG_TIMEOUT_SECONDS = 90
 _SCENE_THRESHOLDS = {"MORE_SENSITIVE": 0.1, "STANDARD": 0.3, "LESS_SENSITIVE": 0.5}
 _DEFAULT_SENSITIVITY = "STANDARD"
 
-# source_path -> one (start_ms, ocr_text) per scene frame with recognized text.
-SceneFrameExtractor = Callable[[str], list[tuple[int, str]]]
-# (source_path, outdir) -> one (start_ms, frame_image_path) per scene frame written into outdir
+
+@dataclass(frozen=True)
+class VideoProcessingBounds:
+    """Typed duration/frame limits enforced before expensive OCR or embedding work."""
+
+    max_duration_ms: int | None = None
+    max_scene_count: int | None = None
+    requested_max_duration_ms: int | None = None
+    requested_max_scene_count: int | None = None
+
+
+# source_path + bounds -> one (start_ms, ocr_text) per recognized scene frame.
+SceneFrameExtractor = Callable[[str, VideoProcessingBounds], list[tuple[int, str]]]
+# (source_path, outdir, bounds) -> one (start_ms, frame_image_path) per scene frame
 # (L11 visual embedding input). The caller owns outdir so frames outlive extraction for embedding.
-SceneFramePathExtractor = Callable[[str, str], list[tuple[int, str]]]
+SceneFramePathExtractor = Callable[[str, str, VideoProcessingBounds], list[tuple[int, str]]]
 
 
 class VideoFrameError(Exception):
@@ -273,10 +284,13 @@ class VideoFrameError(Exception):
         self.reason = reason
 
 
-def _default_scene_frame_extractor(source_path: str) -> list[tuple[int, str]]:
+def _default_scene_frame_extractor(
+    source_path: str,
+    bounds: VideoProcessingBounds,
+) -> list[tuple[int, str]]:
     # No ffmpeg/Tesseract is wired in-process; deterministic unit tests inject a fake and the
     # seam stays covered. The real ``video-scene-frames`` profile injects the ffmpeg extractor.
-    del source_path
+    del source_path, bounds
     raise VideoFrameError("frame_extractor_unavailable")
 
 
@@ -285,7 +299,10 @@ def _scene_threshold(scene_sensitivity: str) -> float:
 
 
 def _ffmpeg_scene_frame_extractor(
-    source_path: str, *, scene_sensitivity: str = "MORE_SENSITIVE"
+    source_path: str,
+    bounds: VideoProcessingBounds,
+    *,
+    scene_sensitivity: str = "MORE_SENSITIVE",
 ) -> list[tuple[int, str]]:
     # Real engine (L10): extract scene frames with ffmpeg's ``select=...scene`` filter into a
     # temp dir, one PNG per scene frame; ``showinfo`` prints ``pts_time:<seconds>`` to STDERR in
@@ -293,20 +310,25 @@ def _ffmpeg_scene_frame_extractor(
     # via the existing Tesseract engine; only frames with recognized text are returned.
     threshold = _scene_threshold(scene_sensitivity)
     with tempfile.TemporaryDirectory() as outdir:
-        timecodes = _run_ffmpeg_scene_select(source_path, threshold, outdir)
+        timecodes = _run_ffmpeg_scene_select(source_path, threshold, outdir, bounds)
         frames = sorted(Path(outdir).glob("f_*.png"))
-        if not frames:
+        frame_paths = _bounded_frame_pairs(_frame_path_pairs(frames, timecodes), bounds)
+        if not frame_paths:
             return []
         recognized: list[tuple[int, str]] = []
-        for index, frame in enumerate(frames):
-            pts = timecodes[index] if index < len(timecodes) else 0.0
-            text = "\n".join(_tesseract_ocr_engine(str(frame))).strip()
+        for start_ms, frame in frame_paths:
+            text = "\n".join(_tesseract_ocr_engine(frame)).strip()
             if text:
-                recognized.append((round(pts * 1000), text))
+                recognized.append((start_ms, text))
         return recognized
 
 
-def _run_ffmpeg_scene_select(source_path: str, threshold: float, outdir: str) -> list[float]:
+def _run_ffmpeg_scene_select(
+    source_path: str,
+    threshold: float,
+    outdir: str,
+    bounds: VideoProcessingBounds,
+) -> list[float]:
     select = f"select='eq(n,0)+gt(scene,{threshold})',showinfo"
     args = [
         "ffmpeg",
@@ -317,6 +339,7 @@ def _run_ffmpeg_scene_select(source_path: str, threshold: float, outdir: str) ->
         *_PROTOCOL_ALLOWLIST_ARGS,
         "-i",
         source_path,
+        *_ffmpeg_bounds_args(bounds),
         "-vf",
         select,
         "-vsync",
@@ -377,7 +400,9 @@ class VideoSceneFrameProcessorAdapter:
     def process(self, request: MediaProcessingRequest) -> MediaProcessingResult:
         if request.source_path is None:
             raise self._error("validation", "scene-frame OCR requires a source_path", request, is_retryable=False)
-        frames = self._extract_within_timeout(request)
+        bounds = self._processing_bounds(request)
+        frames = self._extract_within_timeout(request, bounds)
+        structure = _bounds_structure(bounds)
         units = tuple(
             ProcessedContentUnit(
                 unit_kind="video_frame",
@@ -385,6 +410,7 @@ class VideoSceneFrameProcessorAdapter:
                 start_ms=start_ms,
                 text=text,
                 text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                structure=structure,
             )
             for index, (start_ms, text) in enumerate(frames)
         )
@@ -395,18 +421,29 @@ class VideoSceneFrameProcessorAdapter:
             content_hash=_content_hash(units),
             mime_type="text/plain",
             units=units,
+            processing_evidence=_video_processing_evidence(bounds, units),
         )
 
-    def _extract_within_timeout(self, request: MediaProcessingRequest) -> list[tuple[int, str]]:
+    def _processing_bounds(self, request: MediaProcessingRequest) -> VideoProcessingBounds:
+        try:
+            return _video_processing_bounds(request.spec.parameters)
+        except VideoFrameError as exc:
+            raise self._error("validation", exc.reason, request, is_retryable=False) from exc
+
+    def _extract_within_timeout(
+        self,
+        request: MediaProcessingRequest,
+        bounds: VideoProcessingBounds,
+    ) -> list[tuple[int, str]]:
         assert request.source_path is not None
         # Not a context manager: on timeout we abandon the worker (shutdown wait=False) rather
         # than block on shutdown(wait=True) for a hung ffmpeg/OCR call.
         pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self._scene_frame_extractor, request.source_path)
+        future = pool.submit(self._scene_frame_extractor, request.source_path, bounds)
         try:
             result = future.result(timeout=self._timeout_seconds)
             pool.shutdown(wait=True)
-            return result
+            return _bounded_frame_pairs(result, bounds)
         except FuturesTimeoutError as exc:
             pool.shutdown(wait=False)
             raise self._error("timeout", "scene-frame extraction timed out", request, is_retryable=True) from exc
@@ -444,26 +481,31 @@ _SCENE_VISION_DERIVATIVE = "video_scene_vision"
 _VISION_PROCESSOR = "video_vision_v1"
 
 
-def _default_scene_frame_path_extractor(source_path: str, outdir: str) -> list[tuple[int, str]]:
+def _default_scene_frame_path_extractor(
+    source_path: str,
+    outdir: str,
+    bounds: VideoProcessingBounds,
+) -> list[tuple[int, str]]:
     # No ffmpeg is wired in-process; deterministic unit tests inject a fake. The real
     # ``video-scene-vision`` profile injects the ffmpeg path extractor.
-    del source_path, outdir
+    del source_path, outdir, bounds
     raise VideoFrameError("frame_extractor_unavailable")
 
 
 def _ffmpeg_scene_frame_paths(
-    source_path: str, outdir: str, *, scene_sensitivity: str = "MORE_SENSITIVE"
+    source_path: str,
+    outdir: str,
+    bounds: VideoProcessingBounds,
+    *,
+    scene_sensitivity: str = "MORE_SENSITIVE",
 ) -> list[tuple[int, str]]:
     # Real engine (L11): extract scene frames with the SAME ffmpeg scene-select as L10 (one PNG
     # per scene frame, ``pts_time`` timecodes from showinfo stderr) into ``outdir``, but return the
     # frame IMAGE paths (not OCR) so a CLIP image embedding can be computed per frame.
     threshold = _scene_threshold(scene_sensitivity)
-    timecodes = _run_ffmpeg_scene_select(source_path, threshold, outdir)
+    timecodes = _run_ffmpeg_scene_select(source_path, threshold, outdir, bounds)
     frames = sorted(Path(outdir).glob("f_*.png"))
-    return [
-        (round((timecodes[index] if index < len(timecodes) else 0.0) * 1000), str(frame))
-        for index, frame in enumerate(frames)
-    ]
+    return _bounded_frame_pairs(_frame_path_pairs(frames, timecodes), bounds)
 
 
 class VideoSceneVisionProcessorAdapter:
@@ -515,7 +557,9 @@ class VideoSceneVisionProcessorAdapter:
     def process(self, request: MediaProcessingRequest) -> MediaProcessingResult:
         if request.source_path is None:
             raise self._error("validation", "scene-frame vision requires a source_path", request, is_retryable=False)
-        frames = self._embed_within_timeout(request)
+        bounds = self._processing_bounds(request)
+        frames = self._embed_within_timeout(request, bounds)
+        structure = _bounds_structure(bounds)
         units = tuple(
             ProcessedContentUnit(
                 unit_kind="video_frame_visual",
@@ -524,6 +568,7 @@ class VideoSceneVisionProcessorAdapter:
                 text=text,
                 text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 embedding=embedding,
+                structure=structure,
             )
             for index, (start_ms, text, embedding) in enumerate(frames)
         )
@@ -534,12 +579,23 @@ class VideoSceneVisionProcessorAdapter:
             content_hash=_content_hash(units),
             mime_type="application/json",
             units=units,
+            processing_evidence=_video_processing_evidence(bounds, units),
         )
 
-    def _embed_within_timeout(self, request: MediaProcessingRequest) -> list[tuple[int, str, EmbeddingVector]]:
+    def _processing_bounds(self, request: MediaProcessingRequest) -> VideoProcessingBounds:
+        try:
+            return _video_processing_bounds(request.spec.parameters)
+        except VideoFrameError as exc:
+            raise self._error("validation", exc.reason, request, is_retryable=False) from exc
+
+    def _embed_within_timeout(
+        self,
+        request: MediaProcessingRequest,
+        bounds: VideoProcessingBounds,
+    ) -> list[tuple[int, str, EmbeddingVector]]:
         assert request.source_path is not None
         pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self._extract_and_embed, request.source_path)
+        future = pool.submit(self._extract_and_embed, request.source_path, bounds)
         try:
             result = future.result(timeout=self._timeout_seconds)
             pool.shutdown(wait=True)
@@ -551,10 +607,15 @@ class VideoSceneVisionProcessorAdapter:
             pool.shutdown(wait=False)
             raise self._error("validation", exc.reason, request, is_retryable=False) from exc
 
-    def _extract_and_embed(self, source_path: str) -> list[tuple[int, str, EmbeddingVector]]:
+    def _extract_and_embed(
+        self,
+        source_path: str,
+        bounds: VideoProcessingBounds,
+    ) -> list[tuple[int, str, EmbeddingVector]]:
         # Extraction + embedding share one tempdir scope so frame files outlive extraction.
         with tempfile.TemporaryDirectory() as outdir:
-            frames = self._scene_frame_path_extractor(source_path, outdir)
+            extracted = self._scene_frame_path_extractor(source_path, outdir, bounds)
+            frames = _bounded_frame_pairs(extracted, bounds)
             if not frames:
                 return []
             embeddings = self._vision_embedding_model.embed_images([path for _, path in frames])
@@ -579,3 +640,113 @@ class VideoSceneVisionProcessorAdapter:
                 },
             )
         )
+
+
+def _video_processing_bounds(parameters: Mapping[str, object]) -> VideoProcessingBounds:
+    applied = _processing_bounds_map(parameters.get("processingBounds"))
+    requested = _processing_bounds_map(parameters.get("requestedProcessingBounds"))
+    return VideoProcessingBounds(
+        max_duration_ms=_positive_optional_int(applied.get("maxDurationMs")),
+        max_scene_count=_positive_optional_int(applied.get("maxSceneCount")),
+        requested_max_duration_ms=_positive_optional_int(requested.get("maxDurationMs")),
+        requested_max_scene_count=_positive_optional_int(requested.get("maxSceneCount")),
+    )
+
+
+def _processing_bounds_map(value: object) -> Mapping[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise VideoFrameError("invalid_processing_bounds")
+    return value
+
+
+def _positive_optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise VideoFrameError("invalid_processing_bounds")
+    return value
+
+
+def _ffmpeg_bounds_args(bounds: VideoProcessingBounds) -> list[str]:
+    args: list[str] = []
+    if bounds.max_duration_ms is not None:
+        args.extend(("-t", f"{bounds.max_duration_ms / 1000:.3f}"))
+    if bounds.max_scene_count is not None:
+        args.extend(("-frames:v", str(bounds.max_scene_count)))
+    return args
+
+
+def _frame_path_pairs(
+    frames: Sequence[Path],
+    timecodes: Sequence[float],
+) -> list[tuple[int, str]]:
+    return [
+        (round((timecodes[index] if index < len(timecodes) else 0.0) * 1000), str(frame))
+        for index, frame in enumerate(frames)
+    ]
+
+
+def _bounded_frame_pairs(
+    frames: Sequence[tuple[int, str]],
+    bounds: VideoProcessingBounds,
+) -> list[tuple[int, str]]:
+    within_duration = list(frames)
+    if bounds.max_duration_ms is not None:
+        within_duration = [(start_ms, value) for start_ms, value in frames if start_ms < bounds.max_duration_ms]
+    if bounds.max_scene_count is None:
+        return within_duration
+    return within_duration[: bounds.max_scene_count]
+
+
+def _bounds_structure(bounds: VideoProcessingBounds) -> Mapping[str, object] | None:
+    if bounds.max_duration_ms is None and bounds.max_scene_count is None:
+        return None
+    return {
+        "processingBounds": {
+            "maxDurationMs": bounds.max_duration_ms,
+            "maxSceneCount": bounds.max_scene_count,
+            "isDurationBoundApplied": bounds.max_duration_ms is not None,
+            "isSceneCountBoundApplied": bounds.max_scene_count is not None,
+        }
+    }
+
+
+def _video_processing_evidence(
+    bounds: VideoProcessingBounds,
+    units: tuple[ProcessedContentUnit, ...],
+) -> Mapping[str, object]:
+    requested = _requested_video_bound_values(bounds)
+    applied = _applied_video_bound_values(bounds)
+    starts = [unit.start_ms for unit in units if unit.start_ms is not None]
+    return {
+        "requested": requested,
+        "applied": applied,
+        "observed": {
+            "unitCount": len(units),
+            "maxStartMs": max(starts, default=None),
+        },
+    }
+
+
+def _requested_video_bound_values(bounds: VideoProcessingBounds) -> Mapping[str, object]:
+    duration = bounds.requested_max_duration_ms or bounds.max_duration_ms
+    scene_count = bounds.requested_max_scene_count or bounds.max_scene_count
+    return _bound_values(duration, scene_count)
+
+
+def _applied_video_bound_values(bounds: VideoProcessingBounds) -> Mapping[str, object]:
+    return _bound_values(bounds.max_duration_ms, bounds.max_scene_count)
+
+
+def _bound_values(
+    max_duration_ms: int | None,
+    max_scene_count: int | None,
+) -> Mapping[str, object]:
+    values: dict[str, object] = {}
+    if max_duration_ms is not None:
+        values["maxDurationMs"] = max_duration_ms
+    if max_scene_count is not None:
+        values["maxSceneCount"] = max_scene_count
+    return values

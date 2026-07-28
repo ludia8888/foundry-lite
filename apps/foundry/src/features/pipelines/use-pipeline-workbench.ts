@@ -1,8 +1,8 @@
 import type {
   Dataset,
   PipelineBranch,
-  PipelineGraph,
-  PipelineNode,
+  PipelineGraphV2,
+  PipelineNodeDescriptorPayload,
   PipelineNodeType,
   PipelineSchemaColumn,
 } from "@foundry-lite/sdk";
@@ -11,19 +11,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   autoLayoutPositions,
+  asGraph,
+  canonicalizeGraphForSave,
+  createDescriptorNode,
   createDatasetNode,
   createGraphEdge,
-  createTransformNode,
   deriveNodeSchemas,
   graphPositions,
+  isReadOnlyPipelineNode,
   issuesByNodeId,
   nextNodeId,
   type NodePosition,
   normalizeGraphDoc,
   parseValidation,
+  type PipelineCanvasGraph,
+  type PipelineCanvasNode,
+  type PipelineConnection,
   type PositionsByNodeId,
+  trainedModelUsageNodeIds,
+  validatePipelineConnection,
+  withNodeConfigurationPatch,
   withLayoutPositions,
+  withImportedTrainedModel,
   withSqlInputTemplate,
+  withoutImportedTrainedModel,
 } from "./pipeline-model";
 import { useSafeQuery } from "./use-safe-query";
 
@@ -33,7 +44,10 @@ type PipelineGraphQueryData = {
   diff: Record<string, unknown> | null;
 };
 
-type GraphSnapshot = { doc: PipelineGraph; positions: PositionsByNodeId };
+type GraphSnapshot = {
+  doc: PipelineCanvasGraph;
+  positions: PositionsByNodeId;
+};
 
 /** 로컬 undo/redo 스택 상한 (doc 스냅샷 최대 50개). */
 const MAX_HISTORY = 50;
@@ -44,11 +58,16 @@ export function usePipelineWorkbench() {
 
   // useFoundryLiteProvidedPipelineBuilder와 동일 조합 (branches + proposals 병렬).
   const loadBuilder = useCallback(async () => {
-    const [branches, proposals] = await Promise.all([
+    const [branches, proposals, nodeTypes] = await Promise.all([
       client.pipelines.branches.list({ limit: 50 }),
       client.pipelines.proposals.list({ limit: 50 }),
+      client.pipelines.nodeTypes(),
     ]);
-    return { branches: branches.items, proposals: proposals.items };
+    return {
+      branches: branches.items,
+      proposals: proposals.items,
+      nodeTypes: nodeTypes.items,
+    };
   }, [client]);
   const builder = useSafeQuery(["pipelines", "builder", 50], loadBuilder);
 
@@ -59,6 +78,14 @@ export function usePipelineWorkbench() {
   );
 
   const branches = useMemo(() => builder.data?.branches ?? [], [builder.data]);
+  const nodeDescriptors = useMemo(
+    () => builder.data?.nodeTypes ?? [],
+    [builder.data],
+  );
+  const descriptorById = useMemo(
+    () => currentDescriptorsById(nodeDescriptors),
+    [nodeDescriptors],
+  );
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const branchId = selectedBranchId ?? branches[0]?.id ?? null;
 
@@ -82,16 +109,17 @@ export function usePipelineWorkbench() {
   );
   const diff = graphQuery.data?.diff ?? null;
 
-  const [doc, setDoc] = useState<PipelineGraph | null>(null);
+  const [doc, setDoc] = useState<PipelineCanvasGraph | null>(null);
   const [positions, setPositions] = useState<PositionsByNodeId>({});
   const [isDirty, setIsDirty] = useState(false);
+  const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<readonly string[]>([]);
   const [syncedFingerprint, setSyncedFingerprint] = useState<string | null>(
     null,
   );
 
   // 로컬 undo/redo: 구조 변경(노드/엣지/데이터) 직전 doc+positions 스냅샷을 쌓는다 (서버 왕복 없음).
-  const docRef = useRef<PipelineGraph | null>(null);
+  const docRef = useRef<PipelineCanvasGraph | null>(null);
   const positionsRef = useRef<PositionsByNodeId>({});
   const syncedSnapshotRef = useRef<GraphSnapshot | null>(null);
   const undoStackRef = useRef<GraphSnapshot[]>([]);
@@ -179,7 +207,10 @@ export function usePipelineWorkbench() {
   useEffect(() => {
     if (!branch) return;
     if (isDirty && syncedFingerprint === branch.graphFingerprint) return;
-    const normalized = normalizeGraphDoc(branch.graph);
+    const normalized = normalizeGraphDoc(
+      asGraph(branch.graph),
+      nodeDescriptors,
+    );
     setDoc(normalized);
     const saved = graphPositions(normalized);
     const nextPositions =
@@ -190,14 +221,14 @@ export function usePipelineWorkbench() {
     setSyncedFingerprint(branch.graphFingerprint);
     clearHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branch?.id, branch?.graphFingerprint]);
+  }, [branch?.id, branch?.graphFingerprint, nodeDescriptors]);
 
   const applyDoc = useCallback(
-    (updater: (current: PipelineGraph) => PipelineGraph) => {
+    (updater: (current: PipelineCanvasGraph) => PipelineCanvasGraph) => {
       const current = docRef.current;
       if (!current) return;
       pushHistory();
-      const next = updater(current);
+      const next = deriveNodeSchemas(updater(current));
       setDoc(next);
       markDirtyForSnapshot({ doc: next, positions: positionsRef.current });
     },
@@ -217,7 +248,7 @@ export function usePipelineWorkbench() {
   );
 
   const appendNode = useCallback(
-    (node: PipelineNode) => {
+    (node: PipelineCanvasNode) => {
       const current = docRef.current;
       if (!current) return;
       pushHistory();
@@ -261,40 +292,102 @@ export function usePipelineWorkbench() {
         "dataset",
         doc.nodes.map((node) => node.id),
       );
-      appendNode(createDatasetNode(id, datasetRef, schema));
+      appendNode(
+        createDatasetNode(
+          id,
+          datasetRef,
+          schema,
+          descriptorById.get("source.dataset"),
+        ),
+      );
     },
-    [appendNode, client, doc],
+    [appendNode, client, descriptorById, doc],
   );
 
   const handleAddTransformNode = useCallback(
     (type: PipelineNodeType) => {
       if (!doc) return;
-      const pipelineId = branch?.pipelineId ?? "pipeline";
+      const descriptorId = legacyDescriptorId(type);
+      const descriptor = descriptorById.get(descriptorId);
+      if (!descriptor) return;
       const id = nextNodeId(
-        type,
+        descriptorId,
         doc.nodes.map((node) => node.id),
       );
-      appendNode(createTransformNode(id, type, pipelineId));
+      const node = createDescriptorNode(
+        id,
+        descriptor,
+        branch?.pipelineId ?? "pipeline",
+      );
+      if (node) appendNode(node);
+    },
+    [appendNode, branch?.pipelineId, descriptorById, doc],
+  );
+
+  const handleAddDescriptorNode = useCallback(
+    (descriptor: PipelineNodeDescriptorPayload) => {
+      if (!doc) return;
+      const id = nextNodeId(
+        descriptor.descriptorId,
+        doc.nodes.map((node) => node.id),
+      );
+      const node = createDescriptorNode(
+        id,
+        descriptor,
+        branch?.pipelineId ?? "pipeline",
+      );
+      if (node) appendNode(node);
     },
     [appendNode, branch?.pipelineId, doc],
   );
 
-  const handleConnectNodes = useCallback(
-    (source: string, target: string) => {
-      applyDoc((current) => {
-        const isDuplicate = current.edges.some(
-          (edge) => edge.source === source && edge.target === target,
+  const handleImportTrainedModel = useCallback(
+    (modelRef: string) => {
+      setConnectionIssue(null);
+      applyDoc((current) => withImportedTrainedModel(current, modelRef));
+    },
+    [applyDoc],
+  );
+
+  const handleRemoveTrainedModel = useCallback(
+    (modelRef: string) => {
+      const usageNodeIds = trainedModelUsageNodeIds(docRef.current, modelRef);
+      if (usageNodeIds.length > 0) {
+        setConnectionIssue(
+          `사용 중인 Trained Model은 Reusables에서 제거할 수 없습니다: ${usageNodeIds.join(", ")}`,
         );
-        if (isDuplicate || source === target) return current;
+        return;
+      }
+      setConnectionIssue(null);
+      applyDoc((current) => withoutImportedTrainedModel(current, modelRef));
+    },
+    [applyDoc],
+  );
+
+  const handleConnectNodes = useCallback(
+    (connection: PipelineConnection) => {
+      const current = docRef.current;
+      if (!current) return;
+      const validation = validatePipelineConnection(current, connection);
+      if (!validation.isValid) {
+        setConnectionIssue(validation.reason);
+        return;
+      }
+      setConnectionIssue(null);
+      applyDoc((current) => {
         const withEdge = {
           ...current,
           edges: [
             ...current.edges,
-            createGraphEdge(source, target, current.edges),
+            createGraphEdge(validation.connection, current.edges),
           ],
         };
         // sql 노드 연결 시 기본 SQL 템플릿의 입력 참조를 실제 upstream ref로 채운다.
-        return withSqlInputTemplate(withEdge, source, target);
+        return withSqlInputTemplate(
+          withEdge,
+          validation.connection.source,
+          validation.connection.target,
+        );
       });
     },
     [applyDoc],
@@ -309,22 +402,48 @@ export function usePipelineWorkbench() {
         (item) => (item.id ?? `${item.source}->${item.target}`) === edgeId,
       );
       if (!edge) return;
+      const edgeSource = current.nodes.find((node) => node.id === edge.source);
+      const edgeTarget = current.nodes.find((node) => node.id === edge.target);
+      if (
+        isReadOnlyPipelineNode(edgeSource) ||
+        isReadOnlyPipelineNode(edgeTarget)
+      ) {
+        setConnectionIssue(
+          "읽기 전용 Graph v2 노드에 연결된 edge에는 변환을 삽입할 수 없습니다.",
+        );
+        return;
+      }
+      const descriptor = descriptorById.get(legacyDescriptorId(type));
+      if (!descriptor) return;
       const id = nextNodeId(
-        type,
+        descriptor.descriptorId,
         current.nodes.map((node) => node.id),
       );
-      const node = createTransformNode(
+      const node = createDescriptorNode(
         id,
-        type,
+        descriptor,
         branch?.pipelineId ?? "pipeline",
       );
+      if (!node) return;
       const remainingEdges = current.edges.filter((item) => item !== edge);
-      const inboundEdge = createGraphEdge(edge.source, id, remainingEdges);
-      const outboundEdge = createGraphEdge(id, edge.target, [
-        ...remainingEdges,
-        inboundEdge,
-      ]);
-      const rewired: PipelineGraph = {
+      const inboundEdge = createGraphEdge(
+        {
+          source: edge.source,
+          target: id,
+          sourceHandle: edge.sourceHandle ?? null,
+          targetHandle: type === "join" ? "left" : null,
+        },
+        remainingEdges,
+      );
+      const outboundEdge = createGraphEdge(
+        {
+          source: id,
+          target: edge.target,
+          targetHandle: edge.targetHandle ?? null,
+        },
+        [...remainingEdges, inboundEdge],
+      );
+      const rewired: PipelineCanvasGraph = {
         ...current,
         nodes: [...current.nodes, node],
         edges: [...remainingEdges, inboundEdge, outboundEdge],
@@ -343,12 +462,45 @@ export function usePipelineWorkbench() {
       setSelectedNodeIds([id]);
       markDirtyForSnapshot({ doc: nextDoc, positions: nextPositions });
     },
-    [branch?.pipelineId, markDirtyForSnapshot, pushHistory],
+    [branch?.pipelineId, descriptorById, markDirtyForSnapshot, pushHistory],
   );
 
   const handleDeleteNodes = useCallback(
     (nodeIds: readonly string[]) => {
-      const removed = new Set(nodeIds);
+      const currentDoc = docRef.current;
+      if (!currentDoc) return;
+      const requested = new Set(nodeIds);
+      const readOnlyIds = new Set(
+        currentDoc.nodes
+          .filter(isReadOnlyPipelineNode)
+          .map((node) => node.id),
+      );
+      const protectedIds = new Set(
+        currentDoc.nodes
+        .filter(
+            (node) =>
+              requested.has(node.id) &&
+              (readOnlyIds.has(node.id) ||
+                currentDoc.edges.some(
+                  (edge) =>
+                    (edge.source === node.id &&
+                      readOnlyIds.has(edge.target)) ||
+                    (edge.target === node.id &&
+                      readOnlyIds.has(edge.source)),
+                )),
+        )
+          .map((node) => node.id),
+      );
+      const removed = new Set(
+        nodeIds.filter((nodeId) => !protectedIds.has(nodeId)),
+      );
+      if (protectedIds.size > 0) {
+        setConnectionIssue(
+          `읽기 전용 Graph v2 계약 또는 그 named-port 연결을 훼손하는 노드는 삭제할 수 없습니다: ${[...protectedIds].join(", ")}`,
+        );
+        return;
+      }
+      if (removed.size === 0) return;
       applyDoc((current) => ({
         ...current,
         nodes: current.nodes.filter((node) => !removed.has(node.id)),
@@ -365,7 +517,31 @@ export function usePipelineWorkbench() {
 
   const handleDeleteEdges = useCallback(
     (edgeIds: readonly string[]) => {
-      const removed = new Set(edgeIds);
+      const currentDoc = docRef.current;
+      if (!currentDoc) return;
+      const requested = new Set(edgeIds);
+      const readOnlyNodeIds = new Set(
+        currentDoc.nodes
+          .filter(isReadOnlyPipelineNode)
+          .map((node) => node.id),
+      );
+      const protectedEdgeIds = currentDoc.edges
+        .filter(
+          (edge) =>
+            requested.has(edge.id ?? `${edge.source}->${edge.target}`) &&
+            (readOnlyNodeIds.has(edge.source) ||
+              readOnlyNodeIds.has(edge.target)),
+        )
+        .map((edge) => edge.id ?? `${edge.source}->${edge.target}`);
+      const removed = new Set(
+        edgeIds.filter((edgeId) => !protectedEdgeIds.includes(edgeId)),
+      );
+      if (protectedEdgeIds.length > 0) {
+        setConnectionIssue(
+          "읽기 전용 Graph v2 노드의 기존 named-port 연결은 삭제할 수 없습니다.",
+        );
+      }
+      if (removed.size === 0) return;
       applyDoc((current) => ({
         ...current,
         edges: current.edges.filter(
@@ -390,11 +566,18 @@ export function usePipelineWorkbench() {
 
   const handleUpdateNodeData = useCallback(
     (nodeId: string, patch: Record<string, unknown>) => {
+      const node = docRef.current?.nodes.find((item) => item.id === nodeId);
+      if (isReadOnlyPipelineNode(node)) {
+        setConnectionIssue(
+          "이 Graph v2 descriptor는 현재 UI에서 읽기 전용이며 원본 설정을 그대로 보존합니다.",
+        );
+        return;
+      }
       applyDoc((current) => ({
         ...current,
         nodes: current.nodes.map((node) =>
           node.id === nodeId
-            ? { ...node, data: { ...(node.data ?? {}), ...patch } }
+            ? withNodeConfigurationPatch(node, patch)
             : node,
         ),
       }));
@@ -411,13 +594,18 @@ export function usePipelineWorkbench() {
     markDirtyForSnapshot({ doc: current, positions: nextPositions });
   }, [markDirtyForSnapshot, pushHistory]);
 
-  const buildGraphForSave = useCallback((): PipelineGraph | null => {
+  const buildGraphForSave = useCallback((): PipelineGraphV2 | null => {
     if (!doc) return null;
-    return withLayoutPositions(deriveNodeSchemas(doc), positions);
+    return canonicalizeGraphForSave(
+      withLayoutPositions(deriveNodeSchemas(doc), positions),
+    );
   }, [doc, positions]);
 
   const handleGraphSaved = useCallback((saved: PipelineBranch) => {
-    const normalized = normalizeGraphDoc(saved.graph);
+    const normalized = normalizeGraphDoc(
+      asGraph(saved.graph),
+      nodeDescriptors,
+    );
     const savedPositions = graphPositions(normalized);
     const nextPositions =
       Object.keys(savedPositions).length > 0
@@ -428,9 +616,9 @@ export function usePipelineWorkbench() {
     syncedSnapshotRef.current = { doc: normalized, positions: nextPositions };
     setIsDirty(false);
     setSyncedFingerprint(saved.graphFingerprint);
-  }, []);
+  }, [nodeDescriptors]);
 
-  const selectedNode: PipelineNode | null =
+  const selectedNode: PipelineCanvasNode | null =
     doc?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const nodeIssues = useMemo(
     () => issuesByNodeId(validation?.errors ?? []),
@@ -440,6 +628,7 @@ export function usePipelineWorkbench() {
   return {
     client,
     builder,
+    nodeDescriptors,
     datasetsQuery,
     branches,
     branchId,
@@ -450,6 +639,7 @@ export function usePipelineWorkbench() {
     doc,
     positions,
     isDirty,
+    connectionIssue,
     selectedNodeId,
     selectedNodeIds,
     selectedNode,
@@ -460,6 +650,9 @@ export function usePipelineWorkbench() {
     handleSelectBranch,
     handleAddDatasetNode,
     handleAddTransformNode,
+    handleAddDescriptorNode,
+    handleImportTrainedModel,
+    handleRemoveTrainedModel,
     handleConnectNodes,
     handleInsertNodeBetween,
     handleDeleteNodes,
@@ -508,8 +701,34 @@ function snapshotsEqual(
   );
 }
 
-function snapshotGraph(snapshot: GraphSnapshot): PipelineGraph {
+function snapshotGraph(snapshot: GraphSnapshot): PipelineCanvasGraph {
   return withLayoutPositions(snapshot.doc, snapshot.positions);
+}
+
+function legacyDescriptorId(type: PipelineNodeType): string {
+  const descriptorByType: Record<PipelineNodeType, string> = {
+    dataset: "source.dataset",
+    sql: "transform.sql",
+    python: "transform.python",
+    join: "transform.join",
+    union: "transform.union",
+    select_cast: "transform.select_cast",
+    output_dataset: "output.dataset",
+  };
+  return descriptorByType[type];
+}
+
+function currentDescriptorsById(
+  descriptors: readonly PipelineNodeDescriptorPayload[],
+): Map<string, PipelineNodeDescriptorPayload> {
+  const result = new Map<string, PipelineNodeDescriptorPayload>();
+  for (const descriptor of descriptors) {
+    const current = result.get(descriptor.descriptorId);
+    if (!current || descriptor.specVersion > current.specVersion) {
+      result.set(descriptor.descriptorId, descriptor);
+    }
+  }
+  return result;
 }
 
 function stableStringify(value: unknown): string {
@@ -518,6 +737,15 @@ function stableStringify(value: unknown): string {
   }
   if (typeof value === "object" && value !== null) {
     const entries = Object.entries(value as Record<string, unknown>)
+      .filter(
+        ([key]) =>
+          ![
+            "descriptor",
+            "rawV2Node",
+            "rawV2Edge",
+            "rawV2Graph",
+          ].includes(key),
+      )
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`);
     return `{${entries.join(",")}}`;

@@ -56,6 +56,10 @@ class ContentUnitRecord:
     start_ms: int | None = None
     end_ms: int | None = None
     bbox: dict[str, object] | None = None
+    parent_content_unit_id: str | None = None
+    source_locator: dict[str, object] | None = None
+    structure: dict[str, object] | None = None
+    confidence: float | None = None
     speaker: str | None = None
     language: str | None = None
     embedding: EmbeddingVector = field(default_factory=tuple)
@@ -165,13 +169,30 @@ class MediaDerivativeRepository(Protocol):
         ...
 
     def get_content_units(
-        self, *, transaction: TransactionContext, tenant_id: str, derivative_id: str
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        derivative_id: str,
+        after_ordinal: int | None = None,
+        page_number: int | None = None,
+        limit: int | None = None,
     ) -> list[ContentUnitRecord]:
-        """Return the content units a derivative produced, ordered by ordinal."""
+        """Return a bounded ordinal page of content units produced by one derivative."""
         ...
 
     def get_content_units_by_ids(self, *, transaction: TransactionContext, ids: list[str]) -> list[ContentUnitRecord]:
         """Return content units for the given ids (batch-first; authoritative truth re-read)."""
+        ...
+
+    def content_unit_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        content_unit_id: str,
+    ) -> ContentUnitRecord | None:
+        """Return one tenant-scoped content unit for citation and navigation verification."""
         ...
 
     def get_committed_content_units_for_versions(

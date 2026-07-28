@@ -3,17 +3,23 @@ import {
   Check,
   ChevronDown,
   CircleArrowUp,
+  Copy,
   GitBranch,
   GitPullRequestArrow,
+  HelpCircle,
   Plus,
   Redo2,
+  RefreshCcw,
   Rocket,
+  Settings2,
+  ShieldCheck,
   Star,
   Undo2,
   Users,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -31,7 +37,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 import {
@@ -48,9 +53,6 @@ const VIEW_LABELS: Record<BuilderView, string> = {
   history: "히스토리",
 };
 
-/** 상단 좌측 2행의 future 메뉴 (공식 상단 바의 File/Settings/Help). */
-const FUTURE_MENUS = ["파일", "설정", "도움말"] as const;
-
 interface BuilderToolbarProps {
   branches: readonly PipelineBranch[];
   branchId: string | null;
@@ -65,11 +67,15 @@ interface BuilderToolbarProps {
   canPropose: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  isBaseStale: boolean;
+  isProtected: boolean;
+  isRebasing: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onViewChange: (view: BuilderView) => void;
   onSelectBranch: (branchId: string) => void;
   onCreateBranch: () => void;
+  onRebase: () => void;
   onSave: () => void;
   onPropose: () => void;
 }
@@ -94,27 +100,56 @@ export function BuilderToolbar({
   canPropose,
   canUndo,
   canRedo,
+  isBaseStale,
+  isProtected,
+  isRebasing,
   onUndo,
   onRedo,
   onViewChange,
   onSelectBranch,
   onCreateBranch,
+  onRebase,
   onSave,
   onPropose,
 }: BuilderToolbarProps) {
   const [isStarred, setIsStarred] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+  const copyResetTimer = useRef<number | null>(null);
   const pipelineName = asText(branch?.pipelineId) ?? "파이프라인";
   const branchName = asText(branch?.name) ?? asText(branchId) ?? "브랜치";
+  useEffect(
+    () => () => {
+      if (copyResetTimer.current !== null) {
+        window.clearTimeout(copyResetTimer.current);
+      }
+    },
+    [],
+  );
+  const handleCopyLink = () => {
+    if (!navigator.clipboard) return;
+    void navigator.clipboard.writeText(window.location.href).then(() => {
+      setIsCopied(true);
+      if (copyResetTimer.current !== null) {
+        window.clearTimeout(copyResetTimer.current);
+      }
+      copyResetTimer.current = window.setTimeout(() => {
+        setIsCopied(false);
+        copyResetTimer.current = null;
+      }, 1600);
+    });
+  };
 
   return (
-    <div className="flex h-12 shrink-0 items-stretch border-b bg-card">
-      {/* 앱 아이콘: 연민트 배경 + 틸 파이프 글리프 */}
-      <div className="flex w-12 shrink-0 items-center justify-center bg-[#EAF5F4]">
+    <header className="flex h-11 shrink-0 items-stretch border-b border-[#C5CBD3] bg-card">
+      <Link
+        to="/"
+        aria-label="Foundry 홈으로 이동"
+        className="flex w-11 shrink-0 items-center justify-center border-r border-[#C5CBD3] bg-[#EAF5F4] hover:bg-[#DCEFED]"
+      >
         <PipelineGlyph />
-      </div>
+      </Link>
 
-      {/* 좌측 2행: 브레드크럼 / future 메뉴 + 분기 수 + Batch */}
-      <div className="flex min-w-0 flex-col justify-center gap-0.5 pr-2 pl-3">
+      <div className="flex min-w-0 flex-col justify-center gap-0.5 border-r border-[#C5CBD3] pr-3 pl-3">
         <div className="flex min-w-0 items-center gap-1 leading-none">
           <span className="hidden truncate text-[12px] text-muted-foreground lg:inline">
             Pipeline Builder
@@ -129,7 +164,8 @@ export function BuilderToolbar({
           </span>
           <button
             type="button"
-            className="flex size-4 items-center justify-center rounded text-muted-foreground hover:bg-muted"
+            aria-label={isStarred ? "즐겨찾기 해제" : "즐겨찾기"}
+            className="flex size-4 items-center justify-center text-muted-foreground hover:bg-muted"
             title={isStarred ? "즐겨찾기 해제" : "즐겨찾기"}
             onClick={() => setIsStarred((prev) => !prev)}
           >
@@ -142,21 +178,14 @@ export function BuilderToolbar({
           </button>
         </div>
         <div className="flex items-center gap-2 leading-none">
-          <div className="flex items-center gap-1.5">
-            {FUTURE_MENUS.map((menu) => (
-              <button
-                key={menu}
-                type="button"
-                disabled
-                title="곧 제공 예정"
-                className="flex cursor-not-allowed items-center gap-0.5 text-[11px] text-muted-foreground/80"
-              >
-                {menu}
-                <ChevronDown className="size-2.5" />
-              </button>
-            ))}
-          </div>
-          <Separator orientation="vertical" className="!h-3" />
+          <BuilderHeaderMenus
+            isDirty={isDirty}
+            isSaving={isSaving}
+            onSave={onSave}
+            onCreateBranch={onCreateBranch}
+            onViewChange={onViewChange}
+          />
+          <span className="h-3 w-px bg-[#C5CBD3]" aria-hidden="true" />
           <span
             className="flex items-center gap-1 text-[11px] text-muted-foreground"
             title={`브랜치 ${branches.length}개`}
@@ -167,17 +196,28 @@ export function BuilderToolbar({
           <span className="rounded-[2px] bg-[#404854] px-1.5 py-0.5 text-[10px] leading-none font-semibold text-white">
             Batch
           </span>
+          {isProtected ? (
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-[#1C6B42]">
+              <ShieldCheck className="size-3" />
+              Protected
+            </span>
+          ) : null}
         </div>
       </div>
 
-      {/* 문서 탭: 편집 | 제안 | 히스토리 (활성 = 파란 밑줄) */}
-      <div className="ml-4 flex items-stretch gap-1">
+      <nav
+        role="tablist"
+        aria-label="파이프라인 작업 보기"
+        className="flex shrink-0 items-stretch gap-1 px-3"
+      >
         {(Object.keys(VIEW_LABELS) as BuilderView[]).map((view) => (
           <button
             key={view}
             type="button"
+            role="tab"
+            aria-selected={activeView === view}
             className={cn(
-              "relative flex items-center gap-1 border-b-2 px-2.5 text-[13px] transition-colors",
+              "relative flex items-center gap-1 border-b-2 px-2.5 text-[13px] whitespace-nowrap transition-colors",
               activeView === view
                 ? "border-primary font-semibold text-primary"
                 : "border-transparent text-muted-foreground hover:text-foreground",
@@ -192,13 +232,14 @@ export function BuilderToolbar({
             ) : null}
           </button>
         ))}
-      </div>
+      </nav>
 
-      <div className="ml-auto flex items-center gap-1.5 pr-3">
+      <div className="ml-auto flex items-center gap-1.5 overflow-x-auto pr-2">
         {/* undo/redo: 로컬 그래프 편집 스택 */}
-        <div className="flex overflow-hidden rounded border">
+        <div className="flex overflow-hidden rounded-[2px] border border-[#AEB6C1]">
           <button
             type="button"
+            aria-label="실행 취소"
             title="실행 취소"
             disabled={!canUndo}
             className="flex size-7 items-center justify-center bg-[#F1F3F5] text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
@@ -208,6 +249,7 @@ export function BuilderToolbar({
           </button>
           <button
             type="button"
+            aria-label="다시 실행"
             title="다시 실행"
             disabled={!canRedo}
             className="flex size-7 items-center justify-center border-l bg-[#F1F3F5] text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
@@ -218,8 +260,12 @@ export function BuilderToolbar({
         </div>
 
         <div className="flex items-center">
-          <Select value={branchId ?? undefined} onValueChange={onSelectBranch}>
-            <SelectTrigger size="sm" className="h-7 w-36 gap-1 text-[12px]">
+          <Select value={branchId ?? ""} onValueChange={onSelectBranch}>
+            <SelectTrigger
+              aria-label="파이프라인 브랜치"
+              size="sm"
+              className="h-7 w-32 gap-1 rounded-[2px] border-[#AEB6C1] text-[12px]"
+            >
               <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
               <SelectValue placeholder="브랜치 선택" />
             </SelectTrigger>
@@ -243,7 +289,8 @@ export function BuilderToolbar({
           <Button
             variant="ghost"
             size="sm"
-            className="size-7 px-0"
+            aria-label="새 브랜치"
+            className="size-7 rounded-[2px] px-0"
             title="새 브랜치"
             onClick={onCreateBranch}
           >
@@ -253,7 +300,7 @@ export function BuilderToolbar({
 
         <Button
           size="sm"
-          className="h-7 bg-success px-2.5 text-[12px] text-success-foreground hover:bg-success/90 disabled:opacity-70"
+          className="h-7 rounded-[2px] border border-[#238551] bg-white px-2.5 text-[12px] text-[#1C6B42] hover:bg-[#F1FAF5] disabled:opacity-60"
           disabled={!isDirty || isSaving || !branchId}
           title={isDirty ? "변경 사항 저장" : "저장할 변경이 없습니다"}
           onClick={onSave}
@@ -263,8 +310,23 @@ export function BuilderToolbar({
         </Button>
         <Button
           size="sm"
+          variant="outline"
+          className="h-7 rounded-[2px] border-[#AEB6C1] px-2 text-[11px]"
+          disabled={!isBaseStale || isRebasing || isDirty || !branchId}
+          title={
+            isBaseStale
+              ? "최신 Pipeline 버전과 3-way rebase"
+              : "브랜치 base가 최신입니다"
+          }
+          onClick={onRebase}
+        >
+          <RefreshCcw className="size-3.5" />
+          {isRebasing ? "Rebasing..." : "Rebase"}
+        </Button>
+        <Button
+          size="sm"
           variant="ghost"
-          className="h-7 px-2 text-[12px] text-muted-foreground"
+          className="h-7 rounded-[2px] border border-transparent px-2 text-[12px] text-muted-foreground hover:border-[#AEB6C1]"
           disabled={!canPropose || isProposing}
           onClick={onPropose}
         >
@@ -277,7 +339,7 @@ export function BuilderToolbar({
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2.5 text-[12px] text-primary"
+              className="h-7 rounded-[2px] border-[#AEB6C1] px-2.5 text-[12px] text-primary"
             >
               배포
               <ChevronDown className="size-3.5" />
@@ -301,7 +363,7 @@ export function BuilderToolbar({
         {/* 검증 배지: ✓통과 노드 수 ✗오류 수 */}
         {validation ? (
           <div
-            className="flex h-7 items-center overflow-hidden rounded border bg-[#F1F3F5] font-mono text-[11px]"
+            className="flex h-7 items-center overflow-hidden rounded-[2px] border border-[#AEB6C1] bg-[#F1F3F5] font-mono text-[11px]"
             title={
               validation.valid
                 ? `검증 통과${validation.warnings.length > 0 ? ` · 경고 ${validation.warnings.length}건` : ""}`
@@ -331,18 +393,90 @@ export function BuilderToolbar({
             title="저장되지 않은 변경"
           />
         ) : null}
-
-        <Separator orientation="vertical" className="!h-5" />
+        <span className="mx-0.5 h-5 w-px bg-[#C5CBD3]" aria-hidden="true" />
         <button
           type="button"
-          disabled
-          title="공유 · 곧 제공 예정"
-          className="flex h-7 cursor-not-allowed items-center gap-1 px-1.5 text-[12px] text-muted-foreground/80"
+          aria-live="polite"
+          className="flex h-7 items-center gap-1.5 px-2 text-[12px] hover:bg-muted"
+          onClick={handleCopyLink}
         >
-          <Users className="size-3.5" />
-          공유
+          {isCopied ? (
+            <Copy className="size-3.5 text-success" />
+          ) : (
+            <Users className="size-3.5" />
+          )}
+          {isCopied ? "링크 복사됨" : "공유"}
         </button>
       </div>
+    </header>
+  );
+}
+
+function BuilderHeaderMenus({
+  isDirty,
+  isSaving,
+  onSave,
+  onCreateBranch,
+  onViewChange,
+}: {
+  isDirty: boolean;
+  isSaving: boolean;
+  onSave: () => void;
+  onCreateBranch: () => void;
+  onViewChange: (view: BuilderView) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] text-[#4F5B6A]">
+      <DropdownMenu>
+        <DropdownMenuTrigger className="flex items-center gap-0.5 hover:text-foreground">
+          파일 <ChevronDown className="size-2.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-44">
+          <DropdownMenuItem
+            disabled={!isDirty || isSaving}
+            onSelect={onSave}
+          >
+            변경 사항 저장
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onCreateBranch}>
+            새 브랜치
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DropdownMenu>
+        <DropdownMenuTrigger className="flex items-center gap-0.5 hover:text-foreground">
+          설정 <ChevronDown className="size-2.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuItem onSelect={() => onViewChange("history")}>
+            <Settings2 className="size-3.5" />
+            배포 및 실행 설정
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onCreateBranch}>
+            <GitBranch className="size-3.5" />
+            브랜치 관리
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DropdownMenu>
+        <DropdownMenuTrigger className="flex items-center gap-0.5 hover:text-foreground">
+          도움말 <ChevronDown className="size-2.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-52">
+          <DropdownMenuItem
+            onSelect={() =>
+              window.open(
+                "https://www.palantir.com/docs/foundry/pipeline-builder/overview",
+                "_blank",
+                "noopener,noreferrer",
+              )
+            }
+          >
+            <HelpCircle className="size-3.5" />
+            Pipeline Builder 공개 문서
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

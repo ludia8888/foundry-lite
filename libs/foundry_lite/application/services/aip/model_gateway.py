@@ -25,11 +25,16 @@ One boundary for all LLM access. ``invoke``:
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureKind
 from foundry_lite.application.ports.ai_run_repository import AiModelCallRecord
-from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse
+from foundry_lite.application.ports.language_model import (
+    ModelInvocationRoute,
+    ModelRequest,
+    ModelResolution,
+    ModelResponse,
+)
 from foundry_lite.application.ports.model_registry_repository import (
     ModelAliasRecord,
     ModelProviderRecord,
@@ -44,17 +49,6 @@ _NON_SERVING_LIFECYCLES = frozenset({"sunset", "deprecated"})
 _SERVING_ALIAS_STATUS = "enabled"
 
 
-@dataclass(frozen=True)
-class ModelResolution:
-    """Alias resolution facts that may be recorded before provider execution."""
-
-    provider: str
-    model_id: str
-    revision: str
-    # Per-1k token rates the ledger uses to estimate spend (§10.1 ``ai_models.pricing_json``).
-    pricing_json: dict[str, object] = field(default_factory=dict)
-
-
 class ModelGatewayService(CoreService):
     """Single governed seam: resolve alias, gate egress, forbid silent fallback, invoke, hash."""
 
@@ -65,10 +59,14 @@ class ModelGatewayService(CoreService):
         alias, model, provider = self._resolve(ctx, request.model_alias, request.environment)
         revision = alias.version or model.revision
         self._guard_serving(alias, model)
+        self._guard_expected_resolution(request, model, revision)
         self._guard_egress(request, model, provider)
+        self._guard_provider_contract(request, model, provider)
+        self._guard_adapter_route(provider)
         self._guard_seeded_run(ctx, request)
+        routed_request = replace(request, resolved_route=_invocation_route(ctx, model, provider, revision))
         try:
-            response = self.language_model_adapter.complete(request)
+            response = self.language_model_adapter.complete(routed_request)
         except Exception as exc:
             self._record_model_call(ctx, request, provider.provider_type, revision, None, exc)
             raise
@@ -133,6 +131,27 @@ class ModelGatewayService(CoreService):
                 alias.alias,
             )
 
+    def _guard_expected_resolution(
+        self,
+        request: ModelRequest,
+        model: ModelRecord,
+        revision: str,
+    ) -> None:
+        if request.expected_model_id is not None and request.expected_model_id != model.model_id:
+            raise self._error(
+                "unavailable",
+                "model alias no longer resolves to the promoted model",
+                request.model_alias,
+                reason="model_resolution_pin_mismatch",
+            )
+        if request.expected_model_revision is not None and request.expected_model_revision != revision:
+            raise self._error(
+                "unavailable",
+                "model alias no longer resolves to the promoted revision",
+                request.model_alias,
+                reason="model_resolution_pin_mismatch",
+            )
+
     def _guard_egress(self, request: ModelRequest, model: ModelRecord, provider: ModelProviderRecord) -> None:
         # Export-control marking: classification must be exportable to the destination (§9.3). Fail
         # CLOSED on an unset/empty classification — an unmarked request is never egressed by default.
@@ -155,6 +174,43 @@ class ModelGatewayService(CoreService):
                 f"region {request.region_requirement!r} is not permitted for {provider.provider_type}",
                 model.model_id,
             )
+
+    def _guard_provider_contract(
+        self,
+        request: ModelRequest,
+        model: ModelRecord,
+        provider: ModelProviderRecord,
+    ) -> None:
+        if provider.status != "active":
+            raise self._error("unavailable", f"provider {provider.provider_id} is not active", provider.provider_id)
+        if request.max_output_tokens > model.output_limit:
+            raise self._error(
+                "validation",
+                f"requested output limit exceeds model {model.model_id} capability",
+                model.model_id,
+                reason="model_output_limit_exceeded",
+            )
+        for capability in _required_capabilities(request):
+            if model.capabilities_json.get(capability) is False:
+                raise self._error(
+                    "unsupported",
+                    f"model {model.model_id} does not support {capability}",
+                    model.model_id,
+                    reason="model_capability_unsupported",
+                )
+
+    def _guard_adapter_route(self, provider: ModelProviderRecord) -> None:
+        supported = getattr(self.language_model_adapter, "supported_provider_profiles", ())
+        if not isinstance(supported, tuple) or not supported:
+            return
+        if provider.profile_name in supported:
+            return
+        raise self._error(
+            "unsupported",
+            f"provider profile {provider.profile_name} is not handled by the configured language-model adapter",
+            provider.provider_id,
+            reason="provider_adapter_mismatch",
+        )
 
     def _guard_seeded_run(self, ctx: RequestContext, request: ModelRequest) -> None:
         if not request.ai_run_id:
@@ -213,9 +269,57 @@ def _model_hash(model_id: str, revision: str) -> str:
     return f"sha256:{hashlib.sha256(f'{model_id}@{revision}'.encode()).hexdigest()}"
 
 
+def _invocation_route(
+    ctx: RequestContext,
+    model: ModelRecord,
+    provider: ModelProviderRecord,
+    revision: str,
+) -> ModelInvocationRoute:
+    return ModelInvocationRoute(
+        tenant_id=ctx.tenant_id,
+        provider_type=provider.provider_type,
+        provider_profile=provider.profile_name,
+        provider_model_id=model.provider_model_id,
+        catalog_model_id=model.model_id,
+        model_revision=revision,
+        secret_ref=provider.secret_ref,
+        capabilities=dict(model.capabilities_json),
+        context_limit=model.context_limit,
+        output_limit=model.output_limit,
+    )
+
+
+def _required_capabilities(request: ModelRequest) -> set[str]:
+    required: set[str] = set()
+    if request.response_schema:
+        required.add("structured_outputs")
+    for message in request.messages:
+        for reference in message.media_references:
+            required.add("pdf_input" if reference.mime_type == "application/pdf" else "image_input")
+    return required
+
+
 def _prompt_hash(request: ModelRequest) -> str:
-    joined = "\n".join(f"{message.role}:{message.content}" for message in request.messages)
-    return f"sha256:{hashlib.sha256(joined.encode()).hexdigest()}"
+    if not any(message.media_references for message in request.messages):
+        joined = "\n".join(f"{message.role}:{message.content}" for message in request.messages)
+        return f"sha256:{hashlib.sha256(joined.encode()).hexdigest()}"
+    rows = [
+        {
+            "role": message.role,
+            "content": message.content,
+            "mediaReferences": [
+                {
+                    "mediaItemVersionId": reference.media_item_version_id,
+                    "mimeType": reference.mime_type,
+                    "contentHash": reference.content_hash,
+                    "sourceLocator": dict(reference.source_locator),
+                }
+                for reference in message.media_references
+            ],
+        }
+        for message in request.messages
+    ]
+    return hash_json({"messages": rows})
 
 
 def _model_call_record(

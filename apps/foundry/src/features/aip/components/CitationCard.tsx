@@ -1,8 +1,15 @@
+import { FileSearch, ShieldCheck } from "lucide-react";
 import { forwardRef } from "react";
+import { Link } from "react-router";
 
 import { cn } from "@/lib/utils";
 
-import { type AgentCitationView, asText, shortHash } from "../aip-model";
+import {
+  type AgentCitationView,
+  asText,
+  citationDocumentHref,
+  shortHash,
+} from "../aip-model";
 
 function MetaItem({
   label,
@@ -37,6 +44,8 @@ export const CitationCard = forwardRef<
   { citation: AgentCitationView; isSelected: boolean }
 >(function CitationCard({ citation, isSelected }, ref) {
   const source = citation.source;
+  const evidence = citation.evidence;
+  const documentHref = citationDocumentHref(citation);
   return (
     <div
       ref={ref}
@@ -98,6 +107,73 @@ export const CitationCard = forwardRef<
           </div>
         </div>
       ) : null}
+
+      {evidence ? (
+        <div className="mt-2 rounded border border-[#C8CED6] bg-[#F6F7F9] p-2">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="section-label">Immutable evidence</div>
+            <span className="flex items-center gap-1 text-[9px] text-[#0F6B3E]">
+              <ShieldCheck className="size-3" />
+              open 시 서버 재검증
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+            <MetaItem
+              label="Media version"
+              value={asText(evidence.mediaItemVersionId)}
+              mono
+            />
+            <MetaItem
+              label="Content unit"
+              value={asText(evidence.contentUnitId)}
+              mono
+            />
+            <MetaItem
+              label="Page"
+              value={asText(evidence.pageNumber)}
+            />
+            <MetaItem
+              label="Derivative"
+              value={asText(evidence.derivativeKind)}
+            />
+            <MetaItem
+              label="Processor"
+              value={processorPin(citation)}
+              mono
+            />
+            <MetaItem
+              label="Model"
+              value={modelPin(citation)}
+              mono
+            />
+          </div>
+          {documentHref ? (
+            <Link
+              to={documentHref}
+              className="mt-2 flex h-7 items-center justify-center gap-1.5 rounded-[2px] border border-[#106BA3] bg-[#137CBD] px-2 text-[10px] font-medium text-white hover:bg-[#106BA3] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#137CBD]/40"
+            >
+              <FileSearch className="size-3.5" />
+              원본 근거 열기
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 });
+
+function processorPin(citation: AgentCitationView): string {
+  const evidence = citation.evidence;
+  if (!evidence) return "-";
+  const name = evidence.processorName;
+  const version = evidence.processorVersion;
+  return name && version ? `${name}@${version}` : name ?? version ?? "-";
+}
+
+function modelPin(citation: AgentCitationView): string {
+  const evidence = citation.evidence;
+  if (!evidence) return "-";
+  const name = evidence.modelName;
+  const version = evidence.modelVersion;
+  return name && version ? `${name}@${version}` : name ?? version ?? "-";
+}

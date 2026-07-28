@@ -79,6 +79,54 @@ def test_runtime_error_payload_prefers_explicit_correlation_for_adapter_error() 
     assert "run_id" not in trace
 
 
+def test_runtime_error_payload_preserves_safe_model_stop_evidence() -> None:
+    failure = AdapterFailure(
+        adapter_profile="anthropic",
+        operation="complete",
+        kind="validation",
+        is_retryable=False,
+        operator_message="structured response ended before completion",
+        details={
+            "reason": "structured_output_incomplete",
+            "stopReason": "max_tokens",
+            "outputTokens": 800,
+            "providerRequestId": "msg_safe_identifier",
+        },
+    )
+
+    payload = runtime_error_payload(AdapterError(failure))
+
+    adapter_failure = cast(dict[str, object], payload["adapterFailure"])
+    details = cast(dict[str, object], adapter_failure["details"])
+    assert details == {
+        "reason": "structured_output_incomplete",
+        "stopReason": "max_tokens",
+        "outputTokens": 800,
+        "providerRequestId": "msg_safe_identifier",
+    }
+
+
+def test_runtime_error_payload_preserves_only_structurally_safe_prompt_pins() -> None:
+    payload = runtime_error_payload(
+        ValidationFailed(
+            "semantic trial failed",
+            details={
+                "promptVersionId": "contracts@7",
+                "promptMode": "layout_aware_vision",
+                "promptHash": f"sha256:{'a' * 64}",
+                "nested": {"promptHash": "sk-ant-raw-secret"},
+            },
+        )
+    )
+
+    assert payload["details"] == {
+        "promptVersionId": "contracts@7",
+        "promptMode": "layout_aware_vision",
+        "promptHash": f"sha256:{'a' * 64}",
+        "nested": {"promptHash": "***MASKED***"},
+    }
+
+
 def test_runtime_error_payload_scrubs_secrets_from_messages_and_details() -> None:
     payload = runtime_error_payload(
         RuntimeError("Authorization: Bearer raw-token prompt: reveal customer data"),

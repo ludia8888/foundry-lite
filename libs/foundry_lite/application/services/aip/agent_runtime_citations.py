@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
+from foundry_lite.application.services.aip.citation_navigation import citation_expiry
 from foundry_lite.application.services.aip.citation_service import (
     CitationClaim,
     CitationResolveRequest,
@@ -60,7 +61,7 @@ def resolve_agent_answer_citations(
             message_id=message_id,
             claims=claims,
             issued_at=issued_at,
-            expires_at=issued_at,
+            expires_at=citation_expiry(issued_at),
         ),
     )
     return AgentRuntimeAnswer(

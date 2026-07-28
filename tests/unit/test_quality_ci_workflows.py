@@ -731,6 +731,73 @@ def test_data_platform_sprint_status_gate_runs_after_data_pattern_matrix() -> No
     assert "pnpm quality:data-platform-sprint-status" in package_json
 
 
+def test_pipeline_parity_matrix_is_static_gate_step() -> None:
+    script = _static_lane_text()
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    parity_step = "scripts/quality/check_pipeline_parity_matrix.py"
+    assert parity_step in script
+    assert '"quality:pipeline-parity-matrix"' in package_json
+    assert "pnpm quality:pipeline-parity-matrix" in package_json
+
+
+def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> None:
+    static_driver = (ROOT / "scripts" / "quality" / "run_static_checks.py").read_text(encoding="utf-8")
+    e2e_driver = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
+    static_gates = (
+        "quality:pipeline-graph-v2",
+        "quality:pipeline-artifact-execution",
+        "quality:pipeline-preview",
+        "quality:pipeline-multimodal",
+        "quality:pipeline-scheduler",
+        "quality:pipeline-collaboration",
+        "quality:pipeline-python-isolation",
+        "quality:pipeline-trained-model-sidecar",
+        "quality:pipeline-builder-performance",
+    )
+
+    for gate in static_gates:
+        command = package_scripts[gate]
+        assert "pytest" in command or "scripts/quality/check_pipeline_builder_performance.py" in command
+        assert f'("{gate}", "static")' in static_driver
+        assert f'["pnpm", "--silent", "{gate}"]' in static_driver
+        assert f"pnpm {gate}" in package_scripts["quality:static"]
+
+    assert "infra/code_execution/Dockerfile" in package_scripts["quality:code-execution-image"]
+    isolation_live_gate = "quality:pipeline-python-isolation-live"
+    assert "tests/integration/python_code_execution_container_live.py" in package_scripts[isolation_live_gate]
+    assert "ensure_code_execution_image" in e2e_driver
+    assert f"pnpm --silent {isolation_live_gate}" in e2e_driver
+    assert "infra/trained_model_sidecar/Dockerfile" in package_scripts["quality:trained-model-sidecar-image"]
+    model_live_gate = "quality:pipeline-trained-model-sidecar-live"
+    assert "tests/integration/trained_model_sidecar_container_live.py" in package_scripts[model_live_gate]
+    assert "ensure_trained_model_image" in e2e_driver
+    assert f"pnpm --silent {model_live_gate}" in e2e_driver
+
+    e2e_gate = "quality:pipeline-builder-e2e"
+    assert "tests/e2e-foundry/pipeline-builder-flow.spec.ts" in package_scripts[e2e_gate]
+    assert "playwright.foundry.config.ts" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_API_PORT=8016" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_FRONTEND_PORT=4186" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_E2E_API_BASE_URL=http://127.0.0.1:8016" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_E2E_WEB_BASE_URL=http://127.0.0.1:4186" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_API_PROXY_TARGET=http://127.0.0.1:8016" in package_scripts[e2e_gate]
+    assert "VITE_FOUNDRY_LITE_API_URL=http://127.0.0.1:4186" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_E2E_REUSE_EXISTING=0" in package_scripts[e2e_gate]
+    assert "FOUNDRY_LITE_TRAINED_MODEL_PROFILE=container" in package_scripts[e2e_gate]
+    assert f'("{e2e_gate}", "e2e")' in static_driver
+    assert f"pnpm --silent {e2e_gate}" in e2e_driver
+
+    e2e_api = (ROOT / "scripts" / "e2e_start_api.sh").read_text(encoding="utf-8")
+    foundry_config = (ROOT / "playwright.foundry.config.ts").read_text(encoding="utf-8")
+    assert 'os.environ.get("FOUNDRY_LITE_API_PORT", "8000")' in e2e_api
+    assert "foundryApiBaseUrl" in foundry_config
+    assert "shouldReuseExistingServer" in foundry_config
+    assert 'process.env.FOUNDRY_LITE_E2E_REUSE_EXISTING === "1"' in foundry_config
+    assert "!process.env.CI" not in foundry_config
+
+
 def test_runtime_lane_writes_root_cause_summary_from_failure_trap() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     summary_script = (ROOT / "scripts" / "quality" / "write_runtime_root_cause_summary.py").read_text(encoding="utf-8")
@@ -867,7 +934,7 @@ def test_release_gate_installs_live_media_prerequisites_before_release_gate() ->
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     required_steps = (
-        "Install Tesseract OCR and FFmpeg",
+        "Install Tesseract OCR, Poppler, and FFmpeg",
         "Cache faster-whisper and fastembed models",
         "Pre-fetch faster-whisper tiny model",
         "Pre-fetch fastembed embedding model",
@@ -877,9 +944,9 @@ def test_release_gate_installs_live_media_prerequisites_before_release_gate() ->
     for step in required_steps:
         assert step in workflow
 
-    assert "sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg" in workflow
+    assert "sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg" in workflow
     assert "hf-models-whisper-tiny-bge-small-clip-vit-b32-v1" in workflow
-    assert workflow.index("Install Tesseract OCR and FFmpeg") < workflow.index("Run release evidence gate")
+    assert workflow.index("Install Tesseract OCR, Poppler, and FFmpeg") < workflow.index("Run release evidence gate")
     assert workflow.index("Pre-fetch fastembed CLIP vision/text models") < workflow.index("Run release evidence gate")
 
 

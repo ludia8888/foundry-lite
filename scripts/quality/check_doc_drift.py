@@ -75,6 +75,7 @@ GENERATED_OR_RUNTIME_ROOTS = {
     "artifacts",
     "mutants",
     "node_modules",
+    "test-results",
 }
 DOC_SCAN_IGNORED_ROOTS = {
     ".claude",
@@ -87,6 +88,7 @@ DOC_SCAN_IGNORED_ROOTS = {
     "htmlcov",
     "mutants",
     "node_modules",
+    "test-results",
     "__pycache__",
 }
 EXTERNAL_OR_VALUE_SYMBOLS = {

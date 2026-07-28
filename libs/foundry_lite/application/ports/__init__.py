@@ -50,6 +50,7 @@ from foundry_lite.application.ports.backup_artifact_store import (
 from foundry_lite.application.ports.compute_adapter import (
     ComputeAdapter,
     InputFilePaths,
+    ParquetFieldType,
     PythonTransformPlan,
     SqlTransformPlan,
     TabularRow,
@@ -133,8 +134,8 @@ from foundry_lite.application.ports.dataset_storage import (
     StoredDatasetCommit,
 )
 from foundry_lite.application.ports.dataset_transaction_repository import (
-    DatasetFilePartitionValues,
     DatasetFileRecord,
+    DatasetFileRow,
     DatasetRunError,
     DatasetRunKind,
     DatasetTransactionMetadata,

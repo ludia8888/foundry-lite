@@ -81,6 +81,10 @@ class TransactionEvidence:
     has_audit_or_outbox: bool
 
 
+MethodCallKey = tuple[str, str, str]
+EvidenceCacheKey = tuple[MethodCallKey, frozenset[MethodCallKey]]
+
+
 def _repo_relative(path: Path, project_root: Path = ROOT) -> str:
     try:
         return str(path.relative_to(project_root))
@@ -130,11 +134,21 @@ def _call_uses_transaction(call: ast.Call, transaction_name: str) -> bool:
     )
 
 
-def _service_method_call(call: ast.Call) -> str | None:
+def _service_method_candidates(
+    call: ast.Call,
+    *,
+    class_name: str,
+    methods: dict[tuple[str, str], MethodInfo],
+    methods_by_name: dict[str, list[MethodInfo]],
+) -> list[MethodInfo]:
     call_name = _call_name(call.func)
     if not call_name.startswith("self."):
-        return None
-    return _leaf(call_name)
+        return []
+    method_name = _leaf(call_name)
+    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
+        candidate = methods.get((class_name, method_name))
+        return [candidate] if candidate is not None else []
+    return methods_by_name.get(method_name, [])
 
 
 def _method_transaction_name(caller_transaction_name: str, call: ast.Call, callee: MethodInfo) -> str | None:
@@ -205,7 +219,8 @@ def _analyze_statements(
     transaction_name: str,
     methods: dict[tuple[str, str], MethodInfo],
     methods_by_name: dict[str, list[MethodInfo]],
-    seen: frozenset[tuple[str, str, str]],
+    seen: frozenset[MethodCallKey],
+    evidence_cache: dict[EvidenceCacheKey, TransactionEvidence],
 ) -> TransactionEvidence:
     writes: set[str] = set()
     has_audit_or_outbox = False
@@ -216,7 +231,15 @@ def _analyze_statements(
                 writes.add(call_name)
             if _is_audit_or_outbox(call_name):
                 has_audit_or_outbox = True
-        nested = _nested_transaction_evidence(call, transaction_name, methods_by_name, seen)
+        nested = _nested_transaction_evidence(
+            call,
+            class_name=class_name,
+            transaction_name=transaction_name,
+            methods=methods,
+            methods_by_name=methods_by_name,
+            seen=seen,
+            evidence_cache=evidence_cache,
+        )
         writes.update(nested.writes)
         has_audit_or_outbox = has_audit_or_outbox or nested.has_audit_or_outbox
     return TransactionEvidence(frozenset(writes), has_audit_or_outbox)
@@ -224,30 +247,40 @@ def _analyze_statements(
 
 def _nested_transaction_evidence(
     call: ast.Call,
+    *,
+    class_name: str,
     transaction_name: str,
+    methods: dict[tuple[str, str], MethodInfo],
     methods_by_name: dict[str, list[MethodInfo]],
-    seen: frozenset[tuple[str, str, str]],
+    seen: frozenset[MethodCallKey],
+    evidence_cache: dict[EvidenceCacheKey, TransactionEvidence],
 ) -> TransactionEvidence:
-    method_name = _service_method_call(call)
-    if method_name is None:
-        return TransactionEvidence(frozenset(), False)
     writes: set[str] = set()
     has_audit_or_outbox = False
-    for callee in methods_by_name.get(method_name, []):
+    for callee in _service_method_candidates(
+        call,
+        class_name=class_name,
+        methods=methods,
+        methods_by_name=methods_by_name,
+    ):
         callee_transaction_name = _method_transaction_name(transaction_name, call, callee)
         if callee_transaction_name is None:
             continue
-        key = (callee.class_name, method_name, callee_transaction_name)
+        key = (callee.class_name, callee.name, callee_transaction_name)
         if key in seen:
             continue
-        evidence = _analyze_statements(
-            class_name=callee.class_name,
-            statements=callee.node.body,
-            transaction_name=callee_transaction_name,
-            methods={},
-            methods_by_name=methods_by_name,
-            seen=seen | {key},
-        )
+        cache_key = (key, seen)
+        if cache_key not in evidence_cache:
+            evidence_cache[cache_key] = _analyze_statements(
+                class_name=callee.class_name,
+                statements=callee.node.body,
+                transaction_name=callee_transaction_name,
+                methods=methods,
+                methods_by_name=methods_by_name,
+                seen=seen | {key},
+                evidence_cache=evidence_cache,
+            )
+        evidence = evidence_cache[cache_key]
         writes.update(evidence.writes)
         has_audit_or_outbox = has_audit_or_outbox or evidence.has_audit_or_outbox
     return TransactionEvidence(frozenset(writes), has_audit_or_outbox)
@@ -260,6 +293,7 @@ def collect_findings(
 ) -> list[TransactionFinding]:
     methods = collect_methods(services_root)
     methods_by_name = _methods_by_name(methods)
+    evidence_cache: dict[EvidenceCacheKey, TransactionEvidence] = {}
     findings: list[TransactionFinding] = []
     for method in methods.values():
         if not _is_public_mutation(method.name):
@@ -272,6 +306,7 @@ def collect_findings(
                 methods=methods,
                 methods_by_name=methods_by_name,
                 seen=frozenset({(method.class_name, method.name, transaction_name)}),
+                evidence_cache=evidence_cache,
             )
             if evidence.writes and not evidence.has_audit_or_outbox:
                 findings.append(

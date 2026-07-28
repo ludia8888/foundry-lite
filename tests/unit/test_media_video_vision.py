@@ -23,7 +23,7 @@ from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.content_index import HybridContentQuery
 from foundry_lite.application.ports.embedding_model import EmbeddingModelError, EmbeddingVector
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
-from foundry_lite.application.ports.media_processor import ProcessorSpec
+from foundry_lite.application.ports.media_processor import MediaProcessingRequest, ProcessorSpec
 from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
 from foundry_lite.application.services.media.processing import MediaProcessingService
@@ -39,7 +39,10 @@ from foundry_lite.infrastructure.adapters.local_vision_embedding import (
     CLIP_MODEL_VERSION,
     LocalVisionEmbeddingAdapter,
 )
-from foundry_lite.infrastructure.adapters.video_probe_processor import VideoSceneVisionProcessorAdapter
+from foundry_lite.infrastructure.adapters.video_probe_processor import (
+    VideoProcessingBounds,
+    VideoSceneVisionProcessorAdapter,
+)
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
@@ -56,8 +59,12 @@ _VECTOR_BY_BASENAME = {basename: vector for _, basename, vector in _FRAMES}
 _QUERY_VECTOR = {"a photo of a car": (0.9, 0.1, 0.0), "a photo of a dog": (0.0, 0.1, 0.9)}
 
 
-def _fake_frame_path_extractor(source_path: str, outdir: str) -> list[tuple[int, str]]:
-    del source_path
+def _fake_frame_path_extractor(
+    source_path: str,
+    outdir: str,
+    bounds: VideoProcessingBounds,
+) -> list[tuple[int, str]]:
+    del source_path, bounds
     return [(start_ms, f"{outdir}/{basename}") for start_ms, basename, _ in _FRAMES]
 
 
@@ -197,6 +204,52 @@ def test_default_vision_engine_fails_closed_as_unavailable() -> None:
     assert image_exc.value.reason == "vision_model_unavailable"
     with pytest.raises(EmbeddingModelError):
         adapter.embed_query("a photo of a car")
+
+
+def test_vision_bounds_cap_embedding_inputs_and_return_evidence() -> None:
+    embedded_paths: list[str] = []
+
+    def _tracking_image_engine(image_paths: Sequence[str]) -> list[EmbeddingVector]:
+        embedded_paths.extend(image_paths)
+        return _fake_image_engine(image_paths)
+
+    vision = LocalVisionEmbeddingAdapter(
+        image_engine=_tracking_image_engine,
+        text_engine=_fake_text_engine,
+        model_version=CLIP_MODEL_VERSION,
+    )
+    adapter = VideoSceneVisionProcessorAdapter(
+        vision,
+        scene_frame_path_extractor=_fake_frame_path_extractor,
+    )
+    spec = ProcessorSpec(
+        processor="video_vision_v1",
+        processor_version="1.0",
+        model="clip",
+        model_version="b32",
+        parameters={
+            "requestedProcessingBounds": {"maxDurationMs": 90000, "maxSceneCount": 99},
+            "processingBounds": {"maxDurationMs": 1500, "maxSceneCount": 1},
+        },
+    )
+    request = MediaProcessingRequest(
+        tenant_id="t",
+        media_item_version_id="miv-1",
+        blob_key="blob-1",
+        spec=spec,
+        processing_spec_hash="spec-1",
+        source_path="/sandbox/clip.mp4",
+    )
+
+    result = adapter.process(request)
+
+    assert [Path(path).name for path in embedded_paths] == ["a_car.png"]
+    assert [unit.start_ms for unit in result.units] == [0]
+    assert result.processing_evidence == {
+        "requested": {"maxDurationMs": 90000, "maxSceneCount": 99},
+        "applied": {"maxDurationMs": 1500, "maxSceneCount": 1},
+        "observed": {"unitCount": 1, "maxStartMs": 0},
+    }
 
 
 def test_clip_text_visual_query_ranks_matching_frame_first(env: _Env) -> None:

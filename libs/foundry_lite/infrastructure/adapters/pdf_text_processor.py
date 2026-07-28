@@ -14,6 +14,7 @@ import hashlib
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 from importlib import import_module
 
 from foundry_lite.application.ports.adapter_failure import (
@@ -27,12 +28,25 @@ from foundry_lite.application.ports.media_processor import (
     MediaProcessingResult,
     ProcessedContentUnit,
 )
+from foundry_lite.infrastructure.adapters.pdf_page_selection import (
+    PdfPageSelection,
+    PdfPageSelectionError,
+    pdf_page_selection,
+    selected_page_indexes,
+)
 
 _DERIVATIVE_KIND = "pdf_text"
 _DEFAULT_MAX_PAGES = 5000
 _DEFAULT_TIMEOUT_SECONDS = 30
 
-PageExtractor = Callable[[str, int], Sequence[str]]
+
+@dataclass(frozen=True)
+class PdfExtractedPage:
+    page_number: int
+    text: str
+
+
+PageExtractor = Callable[[str, int, PdfPageSelection], Sequence[PdfExtractedPage]]
 
 
 class PdfDocumentError(Exception):
@@ -44,7 +58,7 @@ class PdfDocumentError(Exception):
         self.page = page
 
 
-def _pypdf_extract(source_path: str, max_pages: int) -> list[str]:
+def _pypdf_extract(source_path: str, max_pages: int, selection: PdfPageSelection) -> list[PdfExtractedPage]:
     pypdf = import_module("pypdf")
     try:
         reader = pypdf.PdfReader(source_path)
@@ -55,7 +69,10 @@ def _pypdf_extract(source_path: str, max_pages: int) -> list[str]:
     pages = reader.pages
     if len(pages) > max_pages:
         raise PdfDocumentError("page_limit_exceeded")
-    return [(page.extract_text() or "") for page in pages]
+    return [
+        PdfExtractedPage(index + 1, pages[index].extract_text() or "")
+        for index in selected_page_indexes(len(pages), selection)
+    ]
 
 
 class PdfTextProcessorAdapter:
@@ -99,16 +116,20 @@ class PdfTextProcessorAdapter:
         if request.source_path is None:
             raise self._error("validation", "pdf processor requires a sandbox source_path", request, is_retryable=False)
         max_pages = _coerce_int(request.spec.parameters.get("maxPages"), _DEFAULT_MAX_PAGES)
-        pages = self._extract_within_timeout(request, max_pages)
+        try:
+            selection = pdf_page_selection(request.spec.parameters)
+        except PdfPageSelectionError as exc:
+            raise self._error("validation", str(exc), request, is_retryable=False) from exc
+        pages = self._extract_within_timeout(request, max_pages, selection)
         units = tuple(
             ProcessedContentUnit(
                 unit_kind="page",
                 ordinal=index,
-                page_number=index + 1,
-                text=text,
-                text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                page_number=page.page_number,
+                text=page.text,
+                text_hash=hashlib.sha256(page.text.encode("utf-8")).hexdigest(),
             )
-            for index, text in enumerate(pages)
+            for index, page in enumerate(pages)
         )
         return MediaProcessingResult(
             media_item_version_id=request.media_item_version_id,
@@ -119,12 +140,17 @@ class PdfTextProcessorAdapter:
             units=units,
         )
 
-    def _extract_within_timeout(self, request: MediaProcessingRequest, max_pages: int) -> Sequence[str]:
+    def _extract_within_timeout(
+        self,
+        request: MediaProcessingRequest,
+        max_pages: int,
+        selection: PdfPageSelection,
+    ) -> Sequence[PdfExtractedPage]:
         assert request.source_path is not None
         # Not a context manager: on timeout we must NOT block on shutdown(wait=True) for a
         # hung extraction — we abandon the worker (shutdown wait=False) and fail closed.
         pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self._page_extractor, request.source_path, max_pages)
+        future = pool.submit(self._page_extractor, request.source_path, max_pages, selection)
         try:
             result = future.result(timeout=self._timeout_seconds)
             pool.shutdown(wait=True)

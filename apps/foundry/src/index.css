@@ -153,3 +153,37 @@
 @utility section-label {
   @apply text-[10px] font-semibold tracking-[0.5px] uppercase text-muted-foreground;
 }
+
+/*
+ * Pipeline Builder는 독립된 고밀도 작업 공간이다.
+ * Palantir 고유 브랜드 자산을 복제하지 않고 공개 화면의 좌표계, hairline,
+ * 캔버스 대비와 키보드 포커스 밀도를 Foundry-lite 토큰으로 재현한다.
+ */
+.pipeline-builder-workspace {
+  --pipeline-hairline: #c5cbd3;
+  --pipeline-canvas: #eef1f4;
+  --pipeline-focus: #2d72d2;
+  background: var(--pipeline-canvas);
+  color: #1c2127;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Noto Sans KR", Roboto, Arial, sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pipeline-builder-workspace :focus-visible {
+  outline: 2px solid var(--pipeline-focus);
+  outline-offset: -2px;
+}
+
+.pipeline-builder-workspace .react-flow__edge-path {
+  stroke: #9aa5b1;
+  stroke-width: 1.35;
+}
+
+.pipeline-builder-workspace .react-flow__selection,
+.pipeline-builder-workspace .react-flow__nodesselection-rect {
+  border: 1px solid #4c90f0;
+  background: rgb(76 144 240 / 8%);
+}

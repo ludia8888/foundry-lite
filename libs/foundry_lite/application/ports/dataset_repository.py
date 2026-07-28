@@ -64,6 +64,27 @@ class DatasetRepository(Protocol):
         """Return the active dataset row for a tenant/ref pair."""
         ...
 
+    def active_dataset_by_ref(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        namespace: str,
+        name: str,
+    ) -> DatasetRow | None:
+        """Return one active tenant-scoped dataset inside the caller transaction."""
+        ...
+
+    def dataset_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> DatasetRow | None:
+        """Return one tenant-scoped dataset row inside the caller transaction."""
+        ...
+
     def list_active_datasets(self, *, tenant_id: str) -> list[DatasetRow]:
         """Return all active dataset rows for one tenant in stable order."""
         ...

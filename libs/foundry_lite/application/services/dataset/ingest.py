@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     ConnectorNetworkRoute,
     DatasetRow,
     DeadLetterRecordRow,
+    ParquetFieldType,
     RestSourceConfig,
     StreamAdapter,
     StreamArchiveConfig,
@@ -38,6 +39,7 @@ from foundry_lite.application.services.dataset.stream_archive_commit import (
     record_stream_read_failure,
     stream_cursor_offset,
 )
+from foundry_lite.application.services.dataset.webhook_signature_context import webhook_signature_context
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -254,7 +256,7 @@ class DatasetIngestService(CoreService):
             signature_timestamp=signature_timestamp,
             secret=secret,
             event_id=event_id,
-            signature_context=_webhook_signature_context(
+            signature_context=webhook_signature_context(
                 ctx,
                 dataset_ref=dataset_ref,
                 connector_name=connector_name,
@@ -470,24 +472,12 @@ class DatasetIngestService(CoreService):
     ) -> None:
         mark_sync_run_committed(self.dataset_transaction_repository, conn, ctx, run_id, result)
 
-    def _rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
-        self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)
-
-
-def _webhook_signature_context(
-    ctx: RequestContext,
-    *,
-    dataset_ref: str,
-    connector_name: str,
-    resource_name: str,
-    require_service_principal_signature: bool,
-) -> webhook_ingest.WebhookSignatureContext | None:
-    if not require_service_principal_signature:
-        return None
-    return webhook_ingest.WebhookSignatureContext(
-        tenant_id=ctx.tenant_id,
-        actor_user_id=ctx.actor_user_id,
-        dataset_ref=dataset_ref,
-        connector_name=connector_name,
-        resource_name=resource_name,
-    )
+    def _rows_to_parquet(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+        *,
+        field_types: Mapping[str, ParquetFieldType] | None = None,
+    ) -> None:
+        self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames, field_types=field_types)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Header, Query, Request, status
 from foundry_lite.domain.errors import FoundryLiteError
 
 from foundry_lite_api import runtime
@@ -16,6 +16,7 @@ from foundry_lite_api.schemas import (
     PipelineDeployRequest,
     PipelineGraphUpdateRequest,
     PipelinePreviewNodeRequest,
+    PipelinePreviewRunCreateRequest,
     PipelineProposalAssignRequest,
     PipelineProposalDecisionRequest,
     PipelineRunStartRequest,
@@ -23,6 +24,30 @@ from foundry_lite_api.schemas import (
 )
 
 router = APIRouter()
+
+
+@router.get("/api/pipelines/node-types")
+def list_pipeline_node_types(request: Request) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.node_types(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/media/processors")
+def list_media_processors(request: Request) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.media_processors(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/pipelines/trained-models")
+def list_pipeline_trained_models(request: Request) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.trained_models(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.post("/api/pipelines/branches")
@@ -152,6 +177,53 @@ def preview_pipeline_node(
             options={"limit": payload.limit},
             ctx=_ctx(request),
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post(
+    "/api/pipelines/branches/{branch_id}/preview-runs",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_pipeline_preview_run(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    branch_id: str,
+    payload: PipelinePreviewRunCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        ctx = _ctx(request)
+        preview = runtime.foundry.pipelines.create_preview_run(
+            branch_id,
+            graph=payload.graph,
+            target_node_id=payload.target_node_id,
+            limits=payload.limits.model_dump(by_alias=True),
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+        background_tasks.add_task(
+            runtime.foundry.pipelines.execute_preview_run,
+            str(preview["id"]),
+            ctx=ctx,
+        )
+        return preview
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/pipelines/preview-runs/{preview_run_id}")
+def get_pipeline_preview_run(request: Request, preview_run_id: str) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.get_preview_run(preview_run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/pipelines/preview-runs/{preview_run_id}/cancel")
+def cancel_pipeline_preview_run(request: Request, preview_run_id: str) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.cancel_preview_run(preview_run_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -323,11 +395,13 @@ def deploy_pipeline_version(
     pipeline_id: str,
     version_id: str,
     payload: PipelineDeployRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
 ) -> JsonObject:
     try:
         return runtime.foundry.pipelines.deploy(
             pipeline_id,
             version_id,
+            idempotency_key=idempotency_key,
             ctx=_ctx(request),
             options=payload.options,
         )
@@ -335,10 +409,34 @@ def deploy_pipeline_version(
         raise _handle_error(exc, request) from exc
 
 
-@router.post("/api/pipelines/{pipeline_id}/runs")
-def start_pipeline_run(request: Request, pipeline_id: str, payload: PipelineRunStartRequest) -> JsonObject:
+@router.get("/api/pipelines/{pipeline_id}/deployments")
+def list_pipeline_deployments(
+    request: Request,
+    pipeline_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> JsonObject:
     try:
-        return runtime.foundry.pipelines.run(pipeline_id, version_id=payload.version_id, ctx=_ctx(request))
+        return runtime.foundry.pipelines.list_deployments(pipeline_id, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/pipelines/{pipeline_id}/runs")
+def start_pipeline_run(
+    request: Request,
+    pipeline_id: str,
+    payload: PipelineRunStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.run(
+            pipeline_id,
+            version_id=payload.version_id,
+            idempotency_key=idempotency_key,
+            parameters=payload.parameters,
+            target_node_ids=payload.target_node_ids,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -348,13 +446,15 @@ def upsert_pipeline_schedule(
     request: Request,
     pipeline_id: str,
     payload: PipelineScheduleUpsertRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
 ) -> JsonObject:
     try:
         return runtime.foundry.pipelines.upsert_schedule(
             pipeline_id,
             version_id=payload.version_id,
-            schedule=payload.schedule,
+            schedule=payload.schedule.model_dump(by_alias=True, exclude_none=True),
             enabled=payload.enabled,
+            idempotency_key=idempotency_key,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:
@@ -369,9 +469,49 @@ def get_pipeline_schedule(request: Request, pipeline_id: str) -> JsonObject | No
         raise _handle_error(exc, request) from exc
 
 
-@router.delete("/api/pipelines/{pipeline_id}/schedule")
-def delete_pipeline_schedule(request: Request, pipeline_id: str) -> JsonObject:
+@router.post("/api/pipelines/{pipeline_id}/schedule/pause")
+def pause_pipeline_schedule(
+    request: Request,
+    pipeline_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
     try:
-        return runtime.foundry.pipelines.delete_schedule(pipeline_id, ctx=_ctx(request))
+        return runtime.foundry.pipelines.pause_schedule(
+            pipeline_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/pipelines/{pipeline_id}/schedule/resume")
+def resume_pipeline_schedule(
+    request: Request,
+    pipeline_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.resume_schedule(
+            pipeline_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.delete("/api/pipelines/{pipeline_id}/schedule")
+def delete_pipeline_schedule(
+    request: Request,
+    pipeline_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.delete_schedule(
+            pipeline_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc

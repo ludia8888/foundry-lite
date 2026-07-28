@@ -92,6 +92,14 @@ class _Quality:
             schema_hash="schema-hash-demo",
         )
 
+    def _resolve_inferred_schema(
+        self,
+        _conn: object,
+        _dataset: object,
+        next_schema: dict[str, object],
+    ) -> dict[str, object]:
+        return next_schema
+
     def _run_dataset_checks(self, *_args: object, **_kwargs: object) -> list[dict[str, object]]:
         return []
 

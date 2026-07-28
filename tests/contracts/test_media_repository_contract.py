@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from foundry_lite.application.ports.media_repository import (
@@ -138,6 +140,44 @@ def test_media_set_create_is_idempotent_and_tenant_scoped(
         assert repo.get_media_sets(transaction=conn, tenant_id="tenant-other", ids=["ms-1"]) == []
 
 
+def test_media_set_concurrent_create_converges_on_unique_winner(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    barrier = Barrier(2, timeout=5)
+
+    def create_media_set(media_set_id: str) -> tuple[str, str | None]:
+        barrier.wait()
+        with engine.begin() as conn:
+            existing = repo.create_media_set_or_get_existing(
+                transaction=conn,
+                record=_media_set(media_set_id),
+            )
+        return media_set_id, existing.media_set_id if existing is not None else None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(create_media_set, ("ms-race-1", "ms-race-2")))
+
+    winner = next(media_set_id for media_set_id, existing_id in results if existing_id is None)
+    replay = next(existing_id for _media_set_id, existing_id in results if existing_id is not None)
+    with engine.begin() as conn:
+        rows = (
+            conn.execute(
+                db.media_sets.select().where(
+                    db.media_sets.c.tenant_id == "tenant-demo",
+                    db.media_sets.c.namespace == "legal",
+                    db.media_sets.c.name == "contracts",
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert replay == winner
+    assert len(rows) == 1
+    assert rows[0]["id"] == winner
+
+
 def test_media_set_lookup_by_id_is_tenant_scoped(
     media_repo: tuple[SqlAlchemyMediaRepository, Engine],
 ) -> None:
@@ -179,6 +219,85 @@ def test_media_transaction_commit_is_cas_and_idempotent(
     )
     # Re-commit is a CAS no-op: the committed_at does not move to the second call.
     assert recommit is not None and recommit.committed_at == "2026-06-23T01:00:00Z"
+
+
+def test_media_transaction_concurrent_open_converges_on_one_winner(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+    barrier = Barrier(2)
+
+    def open_transaction(transaction_id: str) -> tuple[str, str | None]:
+        barrier.wait()
+        with engine.begin() as conn:
+            existing = repo.create_open_transaction(
+                transaction=conn,
+                record=_transaction(transaction_id=transaction_id),
+            )
+        return transaction_id, existing.media_transaction_id if existing is not None else None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(open_transaction, ("mtx-race-1", "mtx-race-2")))
+
+    winner = next(transaction_id for transaction_id, existing_id in results if existing_id is None)
+    replay = next(existing_id for _transaction_id, existing_id in results if existing_id is not None)
+    with engine.begin() as conn:
+        rows = (
+            conn.execute(
+                db.media_transactions.select().where(
+                    db.media_transactions.c.idempotency_key == "idem-1",
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert replay == winner
+    assert len(rows) == 1
+    assert rows[0]["id"] == winner
+
+
+def test_media_item_concurrent_upsert_converges_on_unique_winner(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+    barrier = Barrier(2, timeout=5)
+
+    def upsert_media_item(media_item_id: str) -> tuple[str, str]:
+        barrier.wait()
+        with engine.begin() as conn:
+            item = repo.upsert_media_item(
+                transaction=conn,
+                record=_item(media_item_id),
+            )
+        return media_item_id, item.media_item_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(upsert_media_item, ("mi-race-1", "mi-race-2")))
+
+    returned_ids = {returned_id for _requested_id, returned_id in results}
+    assert len(returned_ids) == 1
+    winner = next(iter(returned_ids))
+    with engine.begin() as conn:
+        rows = (
+            conn.execute(
+                db.media_items.select().where(
+                    db.media_items.c.tenant_id == "tenant-demo",
+                    db.media_items.c.media_set_id == "ms-1",
+                    db.media_items.c.logical_path == "/contracts/acme.pdf",
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert all(returned_id == winner for _requested_id, returned_id in results)
+    assert len(rows) == 1
+    assert rows[0]["id"] == winner
 
 
 def test_media_item_head_cas_yields_single_winner(
@@ -245,6 +364,85 @@ def test_media_version_insert_dedups_and_commits_with_monotonic_numbers(
     assert replay is not None and replay.media_item_version_id == "miv-1"
     assert [version.media_item_version_id for version in committed] == ["miv-1"]
     assert committed[0].status == "COMMITTED" and committed[0].committed_at == "2026-06-23T01:00:00Z"
+
+
+def test_fetch_transaction_versions_returns_all_statuses_and_is_tenant_scoped(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_open_transaction(transaction=conn, record=_transaction())
+        repo.upsert_media_item(transaction=conn, record=_item())
+        repo.insert_version(
+            transaction=conn,
+            record=_version("miv-1", version_number=1, blob_key="blob-1", content_hash="h1"),
+        )
+        versions = repo.fetch_transaction_versions(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_transaction_id="mtx-1",
+        )
+        other_tenant = repo.fetch_transaction_versions(
+            transaction=conn,
+            tenant_id="tenant-other",
+            media_transaction_id="mtx-1",
+        )
+
+    assert [version.media_item_version_id for version in versions] == ["miv-1"]
+    assert [version.status for version in versions] == ["STAGED"]
+    assert other_tenant == []
+
+
+def test_media_set_selection_is_committed_tenant_scoped_and_supports_exact_versions(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_open_transaction(transaction=conn, record=_transaction())
+        repo.upsert_media_item(transaction=conn, record=_item())
+        repo.insert_version(
+            transaction=conn,
+            record=_version("miv-1", version_number=1, blob_key="blob-1", content_hash="h1"),
+        )
+        repo.commit_staged_versions(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_transaction_id="mtx-1",
+            committed_at="2026-06-23T01:00:00Z",
+        )
+        repo.cas_item_head_version(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_item_id="mi-1",
+            expected_head_version_id=None,
+            new_head_version_id="miv-1",
+            updated_at="2026-06-23T01:00:01Z",
+        )
+        current = repo.select_media_set_versions(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_set_id="ms-1",
+            logical_path_prefix="/contracts/",
+        )
+        exact = repo.select_media_set_versions(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_set_id="ms-1",
+            media_item_version_ids=["miv-1"],
+        )
+        other_tenant = repo.select_media_set_versions(
+            transaction=conn,
+            tenant_id="tenant-other",
+            media_set_id="ms-1",
+        )
+
+    assert [(item.logical_path, item.version.media_item_version_id) for item in current] == [
+        ("/contracts/acme.pdf", "miv-1")
+    ]
+    assert [item.version.media_item_version_id for item in exact] == ["miv-1"]
+    assert other_tenant == []
 
 
 def test_fetch_unreachable_staged_versions_finds_aborted_transaction_versions(

@@ -468,6 +468,33 @@ export function createEmptyAppDefinition(): AppDefinition {
   };
 }
 
+/** Keep the legacy representative page alias synchronized with canonical pages. */
+export function withAppPages(
+  definition: AppDefinition,
+  pages: AppPage[],
+): AppDefinition {
+  const representative =
+    pages.find((page) => page.isDefault) ??
+    pages.find((page) => page.id === definition.page.id) ??
+    pages[0] ??
+    definition.page;
+  return { ...definition, page: representative, pages };
+}
+
+/** Replace one page while preserving the `page`/`pages` compatibility invariant. */
+export function replaceAppPage(
+  definition: AppDefinition,
+  nextPage: AppPage,
+): AppDefinition {
+  const hasPage = definition.pages.some((page) => page.id === nextPage.id);
+  const pages = hasPage
+    ? definition.pages.map((page) =>
+        page.id === nextPage.id ? nextPage : page,
+      )
+    : [...definition.pages, nextPage];
+  return withAppPages({ ...definition, page: nextPage }, pages);
+}
+
 export function loadAppDefinition(): AppDefinition {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -481,10 +508,11 @@ export function loadAppDefinition(): AppDefinition {
 
 /** 보조 로컬 캐시: 서버 저장 실패·오프라인에서도 마지막 상태를 복구한다. */
 export function saveAppDefinition(definition: AppDefinition): AppDefinition {
+  const synchronized = replaceAppPage(definition, definition.page);
   const next: AppDefinition = {
-    ...definition,
+    ...synchronized,
     savedAt: new Date().toISOString(),
-    version: definition.version + 1,
+    version: synchronized.version + 1,
   };
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));

@@ -9,6 +9,9 @@ from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.media.access_patterns import MediaAccessPatternService
 from foundry_lite.application.services.media.binding import MediaReferenceBindingService
 from foundry_lite.application.services.media.catalog import MediaCatalogService
+from foundry_lite.application.services.media.content_chunking import (
+    ContentUnitChunkingService,
+)
 from foundry_lite.application.services.media.indexing import MediaIndexingService
 from foundry_lite.application.services.media.processing import MediaProcessingService
 from foundry_lite.application.services.media.references import MediaReferenceService
@@ -29,6 +32,7 @@ class MediaServices:
     upload: MediaUploadService
     reference: MediaReferenceService
     processing: MediaProcessingService
+    chunking: ContentUnitChunkingService
     indexing: MediaIndexingService
     retrieval: DefaultContentRetrievalService
     visual_search: MediaVisualSearchService
@@ -45,6 +49,7 @@ class MediaServices:
             upload=build_service(MediaUploadService, dependencies),
             reference=build_service(MediaReferenceService, dependencies),
             processing=build_service(MediaProcessingService, dependencies),
+            chunking=build_service(ContentUnitChunkingService, dependencies),
             indexing=build_service(MediaIndexingService, dependencies),
             retrieval=build_service(DefaultContentRetrievalService, dependencies),
             visual_search=build_service(MediaVisualSearchService, dependencies),
@@ -61,6 +66,7 @@ class MediaServices:
             self.upload,
             self.reference,
             self.processing,
+            self.chunking,
             self.indexing,
             self.retrieval,
             self.visual_search,

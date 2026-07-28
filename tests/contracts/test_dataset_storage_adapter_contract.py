@@ -231,6 +231,56 @@ def test_local_storage_adapter_rejects_manifest_without_files(tmp_path: Path) ->
         adapter.first_data_file_path(str(manifest_path))
 
 
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(lambda root: LocalDatasetStorageAdapter(root), id="local"),
+        pytest.param(lambda root: FakeDatasetStorageAdapter(root), id="fake-storage"),
+    ],
+)
+def test_dataset_storage_adapter_rejects_same_size_file_tampering_on_read(
+    factory: StorageFactory,
+    tmp_path: Path,
+) -> None:
+    adapter = factory(tmp_path / "object-storage")
+    staged = adapter.staging_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        transaction_id="dstx_demo",
+        file_name="part-00000.parquet",
+    )
+    staged.write_bytes(b"original committed bytes")
+    stored = adapter.commit_staged_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id="dsv_demo",
+        dataset_ref="raw.orders",
+        schema_hash="schema_hash_demo",
+        staged_file=staged,
+        row_count=1,
+        created_at="2026-06-10T00:00:00Z",
+    )
+    stored.data_file_path.write_bytes(b"x" * stored.data_file_path.stat().st_size)
+
+    with pytest.raises(ValueError, match="content hash"):
+        adapter.data_file_paths(stored.manifest_uri)
+
+
+def test_local_storage_adapter_rejects_manifest_file_outside_storage_root(tmp_path: Path) -> None:
+    adapter = LocalDatasetStorageAdapter(tmp_path / "object-storage")
+    outside = tmp_path / "outside.parquet"
+    outside.write_bytes(b"outside bytes")
+    manifest_path = adapter.root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({"files": [_manifest_file(outside)]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="outside the configured storage root"):
+        adapter.data_file_paths(str(manifest_path))
+
+
 def test_local_storage_commit_verifies_manifest_file_reference(tmp_path: Path) -> None:
     adapter = LocalDatasetStorageAdapter(tmp_path / "object-storage")
     manifest_path, data_path, manifest_file = _manifest_fixture(tmp_path, file_uri=str(tmp_path / "wrong.parquet"))

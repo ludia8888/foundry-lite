@@ -969,6 +969,11 @@ Pipeline Builder screens can now work graph-first: create a branch, save nodes/e
 CAS fingerprint, validate the graph, preview/stats a node, run tests, send the branch to review, deploy an approved
 version, start/cancel runs, and manage schedules through `client.pipelines.*`.
 
+Production run cancellation is intentionally safe and pre-execution only in the current synchronous runtime. The
+server atomically moves a run from `running` to `executing` before any node side effect. A cancel request that wins
+first records terminal `cancelled` evidence; a request after `executing` is rejected instead of claiming a cancellation
+that could race a committed output. Cooperative mid-run cancellation is not implemented yet.
+
 ```ts
 import { createPipelineBuilderRecipe } from "@foundry-lite/sdk/screen-recipes";
 

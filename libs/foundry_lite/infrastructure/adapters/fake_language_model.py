@@ -19,6 +19,7 @@ class FakeLanguageModel:
     """Echoing ``LanguageModelAdapter`` (profile ``fake-language-model``)."""
 
     profile_name = "fake-language-model"
+    supported_provider_profiles: tuple[str, ...] = ("fake-language-model", "local-fake")
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         content = self._echo(request)

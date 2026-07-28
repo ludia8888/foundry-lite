@@ -6,10 +6,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from foundry_lite.application.dependency_aip import AipDependencies
 from foundry_lite.application.dependency_compat import (
     BundleFactory,
     apply_flat_dependency_overrides,
+    assign_dependency_bundles,
+    dependency_bundles,
     fill_missing_bundles_from_flat_overrides,
+    preserve_media_processor_override,
+    required_dependency,
+)
+from foundry_lite.application.dependency_media import (
+    ContentIndexAdapter,
+    ExternalMediaReader,
+    MediaAccessCacheRepository,
+    MediaDependencies,
+    MediaDerivativeRepository,
+    MediaPreviewRendererAdapter,
+    MediaProcessorAdapter,
+    MediaProcessorRegistry,
+    MediaReferenceBindingRepository,
+    MediaRepository,
+    MediaStorageAdapter,
 )
 from foundry_lite.application.ports import (
     ActionRepository,
@@ -40,32 +58,26 @@ from foundry_lite.application.ports.citation_source import CitationSourceVerifie
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
-from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
-from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
-from foundry_lite.application.ports.language_model import LanguageModelAdapter
-from foundry_lite.application.ports.media_access_cache_repository import MediaAccessCacheRepository
-from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
-from foundry_lite.application.ports.media_preview_renderer import MediaPreviewRendererAdapter
-from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
-from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRepository
-from foundry_lite.application.ports.media_repository import MediaRepository
-from foundry_lite.application.ports.media_storage import MediaStorageAdapter
+from foundry_lite.application.ports.language_model import GovernedSemanticModelPort, LanguageModelAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
+from foundry_lite.application.ports.pipeline_execution_repository import PipelineExecutionRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
+from foundry_lite.application.ports.semantic_row_cache_repository import SemanticRowCacheRepository
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
 from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
+from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.runtime_profile import RuntimeProfile
@@ -101,6 +113,7 @@ class DataDependencies:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
     pipeline_repository: PipelineRepository
+    pipeline_execution_repository: PipelineExecutionRepository
     resource_catalog_repository: ResourceCatalogRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
@@ -129,34 +142,6 @@ class RuntimeDependencies:
     stream_adapter: StreamAdapter
     workflow_adapter: WorkflowAdapter
     backup_artifact_store: BackupArtifactStore
-
-
-@dataclass(frozen=True)
-class AipDependencies:
-    ai_eval_repository: AiEvalRepository
-    ai_run_repository: AiRunRepository
-    embedding_model_adapter: EmbeddingModelAdapter
-    completion_model_adapter: CompletionModelAdapter
-    vision_embedding_model_adapter: VisionEmbeddingModelAdapter
-    language_model_adapter: LanguageModelAdapter
-    model_registry_repository: ModelRegistryRepository
-    context_provider: ContextProvider
-    prompt_artifact_store: object
-    citation_source_verifier: CitationSourceVerifier
-    tool_executor: ToolExecutor
-
-
-@dataclass(frozen=True)
-class MediaDependencies:
-    media_repository: MediaRepository
-    media_derivative_repository: MediaDerivativeRepository
-    media_reference_binding_repository: MediaReferenceBindingRepository
-    media_access_cache_repository: MediaAccessCacheRepository
-    media_storage: MediaStorageAdapter
-    media_processor: MediaProcessorAdapter
-    media_preview_renderer: MediaPreviewRendererAdapter
-    external_media_reader: ExternalMediaReader
-    content_index_adapter: ContentIndexAdapter
 
 
 @dataclass(frozen=True)
@@ -199,29 +184,21 @@ class CoreDependencies:
         profile: RuntimeProfile | str | None = None,
         **flat_overrides: object,
     ) -> None:
-        bundles: dict[str, object | None] = {
-            "paths": paths,
-            "security": security,
-            "action": action,
-            "data": data,
-            "object_store": object_store,
-            "runtime": runtime,
-            "aip": aip,
-            "media": media,
-            "source": source,
-        }
+        bundles = dependency_bundles(
+            paths=paths,
+            security=security,
+            action=action,
+            data=data,
+            object_store=object_store,
+            runtime=runtime,
+            aip=aip,
+            media=media,
+            source=source,
+        )
+        preserve_media_processor_override(flat_overrides)
         fill_missing_bundles_from_flat_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
         apply_flat_dependency_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
-
-        object.__setattr__(self, "paths", cast(PathDependencies, bundles["paths"]))
-        object.__setattr__(self, "security", cast(SecurityDependencies, bundles["security"]))
-        object.__setattr__(self, "action", cast(ActionDependencies, bundles["action"]))
-        object.__setattr__(self, "data", cast(DataDependencies, bundles["data"]))
-        object.__setattr__(self, "object_store", cast(ObjectDependencies, bundles["object_store"]))
-        object.__setattr__(self, "runtime", cast(RuntimeDependencies, bundles["runtime"]))
-        object.__setattr__(self, "aip", cast(AipDependencies, bundles["aip"]))
-        object.__setattr__(self, "media", cast(MediaDependencies, bundles["media"]))
-        object.__setattr__(self, "source", cast(SourceDependencies, bundles["source"]))
+        assign_dependency_bundles(self, bundles)
         object.__setattr__(self, "profile", RuntimeProfile.from_value(profile))
 
     @property
@@ -283,6 +260,10 @@ class CoreDependencies:
     @property
     def pipeline_repository(self) -> PipelineRepository:
         return self.data.pipeline_repository
+
+    @property
+    def pipeline_execution_repository(self) -> PipelineExecutionRepository:
+        return self.data.pipeline_execution_repository
 
     @property
     def transform_repository(self) -> TransformRepository:
@@ -393,8 +374,20 @@ class CoreDependencies:
         return self.aip.language_model_adapter
 
     @property
+    def governed_semantic_model_port(self) -> GovernedSemanticModelPort:
+        return required_dependency(self.aip.governed_semantic_model_port, "governed semantic model port unavailable")
+
+    @property
+    def trained_model_inference_port(self) -> TrainedModelInferencePort:
+        return required_dependency(self.aip.trained_model_inference_port, "trained model inference port unavailable")
+
+    @property
     def model_registry_repository(self) -> ModelRegistryRepository:
         return self.aip.model_registry_repository
+
+    @property
+    def semantic_row_cache_repository(self) -> SemanticRowCacheRepository:
+        return self.aip.semantic_row_cache_repository
 
     @property
     def context_provider(self) -> ContextProvider:
@@ -435,6 +428,10 @@ class CoreDependencies:
     @property
     def media_processor(self) -> MediaProcessorAdapter:
         return self.media.media_processor
+
+    @property
+    def media_processor_registry(self) -> MediaProcessorRegistry | None:
+        return self.media.media_processor_registry
 
     @property
     def media_preview_renderer(self) -> MediaPreviewRendererAdapter:

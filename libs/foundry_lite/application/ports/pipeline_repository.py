@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 JsonObject = dict[str, object]
+
+
+def _empty_json_object_list() -> list[JsonObject]:
+    return []
 
 
 class PipelineBranchRow(TypedDict):
@@ -20,6 +24,7 @@ class PipelineBranchRow(TypedDict):
     base_graph: JsonObject
     graph: JsonObject
     graph_fingerprint: str
+    graph_schema_version: int
     created_by: str
     created_at: str
     updated_at: str
@@ -38,6 +43,7 @@ class PipelineProposalRow(TypedDict):
     status: str
     graph: JsonObject
     graph_fingerprint: str
+    graph_schema_version: int
     assigned_to: str | None
     decision: str | None
     decision_comment: str | None
@@ -54,6 +60,10 @@ class PipelineVersionRow(TypedDict):
     version_number: int
     graph: JsonObject
     graph_fingerprint: str
+    graph_schema_version: int
+    execution_plan: JsonObject | None
+    plan_fingerprint: str | None
+    compiler_version: str | None
     proposal_id: str
     created_by: str
     created_at: str
@@ -66,6 +76,13 @@ class PipelineRunRow(TypedDict):
     pipeline_id: str
     version_id: str
     status: str
+    idempotency_key: str | None
+    request_fingerprint: str | None
+    plan_fingerprint: str | None
+    workflow_run_id: str | None
+    parameters: JsonObject | None
+    target_node_ids: list[str] | None
+    outputs: list[JsonObject]
     output_dataset_ref: str | None
     output_version_id: str | None
     timeline: list[JsonObject]
@@ -82,9 +99,34 @@ class PipelineScheduleRow(TypedDict):
     version_id: str
     schedule: JsonObject
     enabled: bool
+    status: str
     updated_by: str
     updated_at: str
     last_tick_at: str | None
+    last_slot_at: str | None
+    trigger_type: str | None
+    timezone: str | None
+    next_due_at: str | None
+    lease_owner: str | None
+    lease_token: str | None
+    lease_expires_at: str | None
+    fencing_token: int
+    failure_count: int
+    paused_reason: str | None
+    last_failure_at: str | None
+    last_error: JsonObject | None
+
+
+class PipelineScheduleOperationRow(TypedDict):
+    id: str
+    tenant_id: str
+    pipeline_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    result: JsonObject | None
+    created_by: str
+    created_at: str
 
 
 class PipelineTestResultRow(TypedDict):
@@ -111,6 +153,7 @@ class PipelineBranchRecord:
     created_by: str
     created_at: str
     updated_at: str
+    graph_schema_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -125,6 +168,7 @@ class PipelineProposalRecord:
     graph_fingerprint: str
     created_by: str
     created_at: str
+    graph_schema_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -138,6 +182,7 @@ class PipelineVersionRecord:
     proposal_id: str
     created_by: str
     created_at: str
+    graph_schema_version: int = 1
 
 
 @dataclass(frozen=True)
@@ -154,6 +199,13 @@ class PipelineRunRecord:
     created_by: str
     started_at: str
     completed_at: str | None
+    idempotency_key: str | None = None
+    request_fingerprint: str | None = None
+    plan_fingerprint: str | None = None
+    workflow_run_id: str | None = None
+    parameters: JsonObject | None = None
+    target_node_ids: list[str] | None = None
+    outputs: list[JsonObject] = field(default_factory=_empty_json_object_list)
 
 
 @dataclass(frozen=True)
@@ -164,8 +216,25 @@ class PipelineScheduleRecord:
     version_id: str
     schedule: JsonObject
     enabled: bool
+    status: str
+    trigger_type: str
+    timezone: str
+    next_due_at: str | None
     updated_by: str
     updated_at: str
+    paused_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class PipelineScheduleOperationRecord:
+    operation_id: str
+    tenant_id: str
+    pipeline_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    created_by: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -209,6 +278,7 @@ class PipelineRepository(Protocol):
         graph: JsonObject,
         graph_fingerprint: str,
         updated_at: str,
+        graph_schema_version: int = 1,
     ) -> PipelineBranchRow | None: ...
 
     def rebase_branch(
@@ -224,6 +294,7 @@ class PipelineRepository(Protocol):
         graph_fingerprint: str,
         rebased_at: str,
         updated_at: str,
+        graph_schema_version: int = 1,
     ) -> PipelineBranchRow | None: ...
 
     def set_branch_proposal(
@@ -297,12 +368,33 @@ class PipelineRepository(Protocol):
     ) -> list[PipelineVersionRow]: ...
 
     def mark_version_deployed(
-        self, *, transaction: TransactionContext, tenant_id: str, version_id: str, deployed_at: str
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        version_id: str,
+        execution_plan: JsonObject,
+        plan_fingerprint: str,
+        compiler_version: str,
+        deployed_at: str,
     ) -> PipelineVersionRow | None: ...
 
     def insert_run(self, *, transaction: TransactionContext, record: PipelineRunRecord) -> PipelineRunRow: ...
 
     def run_by_id(self, *, transaction: TransactionContext, tenant_id: str, run_id: str) -> PipelineRunRow | None: ...
+
+    def run_by_idempotency_key(
+        self, *, transaction: TransactionContext, tenant_id: str, idempotency_key: str
+    ) -> PipelineRunRow | None: ...
+
+    def claim_run_execution(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        timeline: list[JsonObject],
+    ) -> PipelineRunRow | None: ...
 
     def update_run_terminal(
         self,
@@ -313,6 +405,7 @@ class PipelineRepository(Protocol):
         transition: StatusTransition,
         output_dataset_ref: str | None,
         output_version_id: str | None,
+        outputs: list[JsonObject] | None = None,
         timeline: list[JsonObject],
         error: JsonObject | None,
         completed_at: str,
@@ -329,8 +422,61 @@ class PipelineRepository(Protocol):
     def delete_schedule(self, *, transaction: TransactionContext, tenant_id: str, pipeline_id: str) -> bool: ...
 
     def list_due_schedules(
-        self, *, transaction: TransactionContext, tenant_id: str, limit: int
+        self, *, transaction: TransactionContext, tenant_id: str, due_at: str, limit: int
     ) -> list[PipelineScheduleRow]: ...
+
+    def claim_due_schedule(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        schedule_id: str,
+        due_at: str,
+        lease_owner: str,
+        lease_token: str,
+        lease_expires_at: str,
+    ) -> PipelineScheduleRow | None: ...
+
+    def complete_schedule_tick(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        schedule_id: str,
+        lease_token: str,
+        fencing_token: int,
+        values: JsonObject,
+    ) -> PipelineScheduleRow | None: ...
+
+    def update_schedule_status(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        pipeline_id: str,
+        status: str,
+        enabled: bool,
+        next_due_at: str | None,
+        paused_reason: str | None,
+        updated_by: str,
+        updated_at: str,
+    ) -> PipelineScheduleRow | None: ...
+
+    def reserve_schedule_operation(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: PipelineScheduleOperationRecord,
+    ) -> tuple[PipelineScheduleOperationRow, bool]: ...
+
+    def complete_schedule_operation(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        operation_id: str,
+        result: JsonObject,
+    ) -> PipelineScheduleOperationRow | None: ...
 
     def insert_test_result(
         self, *, transaction: TransactionContext, record: PipelineTestResultRecord

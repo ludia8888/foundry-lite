@@ -5,7 +5,9 @@ const DEMO_HEADERS = {
   "X-User-ID": "web-demo-operator",
   "X-Roles": "ops_manager,data_engineer,finance,aip_prompt_artifact_reader",
 };
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = (
+  process.env.FOUNDRY_LITE_E2E_API_BASE_URL ?? "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
 
 type WorkshopDefinition = {
   page: { name: string };
@@ -62,8 +64,67 @@ async function waitForWorkshopReady(page: Page): Promise<void> {
 }
 
 async function pageNameInput(page: Page) {
-  return page.locator("input").first();
+  return page.getByRole("textbox", { name: "페이지 이름" });
 }
+
+test("Workshop builder stays editable while the active Ontology is missing", async ({
+  page,
+}) => {
+  await page.route("**/api/ontology/catalog", async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({
+        detail: {
+          code: "NOT_FOUND",
+          message: "active ontology not found",
+          details: {},
+          request_id: "workshop-missing-ontology-e2e",
+        },
+      }),
+    });
+  });
+
+  await page.goto("/workshop");
+
+  await expect(page.getByText("온톨로지 미연결")).toBeVisible();
+  await expect(page.getByText("빌더 편집 가능 · 런타임은 Ontology 필요")).toBeVisible();
+  await expect(await pageNameInput(page)).toBeEditable();
+
+  await page.getByRole("button", { name: "런타임" }).click();
+  await expect(page.getByText("활성 온톨로지가 없습니다")).toBeVisible();
+  await page.getByRole("button", { name: "빌더" }).click();
+  await expect(await pageNameInput(page)).toBeEditable();
+});
+
+test("Workshop exposes the rich template and full widget catalogs", async ({
+  page,
+}) => {
+  await page.goto("/workshop");
+  await waitForWorkshopReady(page);
+
+  await page.getByRole("button", { name: "템플릿으로 시작" }).click();
+  await expect(
+    page.getByRole("heading", { name: "템플릿으로 시작" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /운영 대시보드/ }).click();
+
+  await expect(await pageNameInput(page)).toHaveValue("대시보드");
+  await expect(page.getByText("메트릭 카드", { exact: true })).toBeVisible();
+  await expect(page.getByText("막대 차트", { exact: true })).toBeVisible();
+  await expect(page.getByText("파이 차트", { exact: true })).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "메트릭 카드 위젯 선택" })
+    .first()
+    .click();
+  await expect(page.getByText("metricCard", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "위젯 추가" }).first().click();
+  await expect(page.getByRole("dialog")).toContainText("AIP 챗봇");
+  await expect(page.getByRole("dialog")).toContainText("타임라인");
+  await expect(page.getByRole("dialog")).toContainText("버튼 그룹");
+});
 
 test("Workshop saves its app definition to the backend resource catalog and reloads it without localStorage", async ({
   page,

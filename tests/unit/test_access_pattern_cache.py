@@ -227,6 +227,28 @@ def test_access_pattern_renderer_unavailable_fails_closed(env: _Env) -> None:
         service.preview(env.ctx, media_item_version_id=env.version_id, access_pattern=_THUMBNAIL)
 
 
+def test_access_pattern_rejects_bytes_changed_after_storage_stat(
+    env: _Env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renderer = _RecordingRenderer()
+    monkeypatch.setattr(
+        env.storage,
+        "open_stream",
+        lambda _blob_key: io.BytesIO(b"tampered"),
+    )
+
+    with pytest.raises(InvariantViolation) as captured:
+        _service(env, renderer).preview(
+            env.ctx,
+            media_item_version_id=env.version_id,
+            access_pattern=_THUMBNAIL,
+        )
+
+    assert captured.value.details["reason"] == "stream_size_mismatch"
+    assert renderer.calls == 0
+
+
 def test_reference_resolve_never_reads_access_cache(env: _Env) -> None:
     # Populate a cache, then poison it; resolving the reference must still return the committed
     # source bytes' hash, proving reference resolution reads the source, never the cache.

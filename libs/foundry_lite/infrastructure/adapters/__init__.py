@@ -1,7 +1,12 @@
 """Concrete infrastructure adapters."""
 
+from foundry_lite.infrastructure.adapters.anthropic_language_model import AnthropicLanguageModel
 from foundry_lite.infrastructure.adapters.asr_processor import AsrProcessorAdapter
 from foundry_lite.infrastructure.adapters.compute import DuckDBComputeAdapter, FakeComputeAdapter
+from foundry_lite.infrastructure.adapters.container_code_execution import ContainerCodeExecutionAdapter
+from foundry_lite.infrastructure.adapters.content_unit_citation_source_verifier import (
+    AuthoritativeCitationSourceVerifier,
+)
 from foundry_lite.infrastructure.adapters.dataset_storage import (
     FakeDatasetStorageAdapter,
     LocalDatasetStorageAdapter,
@@ -40,7 +45,10 @@ from foundry_lite.infrastructure.adapters.local_external_media_reader import (
 )
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
+from foundry_lite.infrastructure.adapters.model_media_resolver import RepositoryModelMediaResolver
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
+from foundry_lite.infrastructure.adapters.pdf_layout_processor import PdfLayoutProcessorAdapter
+from foundry_lite.infrastructure.adapters.pdf_ocr_processor import PdfOcrProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
 from foundry_lite.infrastructure.adapters.provider_compatible_language_model import ProviderCompatibleLanguageModel
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
@@ -77,6 +85,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 
 __all__ = [
     "DuckDBComputeAdapter",
+    "ContainerCodeExecutionAdapter",
     "DebeziumPostgresSourceConfig",
     "DebeziumPostgresStreamAdapter",
     "FakeConnectorAdapter",
@@ -106,8 +115,13 @@ __all__ = [
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
     "AsrProcessorAdapter",
+    "AnthropicLanguageModel",
+    "AuthoritativeCitationSourceVerifier",
     "ImageProcessorAdapter",
     "OcrProcessorAdapter",
+    "RepositoryModelMediaResolver",
+    "PdfLayoutProcessorAdapter",
+    "PdfOcrProcessorAdapter",
     "PdfTextProcessorAdapter",
     "VideoProbeProcessorAdapter",
     "VideoSceneFrameProcessorAdapter",

@@ -21,7 +21,15 @@ from foundry_lite.application.ports.media_processor import (
     ProcessedContentUnit,
     ProcessorSpec,
 )
+from foundry_lite.application.ports.media_processor_registry import (
+    MediaProcessorDescriptor,
+    MediaProcessorRegistration,
+    ProcessorModelDescriptor,
+    ProcessorPreviewCapability,
+    ProcessorResourceRequirements,
+)
 from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
+from foundry_lite.application.services.media.content_unit_metadata import source_locator_payload
 from foundry_lite.application.services.media.processing import MediaProcessingService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
@@ -29,6 +37,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
+from foundry_lite.infrastructure.adapters.media_processor_registry import StaticMediaProcessorRegistry
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from sqlalchemy import create_engine
 
@@ -59,6 +68,7 @@ class _FakeProcessor:
 
     def __init__(self) -> None:
         self.fail_with: AdapterError | None = None
+        self.last_request: MediaProcessingRequest | None = None
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
@@ -67,10 +77,21 @@ class _FakeProcessor:
         return True
 
     def process(self, request: MediaProcessingRequest) -> MediaProcessingResult:
+        self.last_request = request
         if self.fail_with is not None:
             raise self.fail_with
         units = tuple(
-            ProcessedContentUnit(unit_kind="page", ordinal=i, page_number=i + 1, text=f"page {i}", text_hash=f"h{i}")
+            ProcessedContentUnit(
+                unit_kind="page",
+                ordinal=i,
+                page_number=i + 1,
+                text=f"page {i}",
+                text_hash=f"h{i}",
+                bbox={"x": 10, "y": 20, "width": 100, "height": 30, "unit": "pt"},
+                source_locator={"pageNumber": i + 1, "blockId": f"block-{i}"},
+                structure={"kind": "paragraph"},
+                confidence=0.95,
+            )
             for i in range(2)
         )
         return MediaProcessingResult(
@@ -80,6 +101,37 @@ class _FakeProcessor:
             content_hash="content-1",
             units=units,
         )
+
+
+class _RejectingProcessor(_FakeProcessor):
+    def supports(self, request: MediaProcessingRequest) -> bool:
+        return False
+
+
+def _registry(processor: _FakeProcessor, *, version: str = "1.0.0") -> StaticMediaProcessorRegistry:
+    descriptor = MediaProcessorDescriptor(
+        processor="pdf_text_v1",
+        processor_version=version,
+        adapter_profile=processor.profile_name,
+        input_formats=("pdf",),
+        output_kinds=("pdf_text",),
+        model=ProcessorModelDescriptor("fake-pdf", "1"),
+        resources=ProcessorResourceRequirements(1, 128),
+        preview=ProcessorPreviewCapability("bounded", max_media_items=1),
+    )
+    return StaticMediaProcessorRegistry((MediaProcessorRegistration(descriptor, processor),))
+
+
+def _registry_processing(env: _Env, registry: StaticMediaProcessorRegistry) -> MediaProcessingService:
+    processing = MediaProcessingService(
+        engine=env.engine,
+        media_repository=env.processing.media_repository,
+        media_derivative_repository=env.derivative_repo,
+        media_storage=env.processing.media_storage,
+        media_processor_registry=registry,
+    )
+    processing.bind_collaborators({"runtime_service": env.runtime})
+    return processing
 
 
 @dataclass(frozen=True)
@@ -187,11 +239,81 @@ def env(tmp_path: Path) -> _Env:
 def test_process_commits_derivative_with_inherited_security_envelope(env: _Env) -> None:
     outcome = env.processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
     assert outcome.status == "committed" and outcome.content_unit_count == 2 and outcome.is_duplicate is False
+    assert env.processor.last_request is not None
+    assert env.processor.last_request.source_mime_type == "application/pdf"
 
     derivative = env.processing.resolve_derivative(env.ctx, media_derivative_id=outcome.media_derivative_id)
     assert derivative.status == "COMMITTED" and derivative.derivative_kind == "pdf_text"
     # Invariant: a derivative carries the source version's security envelope, never weaker.
     assert derivative.security_envelope.get("classification") == "confidential"
+    with env.engine.begin() as conn:  # type: ignore[attr-defined]
+        units = env.derivative_repo.get_content_units(
+            transaction=conn,
+            tenant_id=env.ctx.tenant_id,
+            derivative_id=outcome.media_derivative_id,
+        )
+    assert units[0].bbox == {"x": 10, "y": 20, "width": 100, "height": 30, "unit": "pt"}
+    assert units[0].source_locator == {"pageNumber": 1, "blockId": "block-0"}
+    assert units[0].structure == {"kind": "paragraph"}
+    assert units[0].confidence == pytest.approx(0.95)
+
+
+def test_process_rejects_bytes_changed_after_storage_stat(
+    env: _Env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        env.processing.media_storage,
+        "open_stream",
+        lambda _blob_key: io.BytesIO(b"%PDF-1.4 tampered bytes"),
+    )
+
+    with pytest.raises(ConflictDetected) as captured:
+        env.processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+
+    assert captured.value.details["reason"] == "stream_size_mismatch"
+    assert env.processor.last_request is None
+
+
+def test_content_unit_page_is_read_only_paginated_and_tenant_scoped(env: _Env) -> None:
+    outcome = env.processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+    audit_count = len(env.runtime.audits)
+
+    first = env.processing.list_derivative_content_units(
+        env.ctx,
+        media_derivative_id=outcome.media_derivative_id,
+        limit=1,
+    )
+    second = env.processing.list_derivative_content_units(
+        env.ctx,
+        media_derivative_id=outcome.media_derivative_id,
+        after_ordinal=first.next_cursor,
+        limit=1,
+    )
+
+    assert [unit.ordinal for unit in first.items] == [0]
+    assert first.next_cursor == 0
+    assert [unit.ordinal for unit in second.items] == [1]
+    assert second.next_cursor is None
+    assert len(env.runtime.audits) == audit_count
+    with pytest.raises(NotFound):
+        env.processing.list_derivative_content_units(
+            RequestContext(tenant_id="tenant-other"),
+            media_derivative_id=outcome.media_derivative_id,
+        )
+
+
+def test_empty_source_locator_falls_back_to_processor_coordinates() -> None:
+    unit = ProcessedContentUnit(
+        unit_kind="page",
+        ordinal=0,
+        page_number=3,
+        text="page 3",
+        text_hash="page-3",
+        source_locator={},
+    )
+
+    assert source_locator_payload(unit) == {"pageNumber": 3}
 
 
 def test_process_is_idempotent_duplicate_yields_one_derivative(env: _Env) -> None:
@@ -220,6 +342,42 @@ def test_processor_failure_records_failed_derivative_evidence(env: _Env) -> None
     assert outcome.error is not None and outcome.error.get("operation") == "process"
     with pytest.raises(NotFound):
         env.processing.resolve_derivative(env.ctx, media_derivative_id=outcome.media_derivative_id)
+
+
+def test_registry_rejects_unregistered_processor_version_without_legacy_fallback(env: _Env) -> None:
+    processing = _registry_processing(env, _registry(env.processor, version="1.0"))
+
+    outcome = processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error["kind"] == "unsupported"
+    details = outcome.error["details"]
+    assert isinstance(details, dict)
+    assert details["reason"] == "processor_version_not_registered"
+
+
+def test_registry_preserves_selected_adapter_failure_taxonomy(env: _Env) -> None:
+    env.processor.fail_with = AdapterError(AdapterFailure("fake-pdf", "process", "validation", False, "encrypted_pdf"))
+    processing = _registry_processing(env, _registry(env.processor))
+
+    outcome = processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+
+    assert outcome.error is not None
+    assert outcome.error["adapterProfile"] == "fake-pdf"
+    assert outcome.error["kind"] == "validation"
+
+
+def test_registry_selected_adapter_rejects_unsupported_request_without_fallback(env: _Env) -> None:
+    processor = _RejectingProcessor()
+    processing = _registry_processing(env, _registry(processor))
+
+    outcome = processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error["adapterProfile"] == "fake-pdf"
+    assert outcome.error["kind"] == "unsupported"
 
 
 def test_process_rejects_unknown_version(env: _Env) -> None:

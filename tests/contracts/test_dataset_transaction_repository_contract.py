@@ -144,6 +144,35 @@ class FakeDatasetTransactionRepository:
         del transaction
         self.files_store.append(record.__dict__.copy())
 
+    def files_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_version_id: str,
+    ) -> list[dict[str, Any]]:
+        del transaction
+        records = [
+            row
+            for row in self.files_store
+            if row["tenant_id"] == tenant_id and row["dataset_version_id"] == dataset_version_id
+        ]
+        rows = [
+            {
+                "id": row["file_id"],
+                "tenant_id": row["tenant_id"],
+                "dataset_version_id": row["dataset_version_id"],
+                "uri": row["uri"],
+                "format": row["file_format"],
+                "row_count": row["row_count"],
+                "byte_size": row["byte_size"],
+                "content_hash": row["content_hash"],
+                "partition_values": row["partition_values"],
+            }
+            for row in records
+        ]
+        return sorted(rows, key=lambda row: (row["uri"], row["id"]))
+
     def insert_webhook_event_key(self, *, transaction: Any, record: WebhookEventKeyRecord) -> None:
         del transaction
         key = (
@@ -928,6 +957,34 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_lists_exact_version_files_tenant_scoped(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_and_list(transaction: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        repository.insert_file(transaction=transaction, record=_file_record())
+        rows = repository.files_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            dataset_version_id="dsv_orders_1",
+        )
+        other_tenant = repository.files_for_version(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            dataset_version_id="dsv_orders_1",
+        )
+        return rows, other_tenant
+
+    rows, other_tenant = harness.call_in_transaction(insert_and_list)
+
+    assert len(rows) == 1
+    assert rows[0]["uri"] == "memory://part-00000.parquet"
+    assert rows[0]["format"] == "parquet"
+    assert rows[0]["content_hash"] == "hash-demo"
+    assert other_tenant == []
 
 
 def test_dataset_transaction_repository_contract_commit_requires_open_state(harness: TransactionHarness) -> None:

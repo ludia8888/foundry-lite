@@ -41,6 +41,7 @@ export function BuilderSettingsPanel({
         <div className="space-y-1.5">
           <SectionLabel>Page name</SectionLabel>
           <Input
+            aria-label="페이지 이름"
             className="h-8 text-[13px]"
             value={page.name}
             onChange={(event) => onChange({ name: event.target.value })}

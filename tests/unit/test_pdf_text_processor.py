@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.media_processor import MediaProcessingRequest, ProcessorSpec
-from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
+from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfExtractedPage, PdfTextProcessorAdapter
 
 
 def _make_pdf(pages: list[str]) -> bytes:
@@ -62,8 +62,16 @@ def _write(tmp_path: Path, data: bytes) -> str:
     return str(path)
 
 
-def _request(source_path: str, *, max_pages: int = 100) -> MediaProcessingRequest:
-    spec = ProcessorSpec(processor="pdf_text_v1", processor_version="1.0.0", parameters={"maxPages": max_pages})
+def _request(
+    source_path: str,
+    *,
+    max_pages: int = 100,
+    page_selection: dict[str, object] | None = None,
+) -> MediaProcessingRequest:
+    parameters: dict[str, object] = {"maxPages": max_pages}
+    if page_selection is not None:
+        parameters["pageSelection"] = page_selection
+    spec = ProcessorSpec(processor="pdf_text_v1", processor_version="1.0.0", parameters=parameters)
     return MediaProcessingRequest(
         tenant_id="t",
         media_item_version_id="miv-1",
@@ -127,12 +135,26 @@ def test_page_limit_exceeded_is_validation_failure(tmp_path: Path) -> None:
     assert excinfo.value.failure.kind == "validation"
 
 
+def test_page_selection_previews_first_pages_without_weakening_document_hard_limit(tmp_path: Path) -> None:
+    pages = [f"page {index}" for index in range(1, 14)]
+    adapter = PdfTextProcessorAdapter()
+    source = _write(tmp_path, _make_pdf(pages))
+
+    preview = adapter.process(_request(source, page_selection={"start": 1, "limit": 3}))
+
+    assert len(preview.units) == 3
+    assert [unit.page_number for unit in preview.units] == [1, 2, 3]
+    with pytest.raises(AdapterError) as excinfo:
+        adapter.process(_request(source, max_pages=10, page_selection={"start": 1, "limit": 3}))
+    assert excinfo.value.failure.details["reason"] == "page_limit_exceeded"
+
+
 def test_timeout_fails_closed(tmp_path: Path) -> None:
     release = threading.Event()
 
-    def _blocking(_source: str, _max_pages: int) -> list[str]:
+    def _blocking(_source: str, _max_pages: int, _selection: object) -> list[PdfExtractedPage]:
         release.wait(timeout=10)  # bounded safety; the test releases it immediately below
-        return ["never"]
+        return [PdfExtractedPage(1, "never")]
 
     # timeout_seconds=0: the worker has not finished, so result(timeout=0) fails closed at once.
     adapter = PdfTextProcessorAdapter(timeout_seconds=0, page_extractor=_blocking)

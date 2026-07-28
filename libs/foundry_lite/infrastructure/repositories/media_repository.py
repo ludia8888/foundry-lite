@@ -5,12 +5,16 @@ from __future__ import annotations
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.sql.elements import ColumnElement
 
 from foundry_lite.application.ports.media_repository import (
     MediaItemRecord,
     MediaItemVersionRecord,
     MediaSetRecord,
+    MediaSetSelectionRecord,
     MediaTransactionRecord,
 )
 from foundry_lite.application.state_transitions import (
@@ -35,14 +39,18 @@ class SqlAlchemyMediaRepository:
     # -- catalog ---------------------------------------------------------------
 
     def create_media_set_or_get_existing(self, *, transaction: Any, record: MediaSetRecord) -> MediaSetRecord | None:
+        inserted_id = transaction.execute(_media_set_insert_or_ignore(transaction, record)).scalar_one_or_none()
+        if inserted_id is not None:
+            return None
         existing = self.media_set_by_ref(
-            transaction=transaction, tenant_id=record.tenant_id, namespace=record.namespace, name=record.name
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            namespace=record.namespace,
+            name=record.name,
         )
-        if existing is not None:
-            return existing
-        # The (tenant_id, namespace, name) unique constraint backstops a concurrent race.
-        transaction.execute(insert(db.media_sets).values(tenant_id=record.tenant_id, **_media_set_values(record)))
-        return None
+        if existing is None:
+            raise RuntimeError("media set unique-conflict winner is missing")
+        return existing
 
     def get_media_sets(self, *, transaction: Any, tenant_id: str, ids: list[str]) -> list[MediaSetRecord]:
         if not ids:
@@ -82,15 +90,18 @@ class SqlAlchemyMediaRepository:
     def create_open_transaction(
         self, *, transaction: Any, record: MediaTransactionRecord
     ) -> MediaTransactionRecord | None:
+        inserted_id = transaction.execute(_media_transaction_insert_or_ignore(transaction, record)).scalar_one_or_none()
+        if inserted_id is not None:
+            return None
         existing = self._transaction_by_idempotency(
-            transaction, record.tenant_id, record.media_set_id, record.idempotency_key
+            transaction,
+            record.tenant_id,
+            record.media_set_id,
+            record.idempotency_key,
         )
-        if existing is not None:
-            return existing
-        transaction.execute(
-            insert(db.media_transactions).values(tenant_id=record.tenant_id, **_media_transaction_values(record))
-        )
-        return None
+        if existing is None:
+            raise RuntimeError("media transaction unique-conflict winner is missing")
+        return existing
 
     def transaction_by_id(
         self, *, transaction: Any, tenant_id: str, media_transaction_id: str
@@ -148,11 +159,13 @@ class SqlAlchemyMediaRepository:
     # -- items + head CAS ------------------------------------------------------
 
     def upsert_media_item(self, *, transaction: Any, record: MediaItemRecord) -> MediaItemRecord:
+        inserted_id = transaction.execute(_media_item_insert_or_ignore(transaction, record)).scalar_one_or_none()
+        if inserted_id is not None:
+            return record
         existing = self._media_item_by_path(transaction, record.tenant_id, record.media_set_id, record.logical_path)
-        if existing is not None:
-            return existing
-        transaction.execute(insert(db.media_items).values(tenant_id=record.tenant_id, **_media_item_values(record)))
-        return record
+        if existing is None:
+            raise RuntimeError("media item unique-conflict winner is missing")
+        return existing
 
     def media_item_by_id(self, *, transaction: Any, tenant_id: str, media_item_id: str) -> MediaItemRecord | None:
         return self._media_item_by_id(transaction, tenant_id, media_item_id)
@@ -218,6 +231,40 @@ class SqlAlchemyMediaRepository:
         )
         return _media_version_from_row(row) if row else None
 
+    def select_media_set_versions(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        media_set_id: str,
+        media_item_version_ids: list[str] | None = None,
+        logical_path_prefix: str | None = None,
+        limit: int = 20,
+    ) -> list[MediaSetSelectionRecord]:
+        conditions = _media_selection_conditions(
+            tenant_id,
+            media_set_id,
+            media_item_version_ids=media_item_version_ids,
+            logical_path_prefix=logical_path_prefix,
+        )
+        rows = (
+            transaction.execute(
+                select(db.media_items.c.media_set_id, db.media_items.c.logical_path, db.media_item_versions)
+                .select_from(
+                    db.media_items.join(
+                        db.media_item_versions,
+                        db.media_items.c.id == db.media_item_versions.c.media_item_id,
+                    )
+                )
+                .where(and_(*conditions))
+                .order_by(db.media_items.c.logical_path, db.media_item_versions.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [_media_selection_from_row(row) for row in rows]
+
     def get_media_item_versions(self, *, transaction: Any, ids: list[str]) -> list[MediaItemVersionRecord]:
         if not ids:
             return []
@@ -275,6 +322,25 @@ class SqlAlchemyMediaRepository:
                         db.media_item_versions.c.status == "COMMITTED",
                     )
                 )
+            )
+            .mappings()
+            .all()
+        )
+        return [_media_version_from_row(row) for row in rows]
+
+    def fetch_transaction_versions(
+        self, *, transaction: Any, tenant_id: str, media_transaction_id: str
+    ) -> list[MediaItemVersionRecord]:
+        rows = (
+            transaction.execute(
+                select(db.media_item_versions)
+                .where(
+                    and_(
+                        db.media_item_versions.c.tenant_id == tenant_id,
+                        db.media_item_versions.c.media_transaction_id == media_transaction_id,
+                    )
+                )
+                .order_by(db.media_item_versions.c.id)
             )
             .mappings()
             .all()
@@ -495,6 +561,37 @@ def _media_set_values(record: MediaSetRecord) -> dict[str, object]:
     }
 
 
+def _media_selection_conditions(
+    tenant_id: str,
+    media_set_id: str,
+    *,
+    media_item_version_ids: list[str] | None,
+    logical_path_prefix: str | None,
+) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = [
+        db.media_items.c.tenant_id == tenant_id,
+        db.media_items.c.media_set_id == media_set_id,
+        db.media_items.c.is_deleted.is_(False),
+        db.media_item_versions.c.tenant_id == tenant_id,
+        db.media_item_versions.c.status == "COMMITTED",
+    ]
+    if media_item_version_ids is None:
+        conditions.append(db.media_items.c.head_version_id == db.media_item_versions.c.id)
+    else:
+        conditions.append(db.media_item_versions.c.id.in_(media_item_version_ids))
+    if logical_path_prefix:
+        conditions.append(db.media_items.c.logical_path.startswith(logical_path_prefix))
+    return conditions
+
+
+def _media_selection_from_row(row: Any) -> MediaSetSelectionRecord:
+    return MediaSetSelectionRecord(
+        media_set_id=str(row["media_set_id"]),
+        logical_path=str(row["logical_path"]),
+        version=_media_version_from_row(row),
+    )
+
+
 def _media_set_from_row(row: Any) -> MediaSetRecord:
     return MediaSetRecord(
         media_set_id=str(row["id"]),
@@ -515,6 +612,21 @@ def _media_set_from_row(row: Any) -> MediaSetRecord:
     )
 
 
+def _media_set_insert_or_ignore(transaction: Any, record: MediaSetRecord) -> Any:
+    values = {"tenant_id": record.tenant_id, **_media_set_values(record)}
+    conflict_columns = ["tenant_id", "namespace", "name"]
+    statement: Any
+    if transaction.dialect.name == "postgresql":
+        statement = postgres_insert(db.media_sets)
+    elif transaction.dialect.name == "sqlite":
+        statement = sqlite_insert(db.media_sets)
+    else:
+        return insert(db.media_sets).values(**values).returning(db.media_sets.c.id)
+    return (
+        statement.values(**values).on_conflict_do_nothing(index_elements=conflict_columns).returning(db.media_sets.c.id)
+    )
+
+
 def _media_transaction_values(record: MediaTransactionRecord) -> dict[str, object | None]:
     return {
         "id": record.media_transaction_id,
@@ -529,6 +641,26 @@ def _media_transaction_values(record: MediaTransactionRecord) -> dict[str, objec
         "error": record.error,
         "trace": record.trace,
     }
+
+
+def _media_transaction_insert_or_ignore(
+    transaction: Any,
+    record: MediaTransactionRecord,
+) -> Any:
+    values = {"tenant_id": record.tenant_id, **_media_transaction_values(record)}
+    conflict_columns = ["tenant_id", "media_set_id", "idempotency_key"]
+    statement: Any
+    if transaction.dialect.name == "postgresql":
+        statement = postgres_insert(db.media_transactions)
+    elif transaction.dialect.name == "sqlite":
+        statement = sqlite_insert(db.media_transactions)
+    else:
+        return insert(db.media_transactions).values(**values).returning(db.media_transactions.c.id)
+    return (
+        statement.values(**values)
+        .on_conflict_do_nothing(index_elements=conflict_columns)
+        .returning(db.media_transactions.c.id)
+    )
 
 
 def _media_transaction_from_row(row: Any) -> MediaTransactionRecord:
@@ -558,6 +690,23 @@ def _media_item_values(record: MediaItemRecord) -> dict[str, object | None]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def _media_item_insert_or_ignore(transaction: Any, record: MediaItemRecord) -> Any:
+    values = {"tenant_id": record.tenant_id, **_media_item_values(record)}
+    conflict_columns = ["tenant_id", "media_set_id", "logical_path"]
+    statement: Any
+    if transaction.dialect.name == "postgresql":
+        statement = postgres_insert(db.media_items)
+    elif transaction.dialect.name == "sqlite":
+        statement = sqlite_insert(db.media_items)
+    else:
+        return insert(db.media_items).values(**values).returning(db.media_items.c.id)
+    return (
+        statement.values(**values)
+        .on_conflict_do_nothing(index_elements=conflict_columns)
+        .returning(db.media_items.c.id)
+    )
 
 
 def _media_item_from_row(row: Any) -> MediaItemRecord:

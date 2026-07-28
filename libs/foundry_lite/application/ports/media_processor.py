@@ -39,6 +39,8 @@ class MediaProcessingRequest:
     spec: ProcessorSpec
     processing_spec_hash: str
     source_path: str | None = None
+    source_format: str | None = None
+    source_mime_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,11 @@ class ProcessedContentUnit:
     page_number: int | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    bbox: Mapping[str, object] | None = None
+    parent_content_unit_id: str | None = None
+    source_locator: Mapping[str, object] | None = None
+    structure: Mapping[str, object] | None = None
+    confidence: float | None = None
     speaker: str | None = None
     language: str | None = None
     embedding: EmbeddingVector = ()
@@ -71,6 +78,7 @@ class MediaProcessingResult:
     content_hash: str = ""
     mime_type: str = "text/plain"
     units: tuple[ProcessedContentUnit, ...] = ()
+    processing_evidence: Mapping[str, object] | None = None
 
 
 class MediaProcessorAdapter(Protocol):

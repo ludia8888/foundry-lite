@@ -96,6 +96,20 @@ def test_doc_drift_accepts_repo_root_inside_ignored_parent_name(tmp_path: Path) 
     assert findings == []
 
 
+def test_doc_drift_default_scan_ignores_playwright_failure_artifacts(tmp_path: Path) -> None:
+    _write_doc(
+        tmp_path,
+        "Failed request `/api/pipelines/branches/${branch.id}/graph`.\n",
+        "test-results/pipeline-builder/error-context.md",
+    )
+    _write_doc(tmp_path, "# Current documentation\n", "README.md")
+
+    findings = gate.collect_findings(code_roots=(tmp_path / "libs",), root=tmp_path)
+
+    assert findings == []
+    assert all("test-results" not in path.parts for path in gate._default_docs(tmp_path))
+
+
 def test_doc_drift_skips_python_symbols_in_non_current_docs(tmp_path: Path) -> None:
     doc = _write_doc(tmp_path, "`Order` and `Customer` are ontology examples.\n", "README.md")
     _write_python(tmp_path, "libs/example.py", "class ExistingService:\n    pass\n")

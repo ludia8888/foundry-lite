@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import json
 
+from foundry_lite.application.model_gateway_bridge import GovernedSemanticModelBridge
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.language_model import (
+    GovernedSemanticModelPort,
     LanguageModelAdapter,
     ModelEvent,
     ModelMessage,
     ModelRequest,
+    ModelResolution,
     ModelResponse,
 )
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure.adapters.fake_language_model import FakeLanguageModel
 
 
@@ -122,7 +126,54 @@ def test_language_model_declares_failure_contract() -> None:
 
     assert isinstance(contract, AdapterFailureContract)
     assert adapter.profile_name == "fake-language-model"
+    assert adapter.supported_provider_profiles == ("fake-language-model", "local-fake")
     assert contract.adapter_profile == "fake-language-model"
+
+
+def test_governed_semantic_bridge_exposes_only_pinned_gateway_invocation() -> None:
+    target = _GovernedTarget()
+    bridge: GovernedSemanticModelPort = GovernedSemanticModelBridge(target)
+    ctx = RequestContext(tenant_id="tenant-contract", request_id="req-contract")
+
+    response = bridge.invoke(ctx, _request())
+    resolution = bridge.resolve_model(ctx, "semantic-default")
+
+    assert target.calls == [(ctx, _request())]
+    assert target.resolutions == [(ctx, "semantic-default", "prod")]
+    assert resolution.model_id == "governed-model"
+    assert response.resolved_model_id == "governed-model"
+    assert response.resolved_model_revision == "2026-07-16"
+
+
+class _GovernedTarget:
+    def __init__(self) -> None:
+        self.calls: list[tuple[RequestContext, ModelRequest]] = []
+        self.resolutions: list[tuple[RequestContext, str, str]] = []
+
+    def resolve_model(
+        self,
+        ctx: RequestContext,
+        model_alias: str,
+        environment: str = "prod",
+    ) -> ModelResolution:
+        self.resolutions.append((ctx, model_alias, environment))
+        return ModelResolution(
+            provider="governed",
+            model_id="governed-model",
+            revision="2026-07-16",
+        )
+
+    def invoke(self, ctx: RequestContext, request: ModelRequest) -> ModelResponse:
+        self.calls.append((ctx, request))
+        return ModelResponse(
+            provider="governed",
+            resolved_model_id="governed-model",
+            resolved_model_revision="2026-07-16",
+            content="{}",
+            finish_reason="stop",
+            input_tokens=1,
+            output_tokens=1,
+        )
 
 
 def _user_message() -> ModelMessage:

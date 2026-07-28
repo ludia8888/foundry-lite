@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, Column, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, Integer, String, Table, Text, UniqueConstraint, text
 
 from foundry_lite.infrastructure.schema.base import metadata
 
@@ -17,6 +17,7 @@ lineage_edges = Table(
     Column("to_resource_id", String, nullable=False),
     Column("relation", String, nullable=False),
     Column("created_by_run_id", String),
+    Column("metadata", JSON, nullable=False, server_default=text("'{}'")),
     Column("created_at", String, nullable=False),
 )
 

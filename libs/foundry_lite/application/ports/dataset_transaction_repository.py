@@ -6,6 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
+from foundry_lite.application.dataset_file_contracts import (
+    DatasetFileRecord,
+    DatasetFileRow,
+)
 from foundry_lite.application.dataset_webhook_events import WebhookEventKeyRecord
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
@@ -13,7 +17,6 @@ DatasetRunKind = Literal["sync", "transform", "materialization"]
 DeadLetterRecordStatus = Literal["QUARANTINED", "REPLAY_REQUESTED", "REPLAYING", "RESOLVED", "DISCARDED"]
 DeadLetterRecordReplayStatus = Literal["NOT_REQUESTED", "REQUESTED", "REPLAYING", "SUCCEEDED", "FAILED", "DISCARDED"]
 DatasetTransactionMetadata = Mapping[str, object]
-DatasetFilePartitionValues = Mapping[str, object]
 DatasetRunError = Mapping[str, object]
 DeadLetterRecordPayload = Mapping[str, object]
 
@@ -50,19 +53,6 @@ class DatasetVersionRecord:
     status: str
     superseded_by_version_id: str | None
     created_at: str
-
-
-@dataclass(frozen=True)
-class DatasetFileRecord:
-    file_id: str
-    tenant_id: str
-    dataset_version_id: str
-    uri: str
-    file_format: str
-    row_count: int
-    byte_size: int
-    content_hash: str
-    partition_values: DatasetFilePartitionValues
 
 
 @dataclass(frozen=True)
@@ -287,6 +277,16 @@ class DatasetTransactionRepository(Protocol):
 
     def insert_file(self, *, transaction: TransactionContext, record: DatasetFileRecord) -> None:
         """Persist a dataset file row inside the caller transaction."""
+        ...
+
+    def files_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_version_id: str,
+    ) -> list[DatasetFileRow]:
+        """Return tenant-scoped committed file registry rows for one exact version."""
         ...
 
     def insert_webhook_event_key(self, *, transaction: TransactionContext, record: WebhookEventKeyRecord) -> None:

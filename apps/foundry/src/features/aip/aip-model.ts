@@ -63,11 +63,14 @@ export function asText(value: unknown): string {
 export type AgentCitationView = {
   order: number;
   contextId: string | null;
+  sourceResourceType: string | null;
   sourceResourceId: string | null;
   displayLabel: string | null;
   contentHash: string | null;
   renderedRef: string | null;
+  navigationRef: string | null;
   claimSpan: { start: number; end: number } | null;
+  evidence: AgentCitationEvidenceView | null;
   source: {
     kind: string | null;
     retrievalMethod: string | null;
@@ -78,6 +81,24 @@ export type AgentCitationView = {
     contextItemId: string | null;
     contentHash: string | null;
   } | null;
+};
+
+export type AgentCitationEvidenceView = {
+  mediaItemVersionId: string | null;
+  mediaDerivativeId: string | null;
+  contentUnitId: string | null;
+  pageNumber: number | null;
+  bbox: Record<string, unknown> | null;
+  timecode: Record<string, unknown> | null;
+  sourceLocator: Record<string, unknown> | null;
+  derivativeKind: string | null;
+  processorName: string | null;
+  processorVersion: string | null;
+  processorSpecHash: string | null;
+  modelName: string | null;
+  modelVersion: string | null;
+  paramsHash: string | null;
+  securityEnvelope: Record<string, unknown> | null;
 };
 
 function readString(
@@ -108,6 +129,48 @@ function readClaimSpan(
     return { start, end };
   }
   return null;
+}
+
+function readRecord(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | null {
+  const value = record[key];
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | null {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readCitationEvidence(
+  record: Record<string, unknown>,
+): AgentCitationEvidenceView | null {
+  const evidence = readRecord(record, "evidence");
+  if (evidence === null) return null;
+  return {
+    mediaItemVersionId: readString(evidence, "mediaItemVersionId"),
+    mediaDerivativeId: readString(evidence, "mediaDerivativeId"),
+    contentUnitId: readString(evidence, "contentUnitId"),
+    pageNumber: readNumber(evidence, "pageNumber"),
+    bbox: readRecord(evidence, "bbox"),
+    timecode: readRecord(evidence, "timecode"),
+    sourceLocator: readRecord(evidence, "sourceLocator"),
+    derivativeKind: readString(evidence, "derivativeKind"),
+    processorName: readString(evidence, "processorName"),
+    processorVersion: readString(evidence, "processorVersion"),
+    processorSpecHash: readString(evidence, "processorSpecHash"),
+    modelName: readString(evidence, "modelName"),
+    modelVersion: readString(evidence, "modelVersion"),
+    paramsHash: readString(evidence, "paramsHash"),
+    securityEnvelope: readRecord(evidence, "securityEnvelope"),
+  };
 }
 
 function readSourcePreview(
@@ -146,14 +209,37 @@ export function toCitationViews(
     return {
       order,
       contextId: readString(citation, "contextId"),
+      sourceResourceType: readString(citation, "sourceResourceType"),
       sourceResourceId: readString(citation, "sourceResourceId"),
       displayLabel: readString(citation, "displayLabel"),
       contentHash: readString(citation, "contentHash"),
       renderedRef: readString(citation, "renderedRef"),
+      navigationRef: readString(citation, "navigationRef"),
       claimSpan: readClaimSpan(citation),
+      evidence: readCitationEvidence(citation),
       source: readSourcePreview(citation),
     };
   });
+}
+
+export function citationDocumentHref(
+  citation: AgentCitationView,
+): string | null {
+  const evidence = citation.evidence;
+  if (
+    citation.navigationRef === null ||
+    evidence === null ||
+    evidence.mediaItemVersionId === null ||
+    evidence.contentUnitId === null ||
+    evidence.pageNumber === null ||
+    evidence.pageNumber <= 0 ||
+    evidence.bbox === null ||
+    evidence.sourceLocator === null
+  ) {
+    return null;
+  }
+  const params = new URLSearchParams({ citation: citation.navigationRef });
+  return `/document-intelligence?${params.toString()}`;
 }
 
 /** 답변 텍스트를 claimSpan 기준으로 분할해 inline anchor를 삽입 (legacy 렌더 로직 이식). */

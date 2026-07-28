@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from foundry_lite.application.media_byte_verification import (
+    MediaByteVerificationFailure,
+    copy_verified_committed_media,
+    raise_media_byte_domain_error,
+)
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.ports.media_derivative_repository import (
@@ -18,15 +21,26 @@ from foundry_lite.application.ports.media_derivative_repository import (
 from foundry_lite.application.ports.media_processor import (
     MediaProcessingRequest,
     MediaProcessingResult,
+    MediaProcessorAdapter,
     ProcessorSpec,
 )
+from foundry_lite.application.ports.media_processor_registry import MediaProcessorRegistry
+from foundry_lite.application.ports.media_repository import MediaItemVersionRecord
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.content_unit_paging import (
+    _content_unit_limit,
+    _require_non_negative,
+    _require_positive_optional,
+)
+from foundry_lite.application.services.media.processing_records import (
+    _canonical_spec_hash,
+    _content_unit_records,
+    _derivative_record,
+)
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
-
-_READ_CHUNK = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -38,6 +52,16 @@ class ProcessingOutcome:
     content_unit_count: int
     is_duplicate: bool = False
     error: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class ContentUnitPage:
+    """Read-only page used by Document Intelligence and evidence viewers."""
+
+    media_derivative_id: str
+    source_media_item_version_id: str
+    items: tuple[ContentUnitRecord, ...]
+    next_cursor: int | None
 
 
 class MediaProcessingService(CoreService):
@@ -56,9 +80,31 @@ class MediaProcessingService(CoreService):
         "media_derivative_repository",
         "media_storage",
         "media_processor",
+        "media_processor_registry",
     )
     required_collaborators = ("runtime_service",)
     runtime_service: MediaRuntimeBoundary
+
+    def __init__(
+        self,
+        *,
+        engine: object,
+        media_repository: object,
+        media_derivative_repository: object,
+        media_storage: object,
+        media_processor_registry: MediaProcessorRegistry | None = None,
+        media_processor: MediaProcessorAdapter | None = None,
+    ) -> None:
+        if media_processor_registry is None and media_processor is None:
+            raise TypeError("MediaProcessingService requires a processor registry or legacy processor adapter")
+        super().__init__(
+            engine=engine,
+            media_repository=media_repository,
+            media_derivative_repository=media_derivative_repository,
+            media_storage=media_storage,
+            media_processor=media_processor,
+            media_processor_registry=media_processor_registry,
+        )
 
     def process(self, ctx: RequestContext, *, media_item_version_id: str, spec: ProcessorSpec) -> ProcessingOutcome:
         spec_hash = _canonical_spec_hash(spec)
@@ -79,7 +125,13 @@ class MediaProcessingService(CoreService):
         # CAS conflict, IntegrityError, outbox failure) must still land the run in a durable
         # FAILED verdict rather than leaving it stuck RUNNING forever with no reaper.
         try:
-            result = self._run_processor(ctx, version.blob_key, spec, spec_hash, media_item_version_id)
+            result = self._run_processor(
+                ctx,
+                version,
+                spec,
+                spec_hash,
+                media_item_version_id,
+            )
             if isinstance(result, AdapterError):
                 return self._record_failure(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
             return self._commit_derivative(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
@@ -138,6 +190,38 @@ class MediaProcessingService(CoreService):
             )
         return derivative
 
+    def list_derivative_content_units(
+        self,
+        ctx: RequestContext,
+        *,
+        media_derivative_id: str,
+        after_ordinal: int | None = None,
+        page_number: int | None = None,
+        limit: int = 200,
+    ) -> ContentUnitPage:
+        bounded_limit = _content_unit_limit(limit)
+        _require_non_negative(after_ordinal, "afterOrdinal")
+        _require_positive_optional(page_number, "pageNumber")
+        with self.engine.begin() as conn:
+            derivative = self.media_derivative_repository.derivative_by_id(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                media_derivative_id=media_derivative_id,
+            )
+            if derivative is None or derivative.status != "COMMITTED":
+                raise NotFound("committed derivative not found", details={"media_derivative_id": media_derivative_id})
+            rows = self.media_derivative_repository.get_content_units(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                derivative_id=media_derivative_id,
+                after_ordinal=after_ordinal,
+                page_number=page_number,
+                limit=bounded_limit + 1,
+            )
+        items = tuple(rows[:bounded_limit])
+        next_cursor = items[-1].ordinal if len(rows) > bounded_limit and items else None
+        return ContentUnitPage(media_derivative_id, derivative.source_media_item_version_id, items, next_cursor)
+
     def sweep_orphan_derivatives(self, ctx: RequestContext, *, older_than: str) -> list[str]:
         with self.engine.begin() as conn:
             orphans = self.media_derivative_repository.fetch_unreachable_staged_derivatives(
@@ -161,27 +245,49 @@ class MediaProcessingService(CoreService):
         return ids
 
     def _run_processor(
-        self, ctx: RequestContext, blob_key: str, spec: ProcessorSpec, spec_hash: str, version_id: str
+        self,
+        ctx: RequestContext,
+        version: MediaItemVersionRecord,
+        spec: ProcessorSpec,
+        spec_hash: str,
+        version_id: str,
     ) -> MediaProcessingResult | AdapterError:
+        try:
+            processor = self._resolve_processor(spec, input_format=version.format)
+        except AdapterError as err:
+            return err
         with tempfile.TemporaryDirectory() as sandbox:
             source_path = Path(sandbox) / "source"
-            with self.media_storage.open_stream(blob_key) as stream, source_path.open("wb") as sink:
-                while chunk := stream.read(_READ_CHUNK):
-                    sink.write(chunk)
+            try:
+                with source_path.open("wb") as sink:
+                    copy_verified_committed_media(self.media_storage, version, sink)
+            except MediaByteVerificationFailure as exc:
+                raise_media_byte_domain_error(exc, operation="media_processing")
             request = MediaProcessingRequest(
                 tenant_id=ctx.tenant_id,
                 media_item_version_id=version_id,
-                blob_key=blob_key,
+                blob_key=version.blob_key,
                 spec=spec,
                 processing_spec_hash=spec_hash,
                 source_path=str(source_path),
+                source_format=version.format,
+                source_mime_type=version.sniffed_mime_type,
             )
+            if not processor.supports(request):
+                return _unsupported_processor_request(processor, request)
             try:
-                return self.media_processor.process(request)
+                return processor.process(request)
             except AdapterError as err:
                 return err
             except Exception as err:
-                return _unexpected_processor_error(self.media_processor.profile_name, spec.processor, err)
+                return _unexpected_processor_error(processor.profile_name, spec.processor, err)
+
+    def _resolve_processor(self, spec: ProcessorSpec, *, input_format: str) -> MediaProcessorAdapter:
+        if self.media_processor_registry is not None:
+            return self.media_processor_registry.resolve(spec, input_format=input_format)
+        if self.media_processor is None:
+            raise TypeError("legacy media processor adapter is unavailable")
+        return self.media_processor
 
     def _commit_derivative(
         self,
@@ -331,85 +437,6 @@ class MediaProcessingService(CoreService):
         )
 
 
-def _canonical_spec_hash(spec: ProcessorSpec) -> str:
-    canonical = json.dumps(
-        {
-            "processor": spec.processor,
-            "processorVersion": spec.processor_version,
-            "model": spec.model,
-            "modelVersion": spec.model_version,
-            "parameters": spec.parameters,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _derivative_record(
-    ctx: RequestContext,
-    version_id: str,
-    spec: ProcessorSpec,
-    spec_hash: str,
-    envelope: dict[str, object],
-    result: MediaProcessingResult | None,
-    *,
-    status: str,
-    error: dict[str, object] | None = None,
-) -> MediaDerivativeRecord:
-    return MediaDerivativeRecord(
-        media_derivative_id=_new_id("mder"),
-        tenant_id=ctx.tenant_id,
-        source_media_item_version_id=version_id,
-        derivative_kind=result.derivative_kind if result is not None else spec.processor,
-        processor_spec_hash=spec_hash,
-        processor_name=spec.processor,
-        processor_version=spec.processor_version,
-        model_name=spec.model,
-        model_version=spec.model_version or "",
-        params_hash=spec_hash,
-        security_envelope=envelope,
-        status=status,
-        content_hash=result.content_hash if result is not None else None,
-        mime_type=result.mime_type if result is not None else None,
-        error=error,
-        created_at=_now(),
-    )
-
-
-def _content_unit_records(
-    ctx: RequestContext,
-    version_id: str,
-    derivative_id: str,
-    spec_hash: str,
-    envelope: dict[str, object],
-    result: MediaProcessingResult,
-) -> list[ContentUnitRecord]:
-    return [
-        ContentUnitRecord(
-            content_unit_id=_new_id("cu"),
-            tenant_id=ctx.tenant_id,
-            source_media_item_version_id=version_id,
-            derivative_id=derivative_id,
-            unit_kind=unit.unit_kind,
-            ordinal=unit.ordinal,
-            page_number=unit.page_number,
-            start_ms=unit.start_ms,
-            end_ms=unit.end_ms,
-            speaker=unit.speaker,
-            language=unit.language,
-            embedding=unit.embedding,
-            text=unit.text,
-            text_hash=unit.text_hash,
-            chunk_spec_hash=spec_hash,
-            security_envelope=envelope,
-            created_at=_now(),
-        )
-        for unit in result.units
-    ]
-
-
 def _unexpected_processor_error(adapter_profile: str, processor_name: str, err: Exception) -> AdapterError:
     failure = AdapterFailure(
         adapter_profile=adapter_profile,
@@ -420,3 +447,24 @@ def _unexpected_processor_error(adapter_profile: str, processor_name: str, err: 
         details={"processor": processor_name, "errorType": err.__class__.__name__},
     )
     return AdapterError(failure)
+
+
+def _unsupported_processor_request(
+    processor: MediaProcessorAdapter,
+    request: MediaProcessingRequest,
+) -> AdapterError:
+    return AdapterError(
+        AdapterFailure(
+            adapter_profile=processor.profile_name,
+            operation="process",
+            kind="unsupported",
+            is_retryable=False,
+            operator_message="selected media processor does not support the pinned request",
+            details={
+                "processor": request.spec.processor,
+                "processorVersion": request.spec.processor_version,
+                "inputFormat": request.source_format,
+                "mediaItemVersionId": request.media_item_version_id,
+            },
+        )
+    )

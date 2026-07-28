@@ -74,6 +74,19 @@ class FakeDatasetQualityRepository:
             return None
         return cast(DatasetSchemaRow, dict(sorted(rows, key=lambda item: item["version"], reverse=True)[0]))
 
+    def schema_by_version(
+        self,
+        *,
+        transaction: Any,
+        dataset_id: str,
+        schema_version: int,
+    ) -> DatasetSchemaRow | None:
+        del transaction
+        for row in self.schemas:
+            if row["dataset_id"] == dataset_id and row["version"] == schema_version:
+                return cast(DatasetSchemaRow, dict(row))
+        return None
+
     def insert_schema(self, *, transaction: Any, record: DatasetSchemaRecord) -> None:
         del transaction
         self.schemas.append(
@@ -589,6 +602,26 @@ def test_latest_schema_returns_highest_row(harness: QualityHarness) -> None:
     assert latest is not None
     assert latest["id"] == "schema_v3"
     assert latest["version"] == 3
+
+
+def test_schema_by_version_returns_only_the_exact_dataset_schema(harness: QualityHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_schema(transaction=txn, record=_schema_record(version=1, schema_hash="h1"))
+        harness.repository.insert_schema(transaction=txn, record=_schema_record(version=2, schema_hash="h2"))
+        exact = harness.repository.schema_by_version(
+            transaction=txn,
+            dataset_id="ds_test",
+            schema_version=1,
+        )
+        missing = harness.repository.schema_by_version(
+            transaction=txn,
+            dataset_id="other-dataset",
+            schema_version=1,
+        )
+    assert exact is not None
+    assert exact["id"] == "schema_v1"
+    assert exact["schema_hash"] == "h1"
+    assert missing is None
 
 
 def test_check_by_name_returns_none_when_absent(harness: QualityHarness) -> None:

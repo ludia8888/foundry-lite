@@ -18,6 +18,7 @@ from foundry_lite.application.ports.ai_run_repository import (
 )
 from foundry_lite.application.ports.language_model import (
     LanguageModelError,
+    ModelMediaReference,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -50,9 +51,11 @@ class _SpyLanguageModel:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.requests: list[ModelRequest] = []
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         self.calls += 1
+        self.requests.append(request)
         return ModelResponse(
             provider="spy",
             resolved_model_id="",
@@ -106,6 +109,8 @@ def _engine_with_model(
     allowed: tuple[str, ...] = ("public", "internal"),
     region: str = "us-east-1",
     alias_status: AliasStatus = "enabled",
+    provider_type: str = "local-fake",
+    provider_profile: str = "fake-language-model",
 ) -> Engine:
     engine = create_engine("sqlite:///:memory:", future=True)
     db.metadata.create_all(engine)
@@ -116,8 +121,8 @@ def _engine_with_model(
             record=ModelProviderRecord(
                 provider_id="prov-1",
                 tenant_scope=_TENANT,
-                provider_type="acme",
-                profile_name="acme-proxy",
+                provider_type=provider_type,
+                profile_name=provider_profile,
                 region=region,
                 secret_ref="foundry_aip_token",
                 retention_policy="zero_retention",
@@ -189,8 +194,8 @@ def _engine_with_two_environment_aliases() -> Engine:
             record=ModelProviderRecord(
                 provider_id="prov-1",
                 tenant_scope=_TENANT,
-                provider_type="acme",
-                profile_name="acme-proxy",
+                provider_type="local-fake",
+                profile_name="fake-language-model",
                 region="us-east-1",
                 secret_ref="foundry_aip_token",
                 retention_policy="zero_retention",
@@ -239,7 +244,7 @@ def test_gateway_resolves_pinned_revision() -> None:
     engine = _engine_with_model(version="2026-05-15")
     response = _gateway(engine, FakeLanguageModel()).invoke(_CTX, _request())
 
-    assert response.provider == "acme"
+    assert response.provider == "local-fake"
     assert response.resolved_model_id == "model-1"
     assert response.resolved_model_revision == "2026-05-15"
 
@@ -251,6 +256,31 @@ def test_gateway_resolves_floating_latest_when_unpinned() -> None:
     assert response.resolved_model_revision == "2026-06-01"
 
 
+@pytest.mark.parametrize(
+    ("expected_model_id", "expected_model_revision"),
+    (("model-older", "2026-06-01"), ("model-1", "2026-05-01")),
+)
+def test_gateway_rejects_promoted_model_pin_drift_before_adapter_call(
+    expected_model_id: str,
+    expected_model_revision: str,
+) -> None:
+    engine = _engine_with_model()
+    adapter = _SpyLanguageModel()
+    request = ModelRequest(
+        model_alias="default-completion",
+        expected_model_id=expected_model_id,
+        expected_model_revision=expected_model_revision,
+        messages=(ModelMessage(role="user", content="must not escape"),),
+        data_classification="public",
+    )
+
+    with pytest.raises(AdapterError) as excinfo:
+        _gateway(engine, adapter).invoke(_CTX, request)
+
+    assert adapter.calls == 0
+    assert excinfo.value.failure.details["reason"] == "model_resolution_pin_mismatch"
+
+
 def test_gateway_fake_path_returns_tokens_and_hashes() -> None:
     engine = _engine_with_model()
     response = _gateway(engine, FakeLanguageModel()).invoke(_CTX, _request())
@@ -260,6 +290,62 @@ def test_gateway_fake_path_returns_tokens_and_hashes() -> None:
     assert response.output_tokens == 3
     assert response.prompt_hash.startswith("sha256:")  # sha256 over messages
     assert response.model_hash.startswith("sha256:")
+
+
+def test_gateway_attaches_resolved_provider_route_before_adapter_call() -> None:
+    engine = _engine_with_model(version="2026-05-15")
+    adapter = _SpyLanguageModel()
+
+    _gateway(engine, adapter).invoke(_CTX, _request())
+
+    route = adapter.requests[0].resolved_route
+    assert route is not None
+    assert route.tenant_id == _TENANT
+    assert route.provider_type == "local-fake"
+    assert route.provider_profile == "fake-language-model"
+    assert route.provider_model_id == "acme-large-v2"
+    assert route.catalog_model_id == "model-1"
+    assert route.model_revision == "2026-05-15"
+    assert route.secret_ref == "foundry_aip_token"
+
+
+def test_gateway_blocks_provider_adapter_mismatch_before_rebranding_fake_response() -> None:
+    engine = _engine_with_model(provider_type="anthropic", provider_profile="anthropic")
+
+    with pytest.raises(AdapterError) as excinfo:
+        _gateway(engine, FakeLanguageModel()).invoke(_CTX, _request())
+
+    assert excinfo.value.failure.kind == "unsupported"
+    assert excinfo.value.failure.details["reason"] == "provider_adapter_mismatch"
+
+
+def test_gateway_prompt_hash_pins_media_reference_identity() -> None:
+    engine = _engine_with_model()
+    gateway = _gateway(engine, FakeLanguageModel())
+    first = gateway.invoke(_CTX, _media_request("media-v1"))
+    second = gateway.invoke(_CTX, _media_request("media-v2"))
+
+    assert first.prompt_hash != second.prompt_hash
+
+
+def _media_request(media_item_version_id: str) -> ModelRequest:
+    return ModelRequest(
+        model_alias="default-completion",
+        messages=(
+            ModelMessage(
+                role="user",
+                content="Inspect the attached image",
+                media_references=(
+                    ModelMediaReference(
+                        media_item_version_id=media_item_version_id,
+                        mime_type="image/jpeg",
+                        content_hash=f"sha256:{media_item_version_id}",
+                    ),
+                ),
+            ),
+        ),
+        data_classification="public",
+    )
 
 
 def test_gateway_records_model_call_for_seeded_ai_run() -> None:
@@ -284,7 +370,7 @@ def test_gateway_records_model_call_for_seeded_ai_run() -> None:
     assert response.content == "echo: hello ledger"
     assert row["ai_run_id"] == "ai-run-gateway-ledger"
     assert row["attempt"] == 1
-    assert row["provider"] == "acme"
+    assert row["provider"] == "local-fake"
     assert row["model_revision"] == "2026-06-01"
     assert row["request_hash"] == "sha256:compiled-prompt"
     assert str(row["response_hash"]).startswith("sha256:")

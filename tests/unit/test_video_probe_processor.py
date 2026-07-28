@@ -17,6 +17,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     VideoProbe,
     VideoProbeError,
     VideoProbeProcessorAdapter,
+    VideoProcessingBounds,
     _default_probe_runner,
 )
 
@@ -45,6 +46,7 @@ def test_probe_metadata_is_deterministic() -> None:
     text = first.units[0].text
     assert "container=mp4" in text and "codec=h264" in text and "width=1920 height=1080" in text
     assert first.content_hash == second.content_hash
+    assert first.processing_evidence is None
 
 
 def test_supports_only_video_probe_processor() -> None:
@@ -151,7 +153,8 @@ def test_ffmpeg_scene_select_restricts_protocols_to_prevent_lfi_ssrf(monkeypatch
             return (b"", b"")
 
     monkeypatch.setattr(vpp.subprocess, "Popen", _FakePopen)
-    vpp._run_ffmpeg_scene_select("/sandbox/clip.mp4", 0.3, "/sandbox/out")
+    bounds = VideoProcessingBounds(max_duration_ms=1500, max_scene_count=2)
+    vpp._run_ffmpeg_scene_select("/sandbox/clip.mp4", 0.3, "/sandbox/out", bounds)
 
     args = captured[0]
     assert "-protocol_whitelist" in args
@@ -160,3 +163,7 @@ def test_ffmpeg_scene_select_restricts_protocols_to_prevent_lfi_ssrf(monkeypatch
     assert "-nostdin" in args
     # protocol restriction is an input option and must precede -i.
     assert args.index("-protocol_whitelist") < args.index("-i")
+    assert args[args.index("-t") + 1] == "1.500"
+    assert args[args.index("-frames:v") + 1] == "2"
+    assert args.index("-i") < args.index("-t") < args.index("-vf")
+    assert args.index("-frames:v") < len(args) - 1

@@ -18,6 +18,10 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from foundry_lite.application.media_byte_verification import (
+    MediaByteVerificationFailure,
+    copy_verified_committed_media,
+)
 from foundry_lite.application.ports.media_access_cache_repository import MediaAccessCacheRecord
 from foundry_lite.application.ports.media_preview_renderer import (
     PreviewRenderError,
@@ -30,8 +34,6 @@ from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, NotFound, ValidationFailed
-
-_READ_CHUNK = 1024 * 1024
 
 
 class MediaAccessPatternService(CoreService):
@@ -143,9 +145,17 @@ class MediaAccessPatternService(CoreService):
     def _render(self, version: MediaItemVersionRecord, access_pattern: str, spec: dict[str, object]) -> RenderedPreview:
         with tempfile.TemporaryDirectory() as sandbox:
             source_path = Path(sandbox) / "source"
-            with self.media_storage.open_stream(version.blob_key) as stream, source_path.open("wb") as sink:
-                while chunk := stream.read(_READ_CHUNK):
-                    sink.write(chunk)
+            try:
+                with source_path.open("wb") as sink:
+                    copy_verified_committed_media(self.media_storage, version, sink)
+            except MediaByteVerificationFailure as exc:
+                raise InvariantViolation(
+                    "committed_media_version_storage_unverifiable",
+                    details={
+                        "media_item_version_id": version.media_item_version_id,
+                        "reason": exc.reason,
+                    },
+                ) from exc
             request = PreviewRenderRequest(access_pattern=access_pattern, source_path=str(source_path), spec=spec)
             try:
                 return self.media_preview_renderer.render(request)

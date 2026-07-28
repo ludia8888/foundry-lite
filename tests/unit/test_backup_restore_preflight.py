@@ -177,6 +177,7 @@ def test_backup_restore_artifact_execute_restores_historical_dataset_head(
 
     restored = report["restoredDatasetVersions"][0]
     preview = foundry.datasets.preview("raw.restore_artifact_execute", ctx=ctx)
+    inspection = foundry.datasets.inspect("raw.restore_artifact_execute", ctx=ctx)
     assert report["status"] == "validated"
     assert report["isHistoricalRepointExecuted"] is True
     assert report["restoreTransactionCount"] == 1
@@ -189,7 +190,7 @@ def test_backup_restore_artifact_execute_restores_historical_dataset_head(
     assert replay["restoredDatasetVersions"][0]["restoredVersionId"] == restored["restoredVersionId"]
     assert preview[0]["order_id"] == "O-1"
     assert preview[0]["status"] == "PENDING"
-    assert preview[0]["version"] == restored["restoredVersionId"]
+    assert inspection["version"]["id"] == restored["restoredVersionId"]
     with foundry.engine.begin() as conn:
         transaction = cast(Any, conn)
         tx_row = (

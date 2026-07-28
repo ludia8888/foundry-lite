@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports import (
     DatasetFileRecord,
+    DatasetFileRow,
     DatasetRunError,
     DatasetRunKind,
     DatasetTransactionMetadata,
@@ -194,6 +195,29 @@ class SqlAlchemyDatasetTransactionRepository:
                 partition_values=dict(record.partition_values),
             )
         )
+
+    def files_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_version_id: str,
+    ) -> list[DatasetFileRow]:
+        rows = (
+            transaction.execute(
+                select(db.dataset_files)
+                .where(
+                    and_(
+                        db.dataset_files.c.tenant_id == tenant_id,
+                        db.dataset_files.c.dataset_version_id == dataset_version_id,
+                    )
+                )
+                .order_by(db.dataset_files.c.uri, db.dataset_files.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetFileRow, dict(row)) for row in rows]
 
     def insert_webhook_event_key(self, *, transaction: Any, record: WebhookEventKeyRecord) -> None:
         savepoint = transaction.begin_nested()

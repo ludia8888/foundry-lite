@@ -39,6 +39,7 @@ from foundry_lite.application.osdk import (
 )
 from foundry_lite.application.ports.model_registry_repository import (
     ModelAliasRecord,
+    ModelCatalogSeed,
     ModelProviderRecord,
     ModelRecord,
 )
@@ -61,8 +62,8 @@ from foundry_lite.observability.tracing import trace_public_methods
 __all__ = ["CommitResult", "FoundryLite", "StagedFileStats", "_dataset_ref_parts"]
 __all__ += ["_json_ready", "_normalize_duckdb_type", "_required_row"]
 
-_LOCAL_FAKE_CREDENTIAL_REF = "local-fake-credential-ref"
 _LOGGER = logging.getLogger(__name__)
+_LOCAL_FAKE_AUTH_REFERENCE = "local-fake-reference"
 
 
 @trace_public_methods
@@ -115,6 +116,7 @@ class FoundryLite:
         self.secret_vault = dependencies.secret_vault
         self.source_database_adapter = dependencies.source_database_adapter
         self.model_registry_repository = dependencies.model_registry_repository
+        self.model_catalog_seed = dependencies.aip.model_catalog_seed
 
     def _attach_facades(self, services: CoreServices) -> None:
         self._attach_data_facades(services)
@@ -149,6 +151,7 @@ class FoundryLite:
             services.logic_runtime,
             services.evals,
             services.visual_builder,
+            services.citation,
         )
 
     def _attach_operations_facades(self, services: CoreServices) -> None:
@@ -261,27 +264,34 @@ class FoundryLite:
             self._create_demo_model_registry_rows(transaction, now)
 
     def _create_demo_model_registry_rows(self, transaction: TransactionContext, now: str) -> None:
+        seed = self.model_catalog_seed or _default_model_catalog_seed()
         if not self.model_registry_repository.get_providers(
             transaction=transaction,
             tenant_id=DEFAULT_TENANT_ID,
-            provider_ids=["local-fake-provider"],
+            provider_ids=[seed.provider_id],
         ):
-            self.model_registry_repository.create_provider(transaction=transaction, record=_demo_provider_record(now))
+            self.model_registry_repository.create_provider(
+                transaction=transaction,
+                record=_provider_record(seed, now),
+            )
         if not self.model_registry_repository.get_models(
             transaction=transaction,
             tenant_id=DEFAULT_TENANT_ID,
-            model_ids=["local-fake-model"],
+            model_ids=[seed.model_id],
         ):
-            self.model_registry_repository.create_model(transaction=transaction, record=_demo_model_record(now))
+            self.model_registry_repository.create_model(
+                transaction=transaction,
+                record=_model_record(seed, now),
+            )
         existing = self.model_registry_repository.get_aliases(
             transaction=transaction,
             tenant_id=DEFAULT_TENANT_ID,
-            aliases=["default-completion", "gpt-governed"],
+            aliases=list(seed.aliases),
         )
-        for alias in sorted({"default-completion", "gpt-governed"} - {row.alias for row in existing}):
+        for alias in sorted(set(seed.aliases) - {row.alias for row in existing}):
             self.model_registry_repository.create_alias(
                 transaction=transaction,
-                record=_demo_alias_record(alias, now),
+                record=_alias_record(seed, alias, now),
             )
 
 
@@ -298,47 +308,75 @@ def _source_workspace(services: CoreServices) -> SourceWorkspace:
     return SourceWorkspace(services)
 
 
-def _demo_provider_record(now: str) -> ModelProviderRecord:
+def _provider_record(seed: ModelCatalogSeed, now: str) -> ModelProviderRecord:
     return ModelProviderRecord(
-        provider_id="local-fake-provider",
+        provider_id=seed.provider_id,
         tenant_scope=DEFAULT_TENANT_ID,
-        provider_type="local-fake",
-        profile_name="local-fake",
-        region="us-east-1",
-        secret_ref=_LOCAL_FAKE_CREDENTIAL_REF,
-        retention_policy="zero_retention",
-        training_policy="no_train",
+        provider_type=seed.provider_type,
+        profile_name=seed.profile_name,
+        region=seed.region,
+        secret_ref=seed.secret_ref,
+        retention_policy=seed.retention_policy,
+        training_policy=seed.training_policy,
         status="active",
         created_at=now,
     )
 
 
-def _demo_model_record(now: str) -> ModelRecord:
+def _model_record(seed: ModelCatalogSeed, now: str) -> ModelRecord:
     return ModelRecord(
-        model_id="local-fake-model",
+        model_id=seed.model_id,
         tenant_scope=DEFAULT_TENANT_ID,
-        provider_id="local-fake-provider",
-        provider_model_id="local-fake-echo",
-        revision="2026-06-25",
-        lifecycle="stable",
-        capabilities_json={"streaming": True, "native_tools": False},
-        context_limit=8192,
-        output_limit=1024,
-        pricing_json={"input_per_1k": 0.002, "output_per_1k": 0.006, "currency": "USD"},
-        allowed_classifications=("public", "internal"),
+        provider_id=seed.provider_id,
+        provider_model_id=seed.provider_model_id,
+        revision=seed.revision,
+        lifecycle=seed.lifecycle,
+        capabilities_json=dict(seed.capabilities_json),
+        context_limit=seed.context_limit,
+        output_limit=seed.output_limit,
+        pricing_json=dict(seed.pricing_json),
+        allowed_classifications=seed.allowed_classifications,
         created_at=now,
     )
 
 
-def _demo_alias_record(alias: str, now: str) -> ModelAliasRecord:
+def _alias_record(seed: ModelCatalogSeed, alias: str, now: str) -> ModelAliasRecord:
     return ModelAliasRecord(
         alias=alias,
         tenant_scope=DEFAULT_TENANT_ID,
         environment="prod",
-        model_id="local-fake-model",
-        version="2026-06-25",
+        model_id=seed.model_id,
+        version=seed.revision,
         status="enabled",
         eval_run_id=None,
         effective_at=now,
         retired_at=None,
+    )
+
+
+def _default_model_catalog_seed() -> ModelCatalogSeed:
+    return ModelCatalogSeed(
+        provider_id="local-fake-provider",
+        provider_type="local-fake",
+        profile_name="fake-language-model",
+        region="us-east-1",
+        secret_ref=_LOCAL_FAKE_AUTH_REFERENCE,
+        retention_policy="zero_retention",
+        training_policy="no_train",
+        model_id="local-fake-model",
+        provider_model_id="local-fake-echo",
+        revision="2026-06-25",
+        lifecycle="stable",
+        capabilities_json={
+            "streaming": True,
+            "native_tools": False,
+            "image_input": True,
+            "pdf_input": True,
+            "structured_outputs": True,
+        },
+        context_limit=8192,
+        output_limit=1024,
+        pricing_json={"input_per_1k": 0.002, "output_per_1k": 0.006, "currency": "USD"},
+        allowed_classifications=("public", "internal"),
+        aliases=("default-completion", "gpt-governed", "document-vlm"),
     )

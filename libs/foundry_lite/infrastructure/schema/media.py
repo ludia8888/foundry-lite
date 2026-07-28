@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, Column, Integer, String, Table, UniqueConstraint, text
+from sqlalchemy import JSON, Boolean, Column, Float, Integer, String, Table, UniqueConstraint, text
 
 from foundry_lite.infrastructure.schema.base import metadata
 
@@ -144,6 +144,10 @@ content_units = Table(
     Column("start_ms", Integer),
     Column("end_ms", Integer),
     Column("bbox", JSON),
+    Column("parent_content_unit_id", String),
+    Column("source_locator", JSON),
+    Column("structure", JSON),
+    Column("confidence", Float),
     Column("speaker", String),
     Column("language", String),
     # L11: a vision unit's CLIP frame embedding (list[float]); null for text units, which embed

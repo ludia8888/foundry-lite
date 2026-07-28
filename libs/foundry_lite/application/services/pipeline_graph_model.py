@@ -1,4 +1,4 @@
-"""Pure graph helpers for Pipeline Builder v1."""
+"""Pure graph helpers shared by Pipeline Builder v1 and canonical v2."""
 
 from __future__ import annotations
 
@@ -7,9 +7,49 @@ import json
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.primitives import _json_ready
+from foundry_lite.application.services.pipeline_graph_contracts import (
+    DEFAULT_PIPELINE_PREVIEW_ROWS,
+    MAX_PIPELINE_EDGES,
+    MAX_PIPELINE_NODES,
+    MAX_PIPELINE_PREVIEW_ROWS,
+    MAX_PIPELINE_TESTS,
+    PipelineArtifactKind,
+    PipelineGraphV2,
+    PipelineNodeDescriptor,
+    PipelineNodeKind,
+    pipeline_node_descriptor_payloads,
+    pipeline_node_descriptors,
+)
+from foundry_lite.application.services.pipeline_graph_normalizer import (
+    canonical_node_config,
+    empty_pipeline_graph_v2,
+    normalize_join_type,
+    normalize_pipeline_graph,
+    pipeline_graph_schema_version,
+)
+from foundry_lite.application.services.pipeline_graph_v2_validation import validate_pipeline_graph_v2
 from foundry_lite.domain.errors import ValidationFailed
 
 JsonObject = dict[str, object]
+
+__all__ = [
+    "DEFAULT_PIPELINE_PREVIEW_ROWS",
+    "MAX_PIPELINE_EDGES",
+    "MAX_PIPELINE_NODES",
+    "MAX_PIPELINE_PREVIEW_ROWS",
+    "MAX_PIPELINE_TESTS",
+    "PipelineArtifactKind",
+    "PipelineGraphV2",
+    "PipelineNodeDescriptor",
+    "PipelineNodeKind",
+    "empty_pipeline_graph",
+    "empty_pipeline_graph_v2",
+    "normalize_pipeline_graph",
+    "pipeline_graph_fingerprint",
+    "pipeline_node_descriptor_payloads",
+    "pipeline_node_descriptors",
+    "validate_pipeline_graph",
+]
 
 PIPELINE_NODE_TYPES = frozenset(
     {
@@ -22,10 +62,6 @@ PIPELINE_NODE_TYPES = frozenset(
         "output_dataset",
     }
 )
-MAX_PIPELINE_NODES = 200
-MAX_PIPELINE_EDGES = 600
-MAX_PIPELINE_TESTS = 50
-MAX_PIPELINE_PREVIEW_ROWS = 200
 
 
 def empty_pipeline_graph() -> JsonObject:
@@ -38,6 +74,11 @@ def pipeline_graph_fingerprint(graph: Mapping[str, object]) -> str:
 
 
 def validate_pipeline_graph(graph: Mapping[str, object]) -> JsonObject:
+    if pipeline_graph_schema_version(graph) == 2:
+        v2_result = validate_pipeline_graph_v2(graph)
+        v2_result["fingerprint"] = pipeline_graph_fingerprint(graph)
+        _add_normalized_fingerprint(v2_result)
+        return v2_result
     nodes = graph_nodes(graph)
     edges = graph_edges(graph)
     errors = _basic_graph_errors(nodes, edges)
@@ -46,12 +87,22 @@ def validate_pipeline_graph(graph: Mapping[str, object]) -> JsonObject:
     errors.extend(_topology_errors(nodes, edges))
     errors.extend(_operation_config_errors(nodes, edges))
     errors.extend(_output_contract_errors(graph))
-    return {
+    result: JsonObject = {
         "valid": not errors,
         "errors": errors,
         "warnings": _graph_warnings(graph),
         "fingerprint": pipeline_graph_fingerprint(graph),
     }
+    if not errors:
+        result["normalizedGraph"] = normalize_pipeline_graph(graph)
+        _add_normalized_fingerprint(result)
+    return result
+
+
+def _add_normalized_fingerprint(result: JsonObject) -> None:
+    normalized = result.get("normalizedGraph")
+    if isinstance(normalized, Mapping):
+        result["normalizedFingerprint"] = pipeline_graph_fingerprint(normalized)
 
 
 def graph_nodes(graph: Mapping[str, object]) -> list[JsonObject]:
@@ -73,13 +124,13 @@ def source_dataset_refs(graph: Mapping[str, object], node_id: str) -> list[str]:
     node_ref_by_id = _node_ref_by_id(graph_nodes(graph))
     refs: list[str] = []
     for edge in graph_edges(graph):
-        if edge.get("target") != node_id:
+        if _edge_target_id(edge) != node_id:
             continue
-        source_id = str(edge.get("source"))
+        source_id = _edge_source_id(edge)
         ref = node_ref_by_id.get(source_id)
         if ref is not None:
             refs.append(ref)
-    return refs
+    return sorted(refs)
 
 
 def topological_node_ids(graph: Mapping[str, object]) -> list[str]:
@@ -100,8 +151,8 @@ def _topology_maps(
     incoming = {node_id: 0 for node_id in node_ids}
     outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
     for edge in edges:
-        source = str(edge["source"])
-        target = str(edge["target"])
+        source = _edge_source_id(edge)
+        target = _edge_target_id(edge)
         incoming[target] += 1
         outgoing[source].append(target)
     return incoming, outgoing
@@ -125,20 +176,25 @@ def _consume_topology(
 
 
 def node_data(node: Mapping[str, object]) -> JsonObject:
-    data = _node_object_field(node, "data")
-    config = _node_object_field(node, "config")
-    merged = dict(config)
-    merged.update(data)
-    return merged
+    return canonical_node_config(node)
 
 
 def output_dataset_ref(graph: Mapping[str, object]) -> str | None:
+    refs = output_dataset_refs(graph)
+    return refs[0] if refs else None
+
+
+def output_dataset_refs(graph: Mapping[str, object]) -> list[str]:
+    refs: list[str] = []
     for node in graph_nodes(graph):
-        if node.get("type") == "output_dataset":
-            data = node_data(node)
-            ref = data.get("datasetRef") or data.get("outputDatasetRef")
-            return str(ref) if ref is not None else None
-    return None
+        is_output = node.get("type") == "output_dataset" or node.get("descriptorId") == "output.dataset"
+        if not is_output:
+            continue
+        data = node_data(node)
+        ref = data.get("datasetRef") or data.get("outputDatasetRef")
+        if isinstance(ref, str) and ref:
+            refs.append(ref)
+    return refs
 
 
 def output_contract_columns(graph: Mapping[str, object]) -> list[JsonObject]:
@@ -150,7 +206,7 @@ def output_contract_columns(graph: Mapping[str, object]) -> list[JsonObject]:
 
 def bounded_preview_limit(limit: object | None) -> int:
     if limit is None:
-        return 20
+        return DEFAULT_PIPELINE_PREVIEW_ROWS
     if not isinstance(limit, int):
         raise ValidationFailed("preview limit must be an integer", details={"limit": str(limit)})
     return max(1, min(limit, MAX_PIPELINE_PREVIEW_ROWS))
@@ -255,6 +311,7 @@ def _join_node_errors(
     right_key = _text_config(data, "rightKey", "rightColumn", "rightOn")
     if left_key is None or right_key is None:
         return [{"code": "join_key_required", "nodeId": node_id}]
+    errors.extend(_join_type_errors(node_id, data))
     errors.extend(_join_key_errors(node_id, "left", left_key, data, incoming_edges, nodes))
     errors.extend(_join_key_errors(node_id, "right", right_key, data, incoming_edges, nodes))
     return errors
@@ -311,13 +368,12 @@ def _graph_warnings(graph: Mapping[str, object]) -> list[JsonObject]:
     return warnings
 
 
-def _node_object_field(node: Mapping[str, object], field: str) -> JsonObject:
-    value = node.get(field, {})
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return {str(key): item for key, item in value.items()}
-    raise ValidationFailed(f"pipeline graph node {field} must be an object", details={"node": node.get("id")})
+def _edge_source_id(edge: Mapping[str, object]) -> str:
+    return str(edge.get("sourceNodeId") or edge.get("source") or "")
+
+
+def _edge_target_id(edge: Mapping[str, object]) -> str:
+    return str(edge.get("targetNodeId") or edge.get("target") or "")
 
 
 def _node_ref_by_id(nodes: Sequence[Mapping[str, object]]) -> dict[str, str]:
@@ -380,6 +436,16 @@ def _input_source_id(
     if fallback_index < len(incoming_edges) and isinstance(incoming_edges[fallback_index].get("source"), str):
         return str(incoming_edges[fallback_index]["source"])
     return None
+
+
+def _join_type_errors(node_id: str, data: Mapping[str, object]) -> list[JsonObject]:
+    value = data.get("joinType", "inner")
+    if not isinstance(value, str):
+        return [{"code": "join_type_invalid", "nodeId": node_id, "joinType": value}]
+    normalized = normalize_join_type(value)
+    if normalized in {"inner", "left", "right", "full outer"}:
+        return []
+    return [{"code": "join_type_invalid", "nodeId": node_id, "joinType": value}]
 
 
 def _known_input_schemas(

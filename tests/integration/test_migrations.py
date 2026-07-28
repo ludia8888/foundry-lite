@@ -50,6 +50,33 @@ def test_migrations_to_head_match_metadata_tables_and_columns(tmp_path: Path, mo
         assert migrated_columns == expected_columns, f"column drift in {table_name}"
 
 
+def test_pipeline_v2_migration_matches_declared_execution_indexes(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'pipeline-v2-indexes.db'}"
+
+    _upgrade_fresh_db(database_url)
+
+    inspector = inspect(create_engine(database_url))
+    for table_name in (
+        "pipeline_node_runs",
+        "pipeline_run_artifacts",
+        "pipeline_preview_runs",
+    ):
+        declared = {index.name for index in db.metadata.tables[table_name].indexes}
+        migrated = {str(index["name"]) for index in inspector.get_indexes(table_name)}
+        assert migrated == declared, f"index drift in {table_name}"
+
+
+def test_semantic_row_cache_migration_keeps_tenant_key_uniqueness(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'pipeline-semantic-cache.db'}"
+
+    _upgrade_fresh_db(database_url)
+
+    inspector = inspect(create_engine(database_url))
+    constraints = inspector.get_unique_constraints("pipeline_semantic_row_cache")
+    names = {str(constraint["name"]) for constraint in constraints}
+    assert names == {"uq_pipeline_semantic_row_cache_key"}
+
+
 def test_create_all_bootstrap_stamps_head_and_stays_migration_compatible(tmp_path: Path) -> None:
     """A create_all-bootstrapped database must join the Alembic lineage: it is stamped at
     head so a later `alembic upgrade head` is a no-op instead of failing with 'table already

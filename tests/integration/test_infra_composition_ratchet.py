@@ -310,8 +310,13 @@ def test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_ve
         DebeziumPostgresSourceConfig(primary_key=("order_id",)),
     )
 
-    def fail_rows_to_parquet(rows: object, target_path: Path, fieldnames: list[str]) -> None:
-        del rows, target_path, fieldnames
+    def fail_rows_to_parquet(
+        rows: object,
+        target_path: Path,
+        fieldnames: list[str],
+        **kwargs: object,
+    ) -> None:
+        del rows, target_path, fieldnames, kwargs
         raise RuntimeError("injected cdc archive parquet failure")
 
     monkeypatch.setattr(deps.compute_adapter, "rows_to_parquet", fail_rows_to_parquet)

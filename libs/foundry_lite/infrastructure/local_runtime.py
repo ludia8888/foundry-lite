@@ -30,12 +30,15 @@ from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
 from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
 from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
+from foundry_lite.application.ports.model_registry_repository import ModelCatalogSeed
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
+from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
+from foundry_lite.application.services.media.content_unit_evidence import ContentUnitEvidenceService
 from foundry_lite.application.services.object_store.query_cursor import (
     require_object_query_cursor_signing_key_for_runtime,
 )
@@ -43,7 +46,10 @@ from foundry_lite.application.services.ontology_yaml import action_allowed_roles
 from foundry_lite.application.services.runtime_run_cursors import require_operations_cursor_signing_key_for_runtime
 from foundry_lite.domain.ontology.datasources import property_datasource_rows
 from foundry_lite.infrastructure.adapters import (
+    AnthropicLanguageModel,
     AsrProcessorAdapter,
+    AuthoritativeCitationSourceVerifier,
+    ContainerCodeExecutionAdapter,
     DuckDBComputeAdapter,
     ElasticsearchAdapter,
     ElasticsearchAdapterConfig,
@@ -75,7 +81,10 @@ from foundry_lite.infrastructure.adapters import (
     LocalStreamAdapter,
     LocalWorkflowAdapter,
     OcrProcessorAdapter,
+    PdfLayoutProcessorAdapter,
+    PdfOcrProcessorAdapter,
     PdfTextProcessorAdapter,
+    RepositoryModelMediaResolver,
     RestPullConnectorAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
@@ -106,6 +115,7 @@ from foundry_lite.infrastructure.adapters.local_vision_embedding import (
     _fastembed_clip_image_engine,
     _fastembed_clip_text_engine,
 )
+from foundry_lite.infrastructure.adapters.media_processor_registry import build_default_media_processor_registry
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
 from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_extractor,
@@ -141,19 +151,30 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyOntologyBranchRepository,
     SqlAlchemyOntologyRepository,
     SqlAlchemyOsdkApplicationRepository,
+    SqlAlchemyPipelineExecutionRepository,
     SqlAlchemyPipelineRepository,
     SqlAlchemyResourceCatalogRepository,
     SqlAlchemyRuntimeRepository,
+    SqlAlchemySemanticRowCacheRepository,
     SqlAlchemySourceManagementRepository,
     SqlAlchemySourceRegistryRepository,
     SqlAlchemyTransformRepository,
 )
 from foundry_lite.infrastructure.secrets import local_secret_vault_provider, secret_provider_from_env
+from foundry_lite.infrastructure.trained_model_runtime_adapters import (
+    ContainerTrainedModelInferenceAdapter,
+    LocalTrainedModelInferenceAdapter,
+)
 from foundry_lite.security.policy import ActionRoleProvider, ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
 _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV = "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY"
 _KAFKA_SUBSCRIPTIONS_ENV = "FOUNDRY_LITE_KAFKA_SUBSCRIPTIONS_JSON"
+_ANTHROPIC_MODEL_ENV = "FOUNDRY_LITE_ANTHROPIC_MODEL"
+_ANTHROPIC_AUTH_REFERENCE_ENV = "FOUNDRY_LITE_ANTHROPIC_SECRET_REF"
+_ANTHROPIC_REGION_ENV = "FOUNDRY_LITE_ANTHROPIC_REGION"
+_DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
+_LOCAL_FAKE_AUTH_REFERENCE = "local-fake-reference"
 _PROTECTED_REQUIRED_ADAPTER_PROFILES: Mapping[str, frozenset[str]] = {
     "dataset_storage": frozenset({"s3-storage", "iceberg"}),
     "media_storage": frozenset({"s3-media"}),
@@ -163,6 +184,7 @@ _PROTECTED_REQUIRED_ADAPTER_PROFILES: Mapping[str, frozenset[str]] = {
     "search": frozenset({"elasticsearch"}),
     "stream": frozenset({"kafka"}),
     "workflow": frozenset({"temporal"}),
+    "language_model": frozenset({"anthropic"}),
 }
 
 
@@ -180,6 +202,7 @@ class RuntimeAdapterProfiles:
     stream: str
     workflow: str
     external_media: str
+    language_model: str
 
     @classmethod
     def from_env(
@@ -200,6 +223,7 @@ class RuntimeAdapterProfiles:
             stream=_env_profile(source, "FOUNDRY_LITE_STREAM_PROFILE", base),
             workflow=_env_profile(source, "FOUNDRY_LITE_WORKFLOW_PROFILE", base),
             external_media=_env_profile(source, "FOUNDRY_LITE_EXTERNAL_MEDIA_PROFILE", base),
+            language_model=_env_profile(source, "FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE", base),
         )
 
 
@@ -339,12 +363,16 @@ def _create_core_dependencies(
         model_version=CLIP_MODEL_VERSION,
     )
     media_processor = _media_processor_adapter(profiles.media_processor, vision_embedding_model_adapter)
+    media_processor_registry = build_default_media_processor_registry(vision_embedding_model_adapter)
     content_index_adapter = _content_index_adapter(profiles.content_index)
     embedding_model_adapter = LocalEmbeddingAdapter(
         embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
     )
     completion_model_adapter = LocalCompletionAdapter()
-    compute_adapter = _compute_adapter(profiles.compute)
+    compute_adapter = _compute_adapter(
+        profiles.compute,
+        is_protected=runtime_profile.is_protected,
+    )
     env_secret_provider = secret_provider_from_env()
     secret_vault = local_secret_vault_provider(root, fallback=env_secret_provider)
     secret_provider = secret_vault
@@ -356,16 +384,36 @@ def _create_core_dependencies(
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
+    media_repository = SqlAlchemyMediaRepository(engine)
+    media_derivative_repository = SqlAlchemyMediaDerivativeRepository(engine)
+    policy = PolicyService(
+        classification_provider=_classification_provider(engine, ontology_repository),
+        action_role_provider=_action_role_provider(engine, ontology_repository),
+    )
+    content_unit_evidence_service = ContentUnitEvidenceService(
+        engine=engine,
+        policy=policy,
+        media_repository=media_repository,
+        media_derivative_repository=media_derivative_repository,
+    )
+    citation_source_verifier = AuthoritativeCitationSourceVerifier(
+        content_unit_evidence_service,
+        FakeCitationSourceVerifier(),
+    )
+    language_model_adapter = _language_model_adapter(
+        profiles.language_model,
+        secret_provider,
+        engine,
+        media_repository,
+        media_storage,
+    )
     allow_schema_mutation = not runtime_profile.is_protected
     return CoreDependencies(
         profile=runtime_profile,
         paths=PathDependencies(root=root, storage_root=object_storage_root),
         security=SecurityDependencies(
             engine=engine,
-            policy=PolicyService(
-                classification_provider=_classification_provider(engine, ontology_repository),
-                action_role_provider=_action_role_provider(engine, ontology_repository),
-            ),
+            policy=policy,
             metadata_repository=SqlAlchemyMetadataRepository(
                 engine,
                 allow_schema_mutation=allow_schema_mutation,
@@ -385,6 +433,7 @@ def _create_core_dependencies(
             ontology_repository=ontology_repository,
             ontology_branch_repository=SqlAlchemyOntologyBranchRepository(engine),
             pipeline_repository=SqlAlchemyPipelineRepository(engine),
+            pipeline_execution_repository=SqlAlchemyPipelineExecutionRepository(engine),
             resource_catalog_repository=SqlAlchemyResourceCatalogRepository(engine),
             transform_repository=SqlAlchemyTransformRepository(engine),
             materialization_repository=SqlAlchemyMaterializationRepository(engine),
@@ -416,24 +465,28 @@ def _create_core_dependencies(
             embedding_model_adapter=embedding_model_adapter,
             completion_model_adapter=completion_model_adapter,
             vision_embedding_model_adapter=vision_embedding_model_adapter,
-            language_model_adapter=FakeLanguageModel(),
+            language_model_adapter=language_model_adapter,
             model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
+            semantic_row_cache_repository=SqlAlchemySemanticRowCacheRepository(engine),
             context_provider=FakeContextProvider(),
             prompt_artifact_store=LocalPromptArtifactStore(
                 prompt_artifacts_root,
                 secret_provider,
                 allow_local_dev_fallback=_allow_local_prompt_artifact_key_from_env(),
             ),
-            citation_source_verifier=FakeCitationSourceVerifier(),
+            citation_source_verifier=citation_source_verifier,
             tool_executor=FakeToolExecutor(),
+            model_catalog_seed=_language_model_catalog_seed(profiles.language_model),
+            trained_model_inference_port=_trained_model_inference_adapter(runtime_profile),
         ),
         media=MediaDependencies(
-            media_repository=SqlAlchemyMediaRepository(engine),
-            media_derivative_repository=SqlAlchemyMediaDerivativeRepository(engine),
+            media_repository=media_repository,
+            media_derivative_repository=media_derivative_repository,
             media_reference_binding_repository=SqlAlchemyMediaReferenceBindingRepository(engine),
             media_access_cache_repository=SqlAlchemyMediaAccessCacheRepository(engine),
             media_storage=media_storage,
             media_processor=media_processor,
+            media_processor_registry=media_processor_registry,
             media_preview_renderer=LocalPreviewRendererAdapter(),
             external_media_reader=_external_media_reader(profiles.external_media),
             content_index_adapter=content_index_adapter,
@@ -446,6 +499,90 @@ def _create_core_dependencies(
             source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
             source_stream_adapter=KafkaSourceStreamAdapter(),
         ),
+    )
+
+
+def _language_model_adapter(
+    profile: str,
+    secret_provider: SecretProvider,
+    engine: Engine,
+    media_repository: SqlAlchemyMediaRepository,
+    media_storage: MediaStorageAdapter,
+) -> FakeLanguageModel | AnthropicLanguageModel:
+    profile = _env_profile(os.environ, "FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE", profile)
+    if profile == "anthropic":
+        return AnthropicLanguageModel(
+            secret_provider,
+            media_resolver=RepositoryModelMediaResolver(engine, media_repository, media_storage),
+        )
+    if profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "fake-language-model"}:
+        return FakeLanguageModel()
+    raise ValueError(f"unknown language-model profile: {profile}")
+
+
+def _language_model_catalog_seed(profile: str) -> ModelCatalogSeed:
+    profile = _env_profile(os.environ, "FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE", profile)
+    if profile == "anthropic":
+        return _anthropic_model_catalog_seed()
+    return _fake_model_catalog_seed()
+
+
+def _anthropic_model_catalog_seed() -> ModelCatalogSeed:
+    provider_model_id = os.getenv(_ANTHROPIC_MODEL_ENV, _DEFAULT_ANTHROPIC_MODEL).strip()
+    if not provider_model_id:
+        raise ValueError(f"{_ANTHROPIC_MODEL_ENV} cannot be blank")
+    return ModelCatalogSeed(
+        provider_id="anthropic-direct-provider",
+        provider_type="anthropic",
+        profile_name="anthropic",
+        region=os.getenv(_ANTHROPIC_REGION_ENV, "global").strip() or "global",
+        secret_ref=os.getenv(_ANTHROPIC_AUTH_REFERENCE_ENV, "anthropic_api_key").strip() or "anthropic_api_key",
+        retention_policy="anthropic_api_account_policy",
+        training_policy="anthropic_api_account_policy",
+        model_id=f"anthropic:{provider_model_id}",
+        provider_model_id=provider_model_id,
+        revision=provider_model_id,
+        lifecycle="stable",
+        capabilities_json={
+            "streaming": True,
+            "image_input": True,
+            "pdf_input": True,
+            "structured_outputs": True,
+            "sampling_parameters": not provider_model_id.startswith("claude-sonnet-5"),
+        },
+        context_limit=1_000_000 if provider_model_id.startswith("claude-sonnet-5") else 200_000,
+        output_limit=128_000 if provider_model_id.startswith("claude-sonnet-5") else 64_000,
+        pricing_json={},
+        allowed_classifications=("public", "internal"),
+        aliases=("default-completion", "gpt-governed", "document-vlm"),
+    )
+
+
+def _fake_model_catalog_seed() -> ModelCatalogSeed:
+    return ModelCatalogSeed(
+        provider_id="local-fake-provider",
+        provider_type="local-fake",
+        profile_name="fake-language-model",
+        region="us-east-1",
+        secret_ref=_LOCAL_FAKE_AUTH_REFERENCE,
+        retention_policy="zero_retention",
+        training_policy="no_train",
+        model_id="local-fake-model",
+        provider_model_id="local-fake-echo",
+        revision="2026-06-25",
+        lifecycle="stable",
+        capabilities_json={
+            "streaming": True,
+            "native_tools": False,
+            "image_input": True,
+            "pdf_input": True,
+            "structured_outputs": True,
+        },
+        context_limit=8192,
+        output_limit=1024,
+        pricing_json={"input_per_1k": 0.002, "output_per_1k": 0.006, "currency": "USD"},
+        allowed_classifications=("public", "internal"),
+        aliases=("default-completion", "gpt-governed", "document-vlm"),
     )
 
 
@@ -502,6 +639,10 @@ def _media_processor_adapter(
         return OcrProcessorAdapter(ocr_engine=_tesseract_ocr_engine)
     if processor_profile == "asr-whisper":
         return AsrProcessorAdapter(asr_engine=_faster_whisper_asr_engine)
+    if processor_profile == "pdf-layout-pypdf":
+        return PdfLayoutProcessorAdapter()
+    if processor_profile == "pdf-ocr-tesseract-poppler":
+        return PdfOcrProcessorAdapter()
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
         return PdfTextProcessorAdapter()
     raise ValueError(f"unknown media processor profile: {processor_profile}")
@@ -528,15 +669,30 @@ def _s3_media_storage_config() -> S3MediaStorageConfig:
     )
 
 
-def _compute_adapter(compute_profile: str) -> ComputeAdapter:
+def _compute_adapter(compute_profile: str, *, is_protected: bool = False) -> ComputeAdapter:
     compute_profile = _env_profile(os.environ, "FOUNDRY_LITE_COMPUTE_PROFILE", compute_profile)
-    if compute_profile == "spark":
-        return SparkComputeAdapter()
-    if compute_profile in {"local", "s3-storage", "iceberg"}:
-        return DuckDBComputeAdapter()
     if compute_profile == "fake-storage":
         return FakeComputeAdapter()
+    code_execution_adapter = ContainerCodeExecutionAdapter(
+        is_image_digest_required=is_protected,
+    )
+    if compute_profile == "spark":
+        return SparkComputeAdapter(code_execution_adapter=code_execution_adapter)
+    if compute_profile in {"local", "s3-storage", "iceberg"}:
+        return DuckDBComputeAdapter(code_execution_adapter=code_execution_adapter)
     raise ValueError(f"unknown compute profile: {compute_profile}")
+
+
+def _trained_model_inference_adapter(runtime_profile: RuntimeProfile) -> TrainedModelInferencePort:
+    default_profile = "local" if runtime_profile.is_local_like else "container"
+    profile = _env_profile(os.environ, "FOUNDRY_LITE_TRAINED_MODEL_PROFILE", default_profile)
+    if profile == "local" and runtime_profile.is_local_like:
+        return LocalTrainedModelInferenceAdapter()
+    if profile == "container":
+        return ContainerTrainedModelInferenceAdapter(
+            is_image_digest_required=runtime_profile.is_protected,
+        )
+    raise ValueError("protected runtimes require FOUNDRY_LITE_TRAINED_MODEL_PROFILE=container")
 
 
 def _connector_adapter(

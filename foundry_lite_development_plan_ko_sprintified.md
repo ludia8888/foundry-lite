@@ -91,7 +91,7 @@ P0 결정:
 - Reindex/replay를 위해 `index_runs`, cursor, count/hash validation, shadow swap 전략을 명시한다.
 - Materialization은 v1에서 `action_log`와 `object_snapshot` 두 종류만 필수로 구현한다.
 - 보안은 v1에서 tenant isolation, RBAC, object read/action execute, property masking, audit-all-writes로 제한한다.
-- Scale Foundation은 Sprint 02A에서 먼저 고정한다. Spark/Flink/Kafka/Iceberg/Elasticsearch를 production infrastructure로 바로 강제하지 않더라도, `StorageAdapter`, `MetadataRepository`, `ComputeAdapter`, `EventPublisher`, `WorkflowAdapter`, `SearchAdapter`, `ConnectorAdapter`, `AuthProvider`의 port/contract/test boundary는 MVP 초기에 만든다.
+- Scale Foundation은 Sprint 02A에서 먼저 고정한다. Spark/Kafka/Iceberg/Elasticsearch를 production infrastructure로 바로 강제하지 않더라도, `StorageAdapter`, `MetadataRepository`, `ComputeAdapter`, `EventPublisher`, `WorkflowAdapter`, `SearchAdapter`, `ConnectorAdapter`, `AuthProvider`의 port/contract/test boundary는 MVP 초기에 만든다.
 
 ### 0.2 설계-스프린트 연결표
 
@@ -316,7 +316,7 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 - mandatory markings, CBAC, cross-organization collaboration
 - 수십억~수백억 object indexing 최적화
 - Elasticsearch live cluster deployment와 managed operations
-- Spark/Flink runner 구현
+- Spark runner와 자체 지속 실행 streaming worker의 production packaging
 - full visual pipeline builder
 - full visual ontology manager
 - zero-downtime multi-region deployment automation
@@ -445,8 +445,8 @@ Scale Production
 - S3 / GCS / Azure Blob
 - Iceberg REST Catalog / Nessie / Polaris
 - Spark cluster for batch
-- Flink for streaming
-- Kafka/Redpanda multi-broker
+- Kafka/Redpanda multi-broker + CDC/WebSocket ingest
+- checkpoint·lease·fencing을 갖춘 자체 지속 실행 streaming workers
 - Elasticsearch cluster
 - Kubernetes HPA for workers
 - PostgreSQL primary/replica, partitioned audit/action/object tables
@@ -499,7 +499,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 | DatasetTransactionRepository | SQLAlchemy transaction + schema revision guard + Alembic baseline parity | PostgreSQL transaction + multi-step migration/rollback operations | OPEN → COMMITTED/ABORTED 상태 전이 불변 | `transaction_id`, `run_id` |
 | DatasetVersionRepository | SQLAlchemy version/schema reads | PostgreSQL indexed version/schema reads | 최신 버전, 특정 버전, schema version 조회 의미 불변 | `dataset_id`, `version_id`, `schema_version` |
 | RuntimeRepository | SQLAlchemy audit/outbox/lineage/run table | PostgreSQL partitioned audit/outbox, future publisher state | audit, outbox, lineage, run state의 key 의미 불변 | `tenant_id`, `request_id`, `run_id`, `correlation_id` |
-| ComputeAdapter | DuckDB SQL runner | Spark batch, later Flink bounded job | input version binding, output staging, health gate, lineage 불변 | `transform_run_id`, `input_version_id`, `output_version_id` |
+| ComputeAdapter | DuckDB SQL runner | Spark batch 또는 격리된 bounded worker job | input version binding, output staging, health gate, lineage 불변 | `transform_run_id`, `input_version_id`, `output_version_id` |
 | StreamAdapter/EventPublisher | SQLAlchemy outbox + local/fake stream + Kafka-compatible one-shot worker proof | Kafka/Redpanda publisher and continuously running consumer | event idempotency, DLQ, replay cursor 의미 불변 | `event_id`, `correlation_id`, `cursor` |
 | SearchAdapter | local/fake + Elasticsearch-compatible projection proof | managed Elasticsearch projection | object store가 source of truth이고 search는 재생성 가능한 projection | `object_type`, `object_id`, `index_version` |
 | WorkflowAdapter | direct call or local worker skeleton | Temporal workflow/activity | retry, timeout, durable run state, replay 가능성 불변 | `workflow_id`, `run_id`, `attempt` |
@@ -1262,6 +1262,24 @@ create table lineage_edges (
 Transform run마다 input dataset version과 output dataset version을 기록한다.
 
 현재 checkout의 `foundry.transforms.run_graph(...)`는 한 transform 성공 후 output dataset을 input으로 선언한 downstream transform을 bounded depth/max-runs 안에서 자동 실행하고 `transform.run.downstream_triggered` audit 및 `triggered_downstream` run relation을 남긴다. `foundry.transforms.preview_due(...)`/`run_due(...)`는 등록된 transform의 최신 입력 dataset version과 마지막 성공 run의 `input_versions`를 비교해 snapshot transform만 재빌드하고 `transform.scheduler.triggered` audit 및 `scheduled_rebuild_of` run relation을 남긴다. `worker:transform-scheduler`는 같은 tick을 한 번 실행하거나 configured max tick/empty tick/stop callback까지 반복하고 JSON evidence를 쓴다. 이는 full visual pipeline builder나 production-managed 상시 scheduler daemon이 아니라 명시적 graph/scheduler tick과 bounded worker entrypoint다.
+
+### 7.8 Pipeline Builder semantic interpretation과 direct Anthropic preview 경계
+
+현재 checkout의 Graph v2 no-commit preview는 `transform.use_llm` 노드로 정형 row와 비정형 Content Unit에 versioned prompt를 적용한다. Text, Basic Vision, Layout-aware VLM 모드를 구분하고, PDF의 heading/body/table 같은 구조나 image 의미를 사용자가 정의한 JSON Schema로 받으며, per-item typed error와 model/prompt/source-locator/token/classification evidence를 남긴다.
+
+일반 Pipeline Builder table preview는 기본값과 서버 상한을 500행으로 고정한다. `transform.use_llm` 결과 preview는 상위 `tableRows`가 500이어도 독립적으로 최대 50행까지만 model gateway를 호출한다. Media 5개, PDF 3페이지(최대 10), audio/video 60초, scene 12개, search 10건, 총 32MiB, timeout 30초 경계와 no-commit 규칙은 그대로 유지한다.
+
+`FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE=anthropic`을 명시한 경우에만 direct Anthropic Messages API adapter가 선택된다. local catalog seed는 `claude-sonnet-5`를 provider model과 revision으로 고정하고, graph에는 credential이 아니라 model alias와 `promptVersionId`를 저장한다. Gateway가 alias를 immutable provider route로 해석한 뒤 adapter가 매 요청마다 `SecretProvider`에서 `secret_ref`를 다시 조회한다. committed PDF/image bytes는 검증 후 base64 document/image block으로 전달하고, structured output은 `output_config.format` JSON Schema로 요청한 뒤 Foundry-lite schema validator로 다시 검사한다. 이 preview는 항상 `commitForbidden=true`, `servingVersionCreated=false`이며 Dataset version, Media derivative, Content Unit serving asset을 만들지 않는다.
+
+현재 경계는 다음을 완료로 간주하지 않는다.
+
+- `LanguageModelAdapter.stream(...)` 계약은 있지만 Anthropic adapter는 native SSE를 소비하지 않고 완료 응답을 한 event로 감싼다.
+- Anthropic typed tool schema와 tool-use loop는 아직 없다. name-only tool 요청은 provider 호출 전에 거절한다.
+- `skipRecomputingRows`는 성공 row를 Pipeline·branch/deployment·node·cache generation·resource security policy와 exact model/prompt/input/media/schema fingerprint 범위에서 실제 재사용한다. 다만 이는 Foundry-lite application cache이며 Anthropic provider-native prompt caching `cache_control`, cache read/create usage accounting과는 별개이고 후자는 아직 연결되지 않았다.
+- 모델 catalog는 환경 설정으로 seed되며 Anthropic Models API와 자동 동기화하지 않는다.
+- direct model input은 image와 PDF만 허용한다. Audio는 ASR Content Unit으로, video와 live video는 scene-frame/ASR bounded micro-batch로 먼저 변환해야 한다.
+- provider-native citation과 structured output은 같은 호출의 완료 조건으로 묶지 않는다. Citation이 필요하면 별도 노드 또는 별도 요청으로 구성한다.
+- production async Pipeline deployment/build, node retry/cancel/takeover, serving output commit은 별도 runtime 단계다.
 
 ---
 
@@ -2916,7 +2934,7 @@ Actions:
 | Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, bounded continuous stream archive worker, live broker proof, Debezium archive/live topic, CDC object indexing proof, bounded/continuous CDC object-indexer worker proof가 있다. | rebalance/commit-unknown failure injection, production deployment packaging |
 | Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |
 | Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof, S3/Iceberg/Spark/infra-composition ratchet이 있다. | Kubernetes/Helm, backup/restore, managed operations, real cluster/cloud/chaos evidence |
-| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, Ontology-style object/action/media OSDK facade, Developer Console-lite OSDK app/scope/client registry, JWT claim 기반 app/resource scope enforcement, local OAuth authorization-code/PKCE/token/refresh/revoke lifecycle, local TS/Python SDK version/artifact registry with channels/compatibility windows/download tokens, ObjectSet WebSocket `.subscribe(...)` runtime with SSE fallback, generated package manifest/fingerprint and live-catalog SDK regeneration assertion, lifecycle mutation idempotency, rate-limit/replay/family-compromise/JWKS/redaction proof, reconnect/resume/backpressure proof, browser CORS/WebSocket Origin/XSS/CSRF threat-model proof, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, bounded operation polling, fetch-based operation event streaming helper, Compass-style Projects/Resources DB/API/SDK surface with project grants, folders, RID-backed resources, favorites, trash/restore, and explicit reconcile, Pipeline Builder graph API/SDK surface, Source onboarding recipe/hook, Source Wizard recipe/hook, Generic REST connector onboarding recipe/hook, durable Source/Sync 분리와 감사 가능한 disable/re-enable, Source-level REST/database live connection diagnostic와 durable redacted history, Source scheduler schedule edit/pause/resume, 연속 실패 자동 일시정지, 복구 빌드 성공 후 자동 재개, preview/tick API/SDK와 실패 진단 UI, admin readiness overview/screen/task-plan/operations-board model, bounded outbox publish admin start, 250 route-surface request contract, 28 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK, S64 Operations Recovery overview and post-restore validation API/SDK가 있다. | full visual dataset browser, lineage graph UX, folder/resource direct grant overrides, full visual Compass workspace, insight evidence panel, approval policy UI, action orchestration workspace, recovery console UI, visual Developer Console/login/session UI, external NPM/PyPI publishing, external IdP introspection/refresh-token revocation, exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows, SAP/NetSuite/OAuth packaged source wizard, production Agent proxy/TLS terminal/egress log viewer |
+| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, Ontology-style object/action/media OSDK facade, Developer Console-lite OSDK app/scope/client registry, JWT claim 기반 app/resource scope enforcement, local OAuth authorization-code/PKCE/token/refresh/revoke lifecycle, local TS/Python SDK version/artifact registry with channels/compatibility windows/download tokens, ObjectSet WebSocket `.subscribe(...)` runtime with SSE fallback, generated package manifest/fingerprint and live-catalog SDK regeneration assertion, lifecycle mutation idempotency, rate-limit/replay/family-compromise/JWKS/redaction proof, reconnect/resume/backpressure proof, browser CORS/WebSocket Origin/XSS/CSRF threat-model proof, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, bounded operation polling, fetch-based operation event streaming helper, Compass-style Projects/Resources DB/API/SDK surface with project grants, folders, RID-backed resources, favorites, trash/restore, and explicit reconcile, Pipeline Builder graph API/SDK surface, Source onboarding recipe/hook, Source Wizard recipe/hook, Generic REST connector onboarding recipe/hook, durable Source/Sync 분리와 감사 가능한 disable/re-enable, Source-level REST/database live connection diagnostic와 durable redacted history, Source scheduler schedule edit/pause/resume, 연속 실패 자동 일시정지, 복구 빌드 성공 후 자동 재개, preview/tick API/SDK와 실패 진단 UI, admin readiness overview/screen/task-plan/operations-board model, bounded outbox publish admin start, 262 route-surface request contract, 28 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK, S64 Operations Recovery overview and post-restore validation API/SDK가 있다. | full visual dataset browser, lineage graph UX, folder/resource direct grant overrides, full visual Compass workspace, insight evidence panel, approval policy UI, action orchestration workspace, recovery console UI, visual Developer Console/login/session UI, external NPM/PyPI publishing, external IdP introspection/refresh-token revocation, exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows, SAP/NetSuite/OAuth packaged source wizard, production Agent proxy/TLS terminal/egress log viewer |
 
 ## 22. Performance targets
 

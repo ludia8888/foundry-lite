@@ -89,6 +89,29 @@ class ModelAliasRecord:
     retired_at: str | None
 
 
+@dataclass(frozen=True)
+class ModelCatalogSeed:
+    """Composition-owned bootstrap rows for one explicitly configured model profile."""
+
+    provider_id: str
+    provider_type: str
+    profile_name: str
+    region: str
+    secret_ref: str
+    retention_policy: str
+    training_policy: str
+    model_id: str
+    provider_model_id: str
+    revision: str
+    lifecycle: ModelLifecycle
+    capabilities_json: dict[str, object]
+    context_limit: int
+    output_limit: int
+    pricing_json: dict[str, object]
+    allowed_classifications: tuple[str, ...]
+    aliases: tuple[str, ...]
+
+
 class ModelRegistryRepository(Protocol):
     """DB boundary for the model catalog, providers, and alias indirection."""
 

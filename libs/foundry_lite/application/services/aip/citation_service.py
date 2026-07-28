@@ -9,16 +9,28 @@ output.
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import hmac
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import cast
+from urllib.parse import quote
 
 from foundry_lite.application.ports.ai_run_repository import AiCitationRecord, AiLedgerRow
-from foundry_lite.application.ports.citation_source import CitationSourceVerificationRequest
+from foundry_lite.application.ports.citation_source import (
+    CitationSourceEvidence,
+    CitationSourceVerificationFailed,
+    CitationSourceVerificationRequest,
+    CitationSourceVerificationResult,
+    CitationSourceVerifier,
+    citation_source_evidence_payload,
+)
+from foundry_lite.application.services.aip.citation_navigation import (
+    CitationNavigationTokenError,
+    decode_navigation_ref,
+    encode_navigation_ref,
+)
 from foundry_lite.application.services.aip.source_permissions import source_permission_for_type
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
@@ -66,6 +78,30 @@ class CitationResolveResult:
     citations: tuple[ResolvedCitation, ...]
 
 
+@dataclass(frozen=True)
+class CitationNavigationResolveResult:
+    """Authoritative source and locator returned only after token re-verification."""
+
+    navigation_path: str
+    source_resource_type: str
+    source_resource_id: str
+    source_version: str
+    content_hash: str
+    display_label: str
+    evidence: CitationSourceEvidence | None
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "navigationPath": self.navigation_path,
+            "sourceResourceType": self.source_resource_type,
+            "sourceResourceId": self.source_resource_id,
+            "sourceVersion": self.source_version,
+            "contentHash": self.content_hash,
+            "displayLabel": self.display_label,
+            "evidence": citation_source_evidence_payload(self.evidence),
+        }
+
+
 @dataclass
 class CitationServiceError(Exception):
     """Typed fail-closed citation rejection."""
@@ -98,6 +134,27 @@ class CitationService(CoreService):
                 self.ai_run_repository.record_citation(transaction=transaction, record=citation.ledger_record)
         return CitationResolveResult(citations=resolved)
 
+    def resolve_navigation(
+        self,
+        ctx: RequestContext,
+        navigation_ref: str,
+    ) -> CitationNavigationResolveResult:
+        secret = self.secret_provider.get_secret(_NAV_SIGNING_CREDENTIAL_REF)
+        payload = _decode_navigation(ctx, navigation_ref, secret.value)
+        source_request = _navigation_source_request(payload)
+        _require_navigation_source_access(ctx, self.policy, source_request.source_resource_type)
+        current = _verify_source(self.citation_source_verifier, ctx, source_request)
+        _require_navigation_source_current(payload, current)
+        return CitationNavigationResolveResult(
+            navigation_path=current.navigation_path,
+            source_resource_type=current.source_resource_type,
+            source_resource_id=current.source_resource_id,
+            source_version=current.source_version,
+            content_hash=current.content_hash,
+            display_label=current.display_label,
+            evidence=current.evidence,
+        )
+
     def _resolve_claim(
         self,
         ctx: RequestContext,
@@ -108,11 +165,11 @@ class CitationService(CoreService):
     ) -> ResolvedCitation:
         item = _selected_context_item(context_items, claim.context_id)
         _require_source_access(ctx, self.policy, item)
-        source = self.citation_source_verifier.verify_source(ctx, _source_request(item))
+        source = _verify_source(self.citation_source_verifier, ctx, _source_request(item))
         _require_fresh_source(item, source.source_version, source.content_hash)
         rendered_ref = f"[{claim.citation_order}] {source.display_label}"
-        navigation_ref = _signed_navigation_ref(ctx, request, claim, item, source.navigation_path, signing_key)
-        display_payload = _display_payload(claim, item, source.display_label, navigation_ref)
+        navigation_ref = _signed_navigation_ref(ctx, request, claim, item, source, signing_key)
+        display_payload = _display_payload(claim, item, source, navigation_ref)
         return ResolvedCitation(
             context_id=claim.context_id,
             rendered_ref=rendered_ref,
@@ -197,7 +254,10 @@ def _require_fresh_source(item: AiLedgerRow, current_version: str, current_hash:
 
 
 def _display_payload(
-    claim: CitationClaim, item: AiLedgerRow, display_label: str, signed_navigation_ref: str
+    claim: CitationClaim,
+    item: AiLedgerRow,
+    source: CitationSourceVerificationResult,
+    signed_navigation_ref: str,
 ) -> dict[str, object]:
     return {
         "contextId": claim.context_id,
@@ -207,8 +267,10 @@ def _display_payload(
         "sourceResourceId": _required_str(item, "source_resource_id"),
         "sourceVersion": _required_str(item, "source_version"),
         "contentHash": _required_str(item, "content_hash"),
-        "displayLabel": display_label,
+        "displayLabel": source.display_label,
         "navigationRef": signed_navigation_ref,
+        "navigationPath": _display_navigation_path(source, signed_navigation_ref),
+        "evidence": citation_source_evidence_payload(source.evidence),
         "sourcePreview": _source_preview(item),
     }
 
@@ -249,7 +311,7 @@ def _signed_navigation_ref(
     request: CitationResolveRequest,
     claim: CitationClaim,
     item: AiLedgerRow,
-    navigation_path: str,
+    source: CitationSourceVerificationResult,
     signing_key: str,
 ) -> str:
     payload = {
@@ -262,13 +324,95 @@ def _signed_navigation_ref(
         "source_resource_id": _required_str(item, "source_resource_id"),
         "source_version": _required_str(item, "source_version"),
         "content_hash": _required_str(item, "content_hash"),
-        "navigation_path": navigation_path,
+        "navigation_path": source.navigation_path,
+        "display_label": source.display_label,
+        "evidence": citation_source_evidence_payload(source.evidence),
         "iat": request.issued_at,
         "exp": request.expires_at,
     }
-    encoded = _base64url(_json_block(payload).encode("utf-8"))
-    signature = hmac.new(signing_key.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
-    return f"flite-citation-nav.v1.{encoded}.{signature}"
+    return encode_navigation_ref(payload, signing_key)
+
+
+def _decode_navigation(ctx: RequestContext, navigation_ref: str, signing_key: str) -> dict[str, object]:
+    try:
+        return decode_navigation_ref(
+            navigation_ref,
+            signing_key,
+            expected_tenant_id=ctx.tenant_id,
+            observed_at=_now(),
+        )
+    except CitationNavigationTokenError as exc:
+        raise CitationServiceError(exc.reason, exc.detail) from exc
+
+
+def _navigation_source_request(payload: Mapping[str, object]) -> CitationSourceVerificationRequest:
+    return CitationSourceVerificationRequest(
+        source_resource_type=_required_payload_str(payload, "source_resource_type"),
+        source_resource_id=_required_payload_str(payload, "source_resource_id"),
+        source_version=_required_payload_str(payload, "source_version"),
+        content_hash=_required_payload_str(payload, "content_hash"),
+    )
+
+
+def _require_navigation_source_access(ctx: RequestContext, policy: PolicyService, resource_type: str) -> None:
+    permission = source_permission_for_type(resource_type)
+    try:
+        policy.require(ctx, permission)
+    except PermissionDenied as exc:
+        raise CitationServiceError("policy_denied", f"permission denied for {permission}") from exc
+
+
+def _verify_source(
+    verifier: CitationSourceVerifier,
+    ctx: RequestContext,
+    request: CitationSourceVerificationRequest,
+) -> CitationSourceVerificationResult:
+    try:
+        return verifier.verify_source(ctx, request)
+    except CitationSourceVerificationFailed as exc:
+        raise CitationServiceError(exc.reason, exc.detail) from exc
+
+
+def _require_navigation_source_current(
+    payload: Mapping[str, object],
+    current: CitationSourceVerificationResult,
+) -> None:
+    signed_identity = (
+        _required_payload_str(payload, "source_resource_type"),
+        _required_payload_str(payload, "source_resource_id"),
+        _required_payload_str(payload, "source_version"),
+        _required_payload_str(payload, "content_hash"),
+        _required_payload_str(payload, "navigation_path"),
+        _required_payload_str(payload, "display_label"),
+    )
+    current_identity = (
+        current.source_resource_type,
+        current.source_resource_id,
+        current.source_version,
+        current.content_hash,
+        current.navigation_path,
+        current.display_label,
+    )
+    if signed_identity != current_identity or payload.get("evidence") != citation_source_evidence_payload(
+        current.evidence
+    ):
+        raise CitationServiceError("citation_source_stale", "citation source evidence no longer matches")
+
+
+def _required_payload_str(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise CitationServiceError("invalid_navigation_ref", f"citation navigation field {key} is missing")
+    return value
+
+
+def _display_navigation_path(
+    source: CitationSourceVerificationResult,
+    navigation_ref: str,
+) -> str:
+    if source.evidence is None:
+        return source.navigation_path
+    return f"{source.navigation_path}?citation={quote(navigation_ref, safe='')}"
 
 
 def _citation_id(ctx: RequestContext, request: CitationResolveRequest, claim: CitationClaim) -> str:
@@ -297,9 +441,9 @@ def _is_non_bool_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _base64url(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-
 def _json_block(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)

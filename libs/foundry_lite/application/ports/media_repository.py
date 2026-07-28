@@ -122,6 +122,15 @@ class MediaItemVersionRecord:
     has_legal_hold: bool = False
 
 
+@dataclass(frozen=True)
+class MediaSetSelectionRecord:
+    """One immutable version selected from a tenant-scoped Media Set."""
+
+    media_set_id: str
+    logical_path: str
+    version: MediaItemVersionRecord
+
+
 class MediaRepository(Protocol):
     """DB boundary for the media catalog, transactions, items, and immutable versions.
 
@@ -212,6 +221,19 @@ class MediaRepository(Protocol):
         """Return one tenant-scoped immutable version by id."""
         ...
 
+    def select_media_set_versions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        media_set_id: str,
+        media_item_version_ids: list[str] | None = None,
+        logical_path_prefix: str | None = None,
+        limit: int = 20,
+    ) -> list[MediaSetSelectionRecord]:
+        """Select committed current heads or exact committed versions from one Media Set."""
+        ...
+
     def get_media_item_versions(
         self, *, transaction: TransactionContext, ids: list[str]
     ) -> list[MediaItemVersionRecord]:
@@ -232,6 +254,12 @@ class MediaRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
     ) -> list[MediaItemVersionRecord]:
         """Return a transaction's already-COMMITTED versions read-only (for idempotent commit replay)."""
+        ...
+
+    def fetch_transaction_versions(
+        self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
+    ) -> list[MediaItemVersionRecord]:
+        """Return every immutable version owned by one tenant-scoped media transaction."""
         ...
 
     def fetch_unreachable_staged_versions(

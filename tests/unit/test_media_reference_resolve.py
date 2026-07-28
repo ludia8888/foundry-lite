@@ -12,9 +12,10 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.ports.media_storage import ByteRange
 from foundry_lite.application.services.media.uploads import StagedUpload
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import InvariantViolation
+from foundry_lite.domain.errors import InvariantViolation, NotFound, ValidationFailed
 
 
 def _media_set(foundry: FoundryLite, ctx: RequestContext) -> str:
@@ -76,6 +77,43 @@ def test_reference_pins_immutable_version_after_same_path_overwrite(foundry: Fou
     assert first_resolved.reference.media_item_version_id == first.media_item_version_id
     assert first_resolved.reference.logical_path == "/a.pdf"
     assert first_resolved.reference.content_hash != second_resolved.reference.content_hash
+
+
+def test_source_read_issues_version_pinned_verified_range_grant(foundry: FoundryLite) -> None:
+    ctx = RequestContext()
+    media_set_id = _media_set(foundry, ctx)
+    body = b"%PDF-1.4 range-readable"
+    staged = _upload_and_commit(
+        foundry,
+        ctx,
+        media_set_id=media_set_id,
+        logical_path="/a.pdf",
+        body=body,
+        idempotency_key="source-read",
+    )
+
+    source = foundry.media.source_read(
+        ctx,
+        media_item_version_id=staged.media_item_version_id,
+        byte_range=ByteRange(5, 9),
+    )
+
+    assert source.resolved.version.content_hash == source.resolved.reference.content_hash
+    assert source.byte_range == ByteRange(5, 9)
+    assert source.grant.grant_kind == "inline"
+    assert source.grant.stream is not None and source.grant.stream.read(5) == body[5:10]
+    source.grant.stream.close()
+    with pytest.raises(NotFound):
+        foundry.media.source_read(
+            RequestContext(tenant_id="tenant-other"),
+            media_item_version_id=staged.media_item_version_id,
+        )
+    with pytest.raises(ValidationFailed, match="outside the committed source"):
+        foundry.media.source_read(
+            ctx,
+            media_item_version_id=staged.media_item_version_id,
+            byte_range=ByteRange(len(body), None),
+        )
 
 
 def test_resolve_hard_fails_when_committed_blob_is_missing(foundry: FoundryLite) -> None:

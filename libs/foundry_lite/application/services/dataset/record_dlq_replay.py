@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetTransactionRepository,
     DeadLetterRecordRow,
+    ParquetFieldType,
     StreamArchiveConfig,
     StreamEvent,
     StreamSchemaStrategy,
@@ -25,6 +26,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
 )
 from foundry_lite.application.services.dataset.stream_archive import (
+    stream_archive_field_types,
     stream_archive_fields,
     stream_event_row,
 )
@@ -61,7 +63,12 @@ class RecordDlqReplayRuntime(Protocol):
     ) -> UploadSyncPlan: ...
 
     def _rows_to_parquet(
-        self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+        *,
+        field_types: Mapping[str, ParquetFieldType] | None = None,
     ) -> None: ...
 
     def _mark_sync_run_committed(
@@ -153,7 +160,12 @@ def _execute_replay_sync(
     dataset, stream, plan, staged = sync
     try:
         replay_row = stream_event_row(_stream_event(row, ctx, stream), stream)
-        runtime._rows_to_parquet([replay_row], staged, stream_archive_fields(stream))
+        runtime._rows_to_parquet(
+            [replay_row],
+            staged,
+            stream_archive_fields(stream),
+            field_types=stream_archive_field_types(stream),
+        )
         return _finalize_replay(runtime, ctx, row, dataset, stream, plan, staged)
     except Exception as exc:
         return _record_replay_failure(runtime, ctx, row, plan, exc)

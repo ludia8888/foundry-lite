@@ -53,6 +53,30 @@ _SECRET_KEY_PARTS = frozenset(
         "providerresponse",
     }
 )
+_SAFE_OBSERVABILITY_KEYS = frozenset(
+    {
+        "inputtokens",
+        "outputtokens",
+        "prompthash",
+        "promptmode",
+        "promptversionid",
+        "totaltokens",
+        "providerrequestid",
+        "stopreason",
+    }
+)
+_TOKEN_COUNT_KEYS = frozenset({"inputtokens", "outputtokens", "totaltokens"})
+_SAFE_STOP_REASON_VALUES = frozenset(
+    {
+        "endturn",
+        "maxtokens",
+        "modelcontextwindowexceeded",
+        "pauseturn",
+        "refusal",
+        "stopsequence",
+        "tooluse",
+    }
+)
 _AUTHORIZATION_PATTERN = re.compile(r"\bauthorization\s*:\s*bearer\s+\S+", re.IGNORECASE)
 _BEARER_PATTERN = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
 _ASSIGNMENT_PATTERN = re.compile(
@@ -62,6 +86,8 @@ _ASSIGNMENT_PATTERN = re.compile(
     r"\s*[:=]\s*\S+",
     re.IGNORECASE,
 )
+_SAFE_HASH_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_SAFE_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9._:@/-]{1,256}\Z")
 
 
 def runtime_error_payload(
@@ -146,10 +172,7 @@ def _base_error_payload(exc: Exception) -> dict[str, object]:
 
 def _scrub_error_payload(value: object) -> object:
     if isinstance(value, Mapping):
-        return {
-            str(key): "***MASKED***" if _is_secret_key(key) else _scrub_error_payload(item)
-            for key, item in value.items()
-        }
+        return {str(key): _scrub_mapping_item(key, item) for key, item in value.items()}
     if isinstance(value, list):
         return [_scrub_error_payload(item) for item in value]
     if isinstance(value, tuple):
@@ -159,7 +182,17 @@ def _scrub_error_payload(value: object) -> object:
     return value
 
 
+def _scrub_mapping_item(key: object, value: object) -> object:
+    if _is_secret_key(key):
+        return "***MASKED***"
+    if _is_safe_observability_key(key) and _is_safe_observability_value(key, value):
+        return value
+    return _scrub_error_payload(value)
+
+
 def _scrub_text(value: str) -> str:
+    if _normalize_secret_text(value) in _SAFE_STOP_REASON_VALUES:
+        return value
     if _contains_secret_term(value):
         return "***MASKED***"
     scrubbed = _AUTHORIZATION_PATTERN.sub("Authorization: Bearer ***MASKED***", value)
@@ -169,7 +202,28 @@ def _scrub_text(value: str) -> str:
 
 def _is_secret_key(key: object) -> bool:
     normalized = _normalize_secret_text(str(key))
+    if normalized in _SAFE_OBSERVABILITY_KEYS:
+        return False
     return any(term in normalized for term in _SECRET_KEY_PARTS)
+
+
+def _is_safe_observability_key(key: object) -> bool:
+    return _normalize_secret_text(str(key)) in _SAFE_OBSERVABILITY_KEYS
+
+
+def _is_safe_observability_value(key: object, value: object) -> bool:
+    normalized = _normalize_secret_text(str(key))
+    if normalized in _TOKEN_COUNT_KEYS:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if not isinstance(value, str):
+        return False
+    if normalized == "prompthash":
+        return _SAFE_HASH_PATTERN.fullmatch(value) is not None
+    if normalized == "promptmode":
+        return value in {"text", "basic_vision", "layout_aware_vision"}
+    if normalized == "stopreason":
+        return _normalize_secret_text(value) in _SAFE_STOP_REASON_VALUES
+    return _SAFE_IDENTIFIER_PATTERN.fullmatch(value) is not None
 
 
 def _contains_secret_term(value: str) -> bool:

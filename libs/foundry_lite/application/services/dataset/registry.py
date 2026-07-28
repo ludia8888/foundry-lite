@@ -32,6 +32,12 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
     DatasetVersionLookup,
 )
+from foundry_lite.application.services.dataset.serving_projection import (
+    project_dataset_serving_rows,
+)
+from foundry_lite.application.services.dataset.serving_security import (
+    require_dataset_serving_access,
+)
 from foundry_lite.application.services.resource_catalog_auto_registration import upsert_work_product_resource
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -64,6 +70,7 @@ class DatasetRegistryService(CoreService):
         "policy",
         "compute_adapter",
         "dataset_repository",
+        "dataset_transaction_repository",
         "dataset_version_repository",
         "dataset_storage",
         "resource_catalog_repository",
@@ -229,6 +236,7 @@ class DatasetRegistryService(CoreService):
         ctx: RequestContext | None = None,
         primary_key: list[str] | None = None,
         storage_kind: str = "parquet_manifest",
+        classification: str | None = None,
         partition_spec: list[str] | None = None,
         sort_order: list[str] | None = None,
         target_file_size_bytes: int | None = None,
@@ -242,6 +250,7 @@ class DatasetRegistryService(CoreService):
             ctx=ctx,
             primary_key=primary_key,
             storage_kind=storage_kind,
+            classification=classification,
             partition_spec=partition_spec,
             sort_order=sort_order,
             target_file_size_bytes=target_file_size_bytes,
@@ -250,7 +259,10 @@ class DatasetRegistryService(CoreService):
     def find_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow | None:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "dataset:read")
-        return self._find_dataset_row(dataset_ref, ctx=ctx)
+        dataset = self._find_dataset_row(dataset_ref, ctx=ctx)
+        if dataset is not None:
+            self.policy.require_dataset_classification(ctx, dataset["classification"])
+        return dataset
 
     def _find_dataset_row(self, dataset_ref: str, *, ctx: RequestContext) -> DatasetRow | None:
         namespace, name = _dataset_ref_parts(dataset_ref)
@@ -267,7 +279,8 @@ class DatasetRegistryService(CoreService):
     def list_datasets(self, *, ctx: RequestContext | None = None) -> list[DatasetRow]:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "dataset:read")
-        return self.dataset_repository.list_active_datasets(tenant_id=ctx.tenant_id)
+        rows = self.dataset_repository.list_active_datasets(tenant_id=ctx.tenant_id)
+        return [row for row in rows if self.policy.can_read_dataset_classification(ctx, row["classification"])]
 
     def list_dataset_versions(
         self,
@@ -292,11 +305,25 @@ class DatasetRegistryService(CoreService):
         self.policy.require(ctx, "dataset:read")
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
+        transaction_metadata = self._require_version_security_contract(
+            ctx,
+            version_row,
+            dataset["classification"],
+        )
         parquet_paths = self.dataset_transaction_service._version_preview_file_paths(
             version_row,
             partition_filter=partition_filter,
         )
         rows = self._preview_manifest_paths(parquet_paths, limit=int(limit))
+        schema_row = self.dataset_version_service._schema_for_version(
+            dataset["id"],
+            version_row["schema_version"],
+        )
+        rows = project_dataset_serving_rows(
+            rows,
+            transaction_metadata,
+            schema_row["schema_json"],
+        )
         # A backing dataset must not leak a value that Object masking hides.
         return self.policy.mask_columns(ctx, rows)
 
@@ -314,6 +341,7 @@ class DatasetRegistryService(CoreService):
         self.policy.require(ctx, "dataset:read")
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
+        self._require_version_security_contract(ctx, version_row, dataset["classification"])
         schema_row = self.dataset_version_service._schema_for_version(dataset["id"], version_row["schema_version"])
         plan = build_dataset_aggregation_plan(
             dataset_ref,
@@ -355,6 +383,7 @@ class DatasetRegistryService(CoreService):
         ctx = ctx or RequestContext()
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
+        self._require_version_security_contract(ctx, version_row, dataset["classification"])
         schema_row = self.dataset_version_service._schema_for_version(dataset["id"], version_row["schema_version"])
         return {
             "dataset": dataset_ref,
@@ -375,6 +404,28 @@ class DatasetRegistryService(CoreService):
         except InvariantViolation as exc:
             details = self._storage_error_details(dataset_ref, dataset, version_row, exc.details)
             raise InvariantViolation(exc.message, details=details) from exc
+
+    def _require_version_security_contract(
+        self,
+        ctx: RequestContext,
+        version: DatasetVersionRow,
+        classification: object,
+    ) -> Mapping[str, object]:
+        with self.engine.begin() as transaction:
+            row = self.dataset_transaction_repository.transaction_by_id(
+                transaction=transaction,
+                transaction_id=str(version["transaction_id"]),
+            )
+        if row is None or row["tenant_id"] != ctx.tenant_id:
+            raise InvariantViolation("dataset serving transaction security evidence is unavailable")
+        require_dataset_serving_access(
+            ctx=ctx,
+            policy=self.policy,
+            classification=classification,
+            transaction_metadata=row["metadata"],
+            version_id=str(version["id"]),
+        )
+        return row["metadata"]
 
     def _storage_error_details(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.dataset_aggregation import (
@@ -20,6 +20,9 @@ TabularRow = dict[str, object]
 
 InputFilePaths = Path | tuple[Path, ...]
 """One or more local parquet files backing a pinned transform input."""
+
+ParquetFieldType = Literal["boolean", "float64", "int64", "string"]
+"""Vendor-neutral logical types for fields whose current batch is entirely null."""
 
 
 @dataclass(frozen=True)
@@ -47,7 +50,8 @@ class SqlTransformPlan:
     `sql_template` may reference ``{{ input('dataset_ref') }}`` placeholders;
     the adapter substitutes them with the input file paths bound at execution
     time. This DTO is the only vendor-neutral surface application services
-    use; concrete adapters (DuckDB today, future Spark/Flink) consume the
+    use; concrete adapters (DuckDB today, Spark or isolated bounded workers)
+    consume the
     plan and decide how to materialize it. New plan kinds (e.g.,
     ``PythonUdfTransformPlan``, ``IcebergMergeTransformPlan``) join this
     family without changing the application layer.
@@ -94,8 +98,15 @@ class ComputeAdapter(Protocol):
         """Convert a CSV file into a Parquet file."""
         ...
 
-    def rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
-        """Write in-memory rows into a Parquet file."""
+    def rows_to_parquet(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+        *,
+        field_types: Mapping[str, ParquetFieldType] | None = None,
+    ) -> None:
+        """Write JSON-ready rows using optional declared logical field types."""
         ...
 
     def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:

@@ -215,7 +215,7 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
         return [_finding("reindex_source_missing", "Order", "Order source hashes are missing before reindex", {})]
     with tempfile.TemporaryDirectory() as tmp:
         clone_root = Path(tmp) / "mvp-data-correctness"
-        shutil.copytree(storage_root, clone_root)
+        _clone_local_store_for_replay(storage_root, clone_root)
         try:
             result = FoundryLite(dependencies=create_local_core_dependencies(storage_root=clone_root)).objects.reindex(
                 "Order", ctx=demo_admin_context()
@@ -258,6 +258,56 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
             )
         )
     return findings
+
+
+def _clone_local_store_for_replay(storage_root: Path, clone_root: Path) -> None:
+    """Copy a local store and relocate every durable Dataset URI into the copy."""
+
+    source_root = storage_root.resolve()
+    target_root = clone_root.resolve()
+    shutil.copytree(source_root, target_root)
+    with _connect(_database_path(target_root)) as conn:
+        manifest_rows = _query_rows(conn, "SELECT id, manifest_uri FROM dataset_versions", ())
+        for row in manifest_rows:
+            source_uri = _str_value(row["manifest_uri"])
+            clone_uri = _relocated_clone_uri(source_uri, source_root, target_root)
+            _rewrite_cloned_manifest(Path(clone_uri), source_root, target_root)
+            conn.execute(
+                "UPDATE dataset_versions SET manifest_uri = ? WHERE id = ?",
+                (clone_uri, _str_value(row["id"])),
+            )
+        file_rows = _query_rows(conn, "SELECT id, uri FROM dataset_files", ())
+        for row in file_rows:
+            conn.execute(
+                "UPDATE dataset_files SET uri = ? WHERE id = ?",
+                (
+                    _relocated_clone_uri(_str_value(row["uri"]), source_root, target_root),
+                    _str_value(row["id"]),
+                ),
+            )
+
+
+def _rewrite_cloned_manifest(manifest_path: Path, source_root: Path, target_root: Path) -> None:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        raise ValueError(f"cloned dataset manifest has invalid files: {manifest_path}")
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("uri"), str):
+            raise ValueError(f"cloned dataset manifest has invalid file URI: {manifest_path}")
+        item["uri"] = _relocated_clone_uri(item["uri"], source_root, target_root)
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _relocated_clone_uri(uri: str, source_root: Path, target_root: Path) -> str:
+    path = Path(uri)
+    if not path.is_absolute():
+        return uri
+    try:
+        relative = path.resolve().relative_to(source_root)
+    except ValueError:
+        return uri
+    return str(target_root / relative)
 
 
 def _index_run_rows_skipped(db_path: Path, tenant_id: str, index_run_id: str) -> int:

@@ -43,6 +43,7 @@ class ProviderCompatibleLanguageModel:
     """``LanguageModelAdapter`` for the provider-compatible proxy (profile ``provider-compatible``)."""
 
     profile_name = "provider-compatible"
+    supported_provider_profiles: tuple[str, ...] = ("provider-compatible",)
 
     def __init__(
         self,

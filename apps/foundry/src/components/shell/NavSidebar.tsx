@@ -30,6 +30,7 @@ const MAX_SIDEBAR_RECENTS = 5;
 /** APPLICATIONS 타일 색 (Palantir 사이드바의 컬러 사각 아이콘 관례). */
 const APP_TILE_COLORS: Record<string, string> = {
   "data-connection": "bg-[#C87619]",
+  "document-intelligence": "bg-[#137CBD]",
   pipelines: "bg-[#0F9960]",
   ontology: "bg-[#7961DB]",
   objects: "bg-[#2D72D2]",

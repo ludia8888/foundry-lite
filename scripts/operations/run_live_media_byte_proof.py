@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.content_index import HybridContentQuery
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord
-from foundry_lite.application.ports.media_processor import ProcessorSpec
+from foundry_lite.application.ports.media_processor import MediaProcessorAdapter, ProcessorSpec
 from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
 from foundry_lite.application.services.media.indexing import MediaIndexingService
 from foundry_lite.application.services.media.processing import MediaProcessingService
@@ -329,7 +329,7 @@ def _processing(
     derivative_repository: SqlAlchemyMediaDerivativeRepository,
     storage: LocalMediaStorageAdapter,
     runtime: _FakeRuntime,
-    processor: object,
+    processor: MediaProcessorAdapter,
 ) -> MediaProcessingService:
     service = MediaProcessingService(
         engine=engine,

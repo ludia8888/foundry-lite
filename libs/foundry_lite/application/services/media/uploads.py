@@ -15,6 +15,9 @@ from foundry_lite.application.ports.media_storage import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.security_envelopes import (
+    validated_media_upload_envelope,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
@@ -31,6 +34,7 @@ class MediaUploadInput:
     format: str
     security_envelope: dict[str, object]
     probe_metadata: dict[str, object] | None = None
+    source_ref: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -93,7 +97,7 @@ class MediaUploadService(CoreService):
     ) -> StagedUpload:
         now = _now()
         with self.engine.begin() as conn:
-            self._reject_if_transaction_not_open(conn, ctx, inputs)
+            security_envelope = self._reject_if_transaction_not_open(conn, ctx, inputs)
             item = self.media_repository.upsert_media_item(
                 transaction=conn, record=_item_record(ctx, inputs.media_set_id, inputs.logical_path, now)
             )
@@ -108,6 +112,7 @@ class MediaUploadService(CoreService):
                 blob_key=upload.staged_object_key,
                 staged=staged,
                 created_at=now,
+                security_envelope=security_envelope,
             )
             existing = self.media_repository.insert_version(transaction=conn, record=record)
         if existing is not None and existing.blob_key != upload.staged_object_key:
@@ -116,7 +121,7 @@ class MediaUploadService(CoreService):
 
     def _reject_if_transaction_not_open(
         self, conn: TransactionContext, ctx: RequestContext, inputs: MediaUploadInput
-    ) -> None:
+    ) -> dict[str, object]:
         # Guarded write: the OPEN check in ``complete`` ran in an earlier, separate transaction.
         # Re-read the status inside the write transaction so a commit that landed in between
         # cannot leave a STAGED version under an already-COMMITTED transaction (TOCTOU).
@@ -135,6 +140,19 @@ class MediaUploadService(CoreService):
                 "media upload transaction is not open",
                 details={"media_transaction_id": inputs.media_transaction_id, "status": transaction.status},
             )
+        if transaction.media_set_id != inputs.media_set_id:
+            raise ConflictDetected(
+                "media upload transaction belongs to a different media set",
+                details={"media_transaction_id": inputs.media_transaction_id},
+            )
+        media_sets = self.media_repository.get_media_sets(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ids=[inputs.media_set_id],
+        )
+        if not media_sets:
+            raise NotFound("media set not found", details={"media_set_id": inputs.media_set_id})
+        return _require_media_set_accepts_upload(inputs, media_sets[0], ctx.tenant_id)
 
     def _require_open_transaction(self, ctx: RequestContext, inputs: MediaUploadInput) -> None:
         with self.engine.begin() as conn:
@@ -169,7 +187,7 @@ class MediaUploadService(CoreService):
             )
         if not media_sets:
             raise NotFound("media set not found", details={"media_set_id": inputs.media_set_id})
-        _require_media_set_accepts_upload(inputs, media_sets[0])
+        _require_media_set_accepts_upload(inputs, media_sets[0], ctx.tenant_id)
 
 
 def _item_record(ctx: RequestContext, media_set_id: str, logical_path: str, now: str) -> MediaItemRecord:
@@ -185,7 +203,11 @@ def _item_record(ctx: RequestContext, media_set_id: str, logical_path: str, now:
     )
 
 
-def _require_media_set_accepts_upload(inputs: MediaUploadInput, media_set: MediaSetRecord) -> None:
+def _require_media_set_accepts_upload(
+    inputs: MediaUploadInput,
+    media_set: MediaSetRecord,
+    tenant_id: str,
+) -> dict[str, object]:
     if inputs.schema_type != media_set.schema_type:
         raise ValidationFailed(
             "media upload schema type does not match media set",
@@ -204,6 +226,11 @@ def _require_media_set_accepts_upload(inputs: MediaUploadInput, media_set: Media
                 "format": inputs.format,
             },
         )
+    return validated_media_upload_envelope(
+        media_set,
+        inputs.security_envelope,
+        tenant_id=tenant_id,
+    )
 
 
 def _staged_version_record(
@@ -215,6 +242,7 @@ def _staged_version_record(
     blob_key: str,
     staged: StagedMediaObject,
     created_at: str,
+    security_envelope: dict[str, object],
 ) -> MediaItemVersionRecord:
     return MediaItemVersionRecord(
         media_item_version_id=_new_id("mver"),
@@ -230,10 +258,11 @@ def _staged_version_record(
         schema_type=inputs.schema_type,
         format=inputs.format,
         probe_metadata=inputs.probe_metadata or {},
-        security_envelope=inputs.security_envelope,
-        source_ref=None,
+        security_envelope=security_envelope,
+        source_ref=inputs.source_ref,
         status="STAGED",
         created_at=created_at,
+        has_legal_hold=bool(security_envelope.get("hasLegalHold", False)),
     )
 
 

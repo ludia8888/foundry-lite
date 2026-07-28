@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypedDict
 
 from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.model_gateway_bridge import GovernedSemanticModelBridge
 from foundry_lite.application.services.action_services import ActionServices
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
@@ -183,7 +184,9 @@ class CoreServices:
 
 def _new_core_services(dependencies: CoreDependencies) -> CoreServices:
     shared = _shared_core_services(dependencies)
-    return _compose_core_services(dependencies, shared)
+    model_gateway = build_service(ModelGatewayService, dependencies)
+    pipeline_dependencies = _pipeline_dependencies(dependencies, model_gateway)
+    return _compose_core_services(dependencies, shared, model_gateway, pipeline_dependencies)
 
 
 def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices:
@@ -203,10 +206,11 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
 
 
 # fmt: off
-def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices) -> CoreServices:
+def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices,
+                           model_gateway: ModelGatewayService,
+                           pipeline_dependencies: CoreDependencies) -> CoreServices:
     return CoreServices(
-        action=ActionServices.create(dependencies),
-        agent_runtime=build_service(AgentRuntimeService, dependencies),
+        action=ActionServices.create(dependencies), agent_runtime=build_service(AgentRuntimeService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
         approval_execution=build_service(ApprovalExecutionService, dependencies),
         backup_restore=shared["backup_restore"],
@@ -226,8 +230,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         materialization=build_service(MaterializationService, dependencies),
         media=shared["media"], citation=build_service(CitationService, dependencies),
         logic_runtime=build_service(LogicRuntimeService, dependencies),
-        model_gateway=build_service(ModelGatewayService, dependencies),
-        prompt_artifact=build_service(PromptArtifactService, dependencies),
+        model_gateway=model_gateway, prompt_artifact=build_service(PromptArtifactService, dependencies),
         tool_broker=build_service(ToolBrokerService, dependencies),
         visual_builder=build_service(VisualBuilderService, dependencies),
         object_store=shared["object_store"],
@@ -235,7 +238,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         ontology_search=build_service(OntologySearchService, dependencies),
         osdk_applications=OsdkApplicationServices.create(dependencies),
         osdk_oauth_sessions=build_service(OsdkOAuthSessionService, dependencies),
-        pipelines=PipelineServices.create(dependencies),
+        pipelines=PipelineServices.create(pipeline_dependencies),
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
         resources=build_service(ResourceCatalogService, dependencies),
@@ -244,6 +247,28 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies), )
 # fmt: on
+
+
+def _pipeline_dependencies(
+    dependencies: CoreDependencies,
+    model_gateway: ModelGatewayService,
+) -> CoreDependencies:
+    aip = replace(
+        dependencies.aip,
+        governed_semantic_model_port=GovernedSemanticModelBridge(model_gateway),
+    )
+    return CoreDependencies(
+        paths=dependencies.paths,
+        security=dependencies.security,
+        action=dependencies.action,
+        data=dependencies.data,
+        object_store=dependencies.object_store,
+        runtime=dependencies.runtime,
+        aip=aip,
+        media=dependencies.media,
+        source=dependencies.source,
+        profile=dependencies.profile,
+    )
 
 
 def _bind_runtime_evidence_boundary(services: CoreServices) -> None:
@@ -356,7 +381,11 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 
 def _media_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
+        "content_unit_chunking_service": services.media.chunking,
         "content_retrieval_service": services.media.retrieval,
+        "media_catalog_service": services.media.catalog,
+        "media_indexing_service": services.media.indexing,
+        "media_processing_service": services.media.processing,
         "media_visual_search_service": services.media.visual_search,
         "media_transaction_service": services.media.transaction,
         "media_upload_service": services.media.upload,
@@ -373,6 +402,7 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "dataset_registry_service": services.dataset.registry,
         "dataset_transaction_service": services.dataset.transaction,
         "dataset_version_service": services.dataset.version,
+        "exact_dataset_version_reader_service": services.pipelines.dataset_reader,
         "materialization_service": services.materialization,
         "transform_service": services.transform.entrypoint,
         "transform_definition_service": services.transform.definition,
@@ -380,11 +410,17 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "transform_graph_service": services.transform.graph,
         "transform_run_service": services.transform.run,
         "transform_scheduler_service": services.transform.scheduler,
+        "pipeline_catalog_service": services.pipelines.catalog,
         "pipeline_compiler_service": services.pipelines.compiler,
         "pipeline_definition_service": services.pipelines.definition,
+        "pipeline_deployment_service": services.pipelines.deployment,
         "pipeline_governance_service": services.pipelines.governance,
+        "pipeline_graph_v2_execution_service": services.pipelines.graph_v2_execution,
+        "pipeline_graph_v2_run_coordinator_service": services.pipelines.graph_v2_run_coordinator,
         "pipeline_graph_validation_service": services.pipelines.graph_validation,
+        "pipeline_preview_service": services.pipelines.preview,
         "pipeline_run_service": services.pipelines.run,
+        "pipeline_scheduler_service": services.pipelines.scheduler,
     }
 
 

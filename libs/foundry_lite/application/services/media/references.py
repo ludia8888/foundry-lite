@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaReference
+from foundry_lite.application.ports.media_storage import ByteRange, MediaReadGrant, MediaReadGrantRequest
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import InvariantViolation, NotFound
+from foundry_lite.domain.errors import InvariantViolation, NotFound, ValidationFailed
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,15 @@ class ResolvedMediaReference:
 
     reference: MediaReference
     version: MediaItemVersionRecord
+
+
+@dataclass(frozen=True)
+class SourceMediaRead:
+    """Verified immutable source bytes plus their scoped storage read grant."""
+
+    resolved: ResolvedMediaReference
+    grant: MediaReadGrant
+    byte_range: ByteRange | None
 
 
 class MediaReferenceService(CoreService):
@@ -57,6 +67,25 @@ class MediaReferenceService(CoreService):
         self._verify_blob(version)
         return ResolvedMediaReference(reference=reference, version=version)
 
+    def source_read(
+        self,
+        ctx: RequestContext,
+        *,
+        media_item_version_id: str,
+        byte_range: ByteRange | None = None,
+    ) -> SourceMediaRead:
+        resolved = self.resolve(ctx, media_item_version_id=media_item_version_id)
+        normalized_range = _normalized_byte_range(byte_range, resolved.version.byte_size)
+        grant = self.media_storage.issue_read_grant(
+            MediaReadGrantRequest(
+                tenant_id=ctx.tenant_id,
+                media_item_version_id=media_item_version_id,
+                object_key=resolved.version.blob_key,
+                byte_range=normalized_range,
+            )
+        )
+        return SourceMediaRead(resolved, grant, normalized_range)
+
     def _verify_blob(self, version: MediaItemVersionRecord) -> None:
         stat = self.media_storage.stat(version.blob_key)
         if not stat.is_present:
@@ -73,3 +102,20 @@ class MediaReferenceService(CoreService):
                     "actual_hash": stat.content_hash,
                 },
             )
+
+
+def _normalized_byte_range(byte_range: ByteRange | None, byte_size: int) -> ByteRange | None:
+    if byte_range is None:
+        return None
+    if byte_range.start < 0 or byte_range.start >= byte_size:
+        raise ValidationFailed(
+            "media byte range start is outside the committed source",
+            details={"start": byte_range.start, "byteSize": byte_size},
+        )
+    end = byte_size - 1 if byte_range.end is None else byte_range.end
+    if end < byte_range.start or end >= byte_size:
+        raise ValidationFailed(
+            "media byte range end is outside the committed source",
+            details={"start": byte_range.start, "end": end, "byteSize": byte_size},
+        )
+    return ByteRange(byte_range.start, end)

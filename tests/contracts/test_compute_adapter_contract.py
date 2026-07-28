@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.ports import ComputeAdapter
-from foundry_lite.application.ports.compute_adapter import PythonTransformPlan, SqlTransformPlan
+from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.compute_adapter import (
+    PythonTransformPlan,
+    SqlTransformPlan,
+    TransformExecutionResult,
+)
 from foundry_lite.application.ports.dataset_aggregation import DatasetAggregationPlan
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, FakeComputeAdapter
@@ -92,6 +97,129 @@ def test_compute_adapter_contract_rows_to_parquet_and_health_checks(
     assert "REVIEW" in accepted_values["sample_invalid_values"]
     with pytest.raises(ValidationFailed, match="unsupported dataset quality check type"):
         adapter.execute_check(parquet_path, row_count, {"type": "custom"})
+
+
+def test_compute_adapter_contract_preserves_null_only_column_type(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "null-only.parquet"
+    adapter.rows_to_parquet([{"id": "A", "note": None}], parquet_path, ["id", "note"])
+
+    stats = adapter.inspect_parquet(parquet_path, ["id"])
+
+    assert stats.schema_json["columns"][1] == {"name": "note", "type": "null", "nullable": True}
+
+
+def test_compute_adapter_contract_applies_declared_type_to_null_only_column(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "declared-null-only.parquet"
+    adapter.rows_to_parquet(
+        [{"id": "A", "lag_seconds": None}],
+        parquet_path,
+        ["id", "lag_seconds"],
+        field_types={"id": "string", "lag_seconds": "float64"},
+    )
+
+    stats = adapter.inspect_parquet(parquet_path, ["id"])
+
+    assert stats.schema_json["columns"] == [
+        {"name": "id", "type": "string", "nullable": False},
+        {"name": "lag_seconds", "type": "float", "nullable": True},
+    ]
+
+
+def test_compute_adapter_contract_rows_to_parquet_preserves_nested_json_values(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "nested-rows.parquet"
+    rows = [
+        {
+            "order_id": "O-1",
+            "amount": 10,
+            "analysis": {"category": "payment", "risk": 2},
+            "evidence": {"tokens": {"input": 23, "output": 7}, "mediaIds": []},
+            "labels": ["finance", "review"],
+            "emptyLabels": [],
+            "emptyContext": {},
+        },
+        {
+            "order_id": "O-2",
+            "amount": 20.5,
+            "analysis": {"category": "shipping", "risk": 1},
+            "evidence": {"tokens": {"input": 17, "output": 5}, "mediaIds": ["media-version-1"]},
+            "labels": [],
+            "emptyLabels": [],
+            "emptyContext": {},
+        },
+    ]
+
+    adapter.rows_to_parquet(
+        rows,
+        parquet_path,
+        ["order_id", "amount", "analysis", "evidence", "labels", "emptyLabels", "emptyContext"],
+    )
+
+    assert adapter.rows_from_parquet(parquet_path) == rows
+    assert adapter.preview_parquet(parquet_path, limit=1) == rows[:1]
+    assert not parquet_path.with_suffix(".csv").exists()
+
+
+def test_compute_adapter_contract_rows_to_parquet_rejects_incompatible_nested_shapes(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "invalid-nested-rows.parquet"
+
+    with pytest.raises(ValidationFailed, match="typed parquet"):
+        adapter.rows_to_parquet(
+            [{"analysis": {"risk": 2}}, {"analysis": "not-an-object"}],
+            parquet_path,
+            ["analysis"],
+        )
+
+    assert not parquet_path.exists()
+
+
+def test_duckdb_rows_to_parquet_validates_shape_and_cleans_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = DuckDBComputeAdapter()
+    scalar_path = tmp_path / "typed-scalars.parquet"
+    large_integer = 2**80
+    adapter.rows_to_parquet(
+        [{"none": None, "approved": True, "large": large_integer}],
+        scalar_path,
+        ["none", "approved", "large"],
+    )
+    assert adapter.rows_from_parquet(scalar_path) == [{"none": None, "approved": True, "large": large_integer}]
+
+    invalid_cases = (
+        ([{"value": 1}], []),
+        ([{"value": 1}], ["value", "value"]),
+        ([{"value": 1}], [""]),
+        ([["not-a-row"]], ["value"]),
+        ([{"value": 10**39}], ["value"]),
+    )
+    for rows, fieldnames in invalid_cases:
+        with pytest.raises(ValidationFailed, match="typed parquet"):
+            adapter.rows_to_parquet(rows, tmp_path / "invalid.parquet", fieldnames)  # type: ignore[arg-type]
+
+    partial_path = tmp_path / "partial.parquet"
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        partial_path.write_bytes(b"partial")
+        raise compute_module.pa.ArrowInvalid("injected write failure")
+
+    monkeypatch.setattr(compute_module.pq, "write_table", fail_write)
+    with pytest.raises(ValidationFailed, match="typed parquet") as captured:
+        adapter.rows_to_parquet([{"value": 1}], partial_path, ["value"])
+    assert captured.value.details["errorType"] == "ArrowInvalid"
+    assert not partial_path.exists()
 
 
 def test_compute_adapter_contract_detects_duplicate_composite_tuple(
@@ -271,119 +399,54 @@ def test_compute_adapter_contract_unsupported_transform_plan_raises_typed_error(
         adapter.execute_transform(_UnsupportedPlan(target_path=_Path("/tmp/never.parquet")))  # type: ignore[arg-type]
 
 
-def test_duckdb_compute_adapter_python_transform_returned_rows_and_fail_closed_edges(tmp_path: Path) -> None:
+def test_duckdb_compute_adapter_python_transform_fails_closed_without_isolation_adapter(tmp_path: Path) -> None:
     adapter = DuckDBComputeAdapter()
-    source_path = tmp_path / "source.parquet"
-    target_path = tmp_path / "python-target.parquet"
-    adapter.rows_to_parquet([{"order_id": "O-1", "amount": 10}], source_path, ["order_id", "amount"])
-
-    result = adapter.execute_transform(
-        PythonTransformPlan(
-            entrypoint=str(tmp_path / "return_rows_transform.py"),
-            source_code=(
-                "def compute(orders):\n"
-                "    return [\n"
-                "        {'order_id': row['order_id'], 'amount': row['amount'] * 3}\n"
-                "        for row in orders.read_rows()\n"
-                "    ]\n"
-            ),
-            function_name="compute",
-            input_refs_by_alias={"orders": "raw.orders"},
-            input_paths_by_ref={"raw.orders": source_path},
-            output_dataset_ref="clean.orders",
-            target_path=target_path,
-        )
+    marker = tmp_path / "api-process-marker"
+    plan = PythonTransformPlan(
+        entrypoint=str(tmp_path / "unsafe.py"),
+        source_code=f"open({str(marker)!r}, 'w').write('executed')\n",
+        function_name=None,
+        input_refs_by_alias={},
+        input_paths_by_ref={},
+        output_dataset_ref="clean.orders",
+        target_path=tmp_path / "target.parquet",
     )
 
-    assert result.dead_letters == ()
-    assert adapter.rows_from_parquet(target_path) == [{"order_id": "O-1", "amount": 30}]
-    with pytest.raises(ValidationFailed, match="function not found"):
-        adapter.execute_transform(
-            PythonTransformPlan(
-                entrypoint=str(tmp_path / "missing_function.py"),
-                source_code="def compute():\n    return [{'ok': True}]\n",
-                function_name="missing",
-                input_refs_by_alias={},
-                input_paths_by_ref={},
-                output_dataset_ref="clean.orders",
-                target_path=tmp_path / "missing-function.parquet",
-            )
-        )
-    with pytest.raises(ValidationFailed, match="did not write output"):
-        adapter.execute_transform(
-            PythonTransformPlan(
-                entrypoint=str(tmp_path / "no_output.py"),
-                source_code="def compute():\n    return None\n",
-                function_name="compute",
-                input_refs_by_alias={},
-                input_paths_by_ref={},
-                output_dataset_ref="clean.orders",
-                target_path=tmp_path / "no-output.parquet",
-            )
-        )
-    with pytest.raises(ValidationFailed, match="return value must be a sequence"):
-        adapter.execute_transform(
-            PythonTransformPlan(
-                entrypoint=str(tmp_path / "bad_return.py"),
-                source_code="def compute():\n    return 'bad'\n",
-                function_name="compute",
-                input_refs_by_alias={},
-                input_paths_by_ref={},
-                output_dataset_ref="clean.orders",
-                target_path=tmp_path / "bad-return.parquet",
-            )
-        )
-    with pytest.raises(ValidationFailed, match="return rows must be mappings"):
-        adapter.execute_transform(
-            PythonTransformPlan(
-                entrypoint=str(tmp_path / "bad_rows.py"),
-                source_code="def compute():\n    return ['bad']\n",
-                function_name="compute",
-                input_refs_by_alias={},
-                input_paths_by_ref={},
-                output_dataset_ref="clean.orders",
-                target_path=tmp_path / "bad-rows.parquet",
-            )
-        )
+    with pytest.raises(AdapterError) as captured:
+        adapter.execute_transform(plan)
+
+    assert captured.value.failure.details["codeExecution"] == {
+        "failureType": "runtime_unavailable",
+        "executionAttempted": False,
+    }
+    assert not marker.exists()
+    assert not plan.target_path.exists()
 
 
-def test_duckdb_compute_adapter_python_transform_output_aliases_and_helper_edges(tmp_path: Path) -> None:
-    adapter = DuckDBComputeAdapter()
-    first_path = tmp_path / "first.parquet"
-    second_path = tmp_path / "second.parquet"
-    output_path = tmp_path / "output-alias.parquet"
-    out_path = tmp_path / "out-alias.parquet"
-    adapter.rows_to_parquet([{"order_id": "O-1"}], first_path, ["order_id"])
-    adapter.rows_to_parquet([{"order_id": "O-2"}], second_path, ["order_id"])
+def test_duckdb_compute_adapter_delegates_python_plan_to_code_execution_boundary(tmp_path: Path) -> None:
+    delegated: list[PythonTransformPlan] = []
 
-    adapter.execute_transform(
-        PythonTransformPlan(
-            entrypoint=str(tmp_path / "output_alias.py"),
-            source_code=(
-                "def compute(orders, output):\n"
-                "    output.write_rows([{'order_id': row['order_id']} for row in orders.read_rows()])\n"
-            ),
-            function_name=None,
-            input_refs_by_alias={"orders": "raw.orders"},
-            input_paths_by_ref={"raw.orders": (first_path, second_path)},
-            output_dataset_ref="clean.orders",
-            target_path=output_path,
-        )
-    )
-    adapter.execute_transform(
-        PythonTransformPlan(
-            entrypoint=str(tmp_path / "out_alias.py"),
-            source_code="def compute(out):\n    out.write_rows([{'ok': True}])\n",
-            function_name=None,
-            input_refs_by_alias={},
-            input_paths_by_ref={},
-            output_dataset_ref="clean.orders",
-            target_path=out_path,
-        )
+    class _RecordingCodeExecutionAdapter:
+        def execute_python_transform(self, plan: PythonTransformPlan) -> TransformExecutionResult:
+            delegated.append(plan)
+            return TransformExecutionResult()
+
+    adapter = DuckDBComputeAdapter(code_execution_adapter=_RecordingCodeExecutionAdapter())  # type: ignore[arg-type]
+    plan = PythonTransformPlan(
+        entrypoint=str(tmp_path / "delegated.py"),
+        source_code="def compute():\n    return [{'ok': True}]\n",
+        function_name="compute",
+        input_refs_by_alias={},
+        input_paths_by_ref={},
+        output_dataset_ref="clean.orders",
+        target_path=tmp_path / "delegated.parquet",
     )
 
-    assert adapter.rows_from_parquet(output_path) == [{"order_id": "O-1"}, {"order_id": "O-2"}]
-    assert adapter.rows_from_parquet(out_path) == [{"ok": True}]
+    assert adapter.execute_transform(plan) == TransformExecutionResult()
+    assert delegated == [plan]
+
+
+def test_duckdb_compute_adapter_helper_edges() -> None:
     with pytest.raises(ValidationFailed, match="row must be a mapping"):
         compute_module._tabular_row(["bad"])
     with pytest.raises(ValidationFailed, match="unique tuple check requires columns"):

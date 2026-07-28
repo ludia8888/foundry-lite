@@ -39,7 +39,8 @@
 4. `docs/data-platform-expansion-sprint-plan-ko.md`, `foundry_lite_sprint_breakdown_ko.md`의
    스프린트 상태를 맞춘다.
 5. 필요하면 `docs/frontend-backend-surface-contract.md`, `docs/infra-ratchet.md`,
-   `docs/quality-gate-roadmap.md` 같은 계약 문서를 업데이트한다.
+   `docs/quality-gate-roadmap.md`, `docs/pipeline-builder-parity-matrix.json` 같은 계약·패리티
+   문서를 업데이트한다.
 6. 마지막에 `README.md`를 GitHub 첫 화면용 요약으로 맞춘다.
 
 이 순서가 중요한 이유는 README가 가장 잘 보이는 문서이지만, 원본 장부는 아니기 때문이다.
@@ -90,6 +91,7 @@ ledger에 남아야 한다.
 | `docs/data-engineering-pattern-matrix.json`              | `machine-registry` | Data-pattern current/partial/deferred matrix   | S46 semantic consistency gate의 입력이다.                                                                                                                  |
 | `docs/data-platform-expansion-sprint-plan-ko.md`         | `source-of-truth`  | S46+ expansion roadmap and sprint checklist    | roadmap summary, detailed sprint checklist, and current/partial/future status live in one document.                                                        |
 | `docs/frontend-api-sdk-surface-matrix.json`              | `machine-registry` | API/SDK proof registry                         | frontend route나 SDK helper가 request/helper contract 없이 생기는 것을 막는다.                                                                             |
+| `docs/pipeline-builder-parity-matrix.json`               | `machine-registry` | Pipeline Builder public-behavior parity matrix | 공식 Palantir 공개 동작과 현재 Graph v2, Media registry, execution evidence, UI foundation 및 planned gap을 `current/foundation/planned`로 잠근다.          |
 | `docs/frontend-backend-surface-contract.md`              | `source-of-truth`  | Frontend/backend contract                      | 프론트는 named generated SDK를 통해서만 current API를 사용한다.                                                                                            |
 | `docs/osdk-security-threat-model.md`                     | `risk-registry`    | OSDK browser/OAuth/subscription threat model   | local OAuth, WebSocket/SSE subscription, CORS/CSRF/XSS/token leakage, and future external IdP/package lifecycle boundary를 current/future로 분리한다.       |
 | `docs/sdk-frontend-cookbook.md`                          | `example`          | SDK frontend cookbook                          | SDK만으로 핵심 화면을 조립하는 예제 모음이다. current/future 경계 원본은 아니며 status/evidence 문서와 frontend contract를 따른다.                         |
@@ -98,6 +100,7 @@ ledger에 남아야 한다.
 | `docs/commit-point-risk-register.md`                     | `risk-registry`    | Commit-point risks                             | commit, idempotency, partial failure, cleanup 위험을 추적한다.                                                                                             |
 | `docs/adr/README.md`                                     | `source-of-truth`  | Architecture Decision Record index             | ADR 색인. 새 ADR이 추가/supersede될 때 갱신한다.                                                                                                           |
 | `docs/adr/0001-media-plane-parallel-to-dataset-plane.md` | `source-of-truth`  | Media Plane architecture decision              | Media/Content Plane을 Dataset Plane과 동급 bounded context로 두는 결정과 7개 제품 불변식을 기록한다.                                                       |
+| `docs/adr/0002-public-behavior-mmdp-pipeline-graph-v2.md` | `source-of-truth` | Pipeline Graph v2 architecture decision        | 공개 동작 패리티 범위, Graph v2, named artifact ports, plane별 commit, no-commit preview, exact processor resolution, 단계적 rollout 결정을 기록한다.      |
 | `docs/backend-findings-crosscheck-2026-06-22.md`         | `risk-registry`    | Backend review finding cross-check             | 외부 backend review finding을 현재 코드, tests, gates와 대조해 fixed/partial/still-valid 위험으로 분류한다.                                                |
 | `foundry_lite_development_plan_ko_sprintified.md`        | `source-of-truth`  | Product and architecture plan                  | 장기 목표와 설계 방향의 가장 큰 원본이다.                                                                                                                  |
 | `foundry_lite_sprint_breakdown_ko.md`                    | `source-of-truth`  | Sprint breakdown                               | 스프린트별 scope and status table을 관리한다.                                                                                                              |

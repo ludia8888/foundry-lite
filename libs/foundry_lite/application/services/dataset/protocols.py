@@ -152,6 +152,13 @@ class DatasetVersionLookup(Protocol):
 class DatasetQualityBoundary(Protocol):
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats: ...
 
+    def _resolve_inferred_schema(
+        self,
+        conn: TransactionContext,
+        dataset: DatasetRow,
+        next_schema: DatasetSchemaJson,
+    ) -> DatasetSchemaJson: ...
+
     def _ensure_schema(
         self,
         conn: TransactionContext,

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -129,15 +128,6 @@ def _dataset_ref_parts(dataset_ref: str) -> tuple[str, str]:
 
 def _dataset_ref(row: Mapping[str, object]) -> str:
     return f"{row['namespace']}.{row['name']}"
-
-
-def _write_rows_to_csv(rows: Sequence[Mapping[str, object]], path: Path, fieldnames: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field) for field in fieldnames})
 
 
 def _normalize_duckdb_type(duckdb_type: str) -> str:

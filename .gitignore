@@ -17,6 +17,11 @@ playwright-report/
 output/
 *.tsbuildinfo
 
+# Local frontend build and manual QA/runtime artifacts
+apps/foundry/dist/
+foundry-lite.db
+tmp/
+
 # mutmut working directory
 mutants/
 .mutmut-cache

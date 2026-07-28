@@ -30,6 +30,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
 SEMGREP_TOOL = ["uv", "tool", "run", "--from", "semgrep==1.169.0", "semgrep"]
+PIPELINE_QUALITY_GATE_INVENTORY: tuple[tuple[str, str], ...] = (
+    ("quality:pipeline-graph-v2", "static"),
+    ("quality:pipeline-artifact-execution", "static"),
+    ("quality:pipeline-preview", "static"),
+    ("quality:pipeline-multimodal", "static"),
+    ("quality:pipeline-scheduler", "static"),
+    ("quality:pipeline-collaboration", "static"),
+    ("quality:pipeline-python-isolation", "static"),
+    ("quality:pipeline-trained-model-sidecar", "static"),
+    ("quality:pipeline-builder-performance", "static"),
+    ("quality:pipeline-builder-e2e", "e2e"),
+)
 
 # Ordered heaviest-first so long-running tools overlap the cheap AST checks.
 HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
@@ -77,6 +89,15 @@ HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
         "migration-runner-tests",
         ["uv", "run", "--no-sync", "pytest", "tests/unit/test_migration_runner.py", "-q", "-ra"],
     ),
+    ("pipeline-graph-v2", ["pnpm", "--silent", "quality:pipeline-graph-v2"]),
+    ("pipeline-artifact-execution", ["pnpm", "--silent", "quality:pipeline-artifact-execution"]),
+    ("pipeline-preview", ["pnpm", "--silent", "quality:pipeline-preview"]),
+    ("pipeline-multimodal", ["pnpm", "--silent", "quality:pipeline-multimodal"]),
+    ("pipeline-scheduler", ["pnpm", "--silent", "quality:pipeline-scheduler"]),
+    ("pipeline-collaboration", ["pnpm", "--silent", "quality:pipeline-collaboration"]),
+    ("pipeline-python-isolation", ["pnpm", "--silent", "quality:pipeline-python-isolation"]),
+    ("pipeline-trained-model-sidecar", ["pnpm", "--silent", "quality:pipeline-trained-model-sidecar"]),
+    ("pipeline-builder-performance", ["pnpm", "--silent", "quality:pipeline-builder-performance"]),
     ("sdk-ts-drift", [PYTHON, "scripts/generate_sdk_ts.py", "--check"]),
     ("frontend-foundation", ["pnpm", "--silent", "quality:frontend-foundation"]),
     ("ast-grep", ["node", "scripts/quality/run_ast_grep.cjs", "scan", "-c", "sgconfig.yml"]),
@@ -166,6 +187,8 @@ PYTHON_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("semantic-doc-consistency", ["scripts/quality/check_semantic_doc_consistency.py"]),
     ("data-pattern-matrix", ["scripts/quality/check_data_pattern_matrix.py"]),
     ("data-platform-sprint-status", ["scripts/quality/check_data_platform_sprint_status.py"]),
+    ("pipeline-parity-matrix", ["scripts/quality/check_pipeline_parity_matrix.py"]),
+    ("pipeline-quality-gate-inventory", ["scripts/quality/check_pipeline_quality_gate_inventory.py"]),
     ("frontend-backend-surface", ["scripts/quality/check_frontend_backend_surface.py"]),
     ("schema-revision-guard", ["scripts/quality/check_schema_revision_guard.py"]),
     ("schema-migrations", ["scripts/quality/check_schema_migrations.py"]),
@@ -204,6 +227,7 @@ def _gitleaks_check() -> tuple[str, list[str]] | None:
                 "gitleaks",
                 "dir",
                 "--no-banner",
+                "--redact",
                 "--config",
                 ".gitleaks.toml",
                 "--report-path",

@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import ClassVar
 
 from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.pipeline_runtime_dependencies import (
+    GovernedSemanticModelPort,
+    MediaProcessorRegistry,
+    PipelineExecutionRepository,
+    SemanticRowCacheRepository,
+)
 from foundry_lite.application.ports import (
     ActionRepository,
     AiEvalRepository,
@@ -61,6 +67,7 @@ from foundry_lite.application.ports.source_management_repository import SourceMa
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
 from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
+from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
@@ -90,7 +97,11 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "source_management_service": "SourceManagementService",
     "source_onboarding_service": "SourceOnboardingService",
     "context_compiler_service": "ContextCompilerService",
+    "content_unit_chunking_service": "ContentUnitChunkingService",
     "content_retrieval_service": "DefaultContentRetrievalService",
+    "media_catalog_service": "MediaCatalogService",
+    "media_indexing_service": "MediaIndexingService",
+    "media_processing_service": "MediaProcessingService",
     "media_visual_search_service": "MediaVisualSearchService",
     "media_transaction_service": "MediaTransactionService",
     "media_upload_service": "MediaUploadService",
@@ -102,6 +113,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "dataset_registry_service": "DatasetRegistryService",
     "dataset_transaction_service": "DatasetTransactionService",
     "dataset_version_service": "DatasetVersionService",
+    "exact_dataset_version_reader_service": "ExactCommittedDatasetVersionReader",
     "demo_service": "DemoService",
     "function_execution_service": "FunctionExecutionService",
     "iceberg_maintenance_service": "IcebergMaintenanceService",
@@ -138,11 +150,17 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "osdk_application_sdk_service": "OsdkApplicationSdkService",
     "osdk_oauth_session_service": "OsdkOAuthSessionService",
     "outbox_publisher_service": "OutboxPublisherService",
+    "pipeline_catalog_service": "PipelineCatalogService",
     "pipeline_compiler_service": "PipelineCompilerService",
     "pipeline_definition_service": "PipelineDefinitionService",
+    "pipeline_deployment_service": "PipelineDeploymentService",
     "pipeline_governance_service": "PipelineGovernanceService",
+    "pipeline_graph_v2_execution_service": "PipelineGraphV2ExecutionService",
+    "pipeline_graph_v2_run_coordinator_service": "PipelineGraphV2RunCoordinatorService",
     "pipeline_graph_validation_service": "PipelineGraphValidationService",
+    "pipeline_preview_service": "PipelinePreviewService",
     "pipeline_run_service": "PipelineRunService",
+    "pipeline_scheduler_service": "PipelineSchedulerService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
     "tool_broker_service": "ToolBrokerService",
@@ -206,6 +224,7 @@ class CoreService:
     media_access_cache_repository: MediaAccessCacheRepository
     media_storage: MediaStorageAdapter
     media_processor: MediaProcessorAdapter
+    media_processor_registry: MediaProcessorRegistry | None
     media_preview_renderer: MediaPreviewRendererAdapter
     external_media_reader: ExternalMediaReader
     content_index_adapter: ContentIndexAdapter
@@ -213,7 +232,10 @@ class CoreService:
     completion_model_adapter: CompletionModelAdapter
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
+    governed_semantic_model_port: GovernedSemanticModelPort
+    trained_model_inference_port: TrainedModelInferencePort
     model_registry_repository: ModelRegistryRepository
+    semantic_row_cache_repository: SemanticRowCacheRepository
     context_provider: ContextProvider
     citation_source_verifier: CitationSourceVerifier
     prompt_artifact_store: object
@@ -227,6 +249,7 @@ class CoreService:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
     pipeline_repository: PipelineRepository
+    pipeline_execution_repository: PipelineExecutionRepository
     resource_catalog_repository: ResourceCatalogRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository

@@ -95,11 +95,21 @@ def _authoritative_hit(
         source_media_item_version_id=unit.source_media_item_version_id,
         content_unit_id=unit.content_unit_id,
         index_generation=hit.index_generation,
+        media_derivative_id=unit.derivative_id,
         page_number=unit.page_number,
         start_ms=unit.start_ms,
         end_ms=unit.end_ms,
+        bbox=dict(unit.bbox) if unit.bbox is not None else None,
+        timecode=_timecode(unit),
+        source_locator=dict(unit.source_locator) if unit.source_locator is not None else None,
         text_hash=unit.text_hash,
         text=unit.text,
         chunk_spec_hash=unit.chunk_spec_hash,
         classification=classification,
     )
+
+
+def _timecode(unit: ContentUnitRecord) -> dict[str, object] | None:
+    if unit.start_ms is None and unit.end_ms is None:
+        return None
+    return {"startMs": unit.start_ms, "endMs": unit.end_ms}

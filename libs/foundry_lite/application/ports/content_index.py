@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -99,9 +100,13 @@ class ContentSearchHit:
     source_media_item_version_id: str
     content_unit_id: str
     index_generation: str
+    media_derivative_id: str | None = None
     page_number: int | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    bbox: Mapping[str, object] | None = None
+    timecode: Mapping[str, object] | None = None
+    source_locator: Mapping[str, object] | None = None
     text_hash: str | None = None
     text: str = ""
     chunk_spec_hash: str = ""

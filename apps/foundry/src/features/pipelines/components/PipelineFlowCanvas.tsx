@@ -1,4 +1,4 @@
-import type { PipelineGraph, PipelineNodeType } from "@foundry-lite/sdk";
+import type { PipelineNodeType } from "@foundry-lite/sdk";
 import {
   Panel,
   ReactFlow,
@@ -8,13 +8,21 @@ import {
   type NodeChange,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { ZoomIn, ZoomOut } from "lucide-react";
+import { Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type {
   NodePosition,
+  PipelineCanvasNode,
+  PipelineCanvasGraph,
+  PipelineConnection,
   PipelineValidationIssue,
   PositionsByNodeId,
+} from "../pipeline-model";
+import {
+  asText,
+  nodeDataOf,
+  outputArtifactKind,
 } from "../pipeline-model";
 import {
   InsertTransformEdge,
@@ -33,7 +41,7 @@ export type CanvasInteractionMode = "pan" | "select";
 export type CanvasFocusSignal = { nodeId: string; seq: number };
 
 interface PipelineFlowCanvasProps {
-  graph: PipelineGraph;
+  graph: PipelineCanvasGraph;
   positions: PositionsByNodeId;
   selectedNodeIds: readonly string[];
   interactionMode: CanvasInteractionMode;
@@ -41,7 +49,7 @@ interface PipelineFlowCanvasProps {
   focusSignal: CanvasFocusSignal | null;
   onChangeSelection: (nodeIds: readonly string[]) => void;
   onMoveNode: (nodeId: string, position: NodePosition) => void;
-  onConnectNodes: (source: string, target: string) => void;
+  onConnectNodes: (connection: PipelineConnection) => void;
   onDeleteNodes: (nodeIds: readonly string[]) => void;
   onDeleteEdges: (edgeIds: readonly string[]) => void;
   onInsertTransform: (edgeId: string, type: PipelineNodeType) => void;
@@ -84,28 +92,24 @@ export function PipelineFlowCanvas({
     [graph.nodes, positions, selectedIdSet, nodeIssues],
   );
 
-  // 조인 노드로 들어가는 엣지는 등장 순서대로 좌/우 타깃 핸들에 붙인다 (공식 노드 카드 구조).
   const edges = useMemo<PipelineFlowEdge[]>(() => {
-    const joinIds = new Set(
-      graph.nodes.filter((node) => node.type === "join").map((node) => node.id),
-    );
-    const joinInputCounts: Record<string, number> = {};
-    return graph.edges.map((edge) => {
-      let targetHandle: string | undefined;
-      if (joinIds.has(edge.target)) {
-        const index = joinInputCounts[edge.target] ?? 0;
-        joinInputCounts[edge.target] = index + 1;
-        targetHandle = index === 0 ? "left" : "right";
-      }
-      return {
-        id: edge.id ?? `${edge.source}->${edge.target}`,
-        source: edge.source,
-        target: edge.target,
-        targetHandle,
-        type: "insertEdge" as const,
-        data: { onInsertTransform },
-      };
-    });
+    const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+    return graph.edges.map((edge) => ({
+      id: edge.id ?? `${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourceHandle ?? undefined,
+      targetHandle: edge.targetHandle ?? undefined,
+      type: "insertEdge" as const,
+      data: {
+        onInsertTransform,
+        passport: edgePassport(
+          nodeById.get(edge.source),
+          edge.sourceHandle,
+          edge.targetHandle,
+        ),
+      },
+    }));
   }, [graph.edges, graph.nodes, onInsertTransform]);
 
   useEffect(() => {
@@ -152,7 +156,12 @@ export function PipelineFlowCanvas({
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
-        onConnectNodes(connection.source, connection.target);
+        onConnectNodes({
+          source: connection.source,
+          target: connection.target,
+          sourceHandle: connection.sourceHandle,
+          targetHandle: connection.targetHandle,
+        });
       }
     },
     [onConnectNodes],
@@ -186,9 +195,10 @@ export function PipelineFlowCanvas({
     >
       {/* 공식 캔버스 우하단 돋보기 줌 컨트롤 */}
       <Panel position="bottom-right" className="!m-2">
-        <div className="flex flex-col overflow-hidden rounded border border-[#C5CBD3] bg-white shadow-sm">
+        <div className="flex flex-col overflow-hidden rounded-[2px] border border-[#AEB6C1] bg-white shadow-sm">
           <button
             type="button"
+            aria-label="그래프 확대"
             title="확대"
             className="flex size-7 items-center justify-center hover:bg-muted"
             onClick={() => void instanceRef.current?.zoomIn({ duration: 150 })}
@@ -197,14 +207,53 @@ export function PipelineFlowCanvas({
           </button>
           <button
             type="button"
+            aria-label="그래프 축소"
             title="축소"
             className="flex size-7 items-center justify-center border-t border-[#C5CBD3] hover:bg-muted"
             onClick={() => void instanceRef.current?.zoomOut({ duration: 150 })}
           >
             <ZoomOut className="size-4 text-[#5F6B7C]" />
           </button>
+          <button
+            type="button"
+            aria-label="그래프를 화면에 맞추기"
+            title="화면에 맞추기"
+            className="flex size-7 items-center justify-center border-t border-[#C5CBD3] hover:bg-muted"
+            onClick={() =>
+              void instanceRef.current?.fitView({
+                padding: 0.25,
+                maxZoom: 1,
+                duration: 150,
+              })
+            }
+          >
+            <Maximize2 className="size-4 text-[#5F6B7C]" />
+          </button>
         </div>
       </Panel>
     </ReactFlow>
   );
+}
+
+function edgePassport(
+  source: PipelineCanvasNode | undefined,
+  sourcePortId: string | null | undefined,
+  targetPortId: string | null | undefined,
+) {
+  const resolvedSourcePort = sourcePortId ?? "output";
+  const config = source ? nodeDataOf(source) : {};
+  return {
+    artifactKind:
+      (source && outputArtifactKind(source, resolvedSourcePort)) ??
+      "unknown_artifact",
+    sourcePortId: resolvedSourcePort,
+    targetPortId: targetPortId ?? "input",
+    producerPin: source
+      ? `${source.descriptorId}@${source.specVersion}`
+      : "unknown@0",
+    securityClassification:
+      asText(config.dataClassification) ??
+      asText(config.classification) ??
+      "inherited",
+  };
 }

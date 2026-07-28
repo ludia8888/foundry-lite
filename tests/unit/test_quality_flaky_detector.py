@@ -91,6 +91,16 @@ def test_flaky_detector_passes_for_stable_passing_runs(tmp_path: Path) -> None:
     assert all(run["randomly_seed"] is None for run in report["runs"])
 
 
+def test_pytest_summary_ignores_broker_failure_diagnostics_on_stderr() -> None:
+    stdout = "3856 passed in 314.63s (0:05:14)\n"
+    stderr = (
+        "%3|1785208199.122|FAIL|rdkafka#producer-1| "
+        "[thrd:localhost:38108/1]: Connect to ipv4#127.0.0.1:38108 failed: Connection refused\n"
+    )
+
+    assert gate._pytest_summary(stdout, stderr) == "3856 passed"
+
+
 def test_flaky_detector_fails_when_any_iteration_fails(tmp_path: Path) -> None:
     runner = tmp_path / "fails_once.py"
     runner.write_text(

@@ -1050,17 +1050,34 @@ export function createPipelineBuilderRecipe(
     listVersions: (pipelineId: string, filters: { limit?: number } = {}) =>
       client.pipelines.versions.list(pipelineId, filters),
     getVersion: (versionId: string) => client.pipelines.versions.get(versionId),
-    deploy: (pipelineId: string, versionId: string, payload: PipelineDeployRequest = {}) =>
-      client.pipelines.deploy(pipelineId, versionId, payload),
-    startRun: (pipelineId: string, payload: PipelineRunStartRequest = {}) =>
-      client.pipelines.runs.start(pipelineId, payload),
+    listDeployments: (pipelineId: string, filters: { limit?: number } = {}) =>
+      client.pipelines.deployments.list(pipelineId, filters),
+    deploy: (
+      pipelineId: string,
+      versionId: string,
+      payload: PipelineDeployRequest | undefined,
+      options: { idempotencyKey: string },
+    ) => client.pipelines.deploy(pipelineId, versionId, payload, options),
+    startRun: (
+      pipelineId: string,
+      payload: PipelineRunStartRequest | undefined,
+      options: { idempotencyKey: string },
+    ) => client.pipelines.runs.start(pipelineId, payload, options),
     getRun: (runId: string) => client.pipelines.runs.get(runId),
     timeline: (runId: string) => client.pipelines.runs.timeline(runId),
     cancelRun: (runId: string) => client.pipelines.runs.cancel(runId),
-    upsertSchedule: (pipelineId: string, payload: PipelineScheduleUpsertRequest) =>
-      client.pipelines.schedules.upsert(pipelineId, payload),
+    upsertSchedule: (
+      pipelineId: string,
+      payload: PipelineScheduleUpsertRequest,
+      options: { idempotencyKey: string },
+    ) => client.pipelines.schedules.upsert(pipelineId, payload, options),
     getSchedule: (pipelineId: string) => client.pipelines.schedules.get(pipelineId),
-    deleteSchedule: (pipelineId: string) => client.pipelines.schedules.delete(pipelineId),
+    pauseSchedule: (pipelineId: string, options: { idempotencyKey: string }) =>
+      client.pipelines.schedules.pause(pipelineId, options),
+    resumeSchedule: (pipelineId: string, options: { idempotencyKey: string }) =>
+      client.pipelines.schedules.resume(pipelineId, options),
+    deleteSchedule: (pipelineId: string, options: { idempotencyKey: string }) =>
+      client.pipelines.schedules.delete(pipelineId, options),
     previewDue: (options: { maxRuns?: number } = {}) => client.pipelines.schedules.previewDue(options),
     tick: (options: { maxRuns?: number } = {}) => client.pipelines.schedules.tick(options),
     registerSql: (payload: TransformSqlRegisterRequest) => client.transforms.registerSql(payload),

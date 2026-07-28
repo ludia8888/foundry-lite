@@ -10,29 +10,23 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.ai_run_repository import AiExecutionRunRecord, AiSessionRecord
-from foundry_lite.application.ports.language_model import (
-    LanguageModelError,
-    ModelEvent,
-    ModelMessage,
-    ModelRequest,
-    ModelResponse,
-)
+from foundry_lite.application.ports.language_model import ModelMessage, ModelRequest
 from foundry_lite.application.ports.model_registry_repository import (
     ModelAliasRecord,
     ModelProviderRecord,
     ModelRecord,
 )
-from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.services.aip.eval_identifiers import hash_json
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.platform.evidence import redact_evidence
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.anthropic_language_model import AnthropicLanguageModel
 from foundry_lite.infrastructure.repositories import SqlAlchemyAiRunRepository, SqlAlchemyModelRegistryRepository
 from foundry_lite.infrastructure.secrets import EnvSecretProvider
 from sqlalchemy import create_engine, select
@@ -43,8 +37,8 @@ DEFAULT_OUTPUT = ROOT / "artifacts" / "simulations" / "palantir_live_simulation.
 USER_AGENT = "Foundry-lite-palantir-live-simulation/1.0"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 1800
 DEFAULT_LIVE_LLM_TIMEOUT_SECONDS = 60
-DEFAULT_LIVE_LLM_MODEL = "claude-3-5-haiku-latest"
-DEFAULT_LIVE_LLM_SECRET_NAME = "foundry_aip_token"  # nosec B105 - secret reference name, not secret value.
+DEFAULT_LIVE_LLM_MODEL = "claude-sonnet-5"
+DEFAULT_LIVE_LLM_SECRET_NAME = "anthropic_api_key"  # nosec B105 - secret reference name, not secret value.
 _TENANT = "tenant-live-simulation"
 _CTX = RequestContext(tenant_id=_TENANT, actor_user_id="operator-live-simulation", request_id="req-live-simulation")
 
@@ -92,49 +86,6 @@ class ProviderProbe:
     status: SimulationStatus
     elapsed_seconds: float
     details: dict[str, object]
-
-
-class _AnthropicGatewayLanguageModel:
-    profile_name = "anthropic-live-operator-smoke"
-
-    def __init__(
-        self,
-        secret_provider: SecretProvider,
-        *,
-        secret_name: str,
-        model: str,
-        timeout_seconds: int,
-    ) -> None:
-        self._secret_provider = secret_provider
-        self._secret_name = secret_name
-        self._model = model
-        self._timeout_seconds = timeout_seconds
-
-    def complete(self, request: ModelRequest) -> ModelResponse:
-        secret = self._secret_provider.get_secret(self._secret_name)
-        started = time.monotonic()
-        payload = _anthropic_messages_payload(request, self._model)
-        response = _post_anthropic_messages(secret.value, payload, self._timeout_seconds)
-        usage = _mapping(response.get("usage"))
-        content = _anthropic_text_content(response)
-        return ModelResponse(
-            provider="anthropic",
-            resolved_model_id="",
-            resolved_model_revision="",
-            content=content,
-            finish_reason=str(response.get("stop_reason") or "unknown"),
-            input_tokens=_int_value(usage.get("input_tokens")),
-            output_tokens=_int_value(usage.get("output_tokens")),
-            provider_request_id=str(response.get("id") or ""),
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    def stream(self, request: ModelRequest) -> Sequence[ModelEvent]:
-        del request
-        raise LanguageModelError("streaming_unavailable_for_operator_smoke")
-
-    def failure_contract(self) -> AdapterFailureContract:
-        return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,12 +145,8 @@ def _provider_probes(config: SimulationConfig, source_probes: Sequence[SourcePro
                 elapsed_seconds=0.0,
                 details={
                     "reason": "disabled by default; pass --include-live-llm and configure the secret env var",
-                    "secretName": config.live_llm_secret_name,
-                    "supportedEnvVars": [
-                        _default_secret_env_var(config.live_llm_secret_name),
-                        "ANTHROPIC_API_KEY",
-                        "FOUNDRY_LITE_SECRET_ANTHROPIC_API_KEY",
-                    ],
+                    "secretRef": config.live_llm_secret_name,
+                    "supportedEnvVars": list(_live_llm_env_vars(config.live_llm_secret_name)),
                 },
             )
         ]
@@ -309,7 +256,7 @@ def _guard_provider(probe: Callable[[], ProviderProbe]) -> ProviderProbe:
             name="aip-model-gateway-live-llm",
             status="failed",
             elapsed_seconds=round(elapsed, 3),
-            details={"errorType": type(exc).__name__, "error": _safe_error(exc)},
+            details=_safe_provider_error(exc),
         )
 
 
@@ -325,12 +272,7 @@ def _probe_live_llm_gateway(config: SimulationConfig, source_probes: Sequence[So
     gateway = ModelGatewayService(
         engine=engine,
         model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
-        language_model_adapter=_AnthropicGatewayLanguageModel(
-            secret_provider,
-            secret_name=config.live_llm_secret_name,
-            model=config.live_llm_model,
-            timeout_seconds=config.live_llm_timeout_seconds,
-        ),
+        language_model_adapter=AnthropicLanguageModel(secret_provider),
         ai_run_repository=SqlAlchemyAiRunRepository(engine),
     )
     prompt = _live_llm_prompt(source_probes)
@@ -339,6 +281,7 @@ def _probe_live_llm_gateway(config: SimulationConfig, source_probes: Sequence[So
         ModelRequest(
             model_alias="live-simulation-default",
             messages=(ModelMessage(role="user", content=prompt),),
+            environment="operator-live",
             max_output_tokens=80,
             request_id="req-live-simulation-llm",
             ai_run_id=ai_run_id,
@@ -358,7 +301,7 @@ def _probe_live_llm_gateway(config: SimulationConfig, source_probes: Sequence[So
             "boundary": "ModelGatewayService",
             "provider": response.provider,
             "model": config.live_llm_model,
-            "secretName": config.live_llm_secret_name,
+            "secretRef": config.live_llm_secret_name,
             "secretEnvVar": secret_env_var,
             "aiRunId": ai_run_id,
             "modelCallStatus": row["status"],
@@ -532,47 +475,6 @@ def _probe_commons_direct_media(item: Mapping[str, object]) -> dict[str, object]
     }
 
 
-def _anthropic_messages_payload(request: ModelRequest, model: str) -> dict[str, object]:
-    return {
-        "model": model,
-        "max_tokens": request.max_output_tokens,
-        "temperature": request.temperature,
-        "messages": [{"role": message.role, "content": message.content} for message in request.messages],
-    }
-
-
-def _post_anthropic_messages(api_key: str, payload: Mapping[str, object], timeout_seconds: int) -> Mapping[str, object]:
-    request = Request(
-        "https://api.anthropic.com/v1/messages",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "User-Agent": USER_AGENT,
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            "x-api-key": api_key,
-        },
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310  # nosec B310 - explicit live LLM drill.
-            return _mapping(json.loads(response.read().decode("utf-8")))
-    except HTTPError as exc:
-        raise LanguageModelError(f"anthropic_http_{exc.code}") from exc
-    except URLError as exc:
-        raise LanguageModelError("anthropic_network_error") from exc
-
-
-def _anthropic_text_content(response: Mapping[str, object]) -> str:
-    content = _sequence(response.get("content"))
-    text_parts: list[str] = []
-    for part in content:
-        if not isinstance(part, Mapping):
-            continue
-        if part.get("type") == "text":
-            text_parts.append(str(part.get("text") or ""))
-    return "\n".join(part for part in text_parts if part).strip()
-
-
 def _live_llm_prompt(source_probes: Sequence[SourceProbe]) -> str:
     source_counts = {probe.name: probe.observed_count for probe in source_probes}
     return (
@@ -591,7 +493,7 @@ def _seed_live_llm_registry(engine: Engine, model: str, secret_name: str) -> Non
                 provider_id="provider-anthropic-live",
                 tenant_scope=_TENANT,
                 provider_type="anthropic",
-                profile_name="anthropic-messages-api",
+                profile_name="anthropic",
                 region="us-east-1",
                 secret_ref=secret_name,
                 retention_policy="operator_smoke",
@@ -609,9 +511,16 @@ def _seed_live_llm_registry(engine: Engine, model: str, secret_name: str) -> Non
                 provider_model_id=model,
                 revision=model,
                 lifecycle="stable",
-                capabilities_json={"messages": True, "streaming": False},
-                context_limit=200000,
-                output_limit=4096,
+                capabilities_json={
+                    "messages": True,
+                    "streaming": True,
+                    "image_input": True,
+                    "pdf_input": True,
+                    "structured_outputs": True,
+                    "sampling_parameters": not model.startswith("claude-sonnet-5"),
+                },
+                context_limit=1_000_000 if model.startswith("claude-sonnet-5") else 200_000,
+                output_limit=128_000 if model.startswith("claude-sonnet-5") else 64_000,
                 pricing_json={},
                 allowed_classifications=("public",),
                 created_at="2026-06-27T00:00:00Z",
@@ -679,12 +588,17 @@ def _seed_live_ai_run(engine: Engine, ai_run_id: str, model: str) -> None:
 
 
 def _select_live_llm_env_var(secret_name: str) -> str:
-    candidates = [
+    candidates = _live_llm_env_vars(secret_name)
+    return next((candidate for candidate in candidates if os.environ.get(candidate, "") != ""), candidates[0])
+
+
+def _live_llm_env_vars(secret_name: str) -> tuple[str, ...]:
+    candidates = (
         _default_secret_env_var(secret_name),
         "ANTHROPIC_API_KEY",
         "FOUNDRY_LITE_SECRET_ANTHROPIC_API_KEY",
-    ]
-    return next((candidate for candidate in candidates if os.environ.get(candidate, "") != ""), candidates[0])
+    )
+    return tuple(dict.fromkeys(candidates))
 
 
 def _default_secret_env_var(secret_name: str) -> str:
@@ -776,7 +690,7 @@ def _llm_simulation_gaps(config: SimulationConfig) -> list[dict[str, object]]:
                 "and operations evidence through local/fake paths."
             ),
             "nextCommand": (
-                "FOUNDRY_LITE_SECRET_FOUNDRY_AIP_TOKEN=<redacted> pnpm --silent simulation:palantir-live-llm"
+                "FOUNDRY_LITE_SECRET_ANTHROPIC_API_KEY=<redacted> pnpm --silent simulation:palantir-live-llm"
             ),
         }
     ]
@@ -820,9 +734,23 @@ def _text_output(value: str | bytes | None) -> str:
     return value
 
 
-def _safe_error(exc: Exception) -> str:
-    text = str(exc)
-    return text if len(text) <= 500 else f"{text[:500]}..."
+def _safe_provider_error(exc: Exception) -> dict[str, object]:
+    if isinstance(exc, AdapterError):
+        failure = exc.failure
+        return {
+            "errorType": type(exc).__name__,
+            "errorCode": exc.code,
+            "kind": failure.kind,
+            "retryable": failure.is_retryable,
+            "message": failure.operator_message,
+            "details": redact_evidence(dict(failure.details)),
+        }
+    return {
+        "errorType": type(exc).__name__,
+        "errorCode": getattr(exc, "code", "UNEXPECTED_PROVIDER_ERROR"),
+        "message": "Live provider probe failed; raw exception text was redacted.",
+        "details": redact_evidence(getattr(exc, "details", {})),
+    }
 
 
 def _int_value(value: object) -> int:

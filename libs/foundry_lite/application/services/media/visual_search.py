@@ -104,31 +104,42 @@ class MediaVisualSearchService(CoreService):
         # PRE-filter). A caller value is only an internal narrowing hint; it can never widen the
         # ctx-derived ceiling, so an over-classified frame never enters ranking or is re-read out.
         allowed = _clearance(ctx, allowed_classifications)
-        # Embed the query with the CLIP TEXT tower; match only the dense path (text=None) so a
-        # frame's descriptor never lexically biases the visual ranking. With no CLIP model wired
-        # the path degrades to no hits (default-off), so unified/visual callers stay keyword-safe.
         if not self.vision_embedding_model_adapter.is_available:
             return []
+        hits = self.content_index_adapter.search(self._visual_query(ctx, text, top_k, allowed))
+        if not hits:
+            return []
+        unit_by_id = self._content_units_by_id(ctx, hits)
+        return _authoritative_hits(hits, unit_by_id, ctx.tenant_id, allowed)
+
+    def _visual_query(
+        self,
+        ctx: RequestContext,
+        text: str,
+        top_k: int,
+        allowed_classifications: tuple[str, ...] | None,
+    ) -> HybridContentQuery:
+        """Build a CLIP-text query without lexical score contamination."""
         query_vector = self.vision_embedding_model_adapter.embed_query(text)
-        query = HybridContentQuery(
+        return HybridContentQuery(
             tenant_id=ctx.tenant_id,
             text=None,
             top_k=top_k,
             query_vector=query_vector,
             embedding_model_version=self.vision_embedding_model_adapter.model_version,
-            allowed_classifications=allowed,
+            allowed_classifications=allowed_classifications,
         )
-        hits = self.content_index_adapter.search(query)
-        if not hits:
-            return []
+
+    def _content_units_by_id(
+        self,
+        ctx: RequestContext,
+        hits: list[ContentSearchHit],
+    ) -> dict[str, ContentUnitRecord]:
         with self.engine.begin() as conn:
             units = self.media_derivative_repository.get_content_units_by_ids(
                 transaction=conn, ids=[hit.content_unit_id for hit in hits]
             )
-        unit_by_id = {unit.content_unit_id: unit for unit in units}
-        return [
-            hit for hit in hits if _is_authoritative(hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id, allowed)
-        ]
+        return {unit.content_unit_id: unit for unit in units}
 
     def _project(self, generation: str, units: list[ContentUnitRecord]) -> VisualIndexingOutcome:
         model_version = self.vision_embedding_model_adapter.model_version
@@ -186,21 +197,74 @@ def _indexed(unit: ContentUnitRecord, embedding_model_version: str) -> IndexedCo
     )
 
 
-def _is_authoritative(
+def _authoritative_hit(
     hit: ContentSearchHit,
     unit: ContentUnitRecord | None,
     tenant_id: str,
     allowed_classifications: tuple[str, ...] | None,
-) -> bool:
+) -> ContentSearchHit | None:
     if unit is None:
-        return False  # stale: the source content unit no longer exists
+        return None  # stale: the source content unit no longer exists
     if unit.tenant_id != tenant_id or str(unit.security_envelope.get("tenantId", unit.tenant_id)) != tenant_id:
-        return False  # ACL: never leak another tenant's content
+        return None  # ACL: never leak another tenant's content
     # Defense-in-depth: re-apply the clearance gate against the authoritative DB row so even a
     # stale/over-broad index that leaked an over-classified frame is dropped here.
-    if not is_classification_cleared(str(unit.security_envelope.get("classification", "")), allowed_classifications):
-        return False
-    return hit.text_hash == unit.text_hash  # citation integrity: index must match the truth
+    classification = str(unit.security_envelope.get("classification", ""))
+    if not is_classification_cleared(classification, allowed_classifications):
+        return None
+    if hit.text_hash != unit.text_hash:
+        return None
+    return _content_search_hit(hit, unit, classification)
+
+
+def _authoritative_hits(
+    hits: list[ContentSearchHit],
+    unit_by_id: dict[str, ContentUnitRecord],
+    tenant_id: str,
+    allowed_classifications: tuple[str, ...] | None,
+) -> list[ContentSearchHit]:
+    return [
+        authoritative
+        for hit in hits
+        if (
+            authoritative := _authoritative_hit(
+                hit,
+                unit_by_id.get(hit.content_unit_id),
+                tenant_id,
+                allowed_classifications,
+            )
+        )
+        is not None
+    ]
+
+
+def _content_search_hit(
+    hit: ContentSearchHit,
+    unit: ContentUnitRecord,
+    classification: str,
+) -> ContentSearchHit:
+    return ContentSearchHit(
+        source_media_item_version_id=unit.source_media_item_version_id,
+        content_unit_id=unit.content_unit_id,
+        index_generation=hit.index_generation,
+        media_derivative_id=unit.derivative_id,
+        page_number=unit.page_number,
+        start_ms=unit.start_ms,
+        end_ms=unit.end_ms,
+        bbox=dict(unit.bbox) if unit.bbox is not None else None,
+        timecode=_timecode(unit),
+        source_locator=dict(unit.source_locator) if unit.source_locator is not None else None,
+        text_hash=unit.text_hash,
+        text=unit.text,
+        chunk_spec_hash=unit.chunk_spec_hash,
+        classification=classification,
+    )
+
+
+def _timecode(unit: ContentUnitRecord) -> dict[str, object] | None:
+    if unit.start_ms is None and unit.end_ms is None:
+        return None
+    return {"startMs": unit.start_ms, "endMs": unit.end_ms}
 
 
 __all__ = ["MediaVisualSearchService", "VisualIndexingOutcome"]

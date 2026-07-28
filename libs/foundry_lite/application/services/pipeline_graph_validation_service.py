@@ -17,6 +17,15 @@ from foundry_lite.application.services.pipeline_graph_model import (
     validate_pipeline_graph,
 )
 from foundry_lite.application.services.pipeline_payloads import test_result_record
+from foundry_lite.application.services.pipeline_source_contract_resolver import (
+    PipelineSourceContractResolutionFailed,
+    PipelineSourceContractResolver,
+)
+from foundry_lite.application.services.pipeline_source_contracts import PipelineSourceResolution
+from foundry_lite.application.services.pipeline_source_validation import (
+    validate_pipeline_graph_with_sources,
+    validation_with_source_failure,
+)
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
@@ -25,7 +34,16 @@ from foundry_lite.domain.errors import NotFound, ValidationFailed
 class PipelineGraphValidationService(CoreService):
     """Read-only graph analysis used by the frontend canvas."""
 
-    required_dependencies = ("engine", "policy", "pipeline_repository")
+    required_dependencies = (
+        "engine",
+        "policy",
+        "pipeline_repository",
+        "dataset_repository",
+        "dataset_version_repository",
+        "dataset_quality_repository",
+        "media_repository",
+        "source_management_repository",
+    )
     required_collaborators = ("runtime_service",)
     pipeline_repository: PipelineRepository
     runtime_service: RuntimeEvidenceBoundary
@@ -34,7 +52,13 @@ class PipelineGraphValidationService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "pipeline:read")
         row = self._branch(branch_id, ctx)
-        return validate_pipeline_graph(row["graph"])
+        if _has_dataset_source(row["graph"]):
+            self.policy.require(ctx, "dataset:read")
+        try:
+            resolution = self._resolve_sources(row["graph"], ctx)
+        except PipelineSourceContractResolutionFailed as exc:
+            return validation_with_source_failure(row["graph"], exc)
+        return validate_pipeline_graph_with_sources(row["graph"], resolution)
 
     def suggest_casts(
         self,
@@ -136,6 +160,21 @@ class PipelineGraphValidationService(CoreService):
         with self.engine.begin() as conn:
             return self._require_branch(conn, ctx, branch_id)
 
+    def _resolve_sources(
+        self,
+        graph: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> PipelineSourceResolution:
+        resolver = PipelineSourceContractResolver(
+            dataset_repository=self.dataset_repository,
+            dataset_version_repository=self.dataset_version_repository,
+            dataset_quality_repository=self.dataset_quality_repository,
+            media_repository=self.media_repository,
+            source_management_repository=self.source_management_repository,
+        )
+        with self.engine.begin() as conn:
+            return resolver.resolve(transaction=conn, graph=graph, ctx=ctx)
+
     def _require_branch(self, conn: TransactionContext, ctx: RequestContext, branch_id: str) -> PipelineBranchRow:
         row = self.pipeline_repository.branch_by_id(transaction=conn, tenant_id=ctx.tenant_id, branch_id=branch_id)
         if row is None:
@@ -149,6 +188,20 @@ def _columns_from_node_or_contract(node: Mapping[str, object], graph: Mapping[st
     if isinstance(schema, list):
         return [dict(column) for column in schema if isinstance(column, dict)]
     return output_contract_columns(graph)
+
+
+def _has_dataset_source(graph: Mapping[str, object]) -> bool:
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(
+        isinstance(node, Mapping)
+        and (
+            node.get("descriptorId") in {"source.dataset", "source.stream", "source.geospatial"}
+            or node.get("type") == "dataset"
+        )
+        for node in nodes
+    )
 
 
 def _cast_suggestions(columns: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -174,12 +227,14 @@ def _suggested_type(name: str, declared: str) -> str | None:
 
 
 def _test_result(row: PipelineBranchRow) -> dict[str, object]:
-    validation = validate_pipeline_graph(row["graph"])
-    tests = row["graph"].get("tests")
+    graph = dict(row["graph"])
+    tests = graph.get("tests")
     if not isinstance(tests, list):
         tests = []
+        graph["tests"] = tests
+    validation = validate_pipeline_graph(graph)
     failures = [] if validation["valid"] else [{"test": "graph_validation", "errors": validation["errors"]}]
-    failures.extend(_output_contract_test_failures(row["graph"]))
+    failures.extend(_output_contract_test_failures(graph))
     status = "passed" if not failures else "failed"
     return {"status": status, "testCount": len(tests) + 1, "failures": failures, "validation": validation}
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from foundry_lite.application.ports import DatasetCheckResult, DatasetSchemaJson, DatasetSchemaReference
 from foundry_lite.application.ports.dataset_version_repository import DatasetSchemaRow
 from foundry_lite.application.primitives import _json_hash
+from foundry_lite.application.services.dataset.schema_backfill import resume_schema_backfill_progress
 from foundry_lite.domain.errors import ValidationFailed
 
 DatasetSchemaColumn = Mapping[str, object]
@@ -191,26 +192,22 @@ def schema_columns_by_name(schema: DatasetSchemaJson) -> DatasetColumnsByName:
     return result
 
 
-def resume_schema_backfill_progress(
-    *,
-    dataset_id: str,
-    source_schema_hash: str,
-    target_schema_hash: str,
-    changes: Sequence[DatasetSchemaEvolutionChange],
-    existing_progress: Mapping[str, object] | None = None,
-) -> dict[str, object]:
-    """Build deterministic backfill progress while preserving completed steps."""
-    steps = [_backfill_step(change) for change in changes]
-    backfill_key = _backfill_key(dataset_id, source_schema_hash, target_schema_hash, steps)
-    completed = _completed_step_ids(existing_progress, backfill_key)
-    pending = [step for step in steps if step["id"] not in completed]
-    return {
-        "backfillKey": backfill_key,
-        "status": "COMPLETED" if not pending else "PENDING",
-        "steps": steps,
-        "completedStepIds": sorted(completed),
-        "nextStep": _next_step_message(pending),
-    }
+def resolve_inferred_null_types(
+    current_schema: DatasetSchemaJson,
+    next_schema: DatasetSchemaJson,
+) -> DatasetSchemaJson:
+    """Keep a known logical type when a new snapshot contains only null values."""
+
+    current_columns = schema_columns_by_name(current_schema)
+    next_columns = schema_columns_by_name(next_schema)
+    resolved_columns: list[dict[str, object]] = []
+    for name, raw_column in next_columns.items():
+        column = dict(raw_column)
+        previous = current_columns.get(name)
+        if _column_type(column) == "null" and previous is not None and _column_type(previous) != "null":
+            column["type"] = _column_type(previous)
+        resolved_columns.append(column)
+    return {**next_schema, "columns": resolved_columns}
 
 
 def _removed_columns(
@@ -316,6 +313,19 @@ def _column_type_changes(
     previous_type = _column_type(current)
     next_type = _column_type(next_column)
     if previous_type == next_type:
+        return []
+    if previous_type == "null":
+        return [
+            DatasetSchemaEvolutionChange(
+                kind="resolve_null_type",
+                column=name,
+                status="compatible",
+                reason="earlier snapshots contained only null values and established no conflicting logical type",
+                previous_type=previous_type,
+                next_type=next_type,
+            )
+        ]
+    if next_type == "null":
         return []
     if _is_type_widening(previous_type, next_type):
         return [_type_widening_change(name, previous_type, next_type)]
@@ -455,44 +465,3 @@ def _consumer_compatibility(plan: DatasetSchemaEvolutionPlan) -> str:
     if plan.warning_changes:
         return "review_recommended"
     return "compatible"
-
-
-def _backfill_step(change: DatasetSchemaEvolutionChange) -> dict[str, object]:
-    return {
-        "id": f"{change.kind}:{change.column}",
-        "kind": change.kind,
-        "column": change.column,
-        "status": "PENDING",
-        "description": change.reason,
-    }
-
-
-def _backfill_key(
-    dataset_id: str,
-    source_schema_hash: str,
-    target_schema_hash: str,
-    steps: Sequence[Mapping[str, object]],
-) -> str:
-    return "schema_backfill:" + _json_hash(
-        {
-            "datasetId": dataset_id,
-            "sourceSchemaHash": source_schema_hash,
-            "targetSchemaHash": target_schema_hash,
-            "steps": list(steps),
-        }
-    )
-
-
-def _completed_step_ids(existing_progress: Mapping[str, object] | None, backfill_key: str) -> set[str]:
-    if existing_progress is None or existing_progress.get("backfillKey") != backfill_key:
-        return set()
-    value = existing_progress.get("completedStepIds")
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        return set()
-    return {str(item) for item in value}
-
-
-def _next_step_message(pending: Sequence[Mapping[str, object]]) -> str:
-    if not pending:
-        return "Schema evolution backfill already complete."
-    return str(pending[0]["description"])

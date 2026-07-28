@@ -24,7 +24,7 @@ from foundry_lite.application.services.pipeline_payloads import (
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 _RESOURCE_TYPE = "pipeline_proposal"
 
@@ -56,7 +56,7 @@ class PipelineGovernanceService(CoreService):
             require_open_branch(branch)
             if branch["proposal_id"] is not None:
                 proposal = self._require_proposal(conn, ctx, str(branch["proposal_id"]))
-                return proposal_payload(proposal)
+                return self._proposal_view(conn, ctx, proposal)
             validation = validate_pipeline_graph(branch["graph"])
             if not validation["valid"]:
                 raise ValidationFailed("pipeline graph is invalid", details={"validation": validation})
@@ -72,7 +72,7 @@ class PipelineGovernanceService(CoreService):
                 updated_at=_now(),
             )
             self._audit(conn, ctx, "submitted", proposal)
-            return proposal_payload(proposal)
+            return self._proposal_view(conn, ctx, proposal)
 
     def list_proposals(
         self,
@@ -90,13 +90,14 @@ class PipelineGovernanceService(CoreService):
                 status=status,
                 limit=bounded_pipeline_limit(limit),
             )
-        return {"items": [proposal_payload(row) for row in rows], "nextCursor": None}
+            items = [self._proposal_view(conn, ctx, row) for row in rows]
+        return {"items": items, "nextCursor": None}
 
     def get_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "pipeline:read")
         with self.engine.begin() as conn:
-            return proposal_payload(self._require_proposal(conn, ctx, proposal_id))
+            return self._proposal_view(conn, ctx, self._require_proposal(conn, ctx, proposal_id))
 
     def assign_proposal(
         self,
@@ -111,6 +112,7 @@ class PipelineGovernanceService(CoreService):
         assignee = required_text(assignee_user_id, "assigneeUserId")
         with self.engine.begin() as conn:
             before = self._require_proposal(conn, ctx, proposal_id)
+            _require_distinct_reviewer(before, assignee)
             after = self.pipeline_repository.update_proposal_assignment(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -122,7 +124,7 @@ class PipelineGovernanceService(CoreService):
                 require_proposal_status(before, ("submitted", "in_review"))
             assert after is not None
             self._audit(conn, ctx, "assigned", after, before=before)
-            return proposal_payload(after)
+            return self._proposal_view(conn, ctx, after)
 
     def decide_proposal(
         self,
@@ -138,6 +140,10 @@ class PipelineGovernanceService(CoreService):
         status = _decision_status(decision)
         with self.engine.begin() as conn:
             before = self._require_proposal(conn, ctx, proposal_id)
+            require_proposal_status(before, ("submitted", "in_review"))
+            _require_assigned_reviewer(before, ctx)
+            if status == "approved":
+                self._require_fresh_proposal(conn, ctx, before)
             after = self.pipeline_repository.update_proposal_decision(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -152,7 +158,7 @@ class PipelineGovernanceService(CoreService):
                 require_proposal_status(before, ("submitted", "in_review"))
             assert after is not None
             self._audit(conn, ctx, status, after, before=before)
-            return proposal_payload(after)
+            return self._proposal_view(conn, ctx, after)
 
     def execute_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         ctx = ctx or RequestContext()
@@ -161,6 +167,7 @@ class PipelineGovernanceService(CoreService):
         with self.engine.begin() as conn:
             proposal = self._require_proposal(conn, ctx, proposal_id)
             require_proposal_status(proposal, ("approved",))
+            self._require_fresh_proposal(conn, ctx, proposal)
             latest = self.pipeline_repository.latest_version(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -200,10 +207,10 @@ class PipelineGovernanceService(CoreService):
                 updated_at=_now(),
             )
             if after is None:
-                require_proposal_status(before, ("submitted", "in_review"))
+                require_proposal_status(before, ("submitted", "in_review", "approved"))
             assert after is not None
             self._audit(conn, ctx, "withdrawn", after, before=before)
-            return proposal_payload(after)
+            return self._proposal_view(conn, ctx, after)
 
     def _require_branch(self, conn: TransactionContext, ctx: RequestContext, branch_id: str) -> PipelineBranchRow:
         row = self.pipeline_repository.branch_by_id(transaction=conn, tenant_id=ctx.tenant_id, branch_id=branch_id)
@@ -225,6 +232,63 @@ class PipelineGovernanceService(CoreService):
         if row is None:
             raise NotFound("pipeline proposal not found", details={"proposal_id": proposal_id})
         return row
+
+    def _require_fresh_proposal(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        proposal: PipelineProposalRow,
+    ) -> None:
+        reasons = self._proposal_stale_reasons(conn, ctx, proposal)
+        if reasons:
+            raise ConflictDetected(
+                "pipeline proposal is stale and must be rebased and resubmitted",
+                details={"proposalId": proposal["id"], "reasons": reasons},
+            )
+
+    def _proposal_stale_reasons(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        proposal: PipelineProposalRow,
+    ) -> list[str]:
+        if proposal["status"] in {"executed", "rejected", "withdrawn"}:
+            return []
+        branch = self._require_branch(conn, ctx, str(proposal["branch_id"]))
+        latest = self.pipeline_repository.latest_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            pipeline_id=str(proposal["pipeline_id"]),
+        )
+        reasons: list[str] = []
+        if branch["proposal_id"] != proposal["id"]:
+            reasons.append("proposal_detached_from_branch")
+        if branch["graph_fingerprint"] != proposal["graph_fingerprint"]:
+            reasons.append("branch_graph_changed")
+        latest_id = latest["id"] if latest is not None else None
+        if branch["base_version_id"] != latest_id:
+            reasons.append("newer_pipeline_version_exists")
+        return reasons
+
+    def _proposal_view(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        proposal: PipelineProposalRow,
+    ) -> dict[str, object]:
+        payload = proposal_payload(proposal)
+        stale_reasons = self._proposal_stale_reasons(conn, ctx, proposal)
+        payload["isStale"] = bool(stale_reasons)
+        payload["staleReasons"] = stale_reasons
+        payload["canCurrentUserReview"] = (
+            proposal["assigned_to"] == ctx.actor_user_id and proposal["created_by"] != ctx.actor_user_id
+        )
+        payload["reviewPolicy"] = {
+            "requiresAssignment": True,
+            "requiresSeparateReviewer": True,
+            "blocksStaleProposal": True,
+        }
+        return payload
 
     def _require_write_open(self, ctx: RequestContext, operation: str, resource_id: str) -> None:
         self.runtime_service._require_write_traffic_open(
@@ -262,6 +326,27 @@ def _decision_status(decision: str) -> str:
     if normalized in {"reject", "rejected"}:
         return "rejected"
     raise ValidationFailed("unsupported pipeline proposal decision", details={"decision": decision})
+
+
+def _require_distinct_reviewer(proposal: PipelineProposalRow, assignee: str) -> None:
+    if proposal["created_by"] == assignee:
+        raise ValidationFailed(
+            "pipeline proposal creator cannot be assigned as reviewer",
+            details={"proposalId": proposal["id"]},
+        )
+
+
+def _require_assigned_reviewer(proposal: PipelineProposalRow, ctx: RequestContext) -> None:
+    if proposal["assigned_to"] is None:
+        raise ValidationFailed(
+            "pipeline proposal must be assigned before review",
+            details={"proposalId": proposal["id"]},
+        )
+    if proposal["assigned_to"] != ctx.actor_user_id or proposal["created_by"] == ctx.actor_user_id:
+        raise ValidationFailed(
+            "only the assigned independent reviewer can decide this pipeline proposal",
+            details={"proposalId": proposal["id"]},
+        )
 
 
 def _next_version_number(latest: PipelineVersionRow | None) -> int:

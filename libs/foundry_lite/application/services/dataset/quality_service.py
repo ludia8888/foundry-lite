@@ -162,6 +162,14 @@ class DatasetQualityService:
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         return self._dataset_quality_runtime_service._inspect_parquet(parquet_path, primary_key)
 
+    def _resolve_inferred_schema(
+        self,
+        conn: TransactionContext,
+        dataset: DatasetRow,
+        next_schema: DatasetSchemaJson,
+    ) -> DatasetSchemaJson:
+        return self._dataset_quality_runtime_service._resolve_inferred_schema(conn, dataset, next_schema)
+
     def _ensure_schema(
         self,
         conn: TransactionContext,

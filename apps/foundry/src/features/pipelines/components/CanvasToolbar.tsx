@@ -1,6 +1,7 @@
 import type { Dataset, PipelineNodeType } from "@foundry-lite/sdk";
 import {
   Blend,
+  BookOpenCheck,
   Braces,
   ChevronDown,
   CircleDot,
@@ -12,7 +13,6 @@ import {
   LayoutGrid,
   Move,
   MousePointer2,
-  Pencil,
   Table2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -43,7 +43,6 @@ import type { CanvasInteractionMode } from "./PipelineFlowCanvas";
 interface CanvasToolbarProps {
   datasets: readonly Dataset[];
   isDatasetsLoading: boolean;
-  hasOutputNode: boolean;
   hasSelection: boolean;
   interactionMode: CanvasInteractionMode;
   onChangeInteractionMode: (mode: CanvasInteractionMode) => void;
@@ -52,6 +51,7 @@ interface CanvasToolbarProps {
   onAddDataset: (dataset: Dataset) => void;
   onAddTransform: (type: PipelineNodeType) => void;
   onAutoLayout: () => void;
+  onOpenCatalog: () => void;
 }
 
 /** 변환 클러스터: 공식 툴바처럼 고유색 아이콘 버튼이 나란히 놓인다. */
@@ -73,7 +73,6 @@ const TRANSFORM_TYPES: readonly {
 export function CanvasToolbar({
   datasets,
   isDatasetsLoading,
-  hasOutputNode,
   hasSelection,
   interactionMode,
   onChangeInteractionMode,
@@ -82,6 +81,7 @@ export function CanvasToolbar({
   onAddDataset,
   onAddTransform,
   onAutoLayout,
+  onOpenCatalog,
 }: CanvasToolbarProps) {
   const [isDatasetOpen, setIsDatasetOpen] = useState(false);
 
@@ -195,14 +195,15 @@ export function CanvasToolbar({
         </Popover>
 
         <Button
+          type="button"
           size="sm"
           variant="outline"
-          disabled
-          title="파라미터 · 곧 제공 예정"
-          className="h-7 border-[#C5CBD3] bg-white px-2.5 text-[12px]"
+          aria-label="노드 카탈로그"
+          className="h-7 rounded-[2px] border-[#AEB6C1] bg-white px-2.5 text-[12px]"
+          onClick={onOpenCatalog}
         >
-          <span className="font-mono text-[11px]">(x)</span>
-          파라미터
+          <BookOpenCheck className="size-3.5 text-[#147D75]" />
+          변환
           <ChevronDown className="size-3" />
         </Button>
       </div>
@@ -227,25 +228,9 @@ export function CanvasToolbar({
         </div>
       </ToolCluster>
 
-      <ToolCluster label="편집">
-        <ToolIconButton
-          title="편집 도구 · 곧 제공 예정"
-          isDisabled
-          onClick={() => undefined}
-          className="rounded border border-[#C5CBD3]"
-        >
-          <Pencil className="size-4" />
-        </ToolIconButton>
-      </ToolCluster>
-
       <ToolCluster label="출력 추가">
         <ToolIconButton
-          title={
-            hasOutputNode
-              ? "출력 노드는 1개만 허용됩니다"
-              : "데이터셋 출력 노드 추가"
-          }
-          isDisabled={hasOutputNode}
+          title="데이터셋 출력 노드 추가"
           onClick={() => onAddTransform("output_dataset")}
           className="rounded border border-[#C5CBD3]"
         >
@@ -296,6 +281,7 @@ function ToolIconButton({
     <button
       type="button"
       title={title}
+      aria-label={title}
       disabled={isDisabled}
       className={cn(
         "flex size-7 items-center justify-center text-foreground transition-colors",
