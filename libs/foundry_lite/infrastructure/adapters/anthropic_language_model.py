@@ -116,17 +116,31 @@ class AnthropicLanguageModel:
     ) -> AnthropicHttpResponse:
         for attempt in range(self._max_retries + 1):
             remaining_timeout = _remaining_timeout_seconds(self._clock(), started, timeout_seconds)
-            response = self._transport_call(headers, payload, remaining_timeout)
+            try:
+                response = self._transport_call(headers, payload, remaining_timeout)
+            except AdapterError as exc:
+                self._wait_before_retry(exc.failure, {}, attempt, started, timeout_seconds)
+                continue
             if 200 <= response.status_code < 300:
                 return response
             failure = _http_failure(response, timeout_seconds, attempt + 1)
-            if not _should_retry(response.status_code, attempt, self._max_retries):
-                raise AdapterError(failure)
-            delay = _retry_delay(response.headers, attempt)
-            if self._clock() - started + delay >= timeout_seconds:
-                raise AdapterError(failure)
-            self._sleeper(delay)
+            self._wait_before_retry(failure, response.headers, attempt, started, timeout_seconds)
         raise _adapter_failure("unknown", False, "retry_loop_exhausted", timeout_seconds)
+
+    def _wait_before_retry(
+        self,
+        failure: AdapterFailure,
+        headers: Mapping[str, str],
+        attempt: int,
+        started: float,
+        timeout_seconds: int,
+    ) -> None:
+        if not failure.is_retryable or attempt >= self._max_retries:
+            raise AdapterError(failure)
+        delay = _retry_delay(headers, attempt)
+        if self._clock() - started + delay >= timeout_seconds:
+            raise AdapterError(failure)
+        self._sleeper(delay)
 
     def _transport_call(
         self,
@@ -282,10 +296,6 @@ def _provider_error_type(body: Mapping[str, object]) -> str:
     if isinstance(error, Mapping):
         return _text(error.get("type")) or "unknown_error"
     return "unknown_error"
-
-
-def _should_retry(status_code: int, attempt: int, max_retries: int) -> bool:
-    return status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries
 
 
 def _retry_delay(headers: Mapping[str, str], attempt: int) -> float:

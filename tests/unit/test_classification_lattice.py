@@ -1,3 +1,4 @@
+from foundry_lite.application.ports.content_index import is_classification_cleared
 from foundry_lite.domain.classification import (
     CLASSIFICATION_RANKS,
     classification_rank,
@@ -22,3 +23,10 @@ def test_classification_lattice_normalizes_empty_and_fails_closed_for_unknown_la
     assert normalize_classification(None) == "UNCLASSIFIED"
     assert normalize_classification(" confidential ") == "CONFIDENTIAL"
     assert classification_rank("future-unknown") is None
+
+
+def test_content_clearance_uses_the_canonical_lattice_across_storage_casing() -> None:
+    assert is_classification_cleared(" PUBLIC ", ("public",)) is True
+    assert is_classification_cleared("INTERNAL", ("public", "internal")) is True
+    assert is_classification_cleared("CONFIDENTIAL", ("public", "internal")) is False
+    assert is_classification_cleared("future-unknown", ("public", "internal")) is False

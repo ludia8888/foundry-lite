@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 import pytest
-from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailureContract
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailureContract,
+    AdapterFailureKind,
+)
 from foundry_lite.application.ports.language_model import (
     ModelInvocationRoute,
     ModelMediaContent,
@@ -348,11 +352,39 @@ def test_anthropic_transport_timeout_is_typed_and_redacted() -> None:
         raise AnthropicTransportFailure("timeout")
 
     with pytest.raises(AdapterError) as excinfo:
-        AnthropicLanguageModel(_SecretProvider(), transport=transport).complete(_request())
+        AnthropicLanguageModel(_SecretProvider(), transport=transport, max_retries=0).complete(_request())
 
     assert excinfo.value.failure.kind == "timeout"
     assert excinfo.value.failure.is_retryable is True
     assert _DUMMY_KEY not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("kind", ["timeout", "unavailable"])
+def test_anthropic_retries_transient_transport_failure_with_remaining_budget(kind: AdapterFailureKind) -> None:
+    now = [100.0]
+    observed_timeouts: list[int] = []
+    attempts = [kind, "success"]
+
+    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: int) -> AnthropicHttpResponse:
+        observed_timeouts.append(timeout)
+        outcome = attempts.pop(0)
+        if outcome != "success":
+            raise AnthropicTransportFailure(kind)
+        return _success_response()
+
+    def sleep(delay: float) -> None:
+        now[0] += delay
+
+    response = AnthropicLanguageModel(
+        _SecretProvider(),
+        transport=transport,
+        max_retries=2,
+        sleeper=sleep,
+        clock=lambda: now[0],
+    ).complete(replace(_request(), timeout_seconds=10))
+
+    assert observed_timeouts == [10, 9]
+    assert response.provider_request_id == "req_anthropic_1"
 
 
 def test_anthropic_default_transport_rejects_oversized_response_before_json_decode(

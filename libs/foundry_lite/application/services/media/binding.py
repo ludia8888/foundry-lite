@@ -89,7 +89,7 @@ class MediaReferenceBindingService(CoreService):
                 details={"holder_type": holder_type, "holder_id": holder_id, "property": property_name},
             )
         classification = str(binding.security_envelope.get("classification", "public"))
-        if allowed_classifications is not None and classification not in allowed_classifications:
+        if not is_classification_cleared(classification, allowed_classifications):
             return None  # masked: the caller may not see this media reference (no ACL leakage)
         return MediaReference(
             media_set_id=binding.media_set_id,

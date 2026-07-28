@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from foundry_lite.application.ports.embedding_model import EmbeddingVector
+from foundry_lite.domain.classification import normalize_classification
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,8 @@ def is_classification_cleared(classification: str, allowed_classifications: tupl
     """
     if allowed_classifications is None:
         return True
-    return classification in allowed_classifications
+    normalized_allowed = {normalize_classification(value) for value in allowed_classifications}
+    return normalize_classification(classification) in normalized_allowed
 
 
 @dataclass(frozen=True)
