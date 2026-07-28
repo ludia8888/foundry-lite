@@ -104,6 +104,70 @@ def test_preview_success_atomically_honors_concurrent_cancellation(tmp_path: Pat
     assert completed["status"] == "CANCELLED"
 
 
+def test_preview_failure_atomically_honors_concurrent_cancellation(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-cancelled-failure.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineExecutionRepository(engine)
+    with engine.begin() as transaction:
+        repository.insert_preview(transaction=transaction, record=_preview_record())
+        repository.claim_preview(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            started_at=NOW,
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-16T00:02:00+00:00",
+            execution_heartbeat_at=NOW,
+        )
+        repository.request_preview_cancel(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            requested_at=NOW,
+        )
+        completed = repository.complete_preview_failure(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            execution_lease_token="lease-a",
+            error={"code": "NODE_FAILED"},
+            completed_at=NOW,
+        )
+
+    assert completed is not None
+    assert completed["status"] == "CANCELLED"
+    assert completed["error"] is None
+
+
+def test_preview_failure_records_error_when_no_cancel_won(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-failure.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineExecutionRepository(engine)
+    with engine.begin() as transaction:
+        repository.insert_preview(transaction=transaction, record=_preview_record())
+        repository.claim_preview(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            started_at=NOW,
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-16T00:02:00+00:00",
+            execution_heartbeat_at=NOW,
+        )
+        completed = repository.complete_preview_failure(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            preview_run_id="preview-a",
+            execution_lease_token="lease-a",
+            error={"code": "NODE_FAILED"},
+            completed_at=NOW,
+        )
+
+    assert completed is not None
+    assert completed["status"] == "FAILED"
+    assert completed["error"] == {"code": "NODE_FAILED"}
+
+
 def test_expired_preview_reclaim_fences_the_original_executor(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-reclaim.db'}", future=True)
     db.create_database(engine)
@@ -251,6 +315,65 @@ def test_deployment_contract_assigns_sequence_and_replays_idempotently(tmp_path:
     assert listed[0]["execution_plan"]["planFingerprint"] == "plan-fp"
 
 
+def test_promoted_deployment_lookup_is_not_limited_to_latest_hundred(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-deployment-history.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineExecutionRepository(engine)
+    with engine.begin() as transaction:
+        target = repository.insert_deployment(
+            transaction=transaction,
+            record=_deployment_record(
+                "pdep-target",
+                "deploy-target",
+                version_id="version-target",
+                plan_fingerprint="plan-target",
+            ),
+        )
+        for index in range(101):
+            repository.insert_deployment(
+                transaction=transaction,
+                record=_deployment_record(
+                    f"pdep-newer-{index}",
+                    f"deploy-newer-{index}",
+                    version_id=f"version-newer-{index}",
+                    plan_fingerprint=f"plan-newer-{index}",
+                ),
+            )
+        latest_hundred = repository.list_deployments(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipeline-a",
+            limit=100,
+        )
+        resolved = repository.promoted_deployment_for_version(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipeline-a",
+            version_id="version-target",
+            plan_fingerprint="plan-target",
+        )
+        wrong_plan = repository.promoted_deployment_for_version(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipeline-a",
+            version_id="version-target",
+            plan_fingerprint="plan-other",
+        )
+        wrong_tenant = repository.promoted_deployment_for_version(
+            transaction=transaction,
+            tenant_id="tenant-b",
+            pipeline_id="pipeline-a",
+            version_id="version-target",
+            plan_fingerprint="plan-target",
+        )
+
+    assert target["id"] not in {row["id"] for row in latest_hundred}
+    assert resolved is not None
+    assert resolved["id"] == target["id"]
+    assert wrong_plan is None
+    assert wrong_tenant is None
+
+
 def test_deployment_contract_retries_a_concurrent_number_collision(tmp_path: Path, monkeypatch) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-deployment-race.db'}", future=True)
     db.create_database(engine)
@@ -348,15 +471,21 @@ def _artifact_record(*, artifact_id: str = "artifact-a") -> PipelineRunArtifactR
     )
 
 
-def _deployment_record(deployment_id: str, idempotency_key: str) -> PipelineDeploymentRecord:
+def _deployment_record(
+    deployment_id: str,
+    idempotency_key: str,
+    *,
+    version_id: str = "version-a",
+    plan_fingerprint: str = "plan-fp",
+) -> PipelineDeploymentRecord:
     return PipelineDeploymentRecord(
         deployment_id=deployment_id,
         tenant_id="tenant-a",
         pipeline_id="pipeline-a",
-        version_id="version-a",
+        version_id=version_id,
         status="PROMOTED",
-        execution_plan={"compilerVersion": "pipeline-plan-v2.0", "planFingerprint": "plan-fp"},
-        plan_fingerprint="plan-fp",
+        execution_plan={"compilerVersion": "pipeline-plan-v2.0", "planFingerprint": plan_fingerprint},
+        plan_fingerprint=plan_fingerprint,
         compiler_version="pipeline-plan-v2.0",
         processor_pins=[],
         model_pins=[],

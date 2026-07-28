@@ -33,7 +33,6 @@ from foundry_lite.application.services.pipeline_preview_runtime import (
 )
 from foundry_lite.application.services.pipeline_preview_values import (
     PIPELINE_PREVIEW_CANCELLED,
-    PIPELINE_PREVIEW_FAILED,
     StatusTransition,
     _idempotent_preview_payload,
     _preview_payload,
@@ -271,15 +270,29 @@ class PipelinePreviewService(CoreService):
         error: dict[str, object] | None,
     ) -> dict[str, object]:
         if error is not None:
-            return self._complete_preview(
-                ctx,
-                row,
-                PIPELINE_PREVIEW_FAILED,
-                PreviewExecutionResult([], []),
-                error,
-                execution_lease_token,
-            )
+            return self._complete_preview_failure(ctx, row, error, execution_lease_token)
         return self._complete_preview_success(ctx, row, result, execution_lease_token)
+
+    def _complete_preview_failure(
+        self,
+        ctx: RequestContext,
+        row: PipelinePreviewRunRow,
+        error: dict[str, object],
+        execution_lease_token: str,
+    ) -> dict[str, object]:
+        with self.engine.begin() as conn:
+            after = self.pipeline_execution_repository.complete_preview_failure(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                preview_run_id=str(row["id"]),
+                execution_lease_token=execution_lease_token,
+                error=error,
+                completed_at=pipeline_preview_utc_now(),
+            )
+            if after is None:
+                return _preview_payload(self._require_preview(conn, ctx, str(row["id"])))
+            self._audit_preview(conn, ctx, after, after["status"].lower())
+        return _preview_payload(after)
 
     def _complete_preview_success(
         self,

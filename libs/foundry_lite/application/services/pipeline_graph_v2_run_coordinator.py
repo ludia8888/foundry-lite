@@ -77,22 +77,13 @@ class PipelineGraphV2RunCoordinatorService(CoreService):
         version: PipelineVersionRow,
     ) -> str:
         with self.engine.begin() as transaction:
-            deployments = self.pipeline_execution_repository.list_deployments(
+            matching = self.pipeline_execution_repository.promoted_deployment_for_version(
                 transaction=transaction,
                 tenant_id=ctx.tenant_id,
                 pipeline_id=str(version["pipeline_id"]),
-                limit=100,
+                version_id=str(version["id"]),
+                plan_fingerprint=str(version["plan_fingerprint"]),
             )
-        matching = next(
-            (
-                row
-                for row in deployments
-                if row["version_id"] == version["id"]
-                and row["plan_fingerprint"] == version["plan_fingerprint"]
-                and row["status"] == "PROMOTED"
-            ),
-            None,
-        )
         if matching is None:
             raise InvariantViolation(
                 "deployed Graph v2 version has no matching promoted deployment",

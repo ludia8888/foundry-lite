@@ -66,6 +66,9 @@ class _PreviewRepository:
     def complete_preview_success(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
         return self.terminal_result
 
+    def complete_preview_failure(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
+        return self.terminal_result
+
     def request_preview_cancel(self, **_kwargs: object) -> PipelinePreviewRunRow | None:
         self.cancel_requests += 1
         if self.row is not None and self.row["status"] in {"QUEUED", "RUNNING"}:
@@ -214,6 +217,22 @@ def test_pipeline_preview_success_resolves_concurrent_cancel_in_repository_trans
         _row("RUNNING"),
         PreviewExecutionResult([{"kind": "table"}], []),
         "preview-lease",
+    )
+
+    assert payload["status"] == "CANCELLED"
+
+
+def test_pipeline_preview_failure_resolves_concurrent_cancel_in_repository_transaction() -> None:
+    cancelled = _row("CANCELLED")
+    repository = _PreviewRepository(_row("CANCEL_REQUESTED"), terminal_result=cancelled)
+    service = _service(repository)
+
+    payload = service._finish_claimed_execution(
+        RequestContext(),
+        _row("RUNNING"),
+        "preview-lease",
+        PreviewExecutionResult([], []),
+        {"code": "NODE_FAILED"},
     )
 
     assert payload["status"] == "CANCELLED"

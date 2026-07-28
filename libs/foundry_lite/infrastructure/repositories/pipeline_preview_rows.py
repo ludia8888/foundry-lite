@@ -14,6 +14,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
 from foundry_lite.application.state_transitions import (
     PIPELINE_PREVIEW_CANCEL_REQUESTED,
     PIPELINE_PREVIEW_CANCELLED,
+    PIPELINE_PREVIEW_FAILED,
     PIPELINE_PREVIEW_RUNNING,
     PIPELINE_PREVIEW_SUCCEEDED,
     StatusTransition,
@@ -220,6 +221,39 @@ def complete_preview_success(
             values=values,
         )
     return preview_by_id(transaction, tenant_id, preview_run_id) if succeeded or cancelled else None
+
+
+def complete_preview_failure(
+    transaction: Any,
+    tenant_id: str,
+    preview_run_id: str,
+    execution_lease_token: str,
+    error: dict[str, object],
+    completed_at: str,
+) -> PipelinePreviewRunRow | None:
+    """Complete failure or atomically honor a cancellation requested first."""
+    condition = (db.pipeline_preview_runs.c.execution_lease_token == execution_lease_token,)
+    failed = cas_status_update(
+        transaction,
+        db.pipeline_preview_runs,
+        tenant_id=tenant_id,
+        row_id=preview_run_id,
+        transition=PIPELINE_PREVIEW_FAILED,
+        conditions=condition,
+        values=_terminal_values([], [], error, completed_at),
+    )
+    cancelled = False
+    if not failed:
+        cancelled = cas_status_update(
+            transaction,
+            db.pipeline_preview_runs,
+            tenant_id=tenant_id,
+            row_id=preview_run_id,
+            transition=PIPELINE_PREVIEW_CANCELLED,
+            conditions=condition,
+            values=_terminal_values([], [], None, completed_at),
+        )
+    return preview_by_id(transaction, tenant_id, preview_run_id) if failed or cancelled else None
 
 
 def update_preview_terminal(

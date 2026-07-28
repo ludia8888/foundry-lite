@@ -309,6 +309,17 @@ class PipelineExecutionRepository(Protocol):
         completed_at: str,
     ) -> PipelinePreviewRunRow | None: ...
 
+    def complete_preview_failure(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        preview_run_id: str,
+        execution_lease_token: str,
+        error: JsonObject,
+        completed_at: str,
+    ) -> PipelinePreviewRunRow | None: ...
+
     def request_preview_cancel(
         self, *, transaction: TransactionContext, tenant_id: str, preview_run_id: str, requested_at: str
     ) -> PipelinePreviewRunRow | None: ...
@@ -406,6 +417,16 @@ class PipelineExecutionRepository(Protocol):
 
     def deployment_by_idempotency_key(
         self, *, transaction: TransactionContext, tenant_id: str, idempotency_key: str
+    ) -> PipelineDeploymentRow | None: ...
+
+    def promoted_deployment_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        pipeline_id: str,
+        version_id: str,
+        plan_fingerprint: str,
     ) -> PipelineDeploymentRow | None: ...
 
     def list_deployments(

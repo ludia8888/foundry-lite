@@ -136,6 +136,25 @@ class SqlAlchemyPipelineExecutionRepository:
             completed_at,
         )
 
+    def complete_preview_failure(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        preview_run_id: str,
+        execution_lease_token: str,
+        error: dict[str, object],
+        completed_at: str,
+    ) -> PipelinePreviewRunRow | None:
+        return preview_rows.complete_preview_failure(
+            transaction,
+            tenant_id,
+            preview_run_id,
+            execution_lease_token,
+            error,
+            completed_at,
+        )
+
     def update_preview_terminal(
         self,
         *,
@@ -349,6 +368,34 @@ class SqlAlchemyPipelineExecutionRepository:
                         db.pipeline_deployments.c.idempotency_key == idempotency_key,
                     )
                 )
+            )
+            .mappings()
+            .first()
+        )
+        return _row(row, PipelineDeploymentRow)
+
+    def promoted_deployment_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        pipeline_id: str,
+        version_id: str,
+        plan_fingerprint: str,
+    ) -> PipelineDeploymentRow | None:
+        row = (
+            transaction.execute(
+                select(db.pipeline_deployments)
+                .where(
+                    and_(
+                        db.pipeline_deployments.c.tenant_id == tenant_id,
+                        db.pipeline_deployments.c.pipeline_id == pipeline_id,
+                        db.pipeline_deployments.c.version_id == version_id,
+                        db.pipeline_deployments.c.plan_fingerprint == plan_fingerprint,
+                        db.pipeline_deployments.c.status == "PROMOTED",
+                    )
+                )
+                .order_by(desc(db.pipeline_deployments.c.deployment_number))
             )
             .mappings()
             .first()
