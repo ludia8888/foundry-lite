@@ -9,7 +9,6 @@ import os
 import subprocess  # nosec B404
 import tempfile
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -33,6 +32,10 @@ from foundry_lite.application.services.pipeline_trained_model_contracts import (
     require_trained_model_invocation_pin,
 )
 from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.infrastructure.adapters.container_cleanup import (
+    ContainerCleanupEvidence,
+    force_remove_container,
+)
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
     ContainerCommandResult,
     ContainerCommandRunner,
@@ -154,15 +157,24 @@ class ContainerTrainedModelInferenceAdapter:
         try:
             return self._command_runner(command, self.config.policy.timeout_seconds, self._client_environment)
         except subprocess.TimeoutExpired as exc:
-            self._force_remove(container_name)
-            raise self._error("sandbox_timeout", "timeout", True) from exc
+            cleanup = self._force_remove(container_name)
+            raise self._error(
+                "sandbox_timeout",
+                "timeout",
+                cleanup.is_confirmed,
+                cleanup=cleanup,
+            ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise self._error("runtime_unavailable", "unavailable", False) from exc
 
-    def _force_remove(self, container_name: str) -> None:
-        command = (self.config.runtime_binary, "rm", "--force", container_name)
-        with suppress(Exception):
-            self._command_runner(command, self.config.cleanup_timeout_seconds, self._client_environment)
+    def _force_remove(self, container_name: str) -> ContainerCleanupEvidence:
+        return force_remove_container(
+            self._command_runner,
+            runtime_binary=self.config.runtime_binary,
+            container_name=container_name,
+            timeout_seconds=self.config.cleanup_timeout_seconds,
+            environment=self._client_environment,
+        )
 
     def _error(
         self,
@@ -172,6 +184,7 @@ class ContainerTrainedModelInferenceAdapter:
         *,
         result: ContainerCommandResult | None = None,
         runner_failure: Mapping[str, object] | None = None,
+        cleanup: ContainerCleanupEvidence | None = None,
     ) -> AdapterError:
         stderr = result.stderr if result is not None else b""
         details = {
@@ -183,6 +196,7 @@ class ContainerTrainedModelInferenceAdapter:
             "runnerFailureType": _text(runner_failure, "type"),
             "exceptionType": _text(runner_failure, "exceptionType"),
             "exceptionMessageSha256": _text(runner_failure, "messageSha256"),
+            "cleanup": cleanup.to_payload() if cleanup is not None else None,
             "sandboxPolicy": self.config.policy.to_payload(),
         }
         return AdapterError(

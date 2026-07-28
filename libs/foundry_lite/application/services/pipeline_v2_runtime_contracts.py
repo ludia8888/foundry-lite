@@ -103,6 +103,18 @@ class PipelineV2CommittedOutputReconciliationRequired(Exception):
         return self._artifact
 
 
+class PipelineV2OutputCommitOutcomeUnknown(Exception):
+    """Carry transaction coordinates when the serving commit outcome is unknown."""
+
+    def __init__(self, message: str, *, artifact: PipelineV2RuntimeArtifact) -> None:
+        super().__init__(message)
+        self._artifact = artifact
+
+    @property
+    def reconciliation_artifact(self) -> PipelineV2RuntimeArtifact:
+        return self._artifact
+
+
 RuntimeInputs = Mapping[str, Sequence[PipelineV2RuntimeArtifact]]
 
 

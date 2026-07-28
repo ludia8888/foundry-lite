@@ -5,7 +5,11 @@ from typing import cast
 import pytest
 from foundry_lite.application.ports import RuntimeRepository
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
-from foundry_lite.application.services.runtime_error_payloads import dead_letter_retry_plan, runtime_error_payload
+from foundry_lite.application.services.runtime_error_payloads import (
+    dead_letter_retry_plan,
+    record_runtime_cleanup_failure,
+    runtime_error_payload,
+)
 from foundry_lite.application.services.runtime_redaction import redact_sensitive
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
@@ -15,6 +19,31 @@ def test_runtime_error_payload_handles_generic_error_without_trace() -> None:
     payload = runtime_error_payload(ValueError("bad value"))
 
     assert payload == {"type": "ValueError", "message": "bad value", "details": {}}
+
+
+def test_runtime_error_payload_preserves_redacted_secondary_cleanup_evidence() -> None:
+    primary = RuntimeError("primary failure")
+    cleanup = RuntimeError("private cleanup failure")
+    record_runtime_cleanup_failure(
+        primary,
+        operation="mediaTransactionAbort",
+        cleanup_error=cleanup,
+    )
+
+    payload = runtime_error_payload(primary)
+
+    assert payload["type"] == "RuntimeError"
+    assert payload["message"] == "primary failure"
+    assert payload["details"] == {
+        "cleanupFailures": [
+            {
+                "operation": "mediaTransactionAbort",
+                "status": "FAILED",
+                "exceptionType": "RuntimeError",
+            }
+        ]
+    }
+    assert "private cleanup failure" not in str(payload)
 
 
 def test_runtime_error_payload_uses_request_context_when_run_is_missing() -> None:

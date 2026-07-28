@@ -15,10 +15,10 @@ def required_source_media_reference(item: Mapping[str, object]) -> JsonObject:
     for field in ("mediaReference", "sourceMediaReference"):
         nested = item.get(field)
         if isinstance(nested, Mapping):
-            return _validated_reference(nested)
+            return validated_media_reference(nested)
     if item.get("mediaDerivativeId") is not None or item.get("derivativeKind") is not None:
         raise InvariantViolation("pipeline derivative lost its authoritative source media reference")
-    return _validated_reference(item)
+    return validated_media_reference(item)
 
 
 def source_media_references_by_version(
@@ -58,7 +58,9 @@ def attach_source_media_reference(
     }
 
 
-def _validated_reference(value: Mapping[str, object]) -> JsonObject:
+def validated_media_reference(value: Mapping[str, object]) -> JsonObject:
+    """Validate the immutable coordinates required by every media reference."""
+
     fields = ("mediaItemVersionId", "mimeType", "contentHash")
     missing = [field for field in fields if not isinstance(value.get(field), str) or not value.get(field)]
     if missing:

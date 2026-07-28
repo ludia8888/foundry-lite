@@ -116,8 +116,47 @@ def test_code_execution_contract_timeout_is_typed_and_force_cleans_container(tmp
     assert evidence["failureType"] == "sandbox_timeout"
     assert evidence["stderrSha256"] == hashlib.sha256(b"sensitive-user-stderr").hexdigest()
     assert evidence["stderrByteCount"] == len(b"sensitive-user-stderr")
+    assert evidence["cleanup"] == {
+        "status": "CONFIRMED",
+        "exitCode": 0,
+        "stderrSha256": None,
+        "stderrByteCount": 0,
+        "exceptionType": None,
+        "exceptionMessageSha256": None,
+    }
     assert "sensitive-user-stderr" not in str(captured.value.details)
     assert any(len(command) > 2 and command[1:3] == ("rm", "--force") for command in calls)
+
+
+def test_code_execution_contract_timeout_cleanup_failure_is_not_retryable(
+    tmp_path: Path,
+) -> None:
+    private_cleanup_error = "private cleanup runtime detail"
+
+    def timeout_and_cleanup_failure(
+        command: Sequence[str],
+        timeout_seconds: float,
+        environment: Mapping[str, str],
+    ) -> ContainerCommandResult:
+        del environment
+        if len(command) > 1 and command[1] == "rm":
+            raise RuntimeError(private_cleanup_error)
+        raise subprocess.TimeoutExpired(command, timeout_seconds)
+
+    adapter = ContainerCodeExecutionAdapter(command_runner=timeout_and_cleanup_failure, environ={})
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.execute_python_transform(_plan(tmp_path))
+
+    evidence = _code_execution_evidence(captured.value)
+    cleanup = evidence["cleanup"]
+    assert captured.value.failure.kind == "timeout"
+    assert captured.value.failure.is_retryable is False
+    assert isinstance(cleanup, dict)
+    assert cleanup["status"] == "FAILED"
+    assert cleanup["exceptionType"] == "RuntimeError"
+    assert cleanup["exceptionMessageSha256"] == hashlib.sha256(private_cleanup_error.encode()).hexdigest()
+    assert private_cleanup_error not in str(captured.value.details)
 
 
 def test_code_execution_contract_resource_exit_is_typed_without_raw_stderr(tmp_path: Path) -> None:

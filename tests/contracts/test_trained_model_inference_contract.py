@@ -360,7 +360,50 @@ def test_container_sidecar_timeout_force_cleans_container(tmp_path: Path) -> Non
         adapter.infer(_container_invocation())
 
     assert captured.value.failure.kind == "timeout"
+    assert captured.value.failure.is_retryable is True
+    evidence = captured.value.failure.details["trainedModelSidecar"]
+    assert isinstance(evidence, dict)
+    assert evidence["cleanup"] == {
+        "status": "CONFIRMED",
+        "exitCode": 0,
+        "stderrSha256": None,
+        "stderrByteCount": 0,
+        "exceptionType": None,
+        "exceptionMessageSha256": None,
+    }
     assert any(command[1:3] == ("rm", "--force") for command in commands)
+
+
+def test_container_sidecar_timeout_cleanup_failure_is_redacted_and_not_retryable(
+    tmp_path: Path,
+) -> None:
+    private_cleanup_error = "private model cleanup detail"
+
+    def runner(command: Sequence[str], timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        argv = tuple(command)
+        if argv[1:3] == ("rm", "--force"):
+            raise RuntimeError(private_cleanup_error)
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(workspace_root=tmp_path),
+        command_runner=runner,
+        environ={},
+    )
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.infer(_container_invocation())
+
+    evidence = captured.value.failure.details["trainedModelSidecar"]
+    assert captured.value.failure.kind == "timeout"
+    assert captured.value.failure.is_retryable is False
+    assert isinstance(evidence, dict)
+    cleanup = evidence["cleanup"]
+    assert isinstance(cleanup, dict)
+    assert cleanup["status"] == "FAILED"
+    assert cleanup["exceptionType"] == "RuntimeError"
+    assert cleanup["exceptionMessageSha256"] == hashlib.sha256(private_cleanup_error.encode()).hexdigest()
+    assert private_cleanup_error not in str(captured.value.failure.details)
 
 
 def test_container_sidecar_requires_digest_in_protected_runtime() -> None:

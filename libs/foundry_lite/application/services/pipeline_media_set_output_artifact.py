@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from foundry_lite.application.ports.media_repository import (
     MediaItemVersionRecord,
@@ -68,6 +69,7 @@ def transaction_reconciliation_artifact(
     transaction_attempt: MediaOutputTransactionAttempt,
     entries: Sequence[MediaOutputEntry],
     committed_version_ids: Sequence[str] = (),
+    commit_outcome: Literal["COMMITTED", "UNKNOWN"] = "COMMITTED",
 ) -> PipelineV2RuntimeArtifact:
     return PipelineV2RuntimeArtifact(
         node_id=node.node_id,
@@ -77,13 +79,7 @@ def transaction_reconciliation_artifact(
         artifact_kind="media_set_selection",
         plane="media",
         items=(),
-        artifact_ref={
-            "mediaSetRef": target_ref,
-            "mediaSetId": target.media_set_id,
-            "mediaTransactionId": transaction_attempt.media_transaction_id,
-            "mediaTransactionGeneration": transaction_attempt.generation,
-            "mediaItemVersionIds": list(committed_version_ids),
-        },
+        artifact_ref=_transaction_ref(target_ref, target, transaction_attempt, committed_version_ids),
         manifest={
             "inputArtifacts": artifact_input_refs(inputs),
             "sourceArtifactKind": source.artifact_kind,
@@ -92,12 +88,28 @@ def transaction_reconciliation_artifact(
             "commitProtocol": ["stage", "validate", "commit"],
             "transactionGeneration": transaction_attempt.generation,
             "coordinateCompleteness": "TRANSACTION_ONLY",
+            "commitOutcome": commit_outcome,
             "sourceLineage": [_source_lineage(entry) for entry in entries],
         },
         security_envelope=inherited_runtime_security([source]),
-        status="COMMITTED",
+        status="COMMITTED" if commit_outcome == "COMMITTED" else "COMMIT_OUTCOME_UNKNOWN",
         is_serving=True,
     )
+
+
+def _transaction_ref(
+    target_ref: str,
+    target: MediaSetRecord,
+    transaction_attempt: MediaOutputTransactionAttempt,
+    committed_version_ids: Sequence[str],
+) -> JsonObject:
+    return {
+        "mediaSetRef": target_ref,
+        "mediaSetId": target.media_set_id,
+        "mediaTransactionId": transaction_attempt.media_transaction_id,
+        "mediaTransactionGeneration": transaction_attempt.generation,
+        "mediaItemVersionIds": list(committed_version_ids),
+    }
 
 
 def _output_items(

@@ -423,7 +423,14 @@ def test_trained_model_output_merge_enforces_row_and_schema_cardinality() -> Non
         (TrainedModelField("value", "array"), [1, 2]),
         (TrainedModelField("value", "map"), {"key": "value"}),
         (TrainedModelField("value", "struct"), {"key": "value"}),
-        (TrainedModelField("value", "mediaReference"), {"mediaItemVersionId": "mver-1"}),
+        (
+            TrainedModelField("value", "mediaReference"),
+            {
+                "mediaItemVersionId": "mver-1",
+                "mimeType": "application/pdf",
+                "contentHash": "sha256:abc",
+            },
+        ),
         (TrainedModelField("value", "string", is_required=False), None),
     ],
 )
@@ -450,11 +457,20 @@ def test_trained_model_output_merge_accepts_declared_value_types(
         (TrainedModelField("value", "byte"), 128),
         (TrainedModelField("value", "integer"), True),
         (TrainedModelField("value", "double"), float("inf")),
+        (TrainedModelField("value", "double"), 10**400),
         (TrainedModelField("value", "decimal"), "not-a-decimal"),
         (TrainedModelField("value", "decimal"), object()),
         (TrainedModelField("value", "string"), 42),
+        (TrainedModelField("value", "date"), "not-a-date"),
+        (TrainedModelField("value", "timestamp"), "2026-07-28"),
+        (TrainedModelField("value", "timestamp"), "2026-07-28T12:30:00"),
         (TrainedModelField("value", "array"), (1, 2)),
         (TrainedModelField("value", "map"), "not-a-map"),
+        (TrainedModelField("value", "mediaReference"), {}),
+        (
+            TrainedModelField("value", "mediaReference"),
+            {"mediaItemVersionId": "mver-1", "mimeType": "application/pdf"},
+        ),
         (TrainedModelField("value", "string"), None),
     ],
 )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from foundry_lite.application.ports import PipelineExecutionLeaseFence
 from foundry_lite.application.services.pipeline_media_output_port_types import (
@@ -299,7 +300,13 @@ class PipelineMediaSetOutputCommitter:
             transaction = self._transaction(transaction_id)
             require_media_transaction_coordinates(transaction, target, request_fingerprint)
             if transaction.status in {"OPEN", "COMMITTED"}:
-                return MediaOutputTransactionAttempt(transaction_id, generation)
+                transaction_status: Literal["OPEN", "COMMITTED"]
+                transaction_status = "COMMITTED" if transaction.status == "COMMITTED" else "OPEN"
+                return MediaOutputTransactionAttempt(
+                    transaction_id,
+                    generation,
+                    transaction_status=transaction_status,
+                )
             if transaction.status != "ABORTED":
                 raise ConflictDetected(
                     "pipeline Media Set output transaction has an unsupported state",

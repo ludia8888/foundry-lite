@@ -26,6 +26,9 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2RuntimeArtifact,
     PipelineV2RuntimeNode,
 )
+from foundry_lite.application.services.runtime_error_payloads import (
+    runtime_error_payload,
+)
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -322,6 +325,15 @@ def test_media_set_output_preserves_primary_error_when_abort_evidence_fails(
         committer.commit(node, inputs)
 
     assert raised.value.__notes__ == ["media output abort failed: RuntimeError"]
+    assert runtime_error_payload(raised.value)["details"] == {
+        "cleanupFailures": [
+            {
+                "operation": "mediaTransactionAbort",
+                "status": "FAILED",
+                "exceptionType": "RuntimeError",
+            }
+        ]
+    }
 
 
 def test_committed_media_set_replay_read_failure_keeps_transaction_coordinates(
@@ -469,6 +481,67 @@ def test_media_set_output_post_commit_validation_failure_preserves_serving_commi
     assert len(_committed_target_versions(fixture, target.media_set_id)) == 1
     assert _run_artifact_count(fixture, str(run["id"]), "output") == 0
     assert repository_reads_after_commit == 0
+
+
+def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "unknown_commit_result", item_count=1)
+    _deploy_graph(
+        fixture,
+        _media_selection_output_graph(
+            fixture.source_ref,
+            fixture.target_ref,
+            fixture.source_version_ids,
+        ),
+    )
+    transaction_service = fixture.foundry._services.media.transaction
+    media_repository = fixture.dependencies.media_repository
+    real_commit = transaction_service.commit
+    real_transaction_by_id = media_repository.transaction_by_id
+    has_committed = False
+    abort_calls = 0
+
+    def commit_then_disconnect(*args: object, **kwargs: object):
+        nonlocal has_committed
+        real_commit(*args, **kwargs)
+        has_committed = True
+        raise ConnectionError("injected lost commit acknowledgement")
+
+    def fail_commit_state_read(*args: object, **kwargs: object):
+        if has_committed:
+            raise ConnectionError("injected reconciliation read outage")
+        return real_transaction_by_id(*args, **kwargs)
+
+    def track_abort(*args: object, **kwargs: object) -> None:
+        nonlocal abort_calls
+        abort_calls += 1
+
+    monkeypatch.setattr(transaction_service, "commit", commit_then_disconnect)
+    monkeypatch.setattr(transaction_service, "abort", track_abort)
+    monkeypatch.setattr(media_repository, "transaction_by_id", fail_commit_state_read)
+
+    run = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-media-output-unknown-commit-result",
+        ctx=fixture.ctx,
+    )
+    output = cast(list[dict[str, Any]], run["outputs"])[0]
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    transactions = _target_transactions(fixture, target.media_set_id)
+
+    assert run["status"] == "partial"
+    assert run["error"]["type"] == "PIPELINE_OUTPUT_COMMIT_OUTCOME_UNKNOWN"
+    assert run["error"]["details"]["servingCommitState"] == "UNKNOWN"
+    cause = cast(dict[str, Any], run["error"]["details"]["cause"])
+    assert cause["details"]["cleanupFailures"][0]["operation"] == "mediaTransactionCommitStateRead"
+    assert output["status"] == "COMMIT_OUTCOME_UNKNOWN"
+    assert output["manifest"]["commitOutcome"] == "UNKNOWN"
+    assert output["manifest"]["coordinateCompleteness"] == "TRANSACTION_ONLY"
+    assert output["artifactEvidence"]["status"] == "RECONCILIATION_REQUIRED"
+    assert [row["status"] for row in transactions] == ["COMMITTED"]
+    assert abort_calls == 0
 
 
 def test_stale_run_recovers_media_transaction_committed_before_artifact_passport(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from math import isfinite
 
@@ -10,6 +11,9 @@ from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelField,
     TrainedModelInvocation,
+)
+from foundry_lite.application.services.pipeline_media_reference import (
+    validated_media_reference,
 )
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -374,14 +378,29 @@ def _is_non_integer_trained_model_value(data_type: str, value: object) -> bool:
     if data_type == "boolean":
         return isinstance(value, bool)
     if data_type in {"float", "double"}:
-        return isinstance(value, int | float) and not isinstance(value, bool) and isfinite(float(value))
+        return _is_finite_float_value(value)
     if data_type == "decimal":
         return _is_decimal_value(value)
-    if data_type in {"string", "binary", "date", "timestamp"}:
+    if data_type in {"string", "binary"}:
         return isinstance(value, str)
+    if data_type == "date":
+        return _is_iso_date(value)
+    if data_type == "timestamp":
+        return _is_iso_timestamp(value)
     if data_type == "array":
         return isinstance(value, list)
+    if data_type == "mediaReference":
+        return _is_media_reference_value(value)
     return isinstance(value, Mapping)
+
+
+def _is_finite_float_value(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        return isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
 
 
 def _is_decimal_value(value: object) -> bool:
@@ -391,3 +410,33 @@ def _is_decimal_value(value: object) -> bool:
         return Decimal(str(value)).is_finite()
     except InvalidOperation:
         return False
+
+
+def _is_iso_date(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_iso_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or "T" not in value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _is_media_reference_value(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    try:
+        validated_media_reference(value)
+    except ValidationFailed:
+        return False
+    return True

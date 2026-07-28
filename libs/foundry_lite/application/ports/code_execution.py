@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -67,6 +68,7 @@ class CodeExecutionFailureEvidence:
     runner_failure_type: str | None = None
     exception_type: str | None = None
     exception_message_sha256: str | None = None
+    cleanup: Mapping[str, object] | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -80,6 +82,7 @@ class CodeExecutionFailureEvidence:
             "runnerFailureType": self.runner_failure_type,
             "exceptionType": self.exception_type,
             "exceptionMessageSha256": self.exception_message_sha256,
+            "cleanup": dict(self.cleanup) if self.cleanup is not None else None,
             "sandboxPolicy": self.sandbox_policy.to_payload(),
         }
 

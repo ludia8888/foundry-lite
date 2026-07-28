@@ -81,7 +81,7 @@ def _terminal_identity(
 ) -> tuple[StatusTransition, str, str]:
     if result.error is None:
         return PIPELINE_RUN_SUCCEEDED, "succeeded", "pipeline.run.succeeded"
-    if any(output.get("status") == "COMMITTED" for output in outputs):
+    if any(output.get("status") in {"COMMITTED", "COMMIT_OUTCOME_UNKNOWN"} for output in outputs):
         return PIPELINE_RUN_PARTIAL, "partial", "pipeline.run.partial"
     return PIPELINE_RUN_FAILED, "failed", "pipeline.run.failed"
 

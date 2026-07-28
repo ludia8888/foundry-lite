@@ -88,6 +88,7 @@ _ASSIGNMENT_PATTERN = re.compile(
 )
 _SAFE_HASH_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SAFE_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9._:@/-]{1,256}\Z")
+_CLEANUP_FAILURES_ATTRIBUTE = "_foundry_lite_cleanup_failures"
 
 
 def runtime_error_payload(
@@ -111,6 +112,26 @@ def scrub_error_mapping(value: Mapping[str, object]) -> dict[str, object]:
 
 def scrub_error_text(value: str) -> str:
     return _scrub_text(value)
+
+
+def record_runtime_cleanup_failure(
+    primary: Exception,
+    *,
+    operation: str,
+    cleanup_error: Exception,
+) -> None:
+    """Attach redacted secondary-cleanup evidence without replacing the primary error."""
+
+    current = getattr(primary, _CLEANUP_FAILURES_ATTRIBUTE, ())
+    failures = [dict(item) for item in current if isinstance(item, Mapping)]
+    failures.append(
+        {
+            "operation": operation,
+            "status": "FAILED",
+            "exceptionType": type(cleanup_error).__name__,
+        }
+    )
+    setattr(primary, _CLEANUP_FAILURES_ATTRIBUTE, tuple(failures))
 
 
 def audit_dlq_retry(
@@ -160,14 +181,28 @@ def link_dlq_retry(
 
 def _base_error_payload(exc: Exception) -> dict[str, object]:
     if isinstance(exc, AdapterError):
-        return scrub_error_mapping(adapter_failure_payload(exc))
-    if isinstance(exc, FoundryLiteError):
-        return {
+        payload = scrub_error_mapping(adapter_failure_payload(exc))
+    elif isinstance(exc, FoundryLiteError):
+        payload = {
             "type": exc.code,
             "message": scrub_error_text(str(exc)),
             "details": scrub_error_mapping(exc.details),
         }
-    return {"type": exc.__class__.__name__, "message": scrub_error_text(str(exc)), "details": {}}
+    else:
+        payload = {"type": exc.__class__.__name__, "message": scrub_error_text(str(exc)), "details": {}}
+    return _with_cleanup_failures(payload, exc)
+
+
+def _with_cleanup_failures(payload: dict[str, object], exc: Exception) -> dict[str, object]:
+    failures = getattr(exc, _CLEANUP_FAILURES_ATTRIBUTE, ())
+    safe = [scrub_error_mapping(item) for item in failures if isinstance(item, Mapping)]
+    if not safe:
+        return payload
+    details = payload.get("details")
+    merged = dict(details) if isinstance(details, Mapping) else {}
+    merged["cleanupFailures"] = safe
+    payload["details"] = merged
+    return payload
 
 
 def _scrub_error_payload(value: object) -> object:

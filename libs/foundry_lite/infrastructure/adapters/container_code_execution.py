@@ -10,7 +10,6 @@ import subprocess  # nosec B404
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -32,6 +31,10 @@ from foundry_lite.application.ports.compute_adapter import (
     PythonTransformPlan,
     TransformDeadLetterRecord,
     TransformExecutionResult,
+)
+from foundry_lite.infrastructure.adapters.container_cleanup import (
+    ContainerCleanupEvidence,
+    force_remove_container,
 )
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
     INPUT_DIR,
@@ -135,15 +138,25 @@ class ContainerCodeExecutionAdapter:
         try:
             return self._command_runner(command, self.config.policy.timeout_seconds, self._client_environment)
         except subprocess.TimeoutExpired as exc:
-            self._force_remove(container_name)
-            raise self._error("sandbox_timeout", "timeout", True, stderr=_timeout_stderr(exc)) from exc
+            cleanup = self._force_remove(container_name)
+            raise self._error(
+                "sandbox_timeout",
+                "timeout",
+                cleanup.is_confirmed,
+                stderr=_timeout_stderr(exc),
+                cleanup=cleanup,
+            ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise self._error("runtime_unavailable", "unavailable", False) from exc
 
-    def _force_remove(self, container_name: str) -> None:
-        command = (self.config.runtime_binary, "rm", "--force", container_name)
-        with suppress(Exception):
-            self._command_runner(command, self.config.cleanup_timeout_seconds, self._client_environment)
+    def _force_remove(self, container_name: str) -> ContainerCleanupEvidence:
+        return force_remove_container(
+            self._command_runner,
+            runtime_binary=self.config.runtime_binary,
+            container_name=container_name,
+            timeout_seconds=self.config.cleanup_timeout_seconds,
+            environment=self._client_environment,
+        )
 
     def _error(
         self,
@@ -154,9 +167,10 @@ class ContainerCodeExecutionAdapter:
         result: ContainerCommandResult | None = None,
         stderr: bytes = b"",
         runner_failure: Mapping[str, object] | None = None,
+        cleanup: ContainerCleanupEvidence | None = None,
     ) -> AdapterError:
         captured = result.stderr if result is not None else stderr
-        evidence = _failure_evidence(self.config, failure_type, result, captured, runner_failure)
+        evidence = _failure_evidence(self.config, failure_type, result, captured, runner_failure, cleanup)
         return AdapterError(
             AdapterFailure(
                 adapter_profile=self.profile_name,
@@ -339,6 +353,7 @@ def _failure_evidence(
     result: ContainerCommandResult | None,
     stderr: bytes,
     runner_failure: Mapping[str, object] | None,
+    cleanup: ContainerCleanupEvidence | None,
 ) -> CodeExecutionFailureEvidence:
     return CodeExecutionFailureEvidence(
         failure_type=failure_type,
@@ -352,6 +367,7 @@ def _failure_evidence(
         runner_failure_type=_mapping_string(runner_failure, "type"),
         exception_type=_mapping_string(runner_failure, "exceptionType"),
         exception_message_sha256=_mapping_string(runner_failure, "messageSha256"),
+        cleanup=cleanup.to_payload() if cleanup is not None else None,
     )
 
 

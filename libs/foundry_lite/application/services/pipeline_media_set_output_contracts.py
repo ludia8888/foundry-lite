@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -68,6 +69,7 @@ class MediaOutputTransactionAttempt:
 
     media_transaction_id: str
     generation: int
+    transaction_status: Literal["OPEN", "COMMITTED"]
 
 
 def normalized_classification(value: object) -> str:
