@@ -1682,7 +1682,7 @@ export type PipelineDeploymentResult = {
   compiled: Record<string, unknown>;
   options: Record<string, unknown>;
 };
-export type PipelineRunStatus = "running" | "succeeded" | "partial" | "failed" | "cancelled";
+export type PipelineRunStatus = "running" | "executing" | "succeeded" | "partial" | "failed" | "cancelled";
 export type PipelineRunOutputStatus = "COMMITTED" | "FAILED";
 export type PipelineRunOutputCommitKind = "SERVING_ASSET" | "GOVERNED_CANDIDATE";
 export type PipelineRunOutput = Record<string, unknown> & {
@@ -1772,6 +1772,8 @@ export type PipelineRun = Record<string, unknown> & {
   outputs: PipelineRunOutput[];
   nodeRuns: PipelineNodeRun[];
   artifacts: PipelineRunArtifact[];
+  executionLeaseExpiresAt: string | null;
+  executionHeartbeatAt: string | null;
   outputDatasetRef: string | null;
   outputVersionId: string | null;
   timeline: Array<Record<string, unknown>>;

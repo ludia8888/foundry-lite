@@ -9,6 +9,7 @@ from typing import Protocol
 from foundry_lite.application.ports.source_management_repository import (
     SourceManagementRepository,
 )
+from foundry_lite.application.services.media.read_access import require_media_version_clearance
 from foundry_lite.application.services.media.security_envelopes import (
     validated_media_source_envelope,
 )
@@ -171,6 +172,8 @@ class PipelinePreviewRuntime:
         _require_exact_selection(version_ids, selected, media_set_ref)
         versions = [item.version for item in selected]
         _require_total_bytes(versions, total_byte_limit)
+        for version in versions:
+            require_media_version_clearance(self._ctx, version)
         envelopes = [
             validated_media_source_envelope(media_set, item.version, tenant_id=self._ctx.tenant_id) for item in selected
         ]

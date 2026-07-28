@@ -188,6 +188,9 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
             tenant_id=ctx.tenant_id,
             run_id=str(executing_run["id"]),
             timeline=[*executing_run["timeline"], {"event": "pipeline.run.execution_claimed", "at": _now()}],
+            execution_lease_token="active-test-lease",
+            execution_lease_expires_at=_now(),
+            execution_heartbeat_at=_now(),
         )
 
     assert branch["graphSchemaVersion"] == 2
@@ -379,7 +382,9 @@ def test_idempotent_replay_recovers_queued_run_and_terminalizes_stale_execution(
         ctx=ctx,
     )
 
-    stale_started_at = schedule_iso(parse_schedule_timestamp(_now(), field="now") - timedelta(hours=2))
+    recovery_now = parse_schedule_timestamp(_now(), field="now")
+    stale_started_at = schedule_iso(recovery_now - timedelta(hours=2))
+    active_lease_expires_at = schedule_iso(recovery_now + timedelta(minutes=2))
     with foundry.engine.begin() as transaction:
         stale = foundry.pipeline_repository.insert_run(
             transaction=transaction,
@@ -398,6 +403,30 @@ def test_idempotent_replay_recovers_queued_run_and_terminalizes_stale_execution(
             tenant_id=ctx.tenant_id,
             run_id=str(stale["id"]),
             timeline=[*stale["timeline"], {"event": "pipeline.run.execution_claimed", "at": stale_started_at}],
+            execution_lease_token="expired-test-lease",
+            execution_lease_expires_at=stale_started_at,
+            execution_heartbeat_at=stale_started_at,
+        )
+        active = foundry.pipeline_repository.insert_run(
+            transaction=transaction,
+            record=run_record(
+                ctx,
+                pipeline_id="historical_v1",
+                version_id="legacy-version",
+                idempotency_key="replay-live-execution",
+                request_fingerprint=fingerprint,
+                plan_fingerprint=plan.plan_fingerprint,
+                now=stale_started_at,
+            ),
+        )
+        active_claim = foundry.pipeline_repository.claim_run_execution(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            run_id=str(active["id"]),
+            timeline=[*active["timeline"], {"event": "pipeline.run.execution_claimed", "at": stale_started_at}],
+            execution_lease_token="live-test-lease",
+            execution_lease_expires_at=active_lease_expires_at,
+            execution_heartbeat_at=schedule_iso(recovery_now),
         )
     failed = foundry.pipelines.run(
         "historical_v1",
@@ -405,14 +434,35 @@ def test_idempotent_replay_recovers_queued_run_and_terminalizes_stale_execution(
         idempotency_key="recover-stale-execution",
         ctx=ctx,
     )
+    replayed_failed = foundry.pipelines.run(
+        "historical_v1",
+        version_id="legacy-version",
+        idempotency_key="recover-stale-execution",
+        ctx=ctx,
+    )
+    live = foundry.pipelines.run(
+        "historical_v1",
+        version_id="legacy-version",
+        idempotency_key="replay-live-execution",
+        ctx=ctx,
+    )
+    failed_audits = [
+        event
+        for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+        if event["event_type"] == "pipeline.failed" and event["resource_id"] == stale["id"]
+    ]
 
     assert recovered["id"] == queued["id"]
     assert recovered["status"] == "succeeded"
     assert claimed is not None and claimed["status"] == "executing"
+    assert active_claim is not None and active_claim["status"] == "executing"
     assert failed["id"] == stale["id"]
     assert failed["status"] == "failed"
+    assert replayed_failed["status"] == "failed"
+    assert live["status"] == "executing"
     assert failed["timeline"][-1]["event"] == "pipeline.run.failed"
-    assert failed["error"]["message"] == "stale pipeline execution was recovered as terminal failure"
+    assert failed["error"]["message"] == "expired pipeline execution lease was recovered as terminal failure"
+    assert len(failed_audits) == 1
 
 
 def test_pre_v2_deployed_version_backfills_pinned_execution_plan_on_first_run(tmp_path: Path) -> None:

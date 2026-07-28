@@ -27,7 +27,7 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineVersionRow,
 )
 from foundry_lite.application.ports.transaction_context import StatusTransition
-from foundry_lite.application.state_transitions import PIPELINE_RUN_EXECUTING
+from foundry_lite.application.state_transitions import PIPELINE_RUN_EXECUTING, PIPELINE_RUN_FAILED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_guarded_update, cas_status_update
 
@@ -487,6 +487,9 @@ class SqlAlchemyPipelineRepository:
         tenant_id: str,
         run_id: str,
         timeline: list[dict[str, object]],
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
     ) -> PipelineRunRow | None:
         updated = cas_status_update(
             transaction,
@@ -494,7 +497,72 @@ class SqlAlchemyPipelineRepository:
             tenant_id=tenant_id,
             row_id=run_id,
             transition=PIPELINE_RUN_EXECUTING,
-            values={"timeline": timeline},
+            values={
+                "timeline": timeline,
+                "execution_lease_token": execution_lease_token,
+                "execution_lease_expires_at": execution_lease_expires_at,
+                "execution_heartbeat_at": execution_heartbeat_at,
+            },
+        )
+        if not updated:
+            return None
+        return self.run_by_id(transaction=transaction, tenant_id=tenant_id, run_id=run_id)
+
+    def renew_run_execution_lease(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelineRunRow | None:
+        updated = cas_status_guarded_update(
+            transaction,
+            db.pipeline_runs,
+            tenant_id=tenant_id,
+            row_id=run_id,
+            allowed_statuses=("executing",),
+            values={
+                "execution_lease_expires_at": execution_lease_expires_at,
+                "execution_heartbeat_at": execution_heartbeat_at,
+            },
+            conditions=(db.pipeline_runs.c.execution_lease_token == execution_lease_token,),
+        )
+        if not updated:
+            return None
+        return self.run_by_id(transaction=transaction, tenant_id=tenant_id, run_id=run_id)
+
+    def expire_run_execution(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+        execution_lease_token: str,
+        expired_at: str,
+        timeline: list[dict[str, object]],
+        error: dict[str, object],
+        completed_at: str,
+    ) -> PipelineRunRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.pipeline_runs,
+            tenant_id=tenant_id,
+            row_id=run_id,
+            transition=PIPELINE_RUN_FAILED,
+            values=_with_cleared_execution_lease(
+                {
+                    "timeline": timeline,
+                    "error": error,
+                    "completed_at": completed_at,
+                }
+            ),
+            conditions=(
+                db.pipeline_runs.c.execution_lease_token == execution_lease_token,
+                db.pipeline_runs.c.execution_lease_expires_at <= expired_at,
+            ),
         )
         if not updated:
             return None
@@ -520,14 +588,16 @@ class SqlAlchemyPipelineRepository:
             tenant_id=tenant_id,
             row_id=run_id,
             transition=transition,
-            values={
-                "output_dataset_ref": output_dataset_ref,
-                "output_version_id": output_version_id,
-                "outputs": _resolved_run_outputs(outputs, output_dataset_ref, output_version_id),
-                "timeline": timeline,
-                "error": error,
-                "completed_at": completed_at,
-            },
+            values=_with_cleared_execution_lease(
+                {
+                    "output_dataset_ref": output_dataset_ref,
+                    "output_version_id": output_version_id,
+                    "outputs": _resolved_run_outputs(outputs, output_dataset_ref, output_version_id),
+                    "timeline": timeline,
+                    "error": error,
+                    "completed_at": completed_at,
+                }
+            ),
         )
         if not updated:
             return None
@@ -737,6 +807,13 @@ def _cast_row[RowT](row: Any, row_type: type[RowT]) -> RowT:
 
 def _row[RowT](row: Any | None, row_type: type[RowT]) -> RowT | None:
     return _cast_row(row, row_type) if row is not None else None
+
+
+def _with_cleared_execution_lease(values: Mapping[str, object]) -> dict[str, object]:
+    cleared = dict(values)
+    for field in ("execution_lease_token", "execution_lease_expires_at", "execution_heartbeat_at"):
+        cleared[field] = None
+    return cleared
 
 
 def _legacy_run_outputs(dataset_ref: str | None, version_id: str | None) -> list[dict[str, object]]:

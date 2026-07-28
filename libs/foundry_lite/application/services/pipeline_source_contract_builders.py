@@ -12,6 +12,7 @@ from foundry_lite.application.ports.media_repository import (
     MediaSetSelectionRecord,
 )
 from foundry_lite.application.primitives import _json_hash
+from foundry_lite.application.services.media.read_access import require_media_version_clearance
 from foundry_lite.application.services.media.security_envelopes import (
     MediaSecurityEnvelopeInvalid,
     validated_media_source_envelope,
@@ -157,6 +158,7 @@ def _validated_media_envelope(
     version: MediaItemVersionRecord,
     ctx: RequestContext,
 ) -> JsonObject:
+    require_media_version_clearance(ctx, version)
     try:
         envelope = validated_media_source_envelope(media_set, version, tenant_id=ctx.tenant_id)
     except MediaSecurityEnvelopeInvalid as exc:

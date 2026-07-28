@@ -52,7 +52,15 @@ def _extend_pipeline_graph_rows() -> None:
 
 
 def _extend_pipeline_runs() -> None:
-    for name in ("idempotency_key", "request_fingerprint", "plan_fingerprint", "workflow_run_id"):
+    for name in (
+        "idempotency_key",
+        "request_fingerprint",
+        "plan_fingerprint",
+        "workflow_run_id",
+        "execution_lease_token",
+        "execution_lease_expires_at",
+        "execution_heartbeat_at",
+    ):
         op.add_column("pipeline_runs", sa.Column(name, sa.String(), nullable=True))
     op.add_column("pipeline_runs", sa.Column("parameters", sa.JSON(), nullable=True))
     op.add_column("pipeline_runs", sa.Column("target_node_ids", sa.JSON(), nullable=True))

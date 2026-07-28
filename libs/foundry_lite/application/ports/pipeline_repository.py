@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.ports.pipeline_execution_repository import PipelineRunRow
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 JsonObject = dict[str, object]
@@ -68,28 +69,6 @@ class PipelineVersionRow(TypedDict):
     created_by: str
     created_at: str
     deployed_at: str | None
-
-
-class PipelineRunRow(TypedDict):
-    id: str
-    tenant_id: str
-    pipeline_id: str
-    version_id: str
-    status: str
-    idempotency_key: str | None
-    request_fingerprint: str | None
-    plan_fingerprint: str | None
-    workflow_run_id: str | None
-    parameters: JsonObject | None
-    target_node_ids: list[str] | None
-    outputs: list[JsonObject]
-    output_dataset_ref: str | None
-    output_version_id: str | None
-    timeline: list[JsonObject]
-    error: JsonObject | None
-    created_by: str
-    started_at: str
-    completed_at: str | None
 
 
 class PipelineScheduleRow(TypedDict):
@@ -394,6 +373,33 @@ class PipelineRepository(Protocol):
         tenant_id: str,
         run_id: str,
         timeline: list[JsonObject],
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelineRunRow | None: ...
+
+    def renew_run_execution_lease(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        execution_lease_token: str,
+        execution_lease_expires_at: str,
+        execution_heartbeat_at: str,
+    ) -> PipelineRunRow | None: ...
+
+    def expire_run_execution(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        execution_lease_token: str,
+        expired_at: str,
+        timeline: list[JsonObject],
+        error: JsonObject,
+        completed_at: str,
     ) -> PipelineRunRow | None: ...
 
     def update_run_terminal(

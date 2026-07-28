@@ -268,6 +268,8 @@ def run_payload(row: PipelineRunRow) -> JsonObject:
         "requestFingerprint": row["request_fingerprint"],
         "planFingerprint": row["plan_fingerprint"],
         "workflowRunId": row["workflow_run_id"],
+        "executionLeaseExpiresAt": row["execution_lease_expires_at"],
+        "executionHeartbeatAt": row["execution_heartbeat_at"],
         "parameters": row["parameters"],
         "targetNodeIds": row["target_node_ids"],
         "outputs": row["outputs"],

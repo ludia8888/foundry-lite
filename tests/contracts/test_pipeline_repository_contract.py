@@ -187,6 +187,9 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
             tenant_id="tenant-a",
             run_id=run["id"],
             timeline=[{"event": "pipeline.run.execution_claimed"}],
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-05T00:07:00Z",
+            execution_heartbeat_at="2026-07-05T00:05:00Z",
         )
         terminal_run = repository.update_run_terminal(
             transaction=transaction,
@@ -257,8 +260,10 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
     assert deployed["compiler_version"] == "pipeline-plan-v2.0"
     assert executing_run is not None
     assert executing_run["status"] == "executing"
+    assert executing_run["execution_lease_token"] == "lease-a"
     assert terminal_run is not None
     assert terminal_run["status"] == "succeeded"
+    assert terminal_run["execution_lease_token"] is None
     assert stale_terminal_run is None
     assert schedule["enabled"] is True
     assert fetched_schedule is not None
@@ -270,6 +275,69 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
     assert deleted_again is False
     assert test_result["result"] == {"valid": True}
     assert hidden_run is None
+
+
+def test_pipeline_run_execution_lease_contract(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline_lease_contract.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineRepository(engine)
+
+    with engine.begin() as transaction:
+        run = repository.insert_run(transaction=transaction, record=_run_record())
+        claimed = repository.claim_run_execution(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=run["id"],
+            timeline=[{"event": "pipeline.run.execution_claimed"}],
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-05T00:07:00Z",
+            execution_heartbeat_at="2026-07-05T00:05:00Z",
+        )
+        wrong_owner = repository.renew_run_execution_lease(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=run["id"],
+            execution_lease_token="lease-b",
+            execution_lease_expires_at="2026-07-05T00:09:00Z",
+            execution_heartbeat_at="2026-07-05T00:06:00Z",
+        )
+        renewed = repository.renew_run_execution_lease(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=run["id"],
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-05T00:09:00Z",
+            execution_heartbeat_at="2026-07-05T00:06:00Z",
+        )
+        premature = repository.expire_run_execution(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=run["id"],
+            execution_lease_token="lease-a",
+            expired_at="2026-07-05T00:08:59Z",
+            timeline=[{"event": "pipeline.run.failed"}],
+            error={"message": "premature"},
+            completed_at="2026-07-05T00:08:59Z",
+        )
+        expired = repository.expire_run_execution(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=run["id"],
+            execution_lease_token="lease-a",
+            expired_at="2026-07-05T00:09:00Z",
+            timeline=[{"event": "pipeline.run.failed"}],
+            error={"message": "expired"},
+            completed_at="2026-07-05T00:09:00Z",
+        )
+
+    assert claimed is not None
+    assert wrong_owner is None
+    assert renewed is not None
+    assert renewed["execution_lease_expires_at"] == "2026-07-05T00:09:00Z"
+    assert premature is None
+    assert expired is not None
+    assert expired["status"] == "failed"
+    assert expired["execution_lease_token"] is None
 
 
 def test_pipeline_scheduler_repository_contract_sqlite(tmp_path: Path) -> None:

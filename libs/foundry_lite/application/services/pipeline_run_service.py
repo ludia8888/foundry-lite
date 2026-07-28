@@ -45,8 +45,10 @@ from foundry_lite.application.services.pipeline_run_contract_types import (
 )
 from foundry_lite.application.services.pipeline_run_recovery import (
     PipelineTerminalCommitError,
+    expire_stale_pipeline_run,
+    new_pipeline_execution_lease,
+    pipeline_execution_heartbeat,
     replayed_pipeline_run_action,
-    stale_pipeline_run_error,
 )
 from foundry_lite.application.services.pipeline_run_requests import (
     deployed_pipeline_version,
@@ -129,7 +131,8 @@ class PipelineRunService(CoreService):
             require_idempotent_run(row, request_fingerprint)
             action = replayed_pipeline_run_action(row)
             if action == "fail_stale":
-                return self._fail_run(ctx, row, stale_pipeline_run_error(row))
+                expire_stale_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row)
+                return self.get_run(str(row["id"]), ctx=ctx)
             if action == "read":
                 return self.get_run(str(row["id"]), ctx=ctx)
         try:
@@ -247,27 +250,24 @@ class PipelineRunService(CoreService):
         if claimed is None:
             return self.get_run(str(row["id"]), ctx=ctx)
         row = claimed
-        if is_graph_v2_execution_plan(version["execution_plan"]):
-            run_id = self.pipeline_graph_v2_run_coordinator_service.execute(
-                ctx,
-                row=row,
-                version=version,
+        with pipeline_execution_heartbeat(self.engine, self.pipeline_repository, ctx, row):
+            if is_graph_v2_execution_plan(version["execution_plan"]):
+                run_id = self.pipeline_graph_v2_run_coordinator_service.execute(ctx, row=row, version=version)
+                return self.get_run(run_id, ctx=ctx)
+            evidence = self._node_evidence(ctx, row, version)
+            compiled = self.pipeline_compiler_service.compile_graph(
+                pipeline_id=str(version["pipeline_id"]),
+                version_id=str(version["id"]),
+                graph=version["graph"],
+                ctx=ctx,
+                target_node_ids=row["target_node_ids"],
             )
-            return self.get_run(run_id, ctx=ctx)
-        evidence = self._node_evidence(ctx, row, version)
-        compiled = self.pipeline_compiler_service.compile_graph(
-            pipeline_id=str(version["pipeline_id"]),
-            version_id=str(version["id"]),
-            graph=version["graph"],
-            ctx=ctx,
-            target_node_ids=row["target_node_ids"],
-        )
-        timeline = [*row["timeline"], {"event": "pipeline.compile.completed", "at": _now(), **compiled}]
-        committers = self._node_committers(ctx, row, version, evidence)
-        execution = run_compiled_transforms(committers, compiled, timeline)
-        if execution.error is not None:
-            return self._complete_unsuccessful_run(ctx, row, compiled, timeline, execution, evidence)
-        return self._succeed_run(ctx, row, version, compiled, timeline, list(execution.outputs))
+            timeline = [*row["timeline"], {"event": "pipeline.compile.completed", "at": _now(), **compiled}]
+            committers = self._node_committers(ctx, row, version, evidence)
+            execution = run_compiled_transforms(committers, compiled, timeline)
+            if execution.error is not None:
+                return self._complete_unsuccessful_run(ctx, row, compiled, timeline, execution, evidence)
+            return self._succeed_run(ctx, row, version, compiled, timeline, list(execution.outputs))
 
     def _claim_run_execution(
         self,
@@ -275,9 +275,10 @@ class PipelineRunService(CoreService):
         row: PipelineRunRow,
     ) -> PipelineRunRow | None:
         run_id = str(row["id"])
+        lease = new_pipeline_execution_lease()
         timeline: list[dict[str, object]] = [
             *row["timeline"],
-            {"event": "pipeline.run.execution_claimed", "at": _now()},
+            {"event": "pipeline.run.execution_claimed", "at": lease.heartbeat_at, "leaseExpiresAt": lease.expires_at},
         ]
         with self.engine.begin() as conn:
             claimed = self.pipeline_repository.claim_run_execution(
@@ -285,9 +286,19 @@ class PipelineRunService(CoreService):
                 tenant_id=ctx.tenant_id,
                 run_id=run_id,
                 timeline=timeline,
+                execution_lease_token=lease.token,
+                execution_lease_expires_at=lease.expires_at,
+                execution_heartbeat_at=lease.heartbeat_at,
             )
             if claimed is not None:
-                self._audit(conn, ctx, "execution_claimed", "pipeline_run", run_id, {"version_id": row["version_id"]})
+                self._audit(
+                    conn,
+                    ctx,
+                    "execution_claimed",
+                    "pipeline_run",
+                    run_id,
+                    {"version_id": row["version_id"], "execution_lease_expires_at": lease.expires_at},
+                )
                 return claimed
             current = self._require_run(conn, ctx, run_id)
             if current["status"] in {"cancelled", "executing", "succeeded", "failed"}:

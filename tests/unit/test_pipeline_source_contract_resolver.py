@@ -38,6 +38,7 @@ from foundry_lite.application.services.pipeline_source_contract_resolver import 
     _text_list,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import PermissionDenied
 
 
 @dataclass
@@ -272,6 +273,17 @@ def test_media_source_rejects_uncommitted_selection_and_weaker_envelope() -> Non
     with pytest.raises(PipelineSourceContractResolutionFailed) as weakened:
         resolver.resolve(transaction=object(), graph=_media_graph(), ctx=_ctx())
     assert weakened.value.details["reason"] == "source_security_weakened"
+
+
+def test_media_source_requires_caller_clearance_before_pinning_secret_version() -> None:
+    secret = _media_selection(classification="secret")
+    resolver = _resolver(
+        media_sets=[_media_set(classification="secret")],
+        selections=[secret],
+    )
+
+    with pytest.raises(PermissionDenied, match="clearance"):
+        resolver.resolve(transaction=object(), graph=_media_graph(), ctx=_ctx())
 
 
 def test_media_source_rejects_dropped_media_set_retention_control() -> None:
@@ -549,7 +561,11 @@ def _stream_run() -> SourceSyncRunRow:
     )
 
 
-def _media_set(*, retention_policy_id: str | None = None) -> MediaSetRecord:
+def _media_set(
+    *,
+    retention_policy_id: str | None = None,
+    classification: str = "confidential",
+) -> MediaSetRecord:
     return MediaSetRecord(
         media_set_id="ms-1",
         tenant_id="tenant-a",
@@ -561,7 +577,7 @@ def _media_set(*, retention_policy_id: str | None = None) -> MediaSetRecord:
         transaction_policy="transactional",
         storage_profile="local",
         processing_profile="default",
-        classification="confidential",
+        classification=classification,
         retention_policy_id=retention_policy_id,
         created_at="2026-07-17T00:00:00Z",
         updated_at="2026-07-17T00:00:00Z",

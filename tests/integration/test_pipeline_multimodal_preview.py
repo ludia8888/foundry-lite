@@ -19,7 +19,7 @@ from foundry_lite.application.ports.media_processor_registry import (
     ProcessorResourceRequirements,
 )
 from foundry_lite.application.primitives import _json_hash
-from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.asr_processor import (
     AsrProcessingBounds,
@@ -198,6 +198,46 @@ def test_media_preview_rejects_bytes_changed_after_catalog_verification(
     assert version_id
     assert completed["status"] == "FAILED"
     assert completed["error"]["type"] == "CONFLICT"
+    assert completed["outputs"] == []
+    assert _serving_counts(dependencies.engine) == {
+        "derivatives": 0,
+        "contentUnits": 0,
+        "datasetVersions": 0,
+    }
+
+
+def test_media_preview_rejects_secret_source_before_returning_raw_text(tmp_path: Path) -> None:
+    dependencies = create_local_core_dependencies(
+        db_url=f"sqlite:///{tmp_path / 'pipeline-secret-media-preview.db'}",
+        storage_root=tmp_path / "secret-flite",
+    )
+    foundry = FoundryLite(dependencies=dependencies)
+    admin = demo_admin_context()
+    _commit_pdf(foundry, classification="secret")
+    branch = foundry.pipelines.create_branch(
+        pipeline_id="secret-media-preview",
+        name="draft",
+        idempotency_key="secret-media-preview-branch",
+        ctx=admin,
+    )
+    queued = foundry.pipelines.create_preview_run(
+        str(branch["id"]),
+        graph=_pdf_page_graph("legal.secret_prompt_contracts"),
+        target_node_id="out",
+        limits={"pdfPages": 3, "tableRows": 50},
+        idempotency_key="secret-media-preview-run",
+        ctx=admin,
+    )
+    data_engineer = RequestContext(
+        tenant_id=admin.tenant_id,
+        actor_user_id="engineer-without-secret-clearance",
+        roles=("data_engineer",),
+    )
+
+    completed = foundry.pipelines.execute_preview_run(str(queued["id"]), ctx=data_engineer)
+
+    assert completed["status"] == "FAILED"
+    assert completed["error"]["type"] == "PERMISSION_DENIED"
     assert completed["outputs"] == []
     assert _serving_counts(dependencies.engine) == {
         "derivatives": 0,

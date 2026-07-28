@@ -11,6 +11,31 @@ from foundry_lite.application.state_transitions import StatusTransition
 JsonObject = dict[str, object]
 
 
+class PipelineRunRow(TypedDict):
+    id: str
+    tenant_id: str
+    pipeline_id: str
+    version_id: str
+    status: str
+    idempotency_key: str | None
+    request_fingerprint: str | None
+    plan_fingerprint: str | None
+    workflow_run_id: str | None
+    execution_lease_token: str | None
+    execution_lease_expires_at: str | None
+    execution_heartbeat_at: str | None
+    parameters: JsonObject | None
+    target_node_ids: list[str] | None
+    outputs: list[JsonObject]
+    output_dataset_ref: str | None
+    output_version_id: str | None
+    timeline: list[JsonObject]
+    error: JsonObject | None
+    created_by: str
+    started_at: str
+    completed_at: str | None
+
+
 class PipelinePreviewRunRow(TypedDict):
     id: str
     tenant_id: str

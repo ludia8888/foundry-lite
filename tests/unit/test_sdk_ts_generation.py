@@ -138,7 +138,10 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "General table preview rows. Defaults to/capped at 500; Use LLM is capped at 50." in generated
     assert "export type PipelineDeployment = Record<string, unknown> & {" in generated
     assert "export type PipelineDeploymentResult = {" in generated
-    assert 'export type PipelineRunStatus = "running" | "succeeded" | "partial" | "failed" | "cancelled";' in generated
+    assert (
+        'export type PipelineRunStatus = "running" | "executing" | "succeeded" | "partial" | "failed" | "cancelled";'
+        in generated
+    )
     assert 'export type PipelineRunOutputStatus = "COMMITTED" | "FAILED";' in generated
     assert 'export type PipelineRunOutputCommitKind = "SERVING_ASSET" | "GOVERNED_CANDIDATE";' in generated
     pipeline_run_output_start = generated.index("export type PipelineRunOutput =")
@@ -162,6 +165,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "outputs: PipelineRunOutput[];" in pipeline_run
     assert "nodeRuns: PipelineNodeRun[];" in pipeline_run
     assert "artifacts: PipelineRunArtifact[];" in pipeline_run
+    assert "executionLeaseExpiresAt: string | null;" in pipeline_run
+    assert "executionHeartbeatAt: string | null;" in pipeline_run
     assert "outputDatasetRef: string | null;" in pipeline_run
     assert "export type PipelineNodeAttempt = Record<string, unknown> & {" in generated
     assert "export type PipelineNodeRun = Record<string, unknown> & {" in generated
