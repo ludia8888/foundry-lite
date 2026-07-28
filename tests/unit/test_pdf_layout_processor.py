@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.media_processor import MediaProcessingRequest, ProcessorSpec
-from foundry_lite.infrastructure.adapters.pdf_layout_processor import PdfLayoutProcessorAdapter
+from foundry_lite.infrastructure.adapters.pdf_layout_processor import (
+    PdfLayoutFragment,
+    PdfLayoutProcessorAdapter,
+    _pypdf_layout_extract,
+)
+from foundry_lite.infrastructure.adapters.pdf_page_selection import PdfPageSelection
+from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfDocumentError
 
 
 def _layout_pdf() -> bytes:
@@ -78,6 +85,93 @@ def test_generated_pdf_yields_deterministic_structured_blocks_with_coordinates(t
         }
         assert unit.structure is not None and unit.structure["isHeuristic"] is True
         assert unit.confidence is not None and 0 < unit.confidence < 1
+
+
+def test_direct_pypdf_extractor_preserves_position_and_font_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "layout.pdf"
+    source.write_bytes(_layout_pdf())
+
+    fragments = _pypdf_layout_extract(str(source), 3, PdfPageSelection(start=1, limit=None))
+
+    assert [fragment.text for fragment in fragments] == [
+        "Annual Report",
+        "Financial Overview",
+        "Revenue Detail",
+        "Revenue increased during the quarter.",
+        "Table 1 Revenue by region",
+        "Figure 1 Growth trend",
+    ]
+    assert all(fragment.page_number == 1 for fragment in fragments)
+    assert [(fragment.x, fragment.baseline_y) for fragment in fragments] == [
+        (72.0, 744.0),
+        (72.0, 690.0),
+        (72.0, 650.0),
+        (72.0, 610.0),
+        (72.0, 570.0),
+        (72.0, 530.0),
+    ]
+    assert fragments[0].font_name.endswith("Helvetica")
+    assert fragments[1].font_name.endswith("Helvetica-Bold")
+
+
+def test_direct_pypdf_extractor_normalizes_corrupt_and_page_limit_failures(tmp_path: Path) -> None:
+    corrupt = tmp_path / "corrupt.pdf"
+    corrupt.write_bytes(b"not-a-pdf")
+
+    with pytest.raises(PdfDocumentError, match="corrupt_pdf"):
+        _pypdf_layout_extract(str(corrupt), 3, PdfPageSelection(start=1, limit=None))
+
+    valid = tmp_path / "layout.pdf"
+    valid.write_bytes(_layout_pdf())
+    with pytest.raises(PdfDocumentError, match="page_limit_exceeded"):
+        _pypdf_layout_extract(str(valid), 0, PdfPageSelection(start=1, limit=None))
+
+
+def test_in_process_extractor_success_and_document_error_keep_typed_evidence() -> None:
+    fragment = PdfLayoutFragment(1, "Title", 10.0, 90.0, 20.0, "Bold", 100.0, 100.0)
+    adapter = PdfLayoutProcessorAdapter(
+        layout_extractor=lambda _path, _max_pages, _selection: [fragment],
+        should_isolate_extractor=False,
+    )
+
+    result = adapter.process(_request("/sandbox/layout.pdf"))
+
+    assert [unit.text for unit in result.units] == ["Title"]
+
+    def _document_error(_path: str, _max_pages: int, _selection: PdfPageSelection) -> list[PdfLayoutFragment]:
+        raise PdfDocumentError("corrupt_pdf", page=2)
+
+    failing_adapter = PdfLayoutProcessorAdapter(
+        layout_extractor=_document_error,
+        should_isolate_extractor=False,
+    )
+    with pytest.raises(AdapterError) as captured:
+        failing_adapter.process(_request("/sandbox/layout.pdf"))
+
+    assert captured.value.failure.kind == "validation"
+    assert captured.value.failure.details["reason"] == "corrupt_pdf"
+    assert captured.value.failure.details["page"] == 2
+
+
+def test_in_process_extractor_timeout_fails_closed_without_waiting_for_worker() -> None:
+    release = threading.Event()
+
+    def _blocking(_path: str, _max_pages: int, _selection: PdfPageSelection) -> list[PdfLayoutFragment]:
+        release.wait(timeout=10)
+        return []
+
+    adapter = PdfLayoutProcessorAdapter(
+        timeout_seconds=0,
+        layout_extractor=_blocking,
+        should_isolate_extractor=False,
+    )
+    try:
+        with pytest.raises(AdapterError) as captured:
+            adapter.process(_request("/sandbox/layout.pdf"))
+        assert captured.value.failure.kind == "timeout"
+        assert captured.value.failure.is_retryable is True
+    finally:
+        release.set()
 
 
 def test_layout_processor_supports_only_its_pinned_processor_family() -> None:
