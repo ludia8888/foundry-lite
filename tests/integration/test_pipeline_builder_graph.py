@@ -12,9 +12,12 @@ from foundry_lite.application.ports.pipeline_repository import (
 )
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.pipeline_compiler_service import PipelineCompilerService
+from foundry_lite.application.services.pipeline_execution_contracts import pipeline_execution_plan_payload
 from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
 from foundry_lite.application.services.pipeline_graph_normalizer import normalize_pipeline_graph
 from foundry_lite.application.services.pipeline_payloads import run_record
+from foundry_lite.application.services.pipeline_plan_compiler import PipelinePlanCompiler
+from foundry_lite.application.services.pipeline_run_requests import run_request_fingerprint
 from foundry_lite.application.services.pipeline_schedule_runtime import (
     parse_schedule_timestamp,
     schedule_iso,
@@ -328,6 +331,88 @@ def test_pipeline_unexpected_failure_preserves_execution_claim_timeline(
         "pipeline.run.execution_claimed",
         "pipeline.run.failed",
     ]
+
+
+def test_idempotent_replay_recovers_queued_run_and_terminalizes_stale_execution(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,10\n", encoding="utf-8")
+    foundry.datasets.ensure("raw.pipeline_orders", ctx=ctx)
+    foundry.datasets.upload_csv("raw.pipeline_orders", csv_path, ctx=ctx)
+    _insert_legacy_governance_rows(foundry, ctx, graph=_orders_pipeline_graph())
+    with foundry.engine.begin() as transaction:
+        undeployed = foundry.pipeline_repository.version_by_id(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            version_id="legacy-version",
+        )
+        assert undeployed is not None
+        plan = PipelinePlanCompiler().compile(undeployed["graph"])
+        version = foundry.pipeline_repository.mark_version_deployed(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            version_id="legacy-version",
+            execution_plan=pipeline_execution_plan_payload(plan),
+            plan_fingerprint=plan.plan_fingerprint,
+            compiler_version=plan.compiler_version,
+            deployed_at=_now(),
+        )
+        assert version is not None
+        fingerprint = run_request_fingerprint("historical_v1", version, None, None)
+        queued = foundry.pipeline_repository.insert_run(
+            transaction=transaction,
+            record=run_record(
+                ctx,
+                pipeline_id="historical_v1",
+                version_id="legacy-version",
+                idempotency_key="recover-queued-run",
+                request_fingerprint=fingerprint,
+                plan_fingerprint=plan.plan_fingerprint,
+                now=_now(),
+            ),
+        )
+    recovered = foundry.pipelines.run(
+        "historical_v1",
+        version_id="legacy-version",
+        idempotency_key="recover-queued-run",
+        ctx=ctx,
+    )
+
+    stale_started_at = schedule_iso(parse_schedule_timestamp(_now(), field="now") - timedelta(hours=2))
+    with foundry.engine.begin() as transaction:
+        stale = foundry.pipeline_repository.insert_run(
+            transaction=transaction,
+            record=run_record(
+                ctx,
+                pipeline_id="historical_v1",
+                version_id="legacy-version",
+                idempotency_key="recover-stale-execution",
+                request_fingerprint=fingerprint,
+                plan_fingerprint=plan.plan_fingerprint,
+                now=stale_started_at,
+            ),
+        )
+        claimed = foundry.pipeline_repository.claim_run_execution(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            run_id=str(stale["id"]),
+            timeline=[*stale["timeline"], {"event": "pipeline.run.execution_claimed", "at": stale_started_at}],
+        )
+    failed = foundry.pipelines.run(
+        "historical_v1",
+        version_id="legacy-version",
+        idempotency_key="recover-stale-execution",
+        ctx=ctx,
+    )
+
+    assert recovered["id"] == queued["id"]
+    assert recovered["status"] == "succeeded"
+    assert claimed is not None and claimed["status"] == "executing"
+    assert failed["id"] == stale["id"]
+    assert failed["status"] == "failed"
+    assert failed["timeline"][-1]["event"] == "pipeline.run.failed"
+    assert failed["error"]["message"] == "stale pipeline execution was recovered as terminal failure"
 
 
 def test_pre_v2_deployed_version_backfills_pinned_execution_plan_on_first_run(tmp_path: Path) -> None:

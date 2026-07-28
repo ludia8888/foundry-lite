@@ -76,17 +76,25 @@ class MediaReferenceService(CoreService):
         *,
         media_item_version_id: str,
         byte_range: ByteRange | None = None,
+        should_proxy: bool = False,
     ) -> SourceMediaRead:
         resolved = self.resolve(ctx, media_item_version_id=media_item_version_id)
         normalized_range = _normalized_byte_range(byte_range, resolved.version.byte_size)
-        grant = self.media_storage.issue_read_grant(
-            MediaReadGrantRequest(
-                tenant_id=ctx.tenant_id,
-                media_item_version_id=media_item_version_id,
+        if should_proxy:
+            grant = MediaReadGrant(
+                grant_kind="inline",
                 object_key=resolved.version.blob_key,
-                byte_range=normalized_range,
+                stream=self.media_storage.open_stream(resolved.version.blob_key, normalized_range),
             )
-        )
+        else:
+            grant = self.media_storage.issue_read_grant(
+                MediaReadGrantRequest(
+                    tenant_id=ctx.tenant_id,
+                    media_item_version_id=media_item_version_id,
+                    object_key=resolved.version.blob_key,
+                    byte_range=normalized_range,
+                )
+            )
         return SourceMediaRead(resolved, grant, normalized_range)
 
     def _verify_blob(self, version: MediaItemVersionRecord) -> None:

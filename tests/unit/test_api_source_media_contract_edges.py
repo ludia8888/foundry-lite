@@ -121,6 +121,7 @@ class _FakeMedia:
         return _Payload(id="process-1")
 
     def source_read(self, *_args, **kwargs):
+        assert kwargs["should_proxy"] is True
         byte_range = kwargs.get("byte_range")
         version = SimpleNamespace(
             sniffed_mime_type="application/pdf",

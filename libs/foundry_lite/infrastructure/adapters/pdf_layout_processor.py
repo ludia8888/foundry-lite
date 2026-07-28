@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess  # nosec B404 - adapter-owned argv, no shell; remove if construction becomes user-controlled.
+import sys
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
 from statistics import median
 
 from foundry_lite.application.ports.adapter_failure import (
@@ -103,6 +106,28 @@ def _font_name(font: object) -> str:
     return str(value)
 
 
+def _fragments_from_payload(payload: object) -> list[PdfLayoutFragment]:
+    if not isinstance(payload, list):
+        raise ValueError("layout worker fragments must be a list")
+    fragments: list[PdfLayoutFragment] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("layout worker fragment must be an object")
+        fragments.append(
+            PdfLayoutFragment(
+                page_number=int(item["page_number"]),
+                text=str(item["text"]),
+                x=float(item["x"]),
+                baseline_y=float(item["baseline_y"]),
+                font_size=float(item["font_size"]),
+                font_name=str(item["font_name"]),
+                page_width=float(item["page_width"]),
+                page_height=float(item["page_height"]),
+            )
+        )
+    return fragments
+
+
 class PdfLayoutProcessorAdapter:
     """Extract positioned PDF blocks with explicitly heuristic structure labels."""
 
@@ -113,9 +138,21 @@ class PdfLayoutProcessorAdapter:
         *,
         timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
         layout_extractor: PageLayoutExtractor | None = None,
+        should_isolate_extractor: bool | None = None,
+        worker_command: Sequence[str] | None = None,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._layout_extractor = layout_extractor or _pypdf_layout_extract
+        self._should_isolate_extractor = (
+            layout_extractor is None if should_isolate_extractor is None else should_isolate_extractor
+        )
+        self._worker_command = tuple(
+            worker_command
+            or (
+                sys.executable,
+                str(Path(__file__).with_name("pdf_layout_worker.py")),
+            )
+        )
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -165,6 +202,16 @@ class PdfLayoutProcessorAdapter:
         max_pages: int,
         selection: PdfPageSelection,
     ) -> Sequence[PdfLayoutFragment]:
+        if self._should_isolate_extractor:
+            return self._extract_in_subprocess(request, max_pages, selection)
+        return self._extract_in_thread(request, max_pages, selection)
+
+    def _extract_in_thread(
+        self,
+        request: MediaProcessingRequest,
+        max_pages: int,
+        selection: PdfPageSelection,
+    ) -> Sequence[PdfLayoutFragment]:
         assert request.source_path is not None
         pool = ThreadPoolExecutor(max_workers=1)
         future = pool.submit(self._layout_extractor, request.source_path, max_pages, selection)
@@ -178,6 +225,57 @@ class PdfLayoutProcessorAdapter:
         except PdfDocumentError as exc:
             pool.shutdown(wait=False)
             raise self._error("validation", exc.reason, request, False, page=exc.page) from exc
+
+    def _extract_in_subprocess(
+        self,
+        request: MediaProcessingRequest,
+        max_pages: int,
+        selection: PdfPageSelection,
+    ) -> Sequence[PdfLayoutFragment]:
+        assert request.source_path is not None
+        process = subprocess.Popen(  # nosec B603 - adapter-owned argv, no shell; only tests replace the command.
+            self._worker_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        worker_input = json.dumps(
+            {
+                "sourcePath": request.source_path,
+                "maxPages": max_pages,
+                "selection": {"start": selection.start, "limit": selection.limit},
+            }
+        )
+        try:
+            stdout, _ = process.communicate(worker_input, timeout=self._timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.communicate()
+            raise self._error("timeout", "pdf layout extraction timed out", request, True) from exc
+        return self._subprocess_result(stdout, process.returncode, request)
+
+    def _subprocess_result(
+        self,
+        stdout: str,
+        return_code: int,
+        request: MediaProcessingRequest,
+    ) -> Sequence[PdfLayoutFragment]:
+        try:
+            payload = json.loads(stdout)
+            if return_code != 0 or not isinstance(payload, dict):
+                raise ValueError("layout worker failed")
+            if payload.get("kind") == "document_error":
+                page = payload.get("page")
+                page_number = int(page) if isinstance(page, int) else None
+                raise self._error("validation", str(payload.get("reason")), request, False, page=page_number)
+            if payload.get("kind") != "ok":
+                raise ValueError("layout worker returned an invalid result")
+            return _fragments_from_payload(payload.get("fragments"))
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise self._error("validation", "corrupt_pdf", request, False) from exc
 
     def _error(
         self,

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
+import pytest
+from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.media_processor import MediaProcessingRequest, ProcessorSpec
 from foundry_lite.infrastructure.adapters.pdf_layout_processor import PdfLayoutProcessorAdapter
 
@@ -82,3 +86,26 @@ def test_layout_processor_supports_only_its_pinned_processor_family() -> None:
     other = ProcessorSpec("pdf_text_v1", "1")
     request = MediaProcessingRequest("t", "v", "b", other, "h", source_path="source.pdf")
     assert adapter.supports(request) is False
+
+
+def test_layout_timeout_terminates_the_isolated_extractor_process(tmp_path: Path) -> None:
+    source = tmp_path / "layout.pdf"
+    source.write_bytes(_layout_pdf())
+    pid_file = tmp_path / "worker.pid"
+    adapter = PdfLayoutProcessorAdapter(
+        timeout_seconds=1,
+        worker_command=(
+            sys.executable,
+            "-c",
+            "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)",
+            str(pid_file),
+        ),
+    )
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.process(_request(str(source)))
+
+    assert captured.value.failure.kind == "timeout"
+    worker_pid = int(pid_file.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(worker_pid, 0)

@@ -162,6 +162,7 @@ def read_media_version_content(
             _ctx(request),
             media_item_version_id=media_item_version_id,
             byte_range=_parse_byte_range(range_header),
+            should_proxy=True,
         )
         return _source_media_response(source)
     except FoundryLiteError as exc:

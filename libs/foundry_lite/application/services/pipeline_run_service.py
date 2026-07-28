@@ -43,21 +43,22 @@ from foundry_lite.application.services.pipeline_run_contract_types import (
     RequestContext,
     TransactionContext,
 )
+from foundry_lite.application.services.pipeline_run_recovery import (
+    PipelineTerminalCommitError,
+    replayed_pipeline_run_action,
+    stale_pipeline_run_error,
+)
 from foundry_lite.application.services.pipeline_run_requests import (
+    deployed_pipeline_version,
     new_run_record,
+    require_deployed,
     require_idempotent_run,
+    require_pipeline_match,
     run_request_fingerprint,
 )
-from foundry_lite.application.services.pipeline_run_requests import (
-    require_deployed as _require_deployed,
-)
-from foundry_lite.application.services.pipeline_run_requests import (
-    require_pipeline_match as _require_pipeline_match,
-)
 
-
-class _PipelineTerminalCommitError(RuntimeError):
-    """Preserve atomic failure evidence instead of falling back to a split terminal write."""
+_require_deployed = require_deployed
+_require_pipeline_match = require_pipeline_match
 
 
 class PipelineRunService(CoreService):
@@ -99,7 +100,7 @@ class PipelineRunService(CoreService):
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "pipeline:run", "pipeline", pipeline_id)
         self._require_write_open(ctx, "start_pipeline_run", pipeline_id)
-        version = self._deployed_version(ctx, pipeline_id, version_id)
+        version = deployed_pipeline_version(self.engine, self.pipeline_repository, ctx, pipeline_id, version_id)
         version = ensure_pipeline_execution_plan(
             self.engine, self.pipeline_repository, self.runtime_service, ctx, version
         )
@@ -114,12 +115,26 @@ class PipelineRunService(CoreService):
             parameters=parameters,
             target_node_ids=target_node_ids,
         )
+        return self._execute_or_recover(ctx, row, version, is_created, request_fingerprint)
+
+    def _execute_or_recover(
+        self,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+        version: PipelineVersionRow,
+        is_created: bool,
+        request_fingerprint: str,
+    ) -> dict[str, object]:
         if not is_created:
             require_idempotent_run(row, request_fingerprint)
-            return self.get_run(str(row["id"]), ctx=ctx)
+            action = replayed_pipeline_run_action(row)
+            if action == "fail_stale":
+                return self._fail_run(ctx, row, stale_pipeline_run_error(row))
+            if action == "read":
+                return self.get_run(str(row["id"]), ctx=ctx)
         try:
             return self._execute_run(ctx, row, version)
-        except _PipelineTerminalCommitError:
+        except PipelineTerminalCommitError:
             raise
         except Exception as exc:
             return self._fail_run(ctx, row, exc)
@@ -159,7 +174,7 @@ class PipelineRunService(CoreService):
             if row["id"] != record.run_id:
                 return row, False
             self._audit_run_started(conn, ctx, row, version)
-            return row, True
+        return row, True
 
     def _audit_run_started(
         self,
@@ -275,7 +290,7 @@ class PipelineRunService(CoreService):
                 self._audit(conn, ctx, "execution_claimed", "pipeline_run", run_id, {"version_id": row["version_id"]})
                 return claimed
             current = self._require_run(conn, ctx, run_id)
-            if current["status"] == "cancelled":
+            if current["status"] in {"cancelled", "executing", "succeeded", "failed"}:
                 return None
         raise ConflictDetected(
             "pipeline run execution claim changed concurrently",
@@ -344,7 +359,7 @@ class PipelineRunService(CoreService):
                     raise ConflictDetected("pipeline run terminal state changed concurrently")
                 self._audit(conn, ctx, state.status, "pipeline_run", str(row["id"]), {"outputs": state.outputs})
         except Exception as exc:
-            raise _PipelineTerminalCommitError("pipeline terminal evidence transaction failed") from exc
+            raise PipelineTerminalCommitError("pipeline terminal evidence transaction failed") from exc
         return self.get_run(str(row["id"]), ctx=ctx)
 
     def _fail_run(self, ctx: RequestContext, row: PipelineRunRow, exc: Exception) -> dict[str, object]:
@@ -432,29 +447,6 @@ class PipelineRunService(CoreService):
             row=row,
             execution_plan=version["execution_plan"] or {"nodes": []},
         )
-
-    def _deployed_version(
-        self,
-        ctx: RequestContext,
-        pipeline_id: str,
-        version_id: str | None,
-    ) -> PipelineVersionRow:
-        with self.engine.begin() as conn:
-            if version_id is not None:
-                version = self._require_version(conn, ctx, version_id)
-                _require_pipeline_match(version, pipeline_id)
-                _require_deployed(version)
-                return version
-            rows = self.pipeline_repository.list_versions(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                pipeline_id=pipeline_id,
-                limit=100,
-            )
-        for row in rows:
-            if row["deployed_at"] is not None:
-                return row
-        raise NotFound("deployed pipeline version not found", details={"pipeline_id": pipeline_id})
 
     def _require_version(self, conn: TransactionContext, ctx: RequestContext, version_id: str) -> PipelineVersionRow:
         row = self.pipeline_repository.version_by_id(transaction=conn, tenant_id=ctx.tenant_id, version_id=version_id)

@@ -120,11 +120,13 @@ class MediaWorkspace:
         *,
         media_item_version_id: str,
         byte_range: ByteRange | None = None,
+        should_proxy: bool = False,
     ) -> SourceMediaRead:
         return self._media.reference.source_read(
             ctx,
             media_item_version_id=media_item_version_id,
             byte_range=byte_range,
+            should_proxy=should_proxy,
         )
 
     def process(self, ctx: RequestContext, *, media_item_version_id: str, spec: ProcessorSpec) -> ProcessingOutcome:

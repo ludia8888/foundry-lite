@@ -5,14 +5,39 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.ports.pipeline_repository import (
+    PipelineRepository,
     PipelineRunRecord,
     PipelineRunRow,
     PipelineVersionRow,
 )
+from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.primitives import _json_hash, _now
 from foundry_lite.application.services.pipeline_payloads import run_record
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+
+
+def deployed_pipeline_version(
+    transaction_manager: TransactionManager,
+    repository: PipelineRepository,
+    ctx: RequestContext,
+    pipeline_id: str,
+    version_id: str | None,
+) -> PipelineVersionRow:
+    if version_id is not None:
+        with transaction_manager.begin() as conn:
+            version = repository.version_by_id(transaction=conn, tenant_id=ctx.tenant_id, version_id=version_id)
+        if version is None:
+            raise NotFound("pipeline version not found", details={"version_id": version_id})
+        require_pipeline_match(version, pipeline_id)
+        require_deployed(version)
+        return version
+    with transaction_manager.begin() as conn:
+        rows = repository.list_versions(transaction=conn, tenant_id=ctx.tenant_id, pipeline_id=pipeline_id, limit=100)
+    for row in rows:
+        if row["deployed_at"] is not None:
+            return row
+    raise NotFound("deployed pipeline version not found", details={"pipeline_id": pipeline_id})
 
 
 def run_request_fingerprint(
