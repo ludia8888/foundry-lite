@@ -53,7 +53,7 @@ class AnthropicTransportFailure(Exception):
         self.kind: AdapterFailureKind = kind
 
 
-AnthropicTransport = Callable[[Mapping[str, str], Mapping[str, object], int], AnthropicHttpResponse]
+AnthropicTransport = Callable[[Mapping[str, str], Mapping[str, object], float], AnthropicHttpResponse]
 
 
 class AnthropicLanguageModel:
@@ -117,7 +117,7 @@ class AnthropicLanguageModel:
         for attempt in range(self._max_retries + 1):
             remaining_timeout = _remaining_timeout_seconds(self._clock(), started, timeout_seconds)
             try:
-                response = self._transport_call(headers, payload, remaining_timeout)
+                response = self._transport_call(headers, payload, remaining_timeout, timeout_seconds)
             except AdapterError as exc:
                 self._wait_before_retry(exc.failure, {}, attempt, started, timeout_seconds)
                 continue
@@ -146,19 +146,20 @@ class AnthropicLanguageModel:
         self,
         headers: Mapping[str, str],
         payload: Mapping[str, object],
-        timeout_seconds: int,
+        timeout_seconds: float,
+        request_timeout_seconds: int,
     ) -> AnthropicHttpResponse:
         try:
             return self._transport(headers, payload, timeout_seconds)
         except AnthropicTransportFailure as exc:
             is_retryable = exc.kind in {"timeout", "unavailable"}
-            raise _adapter_failure(exc.kind, is_retryable, "transport_failure", timeout_seconds) from exc
+            raise _adapter_failure(exc.kind, is_retryable, "transport_failure", request_timeout_seconds) from exc
 
 
 def _urllib_transport(
     headers: Mapping[str, str],
     payload: Mapping[str, object],
-    timeout_seconds: int,
+    timeout_seconds: float,
 ) -> AnthropicHttpResponse:
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     request = Request(_MESSAGES_URL, data=body, headers=dict(headers), method="POST")
@@ -190,11 +191,11 @@ def _request_headers(api_key: str) -> dict[str, str]:
     }
 
 
-def _remaining_timeout_seconds(now: float, started: float, timeout_seconds: int) -> int:
+def _remaining_timeout_seconds(now: float, started: float, timeout_seconds: int) -> float:
     remaining = timeout_seconds - (now - started)
     if remaining <= 0:
         raise _adapter_failure("timeout", True, "request_budget_exhausted", timeout_seconds)
-    return max(1, int(remaining))
+    return remaining
 
 
 def _json_body(raw: bytes) -> Mapping[str, object]:

@@ -138,7 +138,7 @@ def _success_response(*, headers: Mapping[str, str] | None = None) -> AnthropicH
 def test_anthropic_compiles_top_level_system_and_structured_output() -> None:
     captured: dict[str, object] = {}
 
-    def transport(headers: Mapping[str, str], payload: Mapping[str, object], timeout: int) -> AnthropicHttpResponse:
+    def transport(headers: Mapping[str, str], payload: Mapping[str, object], timeout: float) -> AnthropicHttpResponse:
         captured.update(headers=dict(headers), payload=dict(payload), timeout=timeout)
         return _success_response()
 
@@ -180,7 +180,7 @@ def test_anthropic_normalizes_nested_objects_for_strict_structured_output() -> N
     def transport(
         _headers: Mapping[str, str],
         payload: Mapping[str, object],
-        _timeout: int,
+        _timeout: float,
     ) -> AnthropicHttpResponse:
         captured["payload"] = dict(payload)
         return _success_response()
@@ -216,7 +216,7 @@ def test_anthropic_places_pdf_and_image_blocks_before_user_text() -> None:
     resolver = _MediaResolver()
     captured: dict[str, object] = {}
 
-    def transport(_headers: Mapping[str, str], payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(_headers: Mapping[str, str], payload: Mapping[str, object], _timeout: float) -> AnthropicHttpResponse:
         captured["payload"] = dict(payload)
         return _success_response()
 
@@ -263,7 +263,9 @@ def test_anthropic_maps_http_failures_without_exposing_secret(
     expected_kind: str,
     is_retryable: bool,
 ) -> None:
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(
+        _headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float
+    ) -> AnthropicHttpResponse:
         return AnthropicHttpResponse(
             status,
             {"request-id": "req_failure"},
@@ -293,7 +295,9 @@ def test_anthropic_retries_rate_limit_using_retry_after() -> None:
     ]
     sleeps: list[float] = []
 
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(
+        _headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float
+    ) -> AnthropicHttpResponse:
         return responses.pop(0)
 
     response = AnthropicLanguageModel(
@@ -309,13 +313,13 @@ def test_anthropic_retries_rate_limit_using_retry_after() -> None:
 
 def test_anthropic_retry_transport_receives_only_the_remaining_request_budget() -> None:
     now = [100.0]
-    observed_timeouts: list[int] = []
+    observed_timeouts: list[float] = []
     responses = [
         AnthropicHttpResponse(429, {"retry-after": "0.5"}, {"error": {"type": "rate_limit_error"}}),
         _success_response(),
     ]
 
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: int) -> AnthropicHttpResponse:
+    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: float) -> AnthropicHttpResponse:
         observed_timeouts.append(timeout)
         response = responses.pop(0)
         now[0] += 3.0 if response.status_code == 429 else 0.0
@@ -327,14 +331,14 @@ def test_anthropic_retry_transport_receives_only_the_remaining_request_budget() 
     adapter = AnthropicLanguageModel(_SecretProvider(), transport=transport, sleeper=sleep, clock=lambda: now[0])
     adapter.complete(replace(_request(), timeout_seconds=10))
 
-    assert observed_timeouts == [10, 6]
+    assert observed_timeouts == [10.0, 6.5]
 
 
 def test_anthropic_one_second_budget_reaches_the_first_transport_call() -> None:
     now = iter((100.0, 100.001, 100.1))
-    observed_timeouts: list[int] = []
+    observed_timeouts: list[float] = []
 
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: int) -> AnthropicHttpResponse:
+    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: float) -> AnthropicHttpResponse:
         observed_timeouts.append(timeout)
         return _success_response()
 
@@ -344,14 +348,14 @@ def test_anthropic_one_second_budget_reaches_the_first_transport_call() -> None:
         clock=lambda: next(now),
     ).complete(replace(_request(), timeout_seconds=1))
 
-    assert observed_timeouts == [1]
+    assert observed_timeouts == [pytest.approx(0.999)]
 
 
 def test_anthropic_re_resolves_secret_reference_on_every_call_for_rotation() -> None:
     secret_provider = _RotatingSecretProvider()
     observed_keys: list[str] = []
 
-    def transport(headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float) -> AnthropicHttpResponse:
         observed_keys.append(headers["x-api-key"])
         return _success_response()
 
@@ -365,7 +369,9 @@ def test_anthropic_re_resolves_secret_reference_on_every_call_for_rotation() -> 
 
 
 def test_anthropic_transport_timeout_is_typed_and_redacted() -> None:
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(
+        _headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float
+    ) -> AnthropicHttpResponse:
         raise AnthropicTransportFailure("timeout")
 
     with pytest.raises(AdapterError) as excinfo:
@@ -379,10 +385,10 @@ def test_anthropic_transport_timeout_is_typed_and_redacted() -> None:
 @pytest.mark.parametrize("kind", ["timeout", "unavailable"])
 def test_anthropic_retries_transient_transport_failure_with_remaining_budget(kind: AdapterFailureKind) -> None:
     now = [100.0]
-    observed_timeouts: list[int] = []
+    observed_timeouts: list[float] = []
     attempts = [kind, "success"]
 
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: int) -> AnthropicHttpResponse:
+    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], timeout: float) -> AnthropicHttpResponse:
         observed_timeouts.append(timeout)
         outcome = attempts.pop(0)
         if outcome != "success":
@@ -400,7 +406,7 @@ def test_anthropic_retries_transient_transport_failure_with_remaining_budget(kin
         clock=lambda: now[0],
     ).complete(replace(_request(), timeout_seconds=10))
 
-    assert observed_timeouts == [10, 9]
+    assert observed_timeouts == [10.0, 9.5]
     assert response.provider_request_id == "req_anthropic_1"
 
 
@@ -439,7 +445,9 @@ def test_anthropic_default_transport_rejects_oversized_response_before_json_deco
 
 
 def test_anthropic_rejects_incomplete_structured_output() -> None:
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(
+        _headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float
+    ) -> AnthropicHttpResponse:
         response = _success_response()
         return AnthropicHttpResponse(
             200,
@@ -459,7 +467,7 @@ def test_anthropic_rejects_incomplete_structured_output() -> None:
 def test_anthropic_provider_default_omits_thinking_configuration() -> None:
     captured: dict[str, object] = {}
 
-    def transport(_headers: Mapping[str, str], payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(_headers: Mapping[str, str], payload: Mapping[str, object], _timeout: float) -> AnthropicHttpResponse:
         captured.update(payload)
         return _success_response()
 
@@ -470,7 +478,9 @@ def test_anthropic_provider_default_omits_thinking_configuration() -> None:
 
 
 def test_anthropic_rejects_structured_output_refusal_with_safe_evidence() -> None:
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(
+        _headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float
+    ) -> AnthropicHttpResponse:
         response = _success_response()
         return AnthropicHttpResponse(200, response.headers, {**response.body, "stop_reason": "refusal"})
 
@@ -482,7 +492,9 @@ def test_anthropic_rejects_structured_output_refusal_with_safe_evidence() -> Non
 
 
 def test_anthropic_rejects_provider_model_substitution() -> None:
-    def transport(_headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: int) -> AnthropicHttpResponse:
+    def transport(
+        _headers: Mapping[str, str], _payload: Mapping[str, object], _timeout: float
+    ) -> AnthropicHttpResponse:
         response = _success_response()
         return AnthropicHttpResponse(200, response.headers, {**response.body, "model": "different-model"})
 
