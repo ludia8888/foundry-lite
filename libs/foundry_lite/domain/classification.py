@@ -5,17 +5,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
+# Each tuple is one sensitivity level, from least to most sensitive.
 # ``SECRET`` is the media-facing name and ``RESTRICTED`` is the Pipeline/Dataset
-# name for the same highest sensitivity level. Keeping both aliases here prevents
-# one product plane from treating a stronger value as an unknown weaker value.
+# name for the same highest level. Grouping aliases by level prevents product
+# planes from drifting while avoiding credential-like key/value declarations.
+_CLASSIFICATION_LEVEL_GROUPS = (
+    ("UNCLASSIFIED", "PUBLIC"),
+    ("INTERNAL",),
+    ("CONFIDENTIAL",),
+    ("SECRET", "RESTRICTED"),
+)
+
 CLASSIFICATION_RANKS: Mapping[str, int] = MappingProxyType(
     {
-        "UNCLASSIFIED": 0,
-        "PUBLIC": 0,
-        "INTERNAL": 1,
-        "CONFIDENTIAL": 2,
-        "SECRET": 3,
-        "RESTRICTED": 3,
+        classification: rank
+        for rank, classifications in enumerate(_CLASSIFICATION_LEVEL_GROUPS)
+        for classification in classifications
     }
 )
 

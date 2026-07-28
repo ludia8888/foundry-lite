@@ -6,6 +6,14 @@ from foundry_lite.domain.classification import (
 
 
 def test_classification_lattice_keeps_secret_and_restricted_as_highest_aliases() -> None:
+    assert dict(CLASSIFICATION_RANKS) == {
+        "UNCLASSIFIED": 0,
+        "PUBLIC": 0,
+        "INTERNAL": 1,
+        "CONFIDENTIAL": 2,
+        "SECRET": 3,
+        "RESTRICTED": 3,
+    }
     assert classification_rank("secret") == classification_rank("RESTRICTED") == 3
     assert CLASSIFICATION_RANKS["CONFIDENTIAL"] < CLASSIFICATION_RANKS["SECRET"]
 
