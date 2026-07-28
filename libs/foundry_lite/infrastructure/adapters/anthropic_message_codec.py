@@ -175,6 +175,7 @@ def _media_block(
         tenant_id=route.tenant_id,
         reference=reference,
         expected_classification=request.data_classification,
+        allowed_classifications=request.media_allowed_classifications,
     )
     encoded = base64.standard_b64encode(content.content).decode("ascii")
     mime_type = _normalized_mime(content.mime_type)

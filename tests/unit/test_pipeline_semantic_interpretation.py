@@ -118,6 +118,7 @@ def test_content_unit_prompt_produces_typed_json_with_pinned_evidence() -> None:
     request = gateway.requests[0]
     assert "H1" in request.messages[-1].content
     assert request.data_classification == "public"
+    assert request.media_allowed_classifications == ("", "public")
     assert request.response_schema is not None
     assert request.thinking_mode == "disabled"
 

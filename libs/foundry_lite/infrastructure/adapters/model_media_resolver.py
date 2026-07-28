@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureKind
+from foundry_lite.application.ports.content_index import is_classification_cleared
 from foundry_lite.application.ports.language_model import (
     ModelMediaContent,
     ModelMediaReference,
@@ -12,6 +13,7 @@ from foundry_lite.application.ports.language_model import (
 from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.transaction_context import TransactionManager
+from foundry_lite.domain.classification import normalize_classification
 
 _DEFAULT_MAX_MEDIA_BYTES = 24 * 1024 * 1024
 
@@ -40,9 +42,10 @@ class RepositoryModelMediaResolver:
         tenant_id: str,
         reference: ModelMediaReference,
         expected_classification: str,
+        allowed_classifications: tuple[str, ...] | None,
     ) -> ModelMediaContent:
         version = self._version(tenant_id, reference.media_item_version_id)
-        self._guard_version(version, reference, expected_classification)
+        self._guard_version(version, reference, expected_classification, allowed_classifications)
         self._guard_storage(version)
         content = self._read_bytes(version)
         actual_hash = hashlib.sha256(content).hexdigest()
@@ -72,17 +75,24 @@ class RepositoryModelMediaResolver:
         version: MediaItemVersionRecord,
         reference: ModelMediaReference,
         expected_classification: str,
+        allowed_classifications: tuple[str, ...] | None,
     ) -> None:
         if version.status != "COMMITTED":
             raise _failure("not_found", "model media version is not committed", "media_version_not_committed")
         if _normalized_hash(reference.content_hash) != _normalized_hash(version.content_hash):
             raise _failure("conflict", "model media reference hash does not match catalog truth", "media_hash_mismatch")
         classification = version.security_envelope.get("classification")
-        if classification != expected_classification:
+        if normalize_classification(classification) != normalize_classification(expected_classification):
             raise _failure(
                 "authorization",
                 "model media classification does not match the governed egress request",
                 "media_classification_mismatch",
+            )
+        if not is_classification_cleared(str(classification), allowed_classifications):
+            raise _failure(
+                "authorization",
+                "caller clearance does not cover the governed model media input",
+                "media_clearance_denied",
             )
         if _normalized_mime(reference.mime_type) != _normalized_mime(_resolved_mime_type(version)):
             raise _failure("conflict", "model media MIME does not match catalog truth", "media_mime_mismatch")

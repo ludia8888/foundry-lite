@@ -20,6 +20,7 @@ from foundry_lite.application.services.pipeline_preview_executor import (
 )
 from foundry_lite.application.services.pipeline_preview_recovery import (
     PipelinePreviewExecutionLeaseLost,
+    PipelinePreviewRecoveryCursor,
     pipeline_preview_execution_heartbeat,
     pipeline_preview_lease_claim_values,
     pipeline_preview_lease_reclaim_values,
@@ -73,6 +74,10 @@ class PipelinePreviewService(CoreService):
     pipeline_repository: PipelineRepository
     semantic_row_cache_repository: SemanticRowCacheRepository
     runtime_service: RuntimeEvidenceBoundary
+
+    def __init__(self, **dependencies: object) -> None:
+        super().__init__(**dependencies)
+        self._recovery_cursor = PipelinePreviewRecoveryCursor()
 
     def create_preview_run(
         self,
@@ -132,6 +137,7 @@ class PipelinePreviewService(CoreService):
             self.engine,
             self.pipeline_execution_repository,
             self.metadata_repository,
+            self._recovery_cursor,
             as_of=pipeline_preview_utc_now(),
             limit=limit,
         )

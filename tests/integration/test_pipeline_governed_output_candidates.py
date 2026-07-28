@@ -26,6 +26,7 @@ class _GovernedOutputFixture:
     dataset_ref: str
     index_ref: str
     mapping_ref: str
+    source_version_id: str
 
 
 def test_pipeline_commits_dataset_and_non_serving_governed_output_candidates(tmp_path: Path) -> None:
@@ -114,6 +115,24 @@ def test_targeted_candidate_only_run_never_creates_a_serving_output_dataset(tmp_
     }
 
 
+def test_candidate_only_run_uses_deployment_pinned_source_after_new_commit(tmp_path: Path) -> None:
+    fixture = _deploy_governed_output_pipeline(tmp_path, "candidate_pinned_source")
+    newer_csv = tmp_path / "candidate_pinned_source_newer.csv"
+    newer_csv.write_text("document_id,title\nD-3,Newer\n", encoding="utf-8")
+    newer = fixture.foundry.datasets.upload_csv(fixture.source_ref, newer_csv, ctx=fixture.ctx)
+
+    run = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-candidate-pinned-source",
+        target_node_ids=["output_index"],
+        ctx=fixture.ctx,
+    )
+    source = next(item for item in cast(list[dict[str, Any]], run["artifacts"]) if item["nodeId"] == "source")
+
+    assert source["artifactRef"]["versionId"] == fixture.source_version_id
+    assert source["artifactRef"]["versionId"] != newer.version_id
+
+
 def test_pipeline_is_partial_when_later_governed_candidate_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -169,20 +188,23 @@ def test_pipeline_is_partial_when_later_governed_candidate_fails(
 def _deploy_governed_output_pipeline(tmp_path: Path, slug: str) -> _GovernedOutputFixture:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
+    source_ref = f"raw.{slug}"
+    dataset_ref = f"clean.{slug}"
+    csv_path = tmp_path / f"{slug}.csv"
+    csv_path.write_text("document_id,title\nD-1,First\nD-2,Second\n", encoding="utf-8")
+    foundry.datasets.create(source_ref, classification="CONFIDENTIAL", ctx=ctx)
+    foundry.datasets.create(dataset_ref, classification="CONFIDENTIAL", ctx=ctx)
+    source_version = foundry.datasets.upload_csv(source_ref, csv_path, ctx=ctx)
     fixture = _GovernedOutputFixture(
         foundry=foundry,
         ctx=ctx,
         pipeline_id=f"governed_outputs_{slug}",
-        source_ref=f"raw.{slug}",
-        dataset_ref=f"clean.{slug}",
+        source_ref=source_ref,
+        dataset_ref=dataset_ref,
         index_ref=f"search.{slug}",
         mapping_ref=f"DocumentMapping_{slug}",
+        source_version_id=source_version.version_id,
     )
-    csv_path = tmp_path / f"{slug}.csv"
-    csv_path.write_text("document_id,title\nD-1,First\nD-2,Second\n", encoding="utf-8")
-    foundry.datasets.create(fixture.source_ref, classification="CONFIDENTIAL", ctx=ctx)
-    foundry.datasets.create(fixture.dataset_ref, classification="CONFIDENTIAL", ctx=ctx)
-    foundry.datasets.upload_csv(fixture.source_ref, csv_path, ctx=ctx)
     version = _execute_graph_version(fixture, _governed_output_graph(fixture))
     foundry.pipelines.deploy(
         fixture.pipeline_id,

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from foundry_lite.application.services.pipeline_preview_recovery import (
+    PipelinePreviewRecoveryCursor,
     recoverable_pipeline_previews,
 )
 from foundry_lite.infrastructure import schema as db
@@ -109,6 +110,7 @@ def test_preview_recovery_enumerates_tenants_and_binds_rls_context(postgres_fixt
             worker_engine,
             SqlAlchemyPipelineExecutionRepository(worker_engine),
             SqlAlchemyMetadataRepository(worker_engine, allow_schema_mutation=False),
+            PipelinePreviewRecoveryCursor(),
             as_of="2026-07-28T00:00:00.000000Z",
             limit=10,
         )

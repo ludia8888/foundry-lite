@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -9,6 +10,8 @@ import subprocess  # nosec B404
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -199,10 +202,33 @@ def _bounded_request_bytes(
     rows = cast(list[object], payload["rows"])
     if len(rows) > adapter.config.max_rows:
         raise adapter._error("input_row_limit", "validation", False)
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    try:
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            default=_trained_model_json_value,
+        ).encode()
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise adapter._error("input_encoding_error", "validation", False) from exc
     if len(encoded) > adapter.config.max_request_bytes:
         raise adapter._error("input_byte_limit", "validation", False)
     return encoded
+
+
+def _trained_model_json_value(value: object) -> object:
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise TypeError("non-finite decimal is not a trained-model JSON value")
+        return format(value, "f")
+    if isinstance(value, bytes | bytearray | memoryview):
+        return base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"unsupported trained-model JSON value: {type(value).__name__}")
 
 
 def _prepare_workspace(root: Path, request_bytes: bytes) -> tuple[Path, Path]:
@@ -296,6 +322,7 @@ def _operator_message(failure_type: str) -> str:
     messages = {
         "input_row_limit": "The trained-model batch exceeded its configured row limit.",
         "input_byte_limit": "The trained-model batch exceeded its configured byte limit.",
+        "input_encoding_error": "The trained-model batch contains an unsupported input value.",
         "sandbox_timeout": "The trained-model sidecar exceeded its execution timeout.",
         "runtime_unavailable": "The pinned trained-model image or container runtime is unavailable.",
         "resource_limit": "The trained-model sidecar was terminated by a resource limit.",

@@ -5,11 +5,14 @@ import json
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.trained_model_inference import (
+    TrainedModelField,
     TrainedModelInferencePort,
     TrainedModelInvocation,
 )
@@ -121,6 +124,75 @@ def test_container_sidecar_prefers_requested_branch_over_earlier_fallback_spec(t
     assert result.definition.revision == "requested"
     assert "registry.example/model:requested" in commands[-1]
     assert "registry.example/model:fallback" not in commands[-1]
+
+
+def test_container_sidecar_serializes_every_advertised_scalar_input_type(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    definition = replace(
+        TRANSACTION_RISK_DEFINITION,
+        input_fields=(
+            TrainedModelField("decimalValue", "decimal"),
+            TrainedModelField("binaryValue", "binary"),
+            TrainedModelField("dateValue", "date"),
+            TrainedModelField("timestampValue", "timestamp"),
+        ),
+    )
+
+    def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        request_path = _mount_source(tuple(command), "/model-input/request.json")
+        captured.update(json.loads(request_path.read_text(encoding="utf-8")))
+        _write_result(_mount_source(tuple(command), "/model-output/result.json"), _success_payload())
+        return ContainerCommandResult(0)
+
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(
+            specs=(ContainerTrainedModelSpec(definition, "registry.example/model:typed"),),
+            workspace_root=tmp_path,
+        ),
+        command_runner=runner,
+        environ={},
+    )
+    adapter.infer(
+        TrainedModelInvocation(
+            model_ref=definition.model_ref,
+            branch=definition.branch,
+            fallback_branches=(),
+            rows=(
+                {
+                    "decimalValue": Decimal("12.340"),
+                    "binaryValue": b"\x00\xff",
+                    "dateValue": date(2026, 7, 28),
+                    "timestampValue": datetime(2026, 7, 28, 12, 30, tzinfo=UTC),
+                },
+            ),
+        )
+    )
+
+    assert captured["rows"] == [
+        {
+            "binaryValue": "AP8=",
+            "dateValue": "2026-07-28",
+            "decimalValue": "12.340",
+            "timestampValue": "2026-07-28T12:30:00+00:00",
+        }
+    ]
+
+
+def test_container_sidecar_normalizes_unsupported_input_to_adapter_failure(tmp_path: Path) -> None:
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(workspace_root=tmp_path),
+        command_runner=lambda *_args: pytest.fail("container must not start for invalid input"),
+        environ={},
+    )
+    invocation = replace(_container_invocation(), rows=({"amount": object(), "country": "US"},))
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.infer(invocation)
+
+    evidence = captured.value.failure.details["trainedModelSidecar"]
+    assert captured.value.failure.kind == "validation"
+    assert isinstance(evidence, dict)
+    assert evidence["failureType"] == "input_encoding_error"
 
 
 def test_container_sidecar_redacts_model_failure(tmp_path: Path) -> None:

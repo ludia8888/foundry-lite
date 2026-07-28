@@ -8,11 +8,13 @@ from foundry_lite.application.ports.pipeline_execution_repository import Pipelin
 from foundry_lite.application.services.pipeline_preview_recovery import (
     PipelinePreviewExecutionLeaseGuard,
     PipelinePreviewExecutionLeaseLost,
+    PipelinePreviewRecoveryCursor,
     new_pipeline_preview_execution_lease,
     pipeline_preview_execution_context,
     pipeline_preview_lease_claim_values,
     pipeline_preview_lease_reclaim_values,
     pipeline_preview_utc_now,
+    recoverable_pipeline_previews,
     recovered_pipeline_preview_context,
 )
 from foundry_lite.domain.context import RequestContext
@@ -37,6 +39,21 @@ class _Repository:
     def renew_preview_execution_lease(self, **kwargs: object) -> PipelinePreviewRunRow | None:
         self.calls.append(dict(kwargs))
         return _row() if self.is_renewed else None
+
+
+class _MetadataRepository:
+    def list_tenant_ids(self) -> list[str]:
+        return ["tenant-a", "tenant-b"]
+
+
+class _RecoveryRepository:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str | None, int]] = []
+
+    def recoverable_previews(self, *, limit: int, **_kwargs: object) -> list[PipelinePreviewRunRow]:
+        tenant_id = current_tenant_id()
+        self.calls.append((tenant_id, limit))
+        return [_recovery_row(str(tenant_id), index) for index in range(limit)]
 
 
 def _row() -> PipelinePreviewRunRow:
@@ -72,6 +89,13 @@ def _row() -> PipelinePreviewRunRow:
         "started_at": "2026-07-28T00:00:00Z",
         "completed_at": None,
     }
+
+
+def _recovery_row(tenant_id: str, index: int) -> PipelinePreviewRunRow:
+    row = _row()
+    row["id"] = f"preview-{tenant_id}-{index}"
+    row["tenant_id"] = tenant_id
+    return row
 
 
 def test_preview_recovery_round_trips_the_original_caller_security_context() -> None:
@@ -152,3 +176,33 @@ def test_preview_recovery_timestamps_are_fixed_width_utc_and_lexically_ordered()
     assert datetime.fromisoformat(as_of.replace("Z", "+00:00")).utcoffset() == timedelta(0)
     assert len(as_of) == len(lease.expires_at)
     assert as_of < lease.expires_at
+
+
+def test_preview_recovery_rotates_and_reserves_a_fair_tenant_share() -> None:
+    transaction_manager = _TransactionManager()
+    repository = _RecoveryRepository()
+    cursor = PipelinePreviewRecoveryCursor()
+
+    first = recoverable_pipeline_previews(
+        transaction_manager,  # type: ignore[arg-type]
+        repository,  # type: ignore[arg-type]
+        _MetadataRepository(),  # type: ignore[arg-type]
+        cursor,
+        as_of="2026-07-28T00:00:00.000000Z",
+        limit=4,
+    )
+    first_calls = list(repository.calls)
+    repository.calls.clear()
+    second = recoverable_pipeline_previews(
+        transaction_manager,  # type: ignore[arg-type]
+        repository,  # type: ignore[arg-type]
+        _MetadataRepository(),  # type: ignore[arg-type]
+        cursor,
+        as_of="2026-07-28T00:01:00.000000Z",
+        limit=1,
+    )
+
+    assert first_calls == [("tenant-a", 2), ("tenant-b", 2)]
+    assert {row["tenant_id"] for row in first} == {"tenant-a", "tenant-b"}
+    assert repository.calls == [("tenant-b", 1)]
+    assert [row["tenant_id"] for row in second] == ["tenant-b"]

@@ -84,6 +84,7 @@ def test_repository_model_media_resolver_returns_verified_committed_bytes() -> N
         tenant_id="tenant-1",
         reference=_reference(content),
         expected_classification="public",
+        allowed_classifications=("", "public"),
     )
 
     assert resolved.content == content
@@ -104,6 +105,7 @@ def test_repository_model_media_resolver_fails_closed_on_classification_mismatch
             tenant_id="tenant-1",
             reference=_reference(content),
             expected_classification="public",
+            allowed_classifications=("", "public"),
         )
 
     assert excinfo.value.failure.kind == "authorization"
@@ -123,6 +125,7 @@ def test_repository_model_media_resolver_detects_storage_hash_drift() -> None:
             tenant_id="tenant-1",
             reference=_reference(content),
             expected_classification="public",
+            allowed_classifications=("", "public"),
         )
 
     assert excinfo.value.failure.kind == "conflict"
@@ -143,6 +146,27 @@ def test_repository_model_media_resolver_enforces_bound_before_read() -> None:
             tenant_id="tenant-1",
             reference=_reference(content),
             expected_classification="public",
+            allowed_classifications=("", "public"),
         )
 
     assert excinfo.value.failure.details["reason"] == "media_too_large"
+
+
+def test_repository_model_media_resolver_denies_model_egress_above_caller_clearance() -> None:
+    content = b"%PDF-1.4 secret governed media"
+    resolver = RepositoryModelMediaResolver(
+        _Engine(),
+        _Repository(_version(content, classification="SECRET")),
+        _Storage(content),
+    )
+
+    with pytest.raises(AdapterError) as excinfo:
+        resolver.read(
+            tenant_id="tenant-1",
+            reference=_reference(content),
+            expected_classification="secret",
+            allowed_classifications=("", "public", "internal", "confidential"),
+        )
+
+    assert excinfo.value.failure.kind == "authorization"
+    assert excinfo.value.failure.details["reason"] == "media_clearance_denied"

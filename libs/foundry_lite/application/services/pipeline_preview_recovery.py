@@ -36,6 +36,24 @@ class PipelinePreviewExecutionLeaseLost(InvariantViolation):
     """Fail closed when a preview executor can no longer prove ownership."""
 
 
+class PipelinePreviewRecoveryCursor:
+    """Rotate the first tenant across bounded recovery passes."""
+
+    def __init__(self) -> None:
+        self._next_tenant_id: str | None = None
+        self._lock = Lock()
+
+    def ordered_tenant_ids(self, tenant_ids: Sequence[str]) -> tuple[str, ...]:
+        tenants = tuple(dict.fromkeys(tenant_ids))
+        if not tenants:
+            return ()
+        with self._lock:
+            start = tenants.index(self._next_tenant_id) if self._next_tenant_id in tenants else 0
+            ordered = tenants[start:] + tenants[:start]
+            self._next_tenant_id = ordered[1 % len(ordered)]
+        return ordered
+
+
 class PipelinePreviewExecutionLeaseGuard:
     """Renew a preview lease and remember heartbeat failure across threads."""
 
@@ -134,19 +152,22 @@ def recoverable_pipeline_previews(
     transaction_manager: TransactionManager,
     repository: PipelineExecutionRepository,
     metadata_repository: MetadataRepository,
+    recovery_cursor: PipelinePreviewRecoveryCursor,
     *,
     as_of: str,
     limit: int,
 ) -> list[PipelinePreviewRunRow]:
-    """Scan each tenant inside its RLS context and return a globally bounded batch."""
+    """Scan a rotating, fairly shared tenant batch inside each RLS context."""
     remaining = max(1, min(limit, 100))
     rows: list[PipelinePreviewRunRow] = []
-    for tenant_id in metadata_repository.list_tenant_ids():
+    tenant_ids = recovery_cursor.ordered_tenant_ids(metadata_repository.list_tenant_ids())
+    for index, tenant_id in enumerate(tenant_ids):
+        tenant_limit = max(1, remaining // (len(tenant_ids) - index))
         with tenant_context(tenant_id), transaction_manager.begin() as transaction:
             tenant_rows = repository.recoverable_previews(
                 transaction=transaction,
                 as_of=as_of,
-                limit=remaining,
+                limit=tenant_limit,
             )
         rows.extend(tenant_rows)
         remaining -= len(tenant_rows)

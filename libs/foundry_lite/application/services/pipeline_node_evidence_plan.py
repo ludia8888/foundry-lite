@@ -84,6 +84,23 @@ class PipelineEvidencePlan:
     def incoming_edges(self, node_id: str) -> tuple[JsonObject, ...]:
         return tuple(edge for edge in json_rows(self._plan.get("edges")) if edge.get("targetNodeId") == node_id)
 
+    def single_source_version_id(self, node_id: str) -> str:
+        contracts = [
+            contract for contract in json_rows(self._plan.get("sourceContracts")) if contract.get("nodeId") == node_id
+        ]
+        if len(contracts) != 1:
+            raise InvariantViolation(
+                "pipeline source node must have one immutable source contract",
+                details={"node_id": node_id, "contract_count": len(contracts)},
+            )
+        pins = json_rows(contracts[0].get("versionPins"))
+        if len(pins) != 1 or not isinstance(pins[0].get("versionId"), str):
+            raise InvariantViolation(
+                "pipeline Dataset source contract must pin one committed version",
+                details={"node_id": node_id, "version_pin_count": len(pins)},
+            )
+        return str(pins[0]["versionId"])
+
     def executor_profile(self, node_id: str) -> str:
         capability = self.node(node_id).get("runtimeCapability")
         return str(capability) if isinstance(capability, str) else "tabular_v1_compiler"

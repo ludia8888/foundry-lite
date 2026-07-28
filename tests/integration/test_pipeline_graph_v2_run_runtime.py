@@ -491,6 +491,7 @@ def test_graph_v2_document_extract_media_reference_matches_preview_and_resolver_
         tenant_id=ctx.tenant_id,
         reference=reference,
         expected_classification="public",
+        allowed_classifications=None,
     )
 
     assert run["status"] == "succeeded"

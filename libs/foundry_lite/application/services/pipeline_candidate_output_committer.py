@@ -166,13 +166,19 @@ class GovernedPipelineCandidateCommitter:
         edge: Mapping[str, object],
         dataset: DatasetRow,
     ) -> PipelineRunArtifactRow:
-        version = self._dataset_version_repository.latest_version_by_dataset_id(
+        source_node_id = str(edge["sourceNodeId"])
+        pinned_version_id = self._plan.single_source_version_id(source_node_id)
+        version = self._dataset_version_repository.version_by_dataset_id_and_id(
             transaction=transaction,
             dataset_id=dataset["id"],
+            version_id=pinned_version_id,
         )
         if version is None:
-            raise NotFound("pipeline candidate source Dataset has no committed version")
-        spec = self._plan.artifact_spec(str(edge["sourceNodeId"]), str(edge["sourcePortId"]))
+            raise NotFound(
+                "pipeline candidate source Dataset pinned version was not found",
+                details={"sourceNodeId": source_node_id, "versionId": pinned_version_id},
+            )
+        spec = self._plan.artifact_spec(source_node_id, str(edge["sourcePortId"]))
         key = artifact_idempotency_key(self._run_id, spec, str(version["id"]))
         existing = self._repository.artifact_by_idempotency_key(
             transaction=transaction,

@@ -16,6 +16,7 @@ from foundry_lite.application.ports.language_model import (
     ModelResolution,
     ModelResponse,
 )
+from foundry_lite.application.services.media.clearance import allowed_media_classifications
 from foundry_lite.application.services.pipeline_semantic_cache_coordinates import (
     semantic_cache_coordinates,
 )
@@ -391,6 +392,7 @@ def _model_request(
         request_id=ctx.request_id,
         request_hash=request_hash,
         data_classification=spec.data_classification,
+        media_allowed_classifications=allowed_media_classifications(ctx),
         region_requirement=spec.region_requirement,
         timeout_seconds=timeout_seconds,
     )

@@ -68,9 +68,11 @@ class _MediaResolver:
         tenant_id: str,
         reference: ModelMediaReference,
         expected_classification: str,
+        allowed_classifications: tuple[str, ...] | None,
     ) -> ModelMediaContent:
         assert tenant_id == "tenant-anthropic"
         assert expected_classification == "public"
+        assert allowed_classifications == ("", "public")
         self.references.append(reference)
         content = b"%PDF-1.4 test" if reference.mime_type == "application/pdf" else b"\x89PNG\r\n\x1a\n"
         return ModelMediaContent(
@@ -116,6 +118,7 @@ def _request(*, messages: tuple[ModelMessage, ...] | None = None) -> ModelReques
             }
         ),
         data_classification="public",
+        media_allowed_classifications=("", "public"),
         max_output_tokens=128,
         thinking_mode="disabled",
     )

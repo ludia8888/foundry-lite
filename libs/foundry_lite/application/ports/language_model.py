@@ -68,6 +68,7 @@ class ModelMediaContentResolver(Protocol):
         tenant_id: str,
         reference: ModelMediaReference,
         expected_classification: str,
+        allowed_classifications: tuple[str, ...] | None,
     ) -> ModelMediaContent:
         """Return bounded bytes after metadata, security, hash, and storage verification."""
         ...
@@ -148,6 +149,9 @@ class ModelRequest:
     # Egress governance inputs (our gateway gates these BEFORE calling the adapter): the data
     # classification leaving the boundary, and an optional region the call must be pinned to.
     data_classification: str = ""
+    # Server-derived caller clearance for media egress. An empty tuple is the
+    # fail-closed default; None is reserved for server-authorized full clearance.
+    media_allowed_classifications: tuple[str, ...] | None = ()
     region_requirement: str | None = None
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
 
