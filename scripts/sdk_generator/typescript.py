@@ -1715,7 +1715,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  options: Record<string, unknown>;",
         "};",
         'export type PipelineRunStatus = "running" | "executing" | "succeeded" | "partial" | "failed" | "cancelled";',
-        'export type PipelineRunOutputStatus = "COMMITTED" | "FAILED";',
+        'export type PipelineRunOutputStatus = "COMMITTED" | "COMMIT_OUTCOME_UNKNOWN" | "FAILED";',
         'export type PipelineRunOutputCommitKind = "SERVING_ASSET" | "GOVERNED_CANDIDATE";',
         "export type PipelineRunOutput = Record<string, unknown> & {",
         "  nodeId: string;",

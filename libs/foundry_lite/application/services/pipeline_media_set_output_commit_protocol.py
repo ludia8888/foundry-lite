@@ -202,6 +202,8 @@ class PipelineMediaSetOutputCommitProtocol:
         if status == "OPEN":
             self._abort_open_preserving_error(media_transaction_id, exc)
             return
+        if status == "ABORTED":
+            return
         raise PipelineV2OutputCommitOutcomeUnknown(
             "pipeline Media Set output commit outcome is unknown",
             artifact=unknown_fallback,

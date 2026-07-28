@@ -413,7 +413,7 @@ def test_trained_model_output_merge_enforces_row_and_schema_cardinality() -> Non
         (TrainedModelField("value", "short"), 32_767),
         (TrainedModelField("value", "integer"), 2_147_483_647),
         (TrainedModelField("value", "long"), 9_223_372_036_854_775_807),
-        (TrainedModelField("value", "float"), 1.5),
+        (TrainedModelField("value", "float"), 3.4028235e38),
         (TrainedModelField("value", "double"), 2),
         (TrainedModelField("value", "decimal"), "12.340"),
         (TrainedModelField("value", "string"), "text"),
@@ -428,7 +428,7 @@ def test_trained_model_output_merge_enforces_row_and_schema_cardinality() -> Non
             {
                 "mediaItemVersionId": "mver-1",
                 "mimeType": "application/pdf",
-                "contentHash": "sha256:abc",
+                "contentHash": f"sha256:{'a' * 64}",
             },
         ),
         (TrainedModelField("value", "string", is_required=False), None),
@@ -439,15 +439,44 @@ def test_trained_model_output_merge_accepts_declared_value_types(
     value: object,
 ) -> None:
     definition = replace(_definition(), output_fields=(field,))
+    source = {"id": 1, "pinnedMediaReference": value} if field.data_type == "mediaReference" else {"id": 1}
 
     merged = merge_trained_model_outputs(
-        [{"id": 1}],
+        [source],
         [{"value": value}],
         {"outputMappings": {"value": "model_value"}},
         definition,
     )
 
-    assert merged == ({"id": 1, "model_value": value},)
+    assert merged == ({**source, "model_value": value},)
+
+
+def test_trained_model_media_output_requires_tenant_catalog_coordinates() -> None:
+    reference = {
+        "mediaItemVersionId": "mver-tenant-1",
+        "mimeType": "application/pdf",
+        "contentHash": f"sha256:{'c' * 64}",
+    }
+    definition = replace(
+        _definition(),
+        output_fields=(TrainedModelField("value", "mediaReference"),),
+    )
+    arguments = (
+        [{"id": 1, "pinnedMediaReference": reference}],
+        [{"value": reference}],
+        {"outputMappings": {"value": "model_value"}},
+        definition,
+    )
+
+    with pytest.raises(ValidationFailed, match="pinned output type"):
+        merge_trained_model_outputs(*arguments, trusted_media_coordinates=frozenset())
+
+    merged = merge_trained_model_outputs(
+        *arguments,
+        trusted_media_coordinates=frozenset({("mver-tenant-1", "application/pdf", "c" * 64)}),
+    )
+
+    assert merged[0]["model_value"] == reference
 
 
 @pytest.mark.parametrize(
@@ -456,6 +485,7 @@ def test_trained_model_output_merge_accepts_declared_value_types(
         (TrainedModelField("value", "boolean"), 1),
         (TrainedModelField("value", "byte"), 128),
         (TrainedModelField("value", "integer"), True),
+        (TrainedModelField("value", "float"), 1e100),
         (TrainedModelField("value", "double"), float("inf")),
         (TrainedModelField("value", "double"), 10**400),
         (TrainedModelField("value", "decimal"), "not-a-decimal"),
@@ -465,11 +495,38 @@ def test_trained_model_output_merge_accepts_declared_value_types(
         (TrainedModelField("value", "timestamp"), "2026-07-28"),
         (TrainedModelField("value", "timestamp"), "2026-07-28T12:30:00"),
         (TrainedModelField("value", "array"), (1, 2)),
+        (TrainedModelField("value", "array"), [{"nested": float("nan")}]),
         (TrainedModelField("value", "map"), "not-a-map"),
+        (TrainedModelField("value", "map"), {"nested": [float("inf")]}),
+        (TrainedModelField("value", "struct"), {"nested": object()}),
         (TrainedModelField("value", "mediaReference"), {}),
         (
             TrainedModelField("value", "mediaReference"),
             {"mediaItemVersionId": "mver-1", "mimeType": "application/pdf"},
+        ),
+        (
+            TrainedModelField("value", "mediaReference"),
+            {
+                "mediaItemVersionId": "mver-1",
+                "mimeType": "not a mime",
+                "contentHash": f"sha256:{'a' * 64}",
+            },
+        ),
+        (
+            TrainedModelField("value", "mediaReference"),
+            {
+                "mediaItemVersionId": "mver-1",
+                "mimeType": "application/pdf",
+                "contentHash": "sha256:not-a-digest",
+            },
+        ),
+        (
+            TrainedModelField("value", "mediaReference"),
+            {
+                "mediaItemVersionId": "mver-not-in-source",
+                "mimeType": "application/pdf",
+                "contentHash": f"sha256:{'b' * 64}",
+            },
         ),
         (TrainedModelField("value", "string"), None),
     ],

@@ -142,7 +142,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
         'export type PipelineRunStatus = "running" | "executing" | "succeeded" | "partial" | "failed" | "cancelled";'
         in generated
     )
-    assert 'export type PipelineRunOutputStatus = "COMMITTED" | "FAILED";' in generated
+    assert 'export type PipelineRunOutputStatus = "COMMITTED" | "COMMIT_OUTCOME_UNKNOWN" | "FAILED";' in generated
     assert 'export type PipelineRunOutputCommitKind = "SERVING_ASSET" | "GOVERNED_CANDIDATE";' in generated
     pipeline_run_output_start = generated.index("export type PipelineRunOutput =")
     pipeline_run_output_end = generated.index(

@@ -6,8 +6,9 @@ from collections.abc import Mapping
 
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.primitives import _now
-from foundry_lite.application.services import pipeline_run_recovery
+from foundry_lite.application.services import pipeline_run_recovery, pipeline_run_unknown_commit_recovery
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.pipeline_execution_plan_backfill import (
     ensure_pipeline_execution_plan,
 )
@@ -49,6 +50,10 @@ from foundry_lite.application.services.pipeline_run_requests import (
     required_pipeline_version,
     run_request_fingerprint,
 )
+from foundry_lite.application.services.pipeline_run_service_evidence import (
+    audit_pipeline_run,
+    require_pipeline_write_open,
+)
 from foundry_lite.application.services.pipeline_run_terminal import (
     complete_unsuccessful_pipeline_run,
     fail_pipeline_run,
@@ -72,6 +77,7 @@ class PipelineRunService(CoreService):
     required_collaborators = (
         "pipeline_compiler_service",
         "pipeline_graph_v2_run_coordinator_service",
+        "media_transaction_service",
         "runtime_service",
         "transform_service",
     )
@@ -79,6 +85,7 @@ class PipelineRunService(CoreService):
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
     media_repository: MediaRepository
+    media_transaction_service: MediaTransactionService
     pipeline_compiler_service: PipelineCompilerService
     pipeline_graph_v2_run_coordinator_service: PipelineGraphV2RunCoordinatorService
     pipeline_execution_repository: PipelineExecutionRepository
@@ -98,7 +105,7 @@ class PipelineRunService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "pipeline:run", "pipeline", pipeline_id)
-        self._require_write_open(ctx, "start_pipeline_run", pipeline_id)
+        require_pipeline_write_open(self.runtime_service, ctx, "start_pipeline_run", pipeline_id)
         version = deployed_pipeline_version(
             self.engine,
             self.pipeline_repository,
@@ -147,6 +154,7 @@ class PipelineRunService(CoreService):
                 )
                 return self.get_run(str(row["id"]), ctx=ctx)
             if action == "read":
+                self._reconcile_unknown_commit(ctx, row)
                 return self.get_run(str(row["id"]), ctx=ctx)
         try:
             return self._execute_run(ctx, row, version)
@@ -158,6 +166,25 @@ class PipelineRunService(CoreService):
         except Exception as exc:
             fail_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row, exc)
             return self.get_run(str(row["id"]), ctx=ctx)
+
+    def _reconcile_unknown_commit(
+        self,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+    ) -> None:
+        if not pipeline_run_unknown_commit_recovery.has_unknown_commit_output(row):
+            return
+        pipeline_run_unknown_commit_recovery.reconcile_unknown_commit_outputs(
+            self.engine,
+            self.pipeline_repository,
+            self.pipeline_execution_repository,
+            self.dataset_transaction_repository,
+            self.media_repository,
+            self.media_transaction_service,
+            self.runtime_service,
+            ctx,
+            row,
+        )
 
     def _create_or_replay_run(
         self,
@@ -203,7 +230,8 @@ class PipelineRunService(CoreService):
         row: PipelineRunRow,
         version: PipelineVersionRow,
     ) -> None:
-        self._audit(
+        audit_pipeline_run(
+            self.runtime_service,
             conn,
             ctx,
             "started",
@@ -251,7 +279,8 @@ class PipelineRunService(CoreService):
                 completed_at=_now(),
             )
             if after is not None:
-                self._audit(
+                audit_pipeline_run(
+                    self.runtime_service,
                     conn,
                     ctx,
                     "cancelled",
@@ -385,7 +414,8 @@ class PipelineRunService(CoreService):
                 execution_heartbeat_at=lease.heartbeat_at,
             )
             if claimed is not None:
-                self._audit(
+                audit_pipeline_run(
+                    self.runtime_service,
                     conn,
                     ctx,
                     "execution_claimed",
@@ -466,31 +496,4 @@ class PipelineRunService(CoreService):
             tenant_id=ctx.tenant_id,
             row=row,
             execution_plan=version["execution_plan"] or {"nodes": []},
-        )
-
-    def _require_write_open(self, ctx: RequestContext, operation: str, resource_id: str) -> None:
-        self.runtime_service._require_write_traffic_open(
-            ctx,
-            operation=operation,
-            resource_type="pipeline",
-            resource_id=resource_id,
-        )
-
-    def _audit(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        event: str,
-        resource_type: str,
-        resource_id: str,
-        after_ref: Mapping[str, object],
-    ) -> None:
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type=f"pipeline.{event}",
-            resource_type=resource_type,
-            resource_id=resource_id,
-            action=event,
-            after_ref=after_ref,
         )

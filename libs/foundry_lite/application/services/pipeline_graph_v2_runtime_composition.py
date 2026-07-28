@@ -61,5 +61,8 @@ def build_pipeline_graph_v2_dispatcher(
             adapter=service.trained_model_inference_port,
             run_id=run_id,
             model_refs=plan.model_refs,
+            transaction_manager=service.engine,
+            media_repository=service.media_repository,
+            ctx=ctx,
         ),
     )

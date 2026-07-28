@@ -93,7 +93,7 @@ def transaction_reconciliation_artifact(
         },
         security_envelope=inherited_runtime_security([source]),
         status="COMMITTED" if commit_outcome == "COMMITTED" else "COMMIT_OUTCOME_UNKNOWN",
-        is_serving=True,
+        is_serving=commit_outcome == "COMMITTED",
     )
 
 

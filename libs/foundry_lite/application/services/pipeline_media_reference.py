@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 
 JsonObject = dict[str, object]
+_CONTENT_HASH_PATTERN = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+_MIME_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 
 
 def required_source_media_reference(item: Mapping[str, object]) -> JsonObject:
@@ -75,3 +78,14 @@ def validated_media_reference(value: Mapping[str, object]) -> JsonObject:
         "contentHash": value["contentHash"],
         "sourceLocator": dict(locator) if isinstance(locator, Mapping) else {},
     }
+
+
+def validated_model_media_reference(value: Mapping[str, object]) -> JsonObject:
+    """Validate syntax before a trained model may echo a pinned MediaVersion."""
+
+    reference = validated_media_reference(value)
+    content_hash = str(reference["contentHash"])
+    mime_type = str(reference["mimeType"])
+    if not _CONTENT_HASH_PATTERN.fullmatch(content_hash) or not _MIME_TYPE_PATTERN.fullmatch(mime_type):
+        raise ValidationFailed("trained model media reference has invalid immutable coordinates")
+    return reference

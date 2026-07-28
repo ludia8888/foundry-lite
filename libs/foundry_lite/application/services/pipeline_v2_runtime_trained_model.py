@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.ports import TransactionManager
+from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelInferencePort,
@@ -30,6 +32,7 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     single_input_artifact,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_security import inherited_runtime_security
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 
 
@@ -42,10 +45,16 @@ class PipelineV2TrainedModelRuntime:
         adapter: TrainedModelInferencePort,
         run_id: str,
         model_refs: Sequence[ModelRef],
+        transaction_manager: TransactionManager | None = None,
+        media_repository: MediaRepository | None = None,
+        ctx: RequestContext | None = None,
     ) -> None:
         self._adapter = adapter
         self._run_id = run_id
         self._model_refs = tuple(model_refs)
+        self._transaction_manager = transaction_manager
+        self._media_repository = media_repository
+        self._ctx = ctx
 
     def execute(
         self,
@@ -78,8 +87,40 @@ class PipelineV2TrainedModelRuntime:
         )
         result = self._adapter.infer(invocation)
         require_trained_model_invocation_pin(invocation, result.definition)
-        rows = merge_trained_model_outputs(source.items, result.rows, node.config, definition)
+        trusted_media = self._trusted_media_coordinates(result.rows, definition)
+        rows = merge_trained_model_outputs(
+            source.items,
+            result.rows,
+            node.config,
+            definition,
+            trusted_media_coordinates=trusted_media,
+        )
         return _artifact(node, source, inputs, rows, result.runtime_evidence, definition, self._run_id)
+
+    def _trusted_media_coordinates(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        definition: TrainedModelDefinition,
+    ) -> frozenset[tuple[str, str, str]] | None:
+        version_ids = _model_media_version_ids(rows, definition)
+        if version_ids is None:
+            return None
+        if self._transaction_manager is None or self._media_repository is None or self._ctx is None:
+            raise InvariantViolation("trained-model media output requires tenant catalog validation")
+        with self._transaction_manager.begin() as transaction:
+            versions = self._media_repository.get_media_item_versions(
+                transaction=transaction,
+                ids=sorted(version_ids),
+            )
+        return frozenset(
+            (
+                version.media_item_version_id,
+                version.sniffed_mime_type,
+                version.content_hash.removeprefix("sha256:"),
+            )
+            for version in versions
+            if version.tenant_id == self._ctx.tenant_id and version.status == "COMMITTED"
+        )
 
 
 def _required_model_pin(
@@ -117,6 +158,21 @@ def _required_model_pin(
             details={"nodeId": node.node_id, "modelRef": model_ref, "provider": pin.provider},
         )
     return pin
+
+
+def _model_media_version_ids(
+    rows: Sequence[Mapping[str, object]],
+    definition: TrainedModelDefinition,
+) -> set[str] | None:
+    fields = [field.name for field in definition.output_fields if field.data_type == "mediaReference"]
+    if not fields:
+        return None
+    return {
+        str(reference.get("mediaItemVersionId"))
+        for row in rows
+        for field in fields
+        if isinstance(reference := row.get(field), Mapping) and isinstance(reference.get("mediaItemVersionId"), str)
+    }
 
 
 def _artifact(

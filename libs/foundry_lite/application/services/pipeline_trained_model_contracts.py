@@ -2,28 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
-from math import isfinite
+from collections.abc import Mapping, Sequence, Set
 
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelField,
     TrainedModelInvocation,
 )
-from foundry_lite.application.services.pipeline_media_reference import (
-    validated_media_reference,
+from foundry_lite.application.services.pipeline_trained_model_output_validation import (
+    require_trained_model_output_value,
 )
 from foundry_lite.domain.errors import ValidationFailed
 
 JsonObject = dict[str, object]
-_INTEGER_RANGES = {
-    "byte": (-128, 127),
-    "short": (-32_768, 32_767),
-    "integer": (-2_147_483_648, 2_147_483_647),
-    "long": (-9_223_372_036_854_775_808, 9_223_372_036_854_775_807),
-}
 
 SUPPORTED_TRAINED_MODEL_TYPES = frozenset(
     {
@@ -194,12 +185,14 @@ def merge_trained_model_outputs(
     model_rows: Sequence[Mapping[str, object]],
     config: Mapping[str, object],
     definition: TrainedModelDefinition,
+    *,
+    trusted_media_coordinates: Set[tuple[str, str, str]] | None = None,
 ) -> tuple[JsonObject, ...]:
     if len(source_rows) != len(model_rows):
         raise ValidationFailed("trained model output row count does not match its input")
     aliases = _mapping(config, "outputMappings")
     return tuple(
-        _merged_output(source, output, aliases, definition)
+        _merged_output(source, output, aliases, definition, trusted_media_coordinates)
         for source, output in zip(source_rows, model_rows, strict=True)
     )
 
@@ -333,6 +326,7 @@ def _merged_output(
     output: Mapping[str, object],
     aliases: Mapping[str, object],
     definition: TrainedModelDefinition,
+    trusted_media_coordinates: Set[tuple[str, str, str]] | None,
 ) -> JsonObject:
     expected = {field.name for field in definition.output_fields}
     actual = set(output)
@@ -344,99 +338,6 @@ def _merged_output(
     result = dict(source)
     for field in definition.output_fields:
         value = output[field.name]
-        _require_trained_model_output_value(field, value)
+        require_trained_model_output_value(field, value, source, trusted_media_coordinates)
         result[str(aliases[field.name])] = value
     return result
-
-
-def _require_trained_model_output_value(
-    field: TrainedModelField,
-    value: object,
-) -> None:
-    if _is_trained_model_value(field, value):
-        return
-    raise ValidationFailed(
-        "trained model returned a value that contradicts its pinned output type",
-        details={
-            "field": field.name,
-            "expectedType": field.data_type,
-            "actualType": type(value).__name__,
-        },
-    )
-
-
-def _is_trained_model_value(field: TrainedModelField, value: object) -> bool:
-    if value is None:
-        return not field.is_required
-    if field.data_type in _INTEGER_RANGES:
-        minimum, maximum = _INTEGER_RANGES[field.data_type]
-        return isinstance(value, int) and not isinstance(value, bool) and minimum <= value <= maximum
-    return _is_non_integer_trained_model_value(field.data_type, value)
-
-
-def _is_non_integer_trained_model_value(data_type: str, value: object) -> bool:
-    if data_type == "boolean":
-        return isinstance(value, bool)
-    if data_type in {"float", "double"}:
-        return _is_finite_float_value(value)
-    if data_type == "decimal":
-        return _is_decimal_value(value)
-    if data_type in {"string", "binary"}:
-        return isinstance(value, str)
-    if data_type == "date":
-        return _is_iso_date(value)
-    if data_type == "timestamp":
-        return _is_iso_timestamp(value)
-    if data_type == "array":
-        return isinstance(value, list)
-    if data_type == "mediaReference":
-        return _is_media_reference_value(value)
-    return isinstance(value, Mapping)
-
-
-def _is_finite_float_value(value: object) -> bool:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return False
-    try:
-        return isfinite(float(value))
-    except (OverflowError, ValueError):
-        return False
-
-
-def _is_decimal_value(value: object) -> bool:
-    if isinstance(value, bool) or not isinstance(value, str | int | float | Decimal):
-        return False
-    try:
-        return Decimal(str(value)).is_finite()
-    except InvalidOperation:
-        return False
-
-
-def _is_iso_date(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        date.fromisoformat(value)
-    except ValueError:
-        return False
-    return True
-
-
-def _is_iso_timestamp(value: object) -> bool:
-    if not isinstance(value, str) or "T" not in value:
-        return False
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    return parsed.tzinfo is not None
-
-
-def _is_media_reference_value(value: object) -> bool:
-    if not isinstance(value, Mapping):
-        return False
-    try:
-        validated_media_reference(value)
-    except ValidationFailed:
-        return False
-    return True

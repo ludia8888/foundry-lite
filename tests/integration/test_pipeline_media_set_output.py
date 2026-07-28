@@ -501,6 +501,7 @@ def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation
     real_commit = transaction_service.commit
     real_transaction_by_id = media_repository.transaction_by_id
     has_committed = False
+    failed_state_reads = 0
     abort_calls = 0
 
     def commit_then_disconnect(*args: object, **kwargs: object):
@@ -510,7 +511,9 @@ def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation
         raise ConnectionError("injected lost commit acknowledgement")
 
     def fail_commit_state_read(*args: object, **kwargs: object):
-        if has_committed:
+        nonlocal failed_state_reads
+        if has_committed and failed_state_reads == 0:
+            failed_state_reads += 1
             raise ConnectionError("injected reconciliation read outage")
         return real_transaction_by_id(*args, **kwargs)
 
@@ -537,11 +540,122 @@ def test_media_set_output_unknown_commit_result_keeps_transaction_reconciliation
     cause = cast(dict[str, Any], run["error"]["details"]["cause"])
     assert cause["details"]["cleanupFailures"][0]["operation"] == "mediaTransactionCommitStateRead"
     assert output["status"] == "COMMIT_OUTCOME_UNKNOWN"
+    assert output["isServing"] is False
     assert output["manifest"]["commitOutcome"] == "UNKNOWN"
     assert output["manifest"]["coordinateCompleteness"] == "TRANSACTION_ONLY"
     assert output["artifactEvidence"]["status"] == "RECONCILIATION_REQUIRED"
     assert [row["status"] for row in transactions] == ["COMMITTED"]
     assert abort_calls == 0
+
+    reconciled = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-media-output-unknown-commit-result",
+        ctx=fixture.ctx,
+    )
+    reconciled_output = cast(list[dict[str, Any]], reconciled["outputs"])[0]
+
+    assert reconciled["id"] == run["id"]
+    assert reconciled["status"] == "succeeded"
+    assert reconciled["error"] is None
+    assert reconciled_output["status"] == "COMMITTED"
+    assert reconciled_output["isServing"] is True
+    assert len(_target_transactions(fixture, target.media_set_id)) == 1
+
+
+def test_media_set_output_open_unknown_commit_is_aborted_and_failed_on_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "open_unknown_commit", item_count=1)
+    _deploy_graph(
+        fixture,
+        _media_selection_output_graph(
+            fixture.source_ref,
+            fixture.target_ref,
+            fixture.source_version_ids,
+        ),
+    )
+    transaction_service = fixture.foundry._services.media.transaction
+    media_repository = fixture.dependencies.media_repository
+    real_transaction_by_id = media_repository.transaction_by_id
+    has_commit_failed = False
+    failed_state_reads = 0
+
+    def fail_before_commit(*args: object, **kwargs: object):
+        nonlocal has_commit_failed
+        has_commit_failed = True
+        raise ConnectionError("injected commit transport failure")
+
+    def fail_first_reconciliation_read(*args: object, **kwargs: object):
+        nonlocal failed_state_reads
+        if has_commit_failed and failed_state_reads == 0:
+            failed_state_reads += 1
+            raise ConnectionError("injected reconciliation read outage")
+        return real_transaction_by_id(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_service, "commit", fail_before_commit)
+    monkeypatch.setattr(media_repository, "transaction_by_id", fail_first_reconciliation_read)
+
+    unknown = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-media-output-open-unknown-commit",
+        ctx=fixture.ctx,
+    )
+    replayed = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-media-output-open-unknown-commit",
+        ctx=fixture.ctx,
+    )
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+
+    assert unknown["status"] == "partial"
+    assert cast(list[dict[str, Any]], unknown["outputs"])[0]["isServing"] is False
+    assert replayed["id"] == unknown["id"]
+    assert replayed["status"] == "failed"
+    assert replayed["outputs"] == []
+    assert replayed["error"]["message"] == "pipeline output commit reconciled as not committed"
+    assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["ABORTED"]
+
+
+def test_media_set_output_aborted_commit_error_remains_a_known_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "aborted_commit_error", item_count=1)
+    _deploy_graph(
+        fixture,
+        _media_selection_output_graph(
+            fixture.source_ref,
+            fixture.target_ref,
+            fixture.source_version_ids,
+        ),
+    )
+    transaction_service = fixture.foundry._services.media.transaction
+    real_abort = transaction_service.abort
+
+    def abort_then_fail(ctx: RequestContext, *, media_transaction_id: str, **kwargs: object):
+        real_abort(
+            ctx,
+            media_transaction_id=media_transaction_id,
+            error={"code": "INJECTED_COMMIT_FAILURE"},
+        )
+        raise RuntimeError("injected known aborted commit failure")
+
+    monkeypatch.setattr(transaction_service, "commit", abort_then_fail)
+
+    run = fixture.foundry.pipelines.run(
+        fixture.pipeline_id,
+        idempotency_key="run-media-output-aborted-commit-error",
+        ctx=fixture.ctx,
+    )
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    output = cast(list[dict[str, Any]], run["outputs"])[0]
+
+    assert run["status"] == "failed"
+    assert output["status"] == "FAILED"
+    assert output["isServing"] is False
+    assert run["error"]["type"] == "RuntimeError"
+    assert [row["status"] for row in _target_transactions(fixture, target.media_set_id)] == ["ABORTED"]
 
 
 def test_stale_run_recovers_media_transaction_committed_before_artifact_passport(
