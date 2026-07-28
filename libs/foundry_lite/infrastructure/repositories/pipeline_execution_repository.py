@@ -110,10 +110,11 @@ class SqlAlchemyPipelineExecutionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         as_of: str,
         limit: int,
     ) -> list[PipelinePreviewRunRow]:
-        return preview_rows.recoverable_previews(transaction, as_of, limit)
+        return preview_rows.recoverable_previews(transaction, tenant_id, as_of, limit)
 
     def complete_preview_success(
         self,

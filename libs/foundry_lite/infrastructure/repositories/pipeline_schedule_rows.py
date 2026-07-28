@@ -75,6 +75,7 @@ def list_due_schedules(
                     db.pipeline_schedules.c.tenant_id == tenant_id,
                     db.pipeline_schedules.c.enabled.is_(True),
                     db.pipeline_schedules.c.status == "active",
+                    _runtime_config_is_current(),
                     db.pipeline_schedules.c.next_due_at.is_not(None),
                     db.pipeline_schedules.c.next_due_at <= due_at,
                     claimable_lease,
@@ -173,6 +174,7 @@ def claim_due_schedule(
                 db.pipeline_schedules.c.id == schedule_id,
                 db.pipeline_schedules.c.enabled.is_(True),
                 db.pipeline_schedules.c.status == "active",
+                _runtime_config_is_current(),
                 db.pipeline_schedules.c.next_due_at.is_not(None),
                 db.pipeline_schedules.c.next_due_at <= due_at,
                 claimable_lease,
@@ -397,6 +399,13 @@ def _runtime_config_is_stale() -> Any:
     return or_(
         db.pipeline_schedules.c.runtime_config_updated_at.is_(None),
         db.pipeline_schedules.c.runtime_config_updated_at != db.pipeline_schedules.c.updated_at,
+    )
+
+
+def _runtime_config_is_current() -> Any:
+    return and_(
+        db.pipeline_schedules.c.runtime_config_updated_at.is_not(None),
+        db.pipeline_schedules.c.runtime_config_updated_at == db.pipeline_schedules.c.updated_at,
     )
 
 

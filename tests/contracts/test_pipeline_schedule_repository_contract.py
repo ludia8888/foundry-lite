@@ -30,6 +30,21 @@ def test_pipeline_schedule_repository_reconciles_a_legacy_writer_update(tmp_path
             observed_at="2026-07-05T00:06:00Z",
             limit=10,
         )
+        unreconciled_due = repository.list_due_schedules(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            due_at="2026-07-05T00:06:00Z",
+            limit=10,
+        )
+        unreconciled_claim = repository.claim_due_schedule(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            schedule_id=record.schedule_id,
+            due_at="2026-07-05T00:06:00Z",
+            lease_owner="worker-a",
+            lease_token="lease-a",
+            lease_expires_at="2026-07-05T00:07:00Z",
+        )
         reconciled = repository.reconcile_schedule_runtime(
             transaction=transaction,
             tenant_id=record.tenant_id,
@@ -51,6 +66,8 @@ def test_pipeline_schedule_repository_reconciles_a_legacy_writer_update(tmp_path
         )
 
     assert [row["id"] for row in stale] == [record.schedule_id]
+    assert unreconciled_due == []
+    assert unreconciled_claim is None
     assert reconciled is not None
     assert reconciled["runtime_config_updated_at"] == "2026-07-05T00:05:30Z"
     assert [row["id"] for row in due] == [record.schedule_id]

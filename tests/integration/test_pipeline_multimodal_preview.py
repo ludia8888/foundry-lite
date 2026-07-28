@@ -111,7 +111,7 @@ def test_expired_preview_is_recovered_with_original_caller_context(
     )
     foundry = FoundryLite(dependencies=dependencies)
     ctx = RequestContext(
-        tenant_id="tenant-recovery",
+        tenant_id="tenant-demo",
         actor_user_id="preview-owner",
         roles=("admin", "data_engineer"),
         application_id="pipeline-builder",

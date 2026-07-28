@@ -166,6 +166,7 @@ def recoverable_pipeline_previews(
         with tenant_context(tenant_id), transaction_manager.begin() as transaction:
             tenant_rows = repository.recoverable_previews(
                 transaction=transaction,
+                tenant_id=tenant_id,
                 as_of=as_of,
                 limit=tenant_limit,
             )

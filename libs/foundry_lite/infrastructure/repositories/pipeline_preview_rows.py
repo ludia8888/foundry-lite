@@ -164,20 +164,28 @@ def renew_preview_execution_lease(
     return preview_by_id(transaction, tenant_id, preview_run_id) if updated else None
 
 
-def recoverable_previews(transaction: Any, as_of: str, limit: int) -> list[PipelinePreviewRunRow]:
+def recoverable_previews(
+    transaction: Any,
+    tenant_id: str,
+    as_of: str,
+    limit: int,
+) -> list[PipelinePreviewRunRow]:
     """List bounded queued, cancel-requested, and expired running previews."""
     lease_expiry = db.pipeline_preview_runs.c.execution_lease_expires_at
     rows = (
         transaction.execute(
             select(db.pipeline_preview_runs)
             .where(
-                or_(
-                    db.pipeline_preview_runs.c.status.in_(("QUEUED", "CANCEL_REQUESTED")),
-                    and_(
-                        db.pipeline_preview_runs.c.status == "RUNNING",
-                        or_(lease_expiry.is_(None), lease_expiry <= as_of),
+                and_(
+                    db.pipeline_preview_runs.c.tenant_id == tenant_id,
+                    or_(
+                        db.pipeline_preview_runs.c.status.in_(("QUEUED", "CANCEL_REQUESTED")),
+                        and_(
+                            db.pipeline_preview_runs.c.status == "RUNNING",
+                            or_(lease_expiry.is_(None), lease_expiry <= as_of),
+                        ),
                     ),
-                )
+                ),
             )
             .order_by(db.pipeline_preview_runs.c.created_at, db.pipeline_preview_runs.c.id)
             .limit(limit)

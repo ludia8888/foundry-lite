@@ -370,6 +370,7 @@ def _schedule_row(index: int, due_at: str) -> dict[str, object]:
         "status": "active",
         "updated_by": "performance-gate",
         "updated_at": due_at,
+        "runtime_config_updated_at": due_at,
         "trigger_type": "interval",
         "timezone": "UTC",
         "next_due_at": due_at if is_due else "2026-07-18T00:00:00Z",

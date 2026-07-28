@@ -69,6 +69,29 @@ def test_preview_run_contract_is_tenant_scoped_and_commit_forbidden(tmp_path: Pa
     assert completed["outputs"][0]["rows"] == [{"id": 1}]
 
 
+def test_preview_recovery_query_is_explicitly_tenant_scoped_on_sqlite(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-recovery-tenants.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineExecutionRepository(engine)
+    with engine.begin() as transaction:
+        repository.insert_preview(
+            transaction=transaction,
+            record=_preview_record(preview_run_id="preview-a", tenant_id="tenant-a", idempotency_key="key-a"),
+        )
+        repository.insert_preview(
+            transaction=transaction,
+            record=_preview_record(preview_run_id="preview-b", tenant_id="tenant-b", idempotency_key="key-b"),
+        )
+        tenant_b_rows = repository.recoverable_previews(
+            transaction=transaction,
+            tenant_id="tenant-b",
+            as_of=NOW,
+            limit=10,
+        )
+
+    assert [(row["tenant_id"], row["id"]) for row in tenant_b_rows] == [("tenant-b", "preview-b")]
+
+
 def test_preview_success_atomically_honors_concurrent_cancellation(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline-preview-cancel.db'}", future=True)
     db.create_database(engine)
@@ -183,7 +206,12 @@ def test_expired_preview_reclaim_fences_the_original_executor(tmp_path: Path) ->
             execution_lease_expires_at="2026-07-15T23:59:00+00:00",
             execution_heartbeat_at="2026-07-15T23:57:00+00:00",
         )
-        recoverable = repository.recoverable_previews(transaction=transaction, as_of=NOW, limit=10)
+        recoverable = repository.recoverable_previews(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            as_of=NOW,
+            limit=10,
+        )
         reclaimed = repository.reclaim_expired_preview(
             transaction=transaction,
             tenant_id="tenant-a",
@@ -400,17 +428,22 @@ def test_deployment_contract_retries_a_concurrent_number_collision(tmp_path: Pat
     assert second["deployment_number"] == 2
 
 
-def _preview_record() -> PipelinePreviewRunRecord:
+def _preview_record(
+    *,
+    preview_run_id: str = "preview-a",
+    tenant_id: str = "tenant-a",
+    idempotency_key: str = "preview-key",
+) -> PipelinePreviewRunRecord:
     return PipelinePreviewRunRecord(
-        preview_run_id="preview-a",
-        tenant_id="tenant-a",
+        preview_run_id=preview_run_id,
+        tenant_id=tenant_id,
         pipeline_id="pipeline-a",
         branch_id="branch-a",
         graph={"schemaVersion": 2, "nodes": [], "edges": []},
         graph_fingerprint="graph-fp",
         target_node_id=None,
         limits={"tableRows": 50, "maxBytes": 33_554_432},
-        idempotency_key="preview-key",
+        idempotency_key=idempotency_key,
         request_fingerprint="request-fp",
         execution_context={
             "actorUserId": "user-a",

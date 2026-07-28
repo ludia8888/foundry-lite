@@ -293,6 +293,7 @@ class PipelineExecutionRepository(Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         as_of: str,
         limit: int,
     ) -> list[PipelinePreviewRunRow]: ...

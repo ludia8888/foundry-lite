@@ -145,7 +145,10 @@ def _backfill_pipeline_schedules() -> None:
                 trigger_type=_legacy_trigger_type(schedule),
                 timezone=str(schedule.get("timezone") or "UTC"),
                 next_due_at=migration_started_at if is_enabled else None,
-                runtime_config_updated_at=str(row["updated_at"]),
+                # The migration only derives provisional runtime columns.  Keep
+                # the marker stale so the application canonicalizes legacy JSON
+                # (including unsupported pre-v2 triggers) before it can run.
+                runtime_config_updated_at=None,
                 status="active" if is_enabled else "paused",
                 paused_reason=None if is_enabled else "disabled_before_pipeline_v2_upgrade",
             )

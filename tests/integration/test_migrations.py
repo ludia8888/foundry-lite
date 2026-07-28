@@ -103,6 +103,17 @@ def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_pat
                     "updated_at": "2026-07-15T02:03:04Z",
                     "last_tick_at": None,
                 },
+                {
+                    "id": "manual-schedule",
+                    "tenant_id": "tenant-a",
+                    "pipeline_id": "pipeline-c",
+                    "version_id": "version-c",
+                    "schedule": {"kind": "manual"},
+                    "enabled": True,
+                    "updated_by": "user-a",
+                    "updated_at": "2026-07-15T03:04:05Z",
+                    "last_tick_at": None,
+                },
             ],
         )
 
@@ -126,16 +137,19 @@ def test_pipeline_v2_migration_backfills_existing_schedule_runtime_state(tmp_pat
         }
     assert rows["active-schedule"].trigger_type == "interval"
     assert rows["active-schedule"].timezone == "Asia/Seoul"
-    assert rows["active-schedule"].runtime_config_updated_at == rows["active-schedule"].updated_at
+    assert rows["active-schedule"].runtime_config_updated_at is None
     active_next_due_at = datetime.fromisoformat(rows["active-schedule"].next_due_at.replace("Z", "+00:00"))
     assert upgrade_started_at <= active_next_due_at <= upgrade_finished_at + timedelta(seconds=1)
     assert rows["active-schedule"].status == "active"
     assert rows["disabled-schedule"].trigger_type == "cron"
     assert rows["disabled-schedule"].timezone == "UTC"
-    assert rows["disabled-schedule"].runtime_config_updated_at == rows["disabled-schedule"].updated_at
+    assert rows["disabled-schedule"].runtime_config_updated_at is None
     assert rows["disabled-schedule"].next_due_at is None
     assert rows["disabled-schedule"].status == "paused"
     assert rows["disabled-schedule"].paused_reason == "disabled_before_pipeline_v2_upgrade"
+    assert rows["manual-schedule"].trigger_type == "manual"
+    assert rows["manual-schedule"].runtime_config_updated_at is None
+    assert rows["manual-schedule"].status == "active"
 
 
 def test_semantic_row_cache_migration_keeps_tenant_key_uniqueness(tmp_path: Path) -> None:
