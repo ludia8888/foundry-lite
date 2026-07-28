@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
 
@@ -88,6 +89,7 @@ def _version(
     transaction_id: str = "mtx-1",
     status: str = "STAGED",
     created_at: str = "2026-06-23T00:00:00Z",
+    source_ref: dict[str, object] | None = None,
 ) -> MediaItemVersionRecord:
     return MediaItemVersionRecord(
         media_item_version_id=version_id,
@@ -104,10 +106,54 @@ def _version(
         format="pdf",
         probe_metadata={"pages": 3},
         security_envelope={"tenantId": "tenant-demo", "classification": "confidential"},
-        source_ref=None,
+        source_ref=source_ref,
         status=status,
         created_at=created_at,
     )
+
+
+def test_committed_pipeline_output_versions_are_tenant_and_run_scoped(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    transaction = replace(_transaction(status="COMMITTED"), committed_at="2026-06-23T01:00:00Z")
+    lineage = {
+        "pipelineOutput": {
+            "pipelineRunId": "run-media-1",
+            "pipelineNodeId": "output",
+            "descriptorId": "output.media_set",
+            "transactionGeneration": 1,
+        }
+    }
+    version = _version(
+        "mver-pipeline-1",
+        version_number=1,
+        blob_key="blob-pipeline-1",
+        content_hash="hash-pipeline-1",
+        status="COMMITTED",
+        source_ref=lineage,
+    )
+    version = replace(version, committed_at="2026-06-23T01:00:00Z")
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_open_transaction(transaction=conn, record=transaction)
+        repo.upsert_media_item(transaction=conn, record=_item())
+        repo.insert_version(transaction=conn, record=version)
+        rows = repo.committed_pipeline_output_versions(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            pipeline_run_id="run-media-1",
+        )
+        other_tenant = repo.committed_pipeline_output_versions(
+            transaction=conn,
+            tenant_id="tenant-other",
+            pipeline_run_id="run-media-1",
+        )
+
+    assert [row["media_item_version_id"] for row in rows] == ["mver-pipeline-1"]
+    assert rows[0]["media_set_ref"] == "legal.contracts"
+    assert rows[0]["source_ref"] == lineage
+    assert other_tenant == []
 
 
 def test_media_set_create_is_idempotent_and_tenant_scoped(

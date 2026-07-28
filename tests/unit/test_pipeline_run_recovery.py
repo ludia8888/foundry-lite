@@ -2,9 +2,11 @@ from datetime import UTC, datetime, timedelta
 from threading import Event
 from typing import cast
 
+import foundry_lite.application.services.pipeline_run_output_recovery as pipeline_output_recovery
 import foundry_lite.application.services.pipeline_run_recovery as pipeline_run_recovery
 import pytest
 from foundry_lite.application.ports import PipelineExecutionLeaseFence
+from foundry_lite.application.ports.media_repository import PipelineMediaCommitVersionRow
 from foundry_lite.application.ports.pipeline_repository import (
     PipelineRepository,
     PipelineRunRow,
@@ -21,6 +23,7 @@ from foundry_lite.application.services.pipeline_run_recovery import (
 from foundry_lite.application.services.pipeline_run_terminal import succeed_pipeline_run
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import InvariantViolation
 from foundry_lite.security.tenant_context import current_tenant_id
 
 
@@ -67,6 +70,61 @@ def test_success_terminal_transaction_failure_requires_reconciliation() -> None:
             [],
             cast(PipelineExecutionLeaseFence, object()),
         )
+
+
+def test_geospatial_dataset_transaction_recovery_preserves_contract_and_deduplicates_passport() -> None:
+    transaction_output = pipeline_output_recovery._dataset_commit_output(
+        {
+            "transaction_id": "tx-geo-1",
+            "dataset_id": "ds-geo-1",
+            "dataset_ref": "geo.locations",
+            "version_id": "ver-geo-1",
+            "metadata": {
+                "pipelineRunId": "run-geo-1",
+                "pipelineNodeId": "output",
+                "descriptorId": "output.geospatial",
+            },
+            "committed_at": "2026-07-28T00:00:00Z",
+        },
+        {"output"},
+    )
+    assert transaction_output is not None
+    passport = pipeline_output_recovery.RecoveredPipelineOutput(
+        node_id="output",
+        artifact_kind="geospatial_series",
+        plane="geospatial",
+        status="COMMITTED",
+        is_serving=True,
+        ref={
+            "resourceRef": "geo.locations",
+            "datasetId": "ds-geo-1",
+            "versionId": "ver-geo-1",
+            "transactionId": "tx-geo-1",
+        },
+        manifest={"geospatialSpec": {"geometryField": "geometry"}},
+        artifact_id="artifact-geo-1",
+        recovery_source="ARTIFACT_PASSPORT",
+        evidence_id="artifact-geo-1",
+    )
+
+    assert transaction_output.artifact_kind == "geospatial_series"
+    assert transaction_output.plane == "geospatial"
+    assert transaction_output.ref["resourceRef"] == "geo.locations"
+    assert "datasetRef" not in transaction_output.ref
+    assert pipeline_output_recovery._output_key(transaction_output) == pipeline_output_recovery._output_key(passport)
+
+
+def test_media_transaction_recovery_rejects_missing_durable_lineage() -> None:
+    malformed = cast(
+        PipelineMediaCommitVersionRow,
+        {
+            "transaction_id": "mtx-corrupt",
+            "source_ref": None,
+        },
+    )
+
+    with pytest.raises(InvariantViolation, match="inconsistent recovery lineage"):
+        pipeline_output_recovery._media_pipeline_lineage(malformed)
 
 
 def test_execution_heartbeat_renews_the_durable_lease(monkeypatch) -> None:

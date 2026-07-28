@@ -16,6 +16,7 @@ from foundry_lite.application.ports.media_repository import (
     MediaSetRecord,
     MediaSetSelectionRecord,
     MediaTransactionRecord,
+    PipelineMediaCommitVersionRow,
 )
 from foundry_lite.application.state_transitions import (
     MEDIA_TRANSACTION_ABORT,
@@ -327,6 +328,48 @@ class SqlAlchemyMediaRepository:
             .all()
         )
         return [_media_version_from_row(row) for row in rows]
+
+    def committed_pipeline_output_versions(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[PipelineMediaCommitVersionRow]:
+        matching_transactions = _pipeline_media_transaction_ids(tenant_id, pipeline_run_id)
+        media_set_ref = (db.media_sets.c.namespace + "." + db.media_sets.c.name).label("media_set_ref")
+        rows = (
+            transaction.execute(
+                select(
+                    db.media_transactions.c.id.label("transaction_id"),
+                    db.media_transactions.c.media_set_id,
+                    media_set_ref,
+                    db.media_transactions.c.committed_at.label("transaction_committed_at"),
+                    db.media_item_versions.c.id.label("media_item_version_id"),
+                    db.media_item_versions.c.committed_at.label("version_committed_at"),
+                    db.media_item_versions.c.source_ref,
+                )
+                .join(db.media_sets, db.media_sets.c.id == db.media_transactions.c.media_set_id)
+                .join(
+                    db.media_item_versions,
+                    db.media_item_versions.c.media_transaction_id == db.media_transactions.c.id,
+                )
+                .where(
+                    and_(
+                        db.media_transactions.c.tenant_id == tenant_id,
+                        db.media_sets.c.tenant_id == tenant_id,
+                        db.media_item_versions.c.tenant_id == tenant_id,
+                        db.media_transactions.c.status == "COMMITTED",
+                        db.media_item_versions.c.status == "COMMITTED",
+                        db.media_transactions.c.id.in_(matching_transactions),
+                    )
+                )
+                .order_by(db.media_transactions.c.committed_at, db.media_transactions.c.id, db.media_item_versions.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(PipelineMediaCommitVersionRow, dict(row)) for row in rows]
 
     def fetch_transaction_versions(
         self, *, transaction: Any, tenant_id: str, media_transaction_id: str
@@ -641,6 +684,17 @@ def _media_transaction_values(record: MediaTransactionRecord) -> dict[str, objec
         "error": record.error,
         "trace": record.trace,
     }
+
+
+def _pipeline_media_transaction_ids(tenant_id: str, pipeline_run_id: str) -> Any:
+    pipeline_run = db.media_item_versions.c.source_ref["pipelineOutput"]["pipelineRunId"].as_string()
+    return select(db.media_item_versions.c.media_transaction_id).where(
+        and_(
+            db.media_item_versions.c.tenant_id == tenant_id,
+            db.media_item_versions.c.status == "COMMITTED",
+            pipeline_run == pipeline_run_id,
+        )
+    )
 
 
 def _media_transaction_insert_or_ignore(

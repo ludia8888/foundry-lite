@@ -31,7 +31,7 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
 from foundry_lite.application.services.pipeline_v2_runtime_trained_model import (
     PipelineV2TrainedModelRuntime,
 )
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure.adapters.local_trained_model_inference import (
     LocalTrainedModelInferenceAdapter,
 )
@@ -112,6 +112,26 @@ def test_trained_model_runtime_uses_deployed_definition_after_registry_removal()
         "revision": "container-risk-model-r1",
         "executableReference": "local://demo.transaction-risk@container-risk-model-r1",
     }
+
+
+def test_trained_model_runtime_rejects_ambiguous_entrypoint_snapshots() -> None:
+    node = _trained_model_node()
+    first = _model_pin(node.config)
+    second_snapshot = {
+        **dict(first.definition_snapshot),
+        "executableEntrypoint": "/srv/models/rotated_runner.py",
+    }
+    second = replace(first, definition_snapshot=second_snapshot)
+    runtime = PipelineV2TrainedModelRuntime(
+        adapter=LocalTrainedModelInferenceAdapter(),
+        run_id="prun_ambiguous_entrypoint",
+        model_refs=(first, second),
+    )
+
+    with pytest.raises(InvariantViolation, match="no unique matching") as raised:
+        runtime.execute(node, {"input": (_source_artifact(),)})
+
+    assert raised.value.details["matchingPinCount"] == 2
 
 
 def test_trained_model_definition_snapshot_round_trips_and_rejects_malformed_data() -> None:

@@ -28,7 +28,7 @@ from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 
 @dataclass(frozen=True)
@@ -344,6 +344,68 @@ def test_media_set_output_evidence_failure_preserves_the_serving_commit_as_parti
     assert len(committed_versions) == 1
     assert committed_versions[0]["id"] in output["ref"]["mediaItemVersionIds"]
     assert _run_artifact_count(fixture, str(run["id"]), "output") == 0
+
+
+def test_stale_run_recovers_media_transaction_committed_before_artifact_passport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _selection_output_fixture(tmp_path, "stale_transaction_recovery", item_count=1)
+    _deploy_graph(
+        fixture,
+        _media_selection_output_graph(
+            fixture.source_ref,
+            fixture.target_ref,
+            fixture.source_version_ids,
+        ),
+    )
+    repository = fixture.dependencies.pipeline_execution_repository
+
+    class _SimulatedWorkerCrash(BaseException):
+        pass
+
+    original_insert = repository.insert_artifact
+
+    def crash_after_commit(*, transaction: object, record: object):
+        if getattr(record, "node_id", None) == "output":
+            raise _SimulatedWorkerCrash
+        return original_insert(transaction=transaction, record=record)
+
+    monkeypatch.setattr(repository, "insert_artifact", crash_after_commit)
+    key = "run-media-output-stale-transaction"
+    with pytest.raises(_SimulatedWorkerCrash):
+        fixture.foundry.pipelines.run(fixture.pipeline_id, idempotency_key=key, ctx=fixture.ctx)
+
+    with fixture.foundry.engine.begin() as transaction:
+        row = fixture.dependencies.pipeline_repository.run_by_idempotency_key(
+            transaction=transaction,
+            tenant_id=fixture.ctx.tenant_id,
+            idempotency_key=key,
+        )
+        assert row is not None and row["status"] == "executing"
+        transaction.execute(
+            update(db.pipeline_runs)
+            .where(
+                db.pipeline_runs.c.tenant_id == fixture.ctx.tenant_id,
+                db.pipeline_runs.c.id == row["id"],
+            )
+            .values(execution_lease_expires_at="2000-01-01T00:00:00Z")
+        )
+
+    reconciled = fixture.foundry.pipelines.run(fixture.pipeline_id, idempotency_key=key, ctx=fixture.ctx)
+    output = cast(list[dict[str, Any]], reconciled["outputs"])[0]
+    target = _media_set_by_ref(fixture, fixture.target_ref)
+    committed_versions = _committed_target_versions(fixture, target.media_set_id)
+
+    assert reconciled["status"] == "partial"
+    assert output["artifactKind"] == "media_set_selection"
+    assert output["plane"] == "media"
+    assert output["ref"]["mediaSetRef"] == fixture.target_ref
+    assert output["ref"]["mediaTransactionId"]
+    assert output["artifactEvidence"]["recoverySource"] == "MEDIA_TRANSACTION"
+    assert len(committed_versions) == 1
+    assert committed_versions[0]["id"] in output["ref"]["mediaItemVersionIds"]
+    assert _run_artifact_count(fixture, str(row["id"]), "output") == 0
 
 
 def _selection_output_fixture(

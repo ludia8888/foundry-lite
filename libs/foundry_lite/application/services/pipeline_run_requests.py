@@ -152,6 +152,30 @@ def require_idempotent_run(row: PipelineRunRow, request_fingerprint: str) -> Non
     )
 
 
+def required_pipeline_version(
+    repository: PipelineRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    version_id: str,
+) -> PipelineVersionRow:
+    row = repository.version_by_id(transaction=transaction, tenant_id=ctx.tenant_id, version_id=version_id)
+    if row is None:
+        raise NotFound("pipeline version not found", details={"version_id": version_id})
+    return row
+
+
+def required_pipeline_run(
+    repository: PipelineRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    run_id: str,
+) -> PipelineRunRow:
+    row = repository.run_by_id(transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id)
+    if row is None:
+        raise NotFound("pipeline run not found", details={"run_id": run_id})
+    return row
+
+
 def require_pipeline_match(version: PipelineVersionRow, pipeline_id: str) -> None:
     if version["pipeline_id"] != pipeline_id:
         raise ValidationFailed(

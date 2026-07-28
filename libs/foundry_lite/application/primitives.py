@@ -77,7 +77,7 @@ def _json_ready(value: object) -> object:
         return float(value)
     if isinstance(value, datetime | date):
         return value.isoformat()
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): _json_ready(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_json_ready(item) for item in value]

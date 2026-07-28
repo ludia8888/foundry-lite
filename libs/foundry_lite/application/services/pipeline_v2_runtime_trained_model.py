@@ -95,6 +95,7 @@ def _required_model_pin(
             pin.revision,
             pin.parameters_fingerprint,
             pin.executable_reference,
+            _json_hash(dict(pin.definition_snapshot)),
         ): pin
         for pin in model_refs
         if pin.model_id == model_ref and pin.parameters_fingerprint == config_fingerprint

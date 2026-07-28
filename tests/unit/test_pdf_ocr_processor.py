@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -318,6 +319,26 @@ def test_pdf_ocr_parses_embedded_image_metadata_and_filters_selected_pages() -> 
     assert pdf_ocr._parsed_pdf_embedded_images(output, [2]) == (PdfEmbeddedImage(2, 30_000, 30_000),)
     with pytest.raises(PdfOcrDocumentError, match="pdf_image_metadata_invalid"):
         pdf_ocr._parsed_pdf_embedded_images("1 0 image bad 480 rgb 3 8", [1])
+
+
+@pytest.mark.parametrize(
+    ("byte_limit", "line_limit", "program"),
+    (
+        (64, 10_000, "print('x' * 1_000)"),
+        (2 * 1024 * 1024, 2, "print('a\\nb\\nc')"),
+    ),
+)
+def test_pdfimages_listing_is_bounded_before_buffering(
+    monkeypatch: pytest.MonkeyPatch,
+    byte_limit: int,
+    line_limit: int,
+    program: str,
+) -> None:
+    monkeypatch.setattr(pdf_ocr, "_MAX_PDF_IMAGE_METADATA_BYTES", byte_limit)
+    monkeypatch.setattr(pdf_ocr, "_MAX_PDF_IMAGE_METADATA_LINES", line_limit)
+
+    with pytest.raises(PdfOcrDocumentError, match="pdf_image_metadata_limit_exceeded"):
+        pdf_ocr._bounded_pdfimages_output([sys.executable, "-c", program], 5)
 
 
 def test_pdf_ocr_page_discovery_validation(monkeypatch: pytest.MonkeyPatch) -> None:

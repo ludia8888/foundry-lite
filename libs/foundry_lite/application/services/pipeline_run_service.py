@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services import pipeline_run_recovery
 from foundry_lite.application.services.base import CoreService
@@ -34,7 +35,6 @@ from foundry_lite.application.services.pipeline_run_contract_types import (
     DatasetTransactionRepository,
     DatasetVersionRepository,
     InvariantViolation,
-    NotFound,
     PipelineRepository,
     PipelineRunRow,
     PipelineVersionRow,
@@ -45,6 +45,8 @@ from foundry_lite.application.services.pipeline_run_requests import (
     deployed_pipeline_version,
     new_run_record,
     require_idempotent_run,
+    required_pipeline_run,
+    required_pipeline_version,
     run_request_fingerprint,
 )
 from foundry_lite.application.services.pipeline_run_terminal import (
@@ -65,6 +67,7 @@ class PipelineRunService(CoreService):
         "dataset_repository",
         "dataset_transaction_repository",
         "dataset_version_repository",
+        "media_repository",
     )
     required_collaborators = (
         "pipeline_compiler_service",
@@ -75,6 +78,7 @@ class PipelineRunService(CoreService):
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
+    media_repository: MediaRepository
     pipeline_compiler_service: PipelineCompilerService
     pipeline_graph_v2_run_coordinator_service: PipelineGraphV2RunCoordinatorService
     pipeline_execution_repository: PipelineExecutionRepository
@@ -136,6 +140,7 @@ class PipelineRunService(CoreService):
                     self.pipeline_repository,
                     self.pipeline_execution_repository,
                     self.dataset_transaction_repository,
+                    self.media_repository,
                     self.runtime_service,
                     ctx,
                     row,
@@ -211,7 +216,11 @@ class PipelineRunService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "pipeline:read")
         with self.engine.begin() as conn:
-            return self._run_payload(conn, ctx, self._require_run(conn, ctx, run_id))
+            return self._run_payload(
+                conn,
+                ctx,
+                required_pipeline_run(self.pipeline_repository, conn, ctx, run_id),
+            )
 
     def get_run_timeline(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         run = self.get_run(run_id, ctx=ctx)
@@ -221,7 +230,7 @@ class PipelineRunService(CoreService):
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "pipeline:run", "pipeline_run", run_id)
         with self.engine.begin() as conn:
-            row = self._require_run(conn, ctx, run_id)
+            row = required_pipeline_run(self.pipeline_repository, conn, ctx, run_id)
             if row["status"] != "running":
                 message = (
                     "pipeline run execution already started; cancellation is no longer safe"
@@ -385,7 +394,7 @@ class PipelineRunService(CoreService):
                     {"version_id": row["version_id"], "execution_lease_expires_at": lease.expires_at},
                 )
                 return claimed
-            current = self._require_run(conn, ctx, run_id)
+            current = required_pipeline_run(self.pipeline_repository, conn, ctx, run_id)
             if current["status"] in {"cancelled", "executing", "succeeded", "failed"}:
                 return None
         raise ConflictDetected(
@@ -450,7 +459,7 @@ class PipelineRunService(CoreService):
         ctx: RequestContext,
         row: PipelineRunRow,
     ) -> dict[str, object]:
-        version = self._require_version(conn, ctx, str(row["version_id"]))
+        version = required_pipeline_version(self.pipeline_repository, conn, ctx, str(row["version_id"]))
         return run_with_evidence_payload(
             transaction=conn,
             repository=self.pipeline_execution_repository,
@@ -458,18 +467,6 @@ class PipelineRunService(CoreService):
             row=row,
             execution_plan=version["execution_plan"] or {"nodes": []},
         )
-
-    def _require_version(self, conn: TransactionContext, ctx: RequestContext, version_id: str) -> PipelineVersionRow:
-        row = self.pipeline_repository.version_by_id(transaction=conn, tenant_id=ctx.tenant_id, version_id=version_id)
-        if row is None:
-            raise NotFound("pipeline version not found", details={"version_id": version_id})
-        return row
-
-    def _require_run(self, conn: TransactionContext, ctx: RequestContext, run_id: str) -> PipelineRunRow:
-        row = self.pipeline_repository.run_by_id(transaction=conn, tenant_id=ctx.tenant_id, run_id=run_id)
-        if row is None:
-            raise NotFound("pipeline run not found", details={"run_id": run_id})
-        return row
 
     def _require_write_open(self, ctx: RequestContext, operation: str, resource_id: str) -> None:
         self.runtime_service._require_write_traffic_open(

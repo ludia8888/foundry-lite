@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
 MediaTransactionStatus = str
 MediaItemVersionStatus = str
+
+
+class PipelineMediaCommitVersionRow(TypedDict):
+    """One committed Media Set output version used for stale-run recovery."""
+
+    transaction_id: str
+    media_set_id: str
+    media_set_ref: str
+    transaction_committed_at: str
+    media_item_version_id: str
+    version_committed_at: str
+    source_ref: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -254,6 +266,16 @@ class MediaRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
     ) -> list[MediaItemVersionRecord]:
         """Return a transaction's already-COMMITTED versions read-only (for idempotent commit replay)."""
+        ...
+
+    def committed_pipeline_output_versions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        pipeline_run_id: str,
+    ) -> list[PipelineMediaCommitVersionRow]:
+        """Return every version in committed transactions attributed to one Pipeline run."""
         ...
 
     def fetch_transaction_versions(

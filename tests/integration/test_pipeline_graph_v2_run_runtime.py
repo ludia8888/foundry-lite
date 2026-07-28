@@ -253,6 +253,60 @@ def test_graph_v2_geospatial_source_commits_governed_series_output(tmp_path: Pat
     assert rows[0]["latitude"] == 37.5
 
 
+def test_geospatial_stale_recovery_deduplicates_dataset_transaction_and_passport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = _foundry_with_language_model(tmp_path, _StructuredLanguageModel({"unused": True}))
+    ctx = demo_admin_context()
+    pipeline_id = "graph_v2_geospatial_recovery"
+    source_ref = "raw.graph_v2_geospatial_recovery"
+    output_ref = "geo.graph_v2_geospatial_recovery"
+    _commit_geospatial_source(foundry, ctx, tmp_path, source_ref)
+    version = _execute_graph_version(
+        foundry,
+        ctx,
+        pipeline_id=pipeline_id,
+        graph=_geospatial_copy_graph(source_ref, output_ref),
+    )
+    foundry.pipelines.deploy(pipeline_id, str(version["id"]), idempotency_key="deploy-geo-recovery", ctx=ctx)
+    repository = foundry._services.pipelines.run.pipeline_repository
+    original_terminal = repository.update_run_terminal
+
+    def fail_success_terminal(*, transition, **kwargs):
+        if transition.to_status == "succeeded":
+            raise RuntimeError("forced geospatial terminal persistence failure")
+        return original_terminal(transition=transition, **kwargs)
+
+    monkeypatch.setattr(repository, "update_run_terminal", fail_success_terminal)
+    key = "run-geo-recovery"
+    with pytest.raises(RuntimeError, match="Graph v2 terminal transaction failed"):
+        foundry.pipelines.run(pipeline_id, idempotency_key=key, ctx=ctx)
+
+    with foundry.engine.begin() as transaction:
+        row = repository.run_by_idempotency_key(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            idempotency_key=key,
+        )
+        assert row is not None
+        transaction.execute(
+            update(db.pipeline_runs)
+            .where(db.pipeline_runs.c.tenant_id == ctx.tenant_id, db.pipeline_runs.c.id == row["id"])
+            .values(execution_lease_expires_at="2000-01-01T00:00:00Z")
+        )
+
+    reconciled = foundry.pipelines.run(pipeline_id, idempotency_key=key, ctx=ctx)
+
+    assert reconciled["status"] == "partial"
+    assert len(reconciled["outputs"]) == 1
+    assert reconciled["outputs"][0]["artifactKind"] == "geospatial_series"
+    assert reconciled["outputs"][0]["plane"] == "geospatial"
+    assert reconciled["outputs"][0]["ref"]["resourceRef"] == output_ref
+    assert reconciled["outputs"][0]["ref"]["artifactId"]
+    assert "datasetRef" not in reconciled["outputs"][0]["ref"]
+
+
 def test_graph_v2_dataset_llm_run_pins_source_and_model_evidence_without_duplicates(
     tmp_path: Path,
 ) -> None:

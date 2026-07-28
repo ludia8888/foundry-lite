@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import selectors
 import shutil
 import subprocess  # nosec B404 - fixed argv only; remove if any shell execution is introduced.
 import tempfile
@@ -51,6 +53,8 @@ _MIN_DPI = 72
 _MAX_DPI = 300
 _MAX_RASTER_PAGE_PIXELS = 25_000_000
 _MAX_RASTER_TOTAL_PIXELS = 100_000_000
+_MAX_PDF_IMAGE_METADATA_BYTES = 2 * 1024 * 1024
+_MAX_PDF_IMAGE_METADATA_LINES = 10_000
 _LANGUAGES_PATTERN = re.compile(r"^[A-Za-z0-9_.+-]{1,80}$")
 _PAGE_FILE_PATTERN = re.compile(r"-(\d+)\.png$")
 _PAGE_SIZE_PATTERN = re.compile(
@@ -394,21 +398,71 @@ def _pdf_embedded_images(
     if executable is None:
         raise PdfOcrDocumentError("pdfimages_unavailable", kind="unavailable")
     command = [executable, "-f", str(page_numbers[0]), "-l", str(page_numbers[-1]), "-list", source_path]
+    output = _bounded_pdfimages_output(command, timeout_seconds)
+    return _parsed_pdf_embedded_images(output, page_numbers)
+
+
+def _bounded_pdfimages_output(command: Sequence[str], timeout_seconds: int) -> str:
     try:
-        result = subprocess.run(  # nosec B603 - fixed Poppler binary and sandbox-owned source path.
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=max(timeout_seconds, 1),
+        process = subprocess.Popen(  # nosec B603 - fixed Poppler binary and sandbox-owned source path.
+            list(command),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise PdfOcrDocumentError("pdf_image_discovery_timeout", kind="timeout", is_retryable=True) from exc
     except OSError as exc:
         raise PdfOcrDocumentError("pdfimages_unavailable", kind="unavailable") from exc
-    if result.returncode != 0:
+    try:
+        output = _read_bounded_pdfimages_stdout(process, command, timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        _stop_pdfimages(process)
+        raise PdfOcrDocumentError("pdf_image_discovery_timeout", kind="timeout", is_retryable=True) from exc
+    except PdfOcrDocumentError:
+        _stop_pdfimages(process)
+        raise
+    if process.returncode != 0:
         raise PdfOcrDocumentError("corrupt_pdf")
-    return _parsed_pdf_embedded_images(result.stdout, page_numbers)
+    try:
+        return output.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PdfOcrDocumentError("pdf_image_metadata_invalid") from exc
+
+
+def _read_bounded_pdfimages_stdout(
+    process: subprocess.Popen[bytes],
+    command: Sequence[str],
+    timeout_seconds: int,
+) -> bytes:
+    if process.stdout is None:
+        raise PdfOcrDocumentError("pdf_image_metadata_invalid")
+    deadline = time.monotonic() + max(timeout_seconds, 1)
+    output = bytearray()
+    line_count = 0
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            if not selector.select(remaining):
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            chunk = os.read(process.stdout.fileno(), 64 * 1024)
+            if not chunk:
+                break
+            output.extend(chunk)
+            line_count += chunk.count(b"\n")
+            if len(output) > _MAX_PDF_IMAGE_METADATA_BYTES or line_count > _MAX_PDF_IMAGE_METADATA_LINES:
+                raise PdfOcrDocumentError("pdf_image_metadata_limit_exceeded")
+    process.wait(timeout=max(deadline - time.monotonic(), 0.001))
+    return bytes(output)
+
+
+def _stop_pdfimages(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.kill()
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        return
 
 
 def _parsed_pdf_embedded_images(
