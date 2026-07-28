@@ -6,11 +6,11 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from uuid import uuid4
 
 from foundry_lite.application.ports.pipeline_repository import PipelineRepository, PipelineRunRow
-from foundry_lite.application.ports.transaction_context import TransactionManager
+from foundry_lite.application.ports.transaction_context import TransactionContext, TransactionManager
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
@@ -29,6 +29,78 @@ class PipelineExecutionLease:
 
 class PipelineTerminalCommitError(RuntimeError):
     """Preserve atomic failure evidence instead of falling back to a split terminal write."""
+
+
+class PipelineExecutionLeaseLost(InvariantViolation):
+    """Fail closed when an executor can no longer prove ownership of a run."""
+
+
+class PipelineExecutionLeaseGuard:
+    """Renew and fence a run lease at every durable Pipeline write boundary."""
+
+    def __init__(
+        self,
+        transaction_manager: TransactionManager,
+        repository: PipelineRepository,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+    ) -> None:
+        token = row["execution_lease_token"]
+        if token is None:
+            raise PipelineExecutionLeaseLost("executing pipeline run is missing its lease token")
+        self._transaction_manager = transaction_manager
+        self._repository = repository
+        self._ctx = ctx
+        self._run_id = str(row["id"])
+        self._token = token
+        self._failure: PipelineExecutionLeaseLost | None = None
+        self._lock = Lock()
+
+    def require_active(self, transaction: TransactionContext | None = None) -> None:
+        self.raise_if_failed()
+        try:
+            if transaction is None:
+                with self._transaction_manager.begin() as owned_transaction:
+                    self._renew(owned_transaction)
+            else:
+                self._renew(transaction)
+        except PipelineExecutionLeaseLost as exc:
+            self.record_failure(exc)
+            raise
+        except Exception as exc:
+            failure = self._lost_error()
+            self.record_failure(failure)
+            raise failure from exc
+
+    def raise_if_failed(self) -> None:
+        with self._lock:
+            failure = self._failure
+        if failure is not None:
+            raise failure
+
+    def record_failure(self, failure: PipelineExecutionLeaseLost) -> None:
+        with self._lock:
+            if self._failure is None:
+                self._failure = failure
+
+    def _renew(self, transaction: TransactionContext) -> None:
+        lease = new_pipeline_execution_lease()
+        renewed = self._repository.renew_run_execution_lease(
+            transaction=transaction,
+            tenant_id=self._ctx.tenant_id,
+            run_id=self._run_id,
+            execution_lease_token=self._token,
+            execution_lease_expires_at=lease.expires_at,
+            execution_heartbeat_at=lease.heartbeat_at,
+        )
+        if renewed is None:
+            raise self._lost_error()
+
+    def _lost_error(self) -> PipelineExecutionLeaseLost:
+        return PipelineExecutionLeaseLost(
+            "pipeline execution lease was lost before commit",
+            details={"run_id": self._run_id},
+        )
 
 
 def replayed_pipeline_run_action(row: Mapping[str, object]) -> str:
@@ -112,53 +184,32 @@ def pipeline_execution_heartbeat(
     repository: PipelineRepository,
     ctx: RequestContext,
     row: PipelineRunRow,
-) -> Iterator[None]:
+) -> Iterator[PipelineExecutionLeaseGuard]:
     stop = Event()
-    failures: list[Exception] = []
+    guard = PipelineExecutionLeaseGuard(transaction_manager, repository, ctx, row)
     thread = Thread(
         target=_renew_execution_lease,
-        args=(transaction_manager, repository, ctx, row, stop, failures),
+        args=(guard, stop),
         name=f"pipeline-lease-{row['id']}",
         daemon=True,
     )
     thread.start()
     try:
-        yield
+        yield guard
     finally:
         stop.set()
         thread.join()
-    if failures:
-        raise failures[0]
+    guard.raise_if_failed()
 
 
 def _renew_execution_lease(
-    transaction_manager: TransactionManager,
-    repository: PipelineRepository,
-    ctx: RequestContext,
-    row: PipelineRunRow,
+    guard: PipelineExecutionLeaseGuard,
     stop: Event,
-    failures: list[Exception],
 ) -> None:
-    token = row["execution_lease_token"]
-    if token is None:
-        failures.append(InvariantViolation("executing pipeline run is missing its lease token"))
-        return
     while not stop.wait(_HEARTBEAT_INTERVAL_SECONDS):
-        lease = new_pipeline_execution_lease()
         try:
-            with transaction_manager.begin() as transaction:
-                renewed = repository.renew_run_execution_lease(
-                    transaction=transaction,
-                    tenant_id=ctx.tenant_id,
-                    run_id=str(row["id"]),
-                    execution_lease_token=token,
-                    execution_lease_expires_at=lease.expires_at,
-                    execution_heartbeat_at=lease.heartbeat_at,
-                )
-        except Exception as exc:
-            failures.append(exc)
-            return
-        if renewed is None:
+            guard.require_active()
+        except PipelineExecutionLeaseLost:
             return
 
 

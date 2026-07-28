@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.ports import PipelineExecutionLeaseFence
 from foundry_lite.application.services.pipeline_media_output_port_types import (
     MediaDerivativeRecord,
     MediaDerivativeRepository,
@@ -80,6 +81,7 @@ class PipelineMediaSetOutputCommitter:
         media_uploads: MediaUploadService,
         ctx: RequestContext,
         run_id: str,
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> None:
         self._engine = engine
         self._media_repository = media_repository
@@ -90,6 +92,7 @@ class PipelineMediaSetOutputCommitter:
         self._media_uploads = media_uploads
         self._ctx = ctx
         self._run_id = run_id
+        self._execution_lease_guard = execution_lease_guard
 
     def commit(
         self,
@@ -350,6 +353,7 @@ class PipelineMediaSetOutputCommitter:
         self._media_transactions.commit(
             self._ctx,
             media_transaction_id=transaction_attempt.media_transaction_id,
+            before_commit=self._execution_lease_guard.require_active,
         )
         return self._validated_versions(
             transaction_attempt,

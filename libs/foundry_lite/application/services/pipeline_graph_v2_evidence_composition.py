@@ -26,6 +26,7 @@ def build_pipeline_graph_v2_evidence(
         repository=service.pipeline_execution_repository,
         ctx=ctx,
         run_id=run_id,
+        execution_lease_guard=service.execution_lease_guard,
     )
 
 
@@ -45,6 +46,7 @@ def build_pipeline_graph_v2_candidates(
         ctx=ctx,
         run_id=run_id,
         execution_plan=execution_plan,
+        execution_lease_guard=service.execution_lease_guard,
     )
 
 

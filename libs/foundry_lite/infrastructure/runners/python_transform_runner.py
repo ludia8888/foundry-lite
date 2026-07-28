@@ -180,8 +180,12 @@ def _write_returned_rows(
 
 
 def _require_output_file(output_path: Path) -> None:
-    if output_path.is_symlink() or not output_path.is_file():
+    if output_path.is_symlink() or not output_path.is_file() or output_path.stat().st_size == 0:
         raise _runner_failure("output_missing", FileNotFoundError("transform output was not written"))
+    try:
+        pq.ParquetFile(output_path)
+    except Exception as exc:
+        raise _runner_failure("output_invalid", exc) from exc
 
 
 def _row_error_recorder(

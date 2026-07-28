@@ -41,4 +41,5 @@ def build_pipeline_v2_row_runtime(
             sensitive_fields=tuple(service.policy.sensitive_column_names(ctx)),
             masked_fields=tuple(service.policy.masked_column_names(ctx)),
         ),
+        execution_lease_guard=service.execution_lease_guard,
     )

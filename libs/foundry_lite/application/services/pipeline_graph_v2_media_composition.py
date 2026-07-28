@@ -35,6 +35,7 @@ def build_pipeline_v2_media_runtime(
             media_uploads=service.media_upload_service,
             ctx=ctx,
             run_id=run_id,
+            execution_lease_guard=service.execution_lease_guard,
         ),
         ctx=ctx,
         run_id=run_id,

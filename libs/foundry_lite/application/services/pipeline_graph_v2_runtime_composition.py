@@ -48,6 +48,7 @@ def build_pipeline_graph_v2_dispatcher(
             dataset_ingest=service.dataset_ingest_service,
             ctx=ctx,
             run_id=run_id,
+            execution_lease_guard=service.execution_lease_guard,
         ),
         rows=build_pipeline_v2_row_runtime(
             service,

@@ -26,7 +26,7 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
 
 def _assign_and_approve(
@@ -334,6 +334,52 @@ def test_pipeline_unexpected_failure_preserves_execution_claim_timeline(
         "pipeline.run.execution_claimed",
         "pipeline.run.failed",
     ]
+
+
+def test_pipeline_lease_loss_fences_dataset_commit_and_terminalizes_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,10\n", encoding="utf-8")
+    foundry.datasets.ensure("raw.pipeline_orders", ctx=ctx)
+    foundry.datasets.upload_csv("raw.pipeline_orders", csv_path, ctx=ctx)
+    _insert_legacy_governance_rows(foundry, ctx, graph=_orders_pipeline_graph())
+    with foundry.engine.begin() as transaction:
+        undeployed = foundry.pipeline_repository.version_by_id(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            version_id="legacy-version",
+        )
+        assert undeployed is not None
+        plan = PipelinePlanCompiler().compile(undeployed["graph"])
+        foundry.pipeline_repository.mark_version_deployed(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            version_id="legacy-version",
+            execution_plan=pipeline_execution_plan_payload(plan),
+            plan_fingerprint=plan.plan_fingerprint,
+            compiler_version=plan.compiler_version,
+            deployed_at=_now(),
+        )
+        versions_before = transaction.execute(select(func.count()).select_from(db.dataset_versions)).scalar_one()
+
+    monkeypatch.setattr(foundry.pipeline_repository, "renew_run_execution_lease", lambda **_kwargs: None)
+
+    run = foundry.pipelines.run(
+        "historical_v1",
+        version_id="legacy-version",
+        idempotency_key="lease-loss-fences-commit",
+        ctx=ctx,
+    )
+    with foundry.engine.begin() as transaction:
+        versions_after = transaction.execute(select(func.count()).select_from(db.dataset_versions)).scalar_one()
+
+    assert run["status"] == "failed"
+    assert run["error"]["message"] == "pipeline execution lease was lost before commit"
+    assert versions_after == versions_before
 
 
 def test_idempotent_replay_recovers_queued_run_and_terminalizes_stale_execution(tmp_path: Path) -> None:

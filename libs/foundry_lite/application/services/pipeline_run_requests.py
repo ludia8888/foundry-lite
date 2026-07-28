@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from foundry_lite.application.ports.pipeline_execution_repository import (
+    PipelineExecutionRepository,
+)
 from foundry_lite.application.ports.pipeline_repository import (
     PipelineRepository,
     PipelineRunRecord,
     PipelineRunRow,
     PipelineVersionRow,
 )
-from foundry_lite.application.ports.transaction_context import TransactionManager
+from foundry_lite.application.ports.transaction_context import TransactionContext, TransactionManager
 from foundry_lite.application.primitives import _json_hash, _now
 from foundry_lite.application.services.pipeline_payloads import run_record
 from foundry_lite.domain.context import RequestContext
@@ -20,24 +23,81 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFai
 def deployed_pipeline_version(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
     ctx: RequestContext,
     pipeline_id: str,
     version_id: str | None,
 ) -> PipelineVersionRow:
     if version_id is not None:
-        with transaction_manager.begin() as conn:
-            version = repository.version_by_id(transaction=conn, tenant_id=ctx.tenant_id, version_id=version_id)
-        if version is None:
-            raise NotFound("pipeline version not found", details={"version_id": version_id})
-        require_pipeline_match(version, pipeline_id)
-        require_deployed(version)
-        return version
+        return _explicit_deployed_version(transaction_manager, repository, ctx, pipeline_id, version_id)
+    return _current_deployed_version(transaction_manager, repository, execution_repository, ctx, pipeline_id)
+
+
+def _explicit_deployed_version(
+    transaction_manager: TransactionManager,
+    repository: PipelineRepository,
+    ctx: RequestContext,
+    pipeline_id: str,
+    version_id: str,
+) -> PipelineVersionRow:
     with transaction_manager.begin() as conn:
-        rows = repository.list_versions(transaction=conn, tenant_id=ctx.tenant_id, pipeline_id=pipeline_id, limit=100)
-    for row in rows:
-        if row["deployed_at"] is not None:
-            return row
+        version = repository.version_by_id(transaction=conn, tenant_id=ctx.tenant_id, version_id=version_id)
+    if version is None:
+        raise NotFound("pipeline version not found", details={"version_id": version_id})
+    require_pipeline_match(version, pipeline_id)
+    require_deployed(version)
+    return version
+
+
+def _current_deployed_version(
+    transaction_manager: TransactionManager,
+    repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
+    ctx: RequestContext,
+    pipeline_id: str,
+) -> PipelineVersionRow:
+    with transaction_manager.begin() as conn:
+        deployments = execution_repository.list_deployments(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            pipeline_id=pipeline_id,
+            limit=1,
+        )
+        if deployments:
+            version = _current_deployment_version(repository, conn, ctx, pipeline_id, deployments[0]["version_id"])
+            require_pipeline_match(version, pipeline_id)
+            require_deployed(version)
+            return version
+        rows = repository.list_versions(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            pipeline_id=pipeline_id,
+            limit=100,
+        )
+    deployed = [row for row in rows if row["deployed_at"] is not None]
+    if deployed:
+        return max(deployed, key=lambda row: str(row["deployed_at"]))
     raise NotFound("deployed pipeline version not found", details={"pipeline_id": pipeline_id})
+
+
+def _current_deployment_version(
+    repository: PipelineRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    pipeline_id: str,
+    version_id: str,
+) -> PipelineVersionRow:
+    version = repository.version_by_id(
+        transaction=transaction,
+        tenant_id=ctx.tenant_id,
+        version_id=str(version_id),
+    )
+    if version is None:
+        raise NotFound(
+            "current pipeline deployment version not found",
+            details={"pipeline_id": pipeline_id, "version_id": version_id},
+        )
+    return version
 
 
 def run_request_fingerprint(

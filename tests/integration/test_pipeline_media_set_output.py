@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -13,9 +13,13 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord
 from foundry_lite.application.ports.media_processor import ProcessorSpec
+from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.services.media.processing_records import _canonical_spec_hash
 from foundry_lite.application.services.pipeline_media_set_output import (
     PipelineMediaSetOutputCommitter,
+)
+from foundry_lite.application.services.pipeline_run_recovery import (
+    PipelineExecutionLeaseGuard,
 )
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
     PipelineV2RuntimeArtifact,
@@ -259,12 +263,21 @@ def test_media_set_output_retry_uses_a_new_fenced_generation_after_abort(
     real_commit = transaction_service.commit
     commit_calls = 0
 
-    def fail_first_commit(ctx: RequestContext, *, media_transaction_id: str):
+    def fail_first_commit(
+        ctx: RequestContext,
+        *,
+        media_transaction_id: str,
+        before_commit: Callable[[TransactionContext], None] | None = None,
+    ):
         nonlocal commit_calls
         commit_calls += 1
         if commit_calls == 1:
             raise RuntimeError("injected media output commit failure")
-        return real_commit(ctx, media_transaction_id=media_transaction_id)
+        return real_commit(
+            ctx,
+            media_transaction_id=media_transaction_id,
+            before_commit=before_commit,
+        )
 
     monkeypatch.setattr(transaction_service, "commit", fail_first_commit)
 
@@ -647,6 +660,7 @@ def _direct_committer(
         media_uploads=services.media.upload,
         ctx=fixture.ctx,
         run_id="run-aborted-generation",
+        execution_lease_guard=cast(PipelineExecutionLeaseGuard, _NoopLeaseGuard()),
     )
     node = PipelineV2RuntimeNode(
         node_id="output",
@@ -658,6 +672,11 @@ def _direct_committer(
     )
     source = _runtime_source_artifact(fixture)
     return committer, node, {"media": (source,)}, services.media.transaction
+
+
+class _NoopLeaseGuard:
+    def require_active(self, _transaction: object | None = None) -> None:
+        return None
 
 
 def _runtime_source_artifact(

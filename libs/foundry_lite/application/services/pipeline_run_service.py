@@ -14,24 +14,20 @@ from foundry_lite.application.services.pipeline_run_component_types import (
     GovernedCandidatePipelineOutputCommitter,
     GovernedPipelineCandidateCommitter,
     PipelineCompilerService,
+    PipelineExecutionRepository,
     PipelineGraphV2RunCoordinatorService,
     PipelineNodeCommitterRegistry,
-    PipelineNodeEvidenceRepository,
     PipelineNodeExecutionEvidence,
     PipelineRunExecution,
     RuntimeEvidenceBoundary,
     TransformService,
     is_graph_v2_execution_plan,
-    legacy_output_fields,
     run_compiled_transforms,
     run_with_evidence_payload,
-    unsuccessful_run_completion,
 )
 from foundry_lite.application.services.pipeline_run_contract_types import (
     PIPELINE_RUN_CANCELLED,
     PIPELINE_RUN_EXECUTING,
-    PIPELINE_RUN_FAILED,
-    PIPELINE_RUN_SUCCEEDED,
     ConflictDetected,
     DatasetRepository,
     DatasetVersionRepository,
@@ -44,6 +40,7 @@ from foundry_lite.application.services.pipeline_run_contract_types import (
     TransactionContext,
 )
 from foundry_lite.application.services.pipeline_run_recovery import (
+    PipelineExecutionLeaseGuard,
     PipelineTerminalCommitError,
     expire_stale_pipeline_run,
     new_pipeline_execution_lease,
@@ -57,6 +54,11 @@ from foundry_lite.application.services.pipeline_run_requests import (
     require_idempotent_run,
     require_pipeline_match,
     run_request_fingerprint,
+)
+from foundry_lite.application.services.pipeline_run_terminal import (
+    complete_unsuccessful_pipeline_run,
+    fail_pipeline_run,
+    succeed_pipeline_run,
 )
 
 _require_deployed = require_deployed
@@ -84,7 +86,7 @@ class PipelineRunService(CoreService):
     dataset_version_repository: DatasetVersionRepository
     pipeline_compiler_service: PipelineCompilerService
     pipeline_graph_v2_run_coordinator_service: PipelineGraphV2RunCoordinatorService
-    pipeline_execution_repository: PipelineNodeEvidenceRepository
+    pipeline_execution_repository: PipelineExecutionRepository
     pipeline_repository: PipelineRepository
     runtime_service: RuntimeEvidenceBoundary
     transform_service: TransformService
@@ -102,7 +104,14 @@ class PipelineRunService(CoreService):
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "pipeline:run", "pipeline", pipeline_id)
         self._require_write_open(ctx, "start_pipeline_run", pipeline_id)
-        version = deployed_pipeline_version(self.engine, self.pipeline_repository, ctx, pipeline_id, version_id)
+        version = deployed_pipeline_version(
+            self.engine,
+            self.pipeline_repository,
+            self.pipeline_execution_repository,
+            ctx,
+            pipeline_id,
+            version_id,
+        )
         version = ensure_pipeline_execution_plan(
             self.engine, self.pipeline_repository, self.runtime_service, ctx, version
         )
@@ -140,7 +149,8 @@ class PipelineRunService(CoreService):
         except PipelineTerminalCommitError:
             raise
         except Exception as exc:
-            return self._fail_run(ctx, row, exc)
+            fail_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row, exc)
+            return self.get_run(str(row["id"]), ctx=ctx)
 
     def _create_or_replay_run(
         self,
@@ -249,25 +259,98 @@ class PipelineRunService(CoreService):
         claimed = self._claim_run_execution(ctx, row)
         if claimed is None:
             return self.get_run(str(row["id"]), ctx=ctx)
-        row = claimed
-        with pipeline_execution_heartbeat(self.engine, self.pipeline_repository, ctx, row):
-            if is_graph_v2_execution_plan(version["execution_plan"]):
-                run_id = self.pipeline_graph_v2_run_coordinator_service.execute(ctx, row=row, version=version)
-                return self.get_run(run_id, ctx=ctx)
-            evidence = self._node_evidence(ctx, row, version)
-            compiled = self.pipeline_compiler_service.compile_graph(
-                pipeline_id=str(version["pipeline_id"]),
-                version_id=str(version["id"]),
-                graph=version["graph"],
-                ctx=ctx,
-                target_node_ids=row["target_node_ids"],
+        with pipeline_execution_heartbeat(
+            self.engine,
+            self.pipeline_repository,
+            ctx,
+            claimed,
+        ) as execution_lease_guard:
+            return self._execute_claimed_run(ctx, claimed, version, execution_lease_guard)
+
+    def _execute_claimed_run(
+        self,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+        version: PipelineVersionRow,
+        execution_lease_guard: PipelineExecutionLeaseGuard,
+    ) -> dict[str, object]:
+        if is_graph_v2_execution_plan(version["execution_plan"]):
+            run_id = self.pipeline_graph_v2_run_coordinator_service.execute(
+                ctx,
+                row=row,
+                version=version,
+                execution_lease_guard=execution_lease_guard,
             )
-            timeline = [*row["timeline"], {"event": "pipeline.compile.completed", "at": _now(), **compiled}]
-            committers = self._node_committers(ctx, row, version, evidence)
-            execution = run_compiled_transforms(committers, compiled, timeline)
-            if execution.error is not None:
-                return self._complete_unsuccessful_run(ctx, row, compiled, timeline, execution, evidence)
-            return self._succeed_run(ctx, row, version, compiled, timeline, list(execution.outputs))
+            return self.get_run(run_id, ctx=ctx)
+        return self._execute_legacy_run(ctx, row, version, execution_lease_guard)
+
+    def _execute_legacy_run(
+        self,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+        version: PipelineVersionRow,
+        execution_lease_guard: PipelineExecutionLeaseGuard,
+    ) -> dict[str, object]:
+        evidence = self._node_evidence(ctx, row, version, execution_lease_guard)
+        compiled = self.pipeline_compiler_service.compile_graph(
+            pipeline_id=str(version["pipeline_id"]),
+            version_id=str(version["id"]),
+            graph=version["graph"],
+            ctx=ctx,
+            target_node_ids=row["target_node_ids"],
+        )
+        timeline = [*row["timeline"], {"event": "pipeline.compile.completed", "at": _now(), **compiled}]
+        committers = self._node_committers(ctx, row, version, evidence, execution_lease_guard)
+        execution = run_compiled_transforms(committers, compiled, timeline)
+        return self._complete_legacy_execution(
+            ctx,
+            row,
+            version,
+            compiled,
+            timeline,
+            execution,
+            evidence,
+            execution_lease_guard,
+        )
+
+    def _complete_legacy_execution(
+        self,
+        ctx: RequestContext,
+        row: PipelineRunRow,
+        version: PipelineVersionRow,
+        compiled: Mapping[str, object],
+        timeline: list[dict[str, object]],
+        execution: PipelineRunExecution,
+        evidence: PipelineNodeExecutionEvidence,
+        execution_lease_guard: PipelineExecutionLeaseGuard,
+    ) -> dict[str, object]:
+        if execution.error is not None:
+            complete_unsuccessful_pipeline_run(
+                self.engine,
+                self.pipeline_repository,
+                self.runtime_service,
+                ctx,
+                row,
+                compiled,
+                timeline,
+                execution,
+                evidence,
+                execution_lease_guard,
+            )
+            return self.get_run(str(row["id"]), ctx=ctx)
+        succeed_pipeline_run(
+            self.engine,
+            self.pipeline_repository,
+            self.runtime_service,
+            ctx,
+            row,
+            version,
+            compiled,
+            timeline,
+            list(execution.outputs),
+            execution_lease_guard,
+        )
+        return self.get_run(str(row["id"]), ctx=ctx)
 
     def _claim_run_execution(
         self,
@@ -308,100 +391,12 @@ class PipelineRunService(CoreService):
             details={"run_id": run_id, "status": current["status"]},
         )
 
-    def _succeed_run(
-        self,
-        ctx: RequestContext,
-        row: PipelineRunRow,
-        version: PipelineVersionRow,
-        compiled: Mapping[str, object],
-        timeline: list[dict[str, object]],
-        outputs: list[dict[str, object]],
-    ) -> dict[str, object]:
-        output_dataset_ref, output_version_id = legacy_output_fields(compiled, outputs)
-        with self.engine.begin() as conn:
-            after = self.pipeline_repository.update_run_terminal(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                run_id=str(row["id"]),
-                transition=PIPELINE_RUN_SUCCEEDED,
-                output_dataset_ref=output_dataset_ref,
-                output_version_id=output_version_id,
-                outputs=outputs,
-                timeline=[*timeline, {"event": "pipeline.run.succeeded", "at": _now()}],
-                error=None,
-                completed_at=_now(),
-            )
-            if after is not None:
-                self._audit(conn, ctx, "succeeded", "pipeline_run", str(row["id"]), {"version_id": version["id"]})
-        return self.get_run(str(row["id"]), ctx=ctx)
-
-    def _complete_unsuccessful_run(
-        self,
-        ctx: RequestContext,
-        row: PipelineRunRow,
-        compiled: Mapping[str, object],
-        timeline: list[dict[str, object]],
-        execution: PipelineRunExecution,
-        evidence: PipelineNodeExecutionEvidence,
-    ) -> dict[str, object]:
-        state = unsuccessful_run_completion(self.runtime_service, ctx, row, compiled, timeline, execution)
-        try:
-            with self.engine.begin() as conn:
-                evidence.fail_and_skip(
-                    conn,
-                    failed_attempt=execution.failed_attempt,
-                    failed_item=execution.failed_item,
-                    skipped_items=execution.skipped_items,
-                    error=state.error,
-                )
-                after = self.pipeline_repository.update_run_terminal(
-                    transaction=conn,
-                    tenant_id=ctx.tenant_id,
-                    run_id=str(row["id"]),
-                    transition=state.transition,
-                    output_dataset_ref=state.output_dataset_ref,
-                    output_version_id=state.output_version_id,
-                    outputs=list(state.outputs),
-                    timeline=list(state.timeline),
-                    error=state.error,
-                    completed_at=_now(),
-                )
-                if after is None:
-                    raise ConflictDetected("pipeline run terminal state changed concurrently")
-                self._audit(conn, ctx, state.status, "pipeline_run", str(row["id"]), {"outputs": state.outputs})
-        except Exception as exc:
-            raise PipelineTerminalCommitError("pipeline terminal evidence transaction failed") from exc
-        return self.get_run(str(row["id"]), ctx=ctx)
-
-    def _fail_run(self, ctx: RequestContext, row: PipelineRunRow, exc: Exception) -> dict[str, object]:
-        run_id = str(row["id"])
-        error = self.runtime_service._error_payload(exc, ctx, run_id=run_id)
-        with self.engine.begin() as conn:
-            current = self._require_run(conn, ctx, run_id)
-            after = self.pipeline_repository.update_run_terminal(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                run_id=run_id,
-                transition=PIPELINE_RUN_FAILED,
-                output_dataset_ref=current["output_dataset_ref"],
-                output_version_id=current["output_version_id"],
-                outputs=list(current["outputs"]),
-                timeline=[
-                    *current["timeline"],
-                    {"event": "pipeline.run.failed", "at": _now(), "error": dict(error)},
-                ],
-                error=dict(error),
-                completed_at=_now(),
-            )
-            if after is not None:
-                self._audit(conn, ctx, "failed", "pipeline_run", run_id, {"error": dict(error)})
-        return self.get_run(run_id, ctx=ctx)
-
     def _node_evidence(
         self,
         ctx: RequestContext,
         row: PipelineRunRow,
         version: PipelineVersionRow,
+        execution_lease_guard: PipelineExecutionLeaseGuard,
     ) -> PipelineNodeExecutionEvidence:
         plan = version["execution_plan"]
         if plan is None:
@@ -417,6 +412,7 @@ class PipelineRunService(CoreService):
             ctx=ctx,
             run_id=str(row["id"]),
             execution_plan=plan,
+            execution_lease_guard=execution_lease_guard,
         )
 
     def _node_committers(
@@ -425,6 +421,7 @@ class PipelineRunService(CoreService):
         row: PipelineRunRow,
         version: PipelineVersionRow,
         evidence: PipelineNodeExecutionEvidence,
+        execution_lease_guard: PipelineExecutionLeaseGuard,
     ) -> PipelineNodeCommitterRegistry:
         plan = version["execution_plan"]
         if plan is None:
@@ -438,6 +435,7 @@ class PipelineRunService(CoreService):
             ctx=ctx,
             run_id=str(row["id"]),
             execution_plan=plan,
+            execution_lease_guard=execution_lease_guard,
         )
         return PipelineNodeCommitterRegistry(
             dataset=DatasetPipelineNodeCommitter(self.transform_service, evidence, ctx),

@@ -116,9 +116,11 @@ def test_python_transform_runner_rejects_missing_output_with_typed_failure(tmp_p
     source_path = tmp_path / "transform.py"
     manifest_path = tmp_path / "request.json"
     result_path = tmp_path / "result.json"
+    output_path = tmp_path / "output.parquet"
+    output_path.touch()
     source_path.write_text("def compute():\n    return None\n", encoding="utf-8")
     manifest_path.write_text(
-        json.dumps(_manifest(source_path, tmp_path / "output.parquet", function_name="compute")),
+        json.dumps(_manifest(source_path, output_path, function_name="compute")),
         encoding="utf-8",
     )
 
@@ -128,6 +130,25 @@ def test_python_transform_runner_rejects_missing_output_with_typed_failure(tmp_p
     assert exit_code == 2
     assert result["failure"]["type"] == "output_missing"
     assert result["failure"]["exceptionType"] == "FileNotFoundError"
+
+
+def test_python_transform_runner_rejects_unreadable_parquet_output(tmp_path: Path) -> None:
+    source_path = tmp_path / "transform.py"
+    manifest_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    output_path = tmp_path / "output.parquet"
+    output_path.write_bytes(b"not parquet")
+    source_path.write_text("def compute():\n    return None\n", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(_manifest(source_path, output_path, function_name="compute")),
+        encoding="utf-8",
+    )
+
+    exit_code = main([str(manifest_path), str(result_path)])
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 2
+    assert result["failure"]["type"] == "output_invalid"
 
 
 def test_python_transform_runner_rejects_source_changed_after_manifest(tmp_path: Path) -> None:

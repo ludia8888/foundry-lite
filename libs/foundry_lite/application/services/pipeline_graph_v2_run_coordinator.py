@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from foundry_lite.application.ports import TransactionContext, TransactionManager
+from foundry_lite.application.ports import PipelineExecutionLeaseFence, TransactionContext, TransactionManager
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineExecutionRepository,
 )
@@ -51,6 +51,7 @@ class PipelineGraphV2RunCoordinatorService(CoreService):
         *,
         row: PipelineRunRow,
         version: PipelineVersionRow,
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> str:
         plan = version["execution_plan"]
         if plan is None:
@@ -65,9 +66,10 @@ class PipelineGraphV2RunCoordinatorService(CoreService):
             deployment_id=self._deployment_id(ctx, version),
             execution_plan=plan,
             target_node_ids=row["target_node_ids"] or (),
+            execution_lease_guard=execution_lease_guard,
         )
         terminal = graph_v2_terminal_state(result)
-        return self._commit_terminal(ctx, row, version, terminal)
+        return self._commit_terminal(ctx, row, version, terminal, execution_lease_guard)
 
     def _deployment_id(
         self,
@@ -104,8 +106,10 @@ class PipelineGraphV2RunCoordinatorService(CoreService):
         row: PipelineRunRow,
         version: PipelineVersionRow,
         terminal: PipelineGraphV2TerminalState,
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> str:
         with self.engine.begin() as transaction:
+            execution_lease_guard.require_active(transaction)
             after = self.pipeline_repository.update_run_terminal(
                 transaction=transaction,
                 tenant_id=ctx.tenant_id,

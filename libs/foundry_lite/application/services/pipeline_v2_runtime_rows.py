@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 
-from foundry_lite.application.ports.dataset_repository import DatasetRow
+from foundry_lite.application.ports import DatasetRow, PipelineExecutionLeaseFence, TransactionContext
 from foundry_lite.application.ports.language_model import GovernedSemanticModelPort
 from foundry_lite.application.primitives import CommitResult, _now
 from foundry_lite.application.services.pipeline_dataset_output_projection import (
@@ -78,6 +78,7 @@ class PipelineV2DatasetIngest(Protocol):
         tx_type: str = "APPEND",
         source_type: str = "source.batch",
         transaction_metadata: Mapping[str, object] | None = None,
+        before_commit: Callable[[TransactionContext], None] | None = None,
     ) -> CommitResult | None: ...
 
 
@@ -96,6 +97,7 @@ class PipelineV2RowRuntime:
         pipeline_id: str,
         deployment_id: str,
         resource_security_policy_fingerprint: str,
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> None:
         self._dataset_registry = dataset_registry
         self._dataset_ingest = dataset_ingest
@@ -106,6 +108,7 @@ class PipelineV2RowRuntime:
         self._pipeline_id = pipeline_id
         self._deployment_id = deployment_id
         self._resource_security_policy_fingerprint = resource_security_policy_fingerprint
+        self._execution_lease_guard = execution_lease_guard
 
     def content_units_to_rows(
         self,
@@ -289,6 +292,7 @@ class PipelineV2RowRuntime:
                 "inputArtifacts": artifact_input_refs(inputs),
                 **evidence,
             },
+            before_commit=self._execution_lease_guard.require_active,
         )
         if result is None:
             raise InvariantViolation("pipeline Dataset output did not create a version")

@@ -11,6 +11,12 @@ from foundry_lite.application.ports.transaction_context import StatusTransition,
 JsonObject = dict[str, object]
 
 
+class PipelineExecutionLeaseFence(Protocol):
+    """Prove that the current Pipeline executor still owns its durable lease."""
+
+    def require_active(self, transaction: TransactionContext | None = None) -> None: ...
+
+
 def _empty_json_object_list() -> list[JsonObject]:
     return []
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, wait
 from functools import partial
 
 from foundry_lite.application.ports.adapter_failure import AdapterError
@@ -99,8 +99,18 @@ def interpret_semantic_items(
     if len(items) < 2 or max_concurrency == 1:
         return [worker(item) for item in items]
     worker_count = min(len(items), _positive_concurrency(max_concurrency))
+    return _interpret_concurrently(worker, items, worker_count)
+
+
+def _interpret_concurrently(
+    worker: Callable[[Mapping[str, object]], JsonObject],
+    items: Sequence[Mapping[str, object]],
+    worker_count: int,
+) -> list[JsonObject]:
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="pipeline-semantic") as executor:
-        return list(executor.map(worker, items))
+        futures = [executor.submit(worker, item) for item in items]
+        wait(futures)
+        return [future.result() for future in futures]
 
 
 def _positive_timeout(value: int) -> int:

@@ -90,6 +90,28 @@ def test_cron_day_of_month_and_weekday_follow_standard_or_semantics() -> None:
     assert initial_next_due_at(spec, now) == "2026-01-05T00:00:00Z"
 
 
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("0 0 */2 * 1", "2026-01-05T00:00:00Z"),
+        ("0 0 15 * */3", "2026-02-15T00:00:00Z"),
+    ],
+)
+def test_cron_star_steps_keep_standard_day_field_semantics(expression: str, expected: str) -> None:
+    now = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    spec = normalize_pipeline_schedule(
+        {
+            "triggerType": "cron",
+            "cronExpression": expression,
+            "timezone": "UTC",
+        },
+        is_enabled=True,
+        now=now,
+    )
+
+    assert initial_next_due_at(spec, now) == expected
+
+
 def test_cron_registration_mid_minute_skips_elapsed_slot_and_supports_step_from_value() -> None:
     now = datetime(2026, 1, 1, 0, 5, 30, tzinfo=UTC)
     spec = normalize_pipeline_schedule(

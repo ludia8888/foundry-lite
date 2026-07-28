@@ -8,6 +8,7 @@ from foundry_lite.application.ports import (
     DatasetRepository,
     DatasetRow,
     DatasetVersionRepository,
+    PipelineExecutionLeaseFence,
     TransactionContext,
     TransactionManager,
 )
@@ -66,6 +67,7 @@ class GovernedPipelineCandidateCommitter:
         ctx: RequestContext,
         run_id: str,
         execution_plan: Mapping[str, object],
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> None:
         self._transaction_manager = transaction_manager
         self._repository = repository
@@ -75,11 +77,13 @@ class GovernedPipelineCandidateCommitter:
         self._ctx = ctx
         self._run_id = run_id
         self._plan = PipelineEvidencePlan(execution_plan)
+        self._execution_lease_guard = execution_lease_guard
 
     def commit(self, item: Mapping[str, object]) -> PipelineCandidateCommitResult:
         stage = stage_pipeline_candidate(item)
         source_datasets = self._prefetch_source_datasets(stage.node_id)
         with self._transaction_manager.begin() as transaction:
+            self._execution_lease_guard.require_active(transaction)
             inputs = self._resolve_inputs(transaction, stage.node_id, source_datasets)
             candidate = self._validate_candidate(stage, inputs)
             node_run, attempt = self._start_attempt(transaction, candidate)

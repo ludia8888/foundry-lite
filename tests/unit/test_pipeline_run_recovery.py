@@ -3,9 +3,11 @@ from threading import Event
 from typing import cast
 
 import foundry_lite.application.services.pipeline_run_recovery as pipeline_run_recovery
+import pytest
 from foundry_lite.application.ports.pipeline_repository import PipelineRepository, PipelineRunRow
 from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.services.pipeline_run_recovery import (
+    PipelineExecutionLeaseLost,
     is_stale_pipeline_execution,
     pipeline_execution_heartbeat,
     replayed_pipeline_run_action,
@@ -57,6 +59,23 @@ def test_execution_heartbeat_renews_the_durable_lease(monkeypatch) -> None:
     assert set(repository.tokens) == {"lease-a"}
 
 
+def test_execution_heartbeat_fences_commits_immediately_after_renewal_loss(monkeypatch) -> None:
+    attempted = Event()
+    repository = _LostLeaseRepository(attempted)
+    monkeypatch.setattr(pipeline_run_recovery, "_HEARTBEAT_INTERVAL_SECONDS", 0.001)
+    row = cast(PipelineRunRow, {"id": "run-lost", "execution_lease_token": "lease-lost"})
+
+    with pytest.raises(PipelineExecutionLeaseLost, match="lost before commit"):
+        with pipeline_execution_heartbeat(
+            cast(TransactionManager, _TransactionManager()),
+            cast(PipelineRepository, repository),
+            RequestContext(tenant_id="tenant-a"),
+            row,
+        ) as guard:
+            assert attempted.wait(timeout=1)
+            guard.require_active()
+
+
 class _TransactionManager:
     def begin(self) -> "_Transaction":
         return _Transaction()
@@ -79,3 +98,12 @@ class _LeaseRenewalRepository:
         self.tokens.append(str(kwargs["execution_lease_token"]))
         self._renewed.set()
         return cast(PipelineRunRow, {"id": kwargs["run_id"], "status": "executing"})
+
+
+class _LostLeaseRepository:
+    def __init__(self, attempted: Event) -> None:
+        self._attempted = attempted
+
+    def renew_run_execution_lease(self, **_kwargs: object) -> None:
+        self._attempted.set()
+        return None

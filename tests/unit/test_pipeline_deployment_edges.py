@@ -4,12 +4,17 @@ from collections.abc import Sequence
 from typing import cast
 
 import pytest
-from foundry_lite.application.ports.pipeline_execution_repository import PipelineDeploymentRow
+from foundry_lite.application.ports.pipeline_execution_repository import (
+    PipelineDeploymentRow,
+    PipelineExecutionRepository,
+)
+from foundry_lite.application.ports.pipeline_repository import PipelineRepository, PipelineVersionRow
 from foundry_lite.application.ports.trained_model_inference import (
     TrainedModelDefinition,
     TrainedModelField,
     TrainedModelInferencePort,
 )
+from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.services.pipeline_deployment_service import (
     PipelineDeploymentService,
     _engine_neutral_plan_summary,
@@ -22,6 +27,8 @@ from foundry_lite.application.services.pipeline_deployment_service import (
     _processor_pins,
     _require_matching_deployment,
 )
+from foundry_lite.application.services.pipeline_run_requests import deployed_pipeline_version
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 
@@ -150,3 +157,80 @@ def test_deployment_helpers_detect_dataset_sources_and_idempotency_conflicts() -
         _require_matching_deployment(row, "different")
 
     assert captured.value.details["deployment_id"] == "deployment-1"
+
+
+def test_implicit_pipeline_run_uses_latest_promoted_deployment_after_rollback() -> None:
+    versions = {
+        "version-1": cast(
+            PipelineVersionRow,
+            {
+                "id": "version-1",
+                "pipeline_id": "pipe-1",
+                "deployed_at": "2026-07-28T01:00:00Z",
+            },
+        ),
+        "version-2": cast(
+            PipelineVersionRow,
+            {
+                "id": "version-2",
+                "pipeline_id": "pipe-1",
+                "deployed_at": "2026-07-28T02:00:00Z",
+            },
+        ),
+    }
+    repository = _PipelineVersionRepository(versions)
+    execution_repository = _CurrentDeploymentRepository("version-1")
+
+    selected = deployed_pipeline_version(
+        cast(TransactionManager, _TransactionManager()),
+        cast(PipelineRepository, repository),
+        cast(PipelineExecutionRepository, execution_repository),
+        RequestContext(tenant_id="tenant-1"),
+        "pipe-1",
+        None,
+    )
+
+    assert selected["id"] == "version-1"
+
+
+class _TransactionManager:
+    def begin(self) -> _Transaction:
+        return _Transaction()
+
+
+class _Transaction:
+    def __enter__(self) -> object:
+        return object()
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+class _PipelineVersionRepository:
+    def __init__(self, versions: dict[str, PipelineVersionRow]) -> None:
+        self._versions = versions
+
+    def version_by_id(self, **kwargs: object) -> PipelineVersionRow | None:
+        return self._versions.get(str(kwargs["version_id"]))
+
+    def list_versions(self, **_kwargs: object) -> list[PipelineVersionRow]:
+        return list(reversed(self._versions.values()))
+
+
+class _CurrentDeploymentRepository:
+    def __init__(self, version_id: str) -> None:
+        self._version_id = version_id
+
+    def list_deployments(self, **_kwargs: object) -> list[PipelineDeploymentRow]:
+        return [
+            cast(
+                PipelineDeploymentRow,
+                {
+                    "id": "deployment-3",
+                    "pipeline_id": "pipe-1",
+                    "version_id": self._version_id,
+                    "deployment_number": 3,
+                    "status": "PROMOTED",
+                },
+            )
+        ]

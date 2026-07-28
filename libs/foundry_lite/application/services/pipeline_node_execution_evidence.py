@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from foundry_lite.application.ports import (
     DatasetRepository,
     DatasetVersionRepository,
+    PipelineExecutionLeaseFence,
     TransactionContext,
     TransactionManager,
 )
@@ -35,6 +36,7 @@ from foundry_lite.application.services.pipeline_node_evidence_records import (
     unstarted_attempt_record,
 )
 from foundry_lite.application.services.pipeline_node_execution_evidence_types import (
+    JsonObject,
     PipelineNodeAttemptContext,
 )
 from foundry_lite.application.services.transform_runs import TransformRunPlan
@@ -47,9 +49,6 @@ from foundry_lite.application.state_transitions import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, InvariantViolation
-
-JsonObject = dict[str, object]
-type PipelineNodeEvidenceRepository = PipelineExecutionRepository
 
 
 class PipelineNodeExecutionEvidence:
@@ -65,6 +64,7 @@ class PipelineNodeExecutionEvidence:
         ctx: RequestContext,
         run_id: str,
         execution_plan: Mapping[str, object],
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> None:
         self._transaction_manager = transaction_manager
         self._pipeline_execution_repository = repository
@@ -73,6 +73,7 @@ class PipelineNodeExecutionEvidence:
         self._ctx = ctx
         self._run_id = run_id
         self._plan = PipelineEvidencePlan(execution_plan)
+        self._execution_lease_guard = execution_lease_guard
 
     def start_attempt(
         self,
@@ -82,6 +83,7 @@ class PipelineNodeExecutionEvidence:
         node_id = str(item["nodeId"])
         now = _now()
         with self._transaction_manager.begin() as transaction:
+            self._execution_lease_guard.require_active(transaction)
             inputs = self._resolved_input_artifacts(transaction, node_id, transform_plan)
             node_run = self._ensure_node_run(transaction, node_id, inputs, now)
             claimed = self._pipeline_execution_repository.claim_node_run(
@@ -111,6 +113,7 @@ class PipelineNodeExecutionEvidence:
         attempt: PipelineNodeAttemptContext,
         result: CommitResult,
     ) -> None:
+        self._execution_lease_guard.require_active(transaction)
         artifact = self._committed_output_artifact(transaction, attempt, result)
         output_ref = node_artifact_ref(artifact)
         completed_at = _now()
@@ -148,6 +151,7 @@ class PipelineNodeExecutionEvidence:
         skipped_items: tuple[JsonObject, ...],
         error: Mapping[str, object],
     ) -> None:
+        self._execution_lease_guard.require_active(transaction)
         if failed_attempt is not None:
             self._fail_attempt(transaction, failed_attempt, error)
         elif failed_item is not None:

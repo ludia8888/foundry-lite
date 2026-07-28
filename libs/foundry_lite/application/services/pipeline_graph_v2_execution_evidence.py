@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import cast
 
-from foundry_lite.application.ports import TransactionContext, TransactionManager
+from foundry_lite.application.ports import (
+    PipelineExecutionLeaseFence,
+    TransactionContext,
+    TransactionManager,
+)
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineExecutionRepository,
     PipelineNodeAttemptRow,
@@ -13,7 +16,6 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineRunArtifactRow,
 )
 from foundry_lite.application.primitives import _new_id, _now
-from foundry_lite.application.services.pipeline_execution_contracts import thaw_json_value
 from foundry_lite.application.services.pipeline_graph_v2_execution_evidence_records import (
     graph_v2_artifact_record,
     graph_v2_attempt_record,
@@ -30,6 +32,7 @@ from foundry_lite.application.services.pipeline_graph_v2_execution_evidence_type
     input_artifact_payloads,
     require_node_coordinates,
     require_output_security,
+    validated_error_payload,
 )
 from foundry_lite.application.state_transitions import (
     PIPELINE_NODE_ATTEMPT_FAILED,
@@ -52,6 +55,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         repository: PipelineExecutionRepository,
         ctx: RequestContext,
         run_id: str,
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> None:
         if not run_id.strip():
             raise ValidationFailed("pipeline run id is required")
@@ -59,6 +63,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         self._repository = repository
         self._ctx = ctx
         self._run_id = run_id
+        self._execution_lease_guard = execution_lease_guard
 
     def start(
         self,
@@ -78,6 +83,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         inputs = canonical_input_artifacts(input_artifacts)
         now = _now()
         with self._transaction_manager.begin() as transaction:
+            self._execution_lease_guard.require_active(transaction)
             node_run = self._insert_node_run(
                 transaction,
                 node_id=node_id,
@@ -99,6 +105,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         require_output_security(attempt, artifact)
         now = _now()
         with self._transaction_manager.begin() as transaction:
+            self._execution_lease_guard.require_active(transaction)
             node_run, attempt_row = self._required_execution_rows(transaction, attempt)
             existing = self._repository.artifact_by_idempotency_key(
                 transaction=transaction,
@@ -126,9 +133,10 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         attempt: PipelineGraphV2AttemptContext,
         error: Mapping[str, object],
     ) -> None:
-        error_payload = _error_payload(error)
+        error_payload = validated_error_payload(error)
         now = _now()
         with self._transaction_manager.begin() as transaction:
+            self._execution_lease_guard.require_active(transaction)
             node_run, attempt_row = self._required_execution_rows(transaction, attempt)
             self._complete_attempt_failure(transaction, attempt_row, error_payload, now)
             self._complete_node_failure(transaction, node_run, error_payload, now)
@@ -148,9 +156,10 @@ class PipelineGraphV2ExecutionEvidenceWriter:
             spec_version=spec_version,
         )
         inputs = canonical_input_artifacts(input_artifacts)
-        error_payload = _error_payload(error)
+        error_payload = validated_error_payload(error)
         now = _now()
         with self._transaction_manager.begin() as transaction:
+            self._execution_lease_guard.require_active(transaction)
             node_run = self._insert_node_run(
                 transaction,
                 node_id=node_id,
@@ -488,10 +497,3 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         if completed is None:
             raise ConflictDetected("pipeline skipped-node evidence changed concurrently")
         return completed
-
-
-def _error_payload(error: Mapping[str, object]) -> JsonObject:
-    payload = cast(JsonObject, thaw_json_value(error))
-    if not payload:
-        raise ValidationFailed("pipeline node error evidence cannot be empty")
-    return payload

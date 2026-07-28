@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import cast
 
 from foundry_lite.application.services.pipeline_execution_contracts import thaw_json_value
 from foundry_lite.application.services.pipeline_graph_contracts import PipelineArtifactKind
@@ -29,6 +30,13 @@ _ARTIFACT_PLANES = {
     PipelineArtifactKind.GEOSPATIAL_SERIES: "geospatial",
     PipelineArtifactKind.ONTOLOGY_MAPPING: "ontology",
 }
+
+
+def validated_error_payload(error: Mapping[str, object]) -> JsonObject:
+    payload = cast(JsonObject, thaw_json_value(error))
+    if not payload:
+        raise ValidationFailed("pipeline node error evidence cannot be empty")
+    return payload
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.ports import PipelineExecutionLeaseFence
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_graph_v2_execution_bindings import (
     ExactDatasetVersionReader,
@@ -77,9 +78,10 @@ class PipelineGraphV2ExecutionService(CoreService):
         deployment_id: str,
         execution_plan: Mapping[str, object],
         target_node_ids: Sequence[str] = (),
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> PipelineV2RunResult:
         return execute_pipeline_graph_v2(
-            self._execution_bindings(),
+            self._execution_bindings(execution_lease_guard),
             ctx,
             run_id=run_id,
             pipeline_id=pipeline_id,
@@ -88,7 +90,10 @@ class PipelineGraphV2ExecutionService(CoreService):
             target_node_ids=target_node_ids,
         )
 
-    def _execution_bindings(self) -> PipelineGraphV2ExecutionBindings:
+    def _execution_bindings(
+        self,
+        execution_lease_guard: PipelineExecutionLeaseFence,
+    ) -> PipelineGraphV2ExecutionBindings:
         return PipelineGraphV2ExecutionBindings(
             engine=self.engine,
             policy=self.policy,
@@ -113,4 +118,5 @@ class PipelineGraphV2ExecutionService(CoreService):
             media_transaction_service=self.media_transaction_service,
             media_upload_service=self.media_upload_service,
             runtime_service=self.runtime_service,
+            execution_lease_guard=execution_lease_guard,
         )

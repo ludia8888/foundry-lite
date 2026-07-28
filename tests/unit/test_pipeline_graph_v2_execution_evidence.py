@@ -21,6 +21,9 @@ from foundry_lite.application.services.pipeline_graph_v2_execution_evidence_reco
 from foundry_lite.application.services.pipeline_graph_v2_execution_evidence_types import (
     PipelineGraphV2ArtifactSpec,
 )
+from foundry_lite.application.services.pipeline_run_recovery import (
+    PipelineExecutionLeaseGuard,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -56,6 +59,7 @@ def evidence(tmp_path: Path) -> Iterator[EvidenceHarness]:
             request_id="req-graph-v2",
         ),
         run_id=_RUN_ID,
+        execution_lease_guard=cast(PipelineExecutionLeaseGuard, _NoopLeaseGuard()),
     )
     yield EvidenceHarness(engine=engine, repository=repository, writer=writer)
     engine.dispose()
@@ -369,6 +373,7 @@ def test_writer_requires_non_empty_run_and_error_evidence(
             repository=evidence.repository,
             ctx=RequestContext("tenant", "user", "request"),
             run_id=" ",
+            execution_lease_guard=cast(PipelineExecutionLeaseGuard, _NoopLeaseGuard()),
         )
 
     attempt = evidence.writer.start(
@@ -380,6 +385,11 @@ def test_writer_requires_non_empty_run_and_error_evidence(
     )
     with pytest.raises(ValidationFailed, match="cannot be empty"):
         evidence.writer.fail(attempt, {})
+
+
+class _NoopLeaseGuard:
+    def require_active(self, _transaction: object | None = None) -> None:
+        return None
 
 
 def test_writer_rejects_conflicting_terminal_replays(

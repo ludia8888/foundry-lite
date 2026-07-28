@@ -303,6 +303,7 @@ from foundry_lite.application.ports.osdk_application_repository import (
 from foundry_lite.application.ports.pipeline_repository import (
     PipelineBranchRecord,
     PipelineBranchRow,
+    PipelineExecutionLeaseFence,
     PipelineProposalRecord,
     PipelineProposalRow,
     PipelineRepository,

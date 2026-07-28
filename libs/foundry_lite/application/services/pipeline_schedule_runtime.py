@@ -19,7 +19,7 @@ _MAX_INTERVAL_SECONDS = 60 * 60 * 24 * 366 * 5
 @dataclass(frozen=True, slots=True)
 class CronField:
     values: frozenset[int]
-    is_wildcard: bool
+    is_star_based: bool
 
 
 def normalize_pipeline_schedule(
@@ -223,7 +223,7 @@ def _cron_field(value: str, minimum: int, maximum: int) -> CronField:
     values: set[int] = set()
     for part in value.split(","):
         values.update(_cron_part_values(part, minimum, maximum))
-    return CronField(frozenset(values), value == "*")
+    return CronField(frozenset(values), value.startswith("*"))
 
 
 def _cron_part_values(part: str, minimum: int, maximum: int) -> set[int]:
@@ -265,13 +265,9 @@ def _cron_matches(
 
 
 def _day_matches(day: CronField, weekday: CronField, is_day_match: bool, is_weekday_match: bool) -> bool:
-    if day.is_wildcard and weekday.is_wildcard:
-        return True
-    if day.is_wildcard:
-        return is_weekday_match
-    if weekday.is_wildcard:
-        return is_day_match
-    return is_day_match or is_weekday_match
+    if not day.is_star_based and not weekday.is_star_based:
+        return is_day_match or is_weekday_match
+    return is_day_match and is_weekday_match
 
 
 def _timezone(value: str) -> ZoneInfo:

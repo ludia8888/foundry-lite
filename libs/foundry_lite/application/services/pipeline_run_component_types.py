@@ -14,7 +14,7 @@ from foundry_lite.application.services.pipeline_node_evidence_payloads import (
     run_with_evidence_payload,
 )
 from foundry_lite.application.services.pipeline_node_execution_evidence import (
-    PipelineNodeEvidenceRepository,
+    PipelineExecutionRepository,
     PipelineNodeExecutionEvidence,
 )
 from foundry_lite.application.services.pipeline_output_committers import (
@@ -24,6 +24,7 @@ from foundry_lite.application.services.pipeline_output_committers import (
 )
 from foundry_lite.application.services.pipeline_run_execution import (
     PipelineRunExecution,
+    PipelineUnsuccessfulCompletion,
     legacy_output_fields,
     run_compiled_transforms,
     unsuccessful_run_completion,
@@ -38,9 +39,10 @@ __all__ = [
     "PipelineCompilerService",
     "PipelineGraphV2RunCoordinatorService",
     "PipelineNodeCommitterRegistry",
-    "PipelineNodeEvidenceRepository",
+    "PipelineExecutionRepository",
     "PipelineNodeExecutionEvidence",
     "PipelineRunExecution",
+    "PipelineUnsuccessfulCompletion",
     "RuntimeEvidenceBoundary",
     "TransformService",
     "is_graph_v2_execution_plan",

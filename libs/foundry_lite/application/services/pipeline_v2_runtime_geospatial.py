@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.ports import PipelineExecutionLeaseFence
 from foundry_lite.application.primitives import CommitResult, _now
 from foundry_lite.application.services.pipeline_geospatial_contracts import (
     geospatial_spec,
@@ -41,11 +42,13 @@ class PipelineV2GeospatialRuntime:
         dataset_ingest: PipelineV2DatasetIngest,
         ctx: RequestContext,
         run_id: str,
+        execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> None:
         self._dataset_registry = dataset_registry
         self._dataset_ingest = dataset_ingest
         self._ctx = ctx
         self._run_id = run_id
+        self._execution_lease_guard = execution_lease_guard
 
     def output_geospatial(
         self,
@@ -107,6 +110,7 @@ class PipelineV2GeospatialRuntime:
                 "geospatialSpec": dict(spec),
                 "securityEnvelope": dict(security),
             },
+            before_commit=self._execution_lease_guard.require_active,
         )
         if result is None:
             raise InvariantViolation("pipeline geospatial output did not create a version")

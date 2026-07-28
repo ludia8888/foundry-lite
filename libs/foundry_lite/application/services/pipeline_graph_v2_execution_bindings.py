@@ -11,6 +11,7 @@ from foundry_lite.application.pipeline_runtime_dependencies import (
 from foundry_lite.application.ports import (
     DatasetRepository,
     DatasetVersionRepository,
+    PipelineExecutionLeaseFence,
     TransactionManager,
 )
 from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
@@ -82,3 +83,4 @@ class PipelineGraphV2ExecutionBindings:
     media_transaction_service: MediaTransactionService
     media_upload_service: MediaUploadService
     runtime_service: RuntimeEvidenceBoundary
+    execution_lease_guard: PipelineExecutionLeaseFence
