@@ -31,18 +31,23 @@ class _TransactionManager:
         yield object()
 
 
-class _StaleRepository:
+class _FencedRepository:
     def __init__(self) -> None:
-        self.expected_completed_at: str | None = None
+        self.expected_completed_at: list[str | None] = []
 
-    def update_run_terminal(self, **kwargs: object) -> None:
-        self.expected_completed_at = cast(str | None, kwargs["expected_completed_at"])
+    def update_run_terminal(self, **kwargs: object) -> PipelineRunRow | None:
+        self.expected_completed_at.append(cast(str | None, kwargs["expected_completed_at"]))
+        if len(self.expected_completed_at) == 1:
+            return _run_row(completed_at="2026-07-28T00:01:00+00:00")
         return None
 
 
-class _NoAuditRuntime:
+class _RecordingRuntime:
+    def __init__(self) -> None:
+        self.audit_calls = 0
+
     def _audit(self, *_args: object, **_kwargs: object) -> None:
-        raise AssertionError("a stale reconciliation must not write audit evidence")
+        self.audit_calls += 1
 
 
 def test_unknown_commit_resolution_rejects_missing_terminal_fence() -> None:
@@ -50,8 +55,8 @@ def test_unknown_commit_resolution_rejects_missing_terminal_fence() -> None:
 
     persisted = _persist_resolution(
         transaction_manager,
-        cast(PipelineRepository, _StaleRepository()),
-        cast(RuntimeEvidenceBoundary, _NoAuditRuntime()),
+        cast(PipelineRepository, _FencedRepository()),
+        cast(RuntimeEvidenceBoundary, _RecordingRuntime()),
         _CTX,
         _run_row(completed_at=None),
         _resolution(),
@@ -61,22 +66,37 @@ def test_unknown_commit_resolution_rejects_missing_terminal_fence() -> None:
     assert transaction_manager.begin_calls == 0
 
 
-def test_unknown_commit_resolution_rejects_stale_compare_and_swap_without_audit() -> None:
+def test_unknown_commit_resolution_audits_only_the_compare_and_swap_winner() -> None:
     transaction_manager = _TransactionManager()
-    repository = _StaleRepository()
+    repository = _FencedRepository()
+    runtime = _RecordingRuntime()
+    stale_row = _run_row(completed_at="2026-07-28T00:00:00+00:00")
 
-    persisted = _persist_resolution(
+    first = _persist_resolution(
         transaction_manager,
         cast(PipelineRepository, repository),
-        cast(RuntimeEvidenceBoundary, _NoAuditRuntime()),
+        cast(RuntimeEvidenceBoundary, runtime),
         _CTX,
-        _run_row(completed_at="2026-07-28T00:00:00+00:00"),
+        stale_row,
+        _resolution(),
+    )
+    stale = _persist_resolution(
+        transaction_manager,
+        cast(PipelineRepository, repository),
+        cast(RuntimeEvidenceBoundary, runtime),
+        _CTX,
+        stale_row,
         _resolution(),
     )
 
-    assert persisted is False
-    assert transaction_manager.begin_calls == 1
-    assert repository.expected_completed_at == "2026-07-28T00:00:00+00:00"
+    assert first is True
+    assert stale is False
+    assert transaction_manager.begin_calls == 2
+    assert repository.expected_completed_at == [
+        "2026-07-28T00:00:00+00:00",
+        "2026-07-28T00:00:00+00:00",
+    ]
+    assert runtime.audit_calls == 1
 
 
 def _run_row(*, completed_at: str | None) -> PipelineRunRow:
