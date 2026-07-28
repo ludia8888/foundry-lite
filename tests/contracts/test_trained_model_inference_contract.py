@@ -172,6 +172,7 @@ def test_container_sidecar_executes_deployment_digest_when_current_branch_image_
 
 def test_container_sidecar_executes_deployment_pin_after_current_registry_removal(tmp_path: Path) -> None:
     deployed_image = f"registry.example/model@sha256:{'a' * 64}"
+    deployed_runner_path = "/srv/deployed-model/custom_runner.py"
     rotated_image = f"registry.example/other@sha256:{'c' * 64}"
     rotated_definition = replace(
         TRANSACTION_RISK_DEFINITION,
@@ -199,13 +200,19 @@ def test_container_sidecar_executes_deployment_pin_after_current_registry_remova
         expected_model_version="2026.07.1",
         expected_revision="container-risk-model-r1",
         expected_executable_reference=deployed_image,
-        pinned_definition=replace(TRANSACTION_RISK_DEFINITION, executable_reference=deployed_image),
+        pinned_definition=replace(
+            TRANSACTION_RISK_DEFINITION,
+            executable_reference=deployed_image,
+            executable_entrypoint=deployed_runner_path,
+        ),
     )
 
     result = adapter.infer(invocation)
 
     assert result.definition.model_ref == "demo.transaction-risk"
     assert deployed_image in commands[-1]
+    assert deployed_runner_path in commands[-1]
+    assert "/opt/foundry-lite/model/trained_model_runner.py" not in commands[-1]
     assert rotated_image not in commands[-1]
 
 

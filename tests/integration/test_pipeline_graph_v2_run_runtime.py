@@ -174,6 +174,9 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
     assert reconciled["outputVersionId"] == output_version_id
     assert reconciled["outputs"][0]["ref"]["versionId"] == output_version_id
     assert reconciled["outputs"][0]["ref"]["transactionId"]
+    assert reconciled["outputs"][0]["manifest"]["metadata"]["pipelineRunId"] == row["id"]
+    assert reconciled["outputs"][0]["artifactEvidence"]["status"] == "RECONCILIATION_REQUIRED"
+    assert reconciled["outputs"][0]["artifactEvidence"]["recoverySource"] == "DATASET_TRANSACTION"
     assert "terminal evidence requires reconciliation" in reconciled["error"]["message"]
     assert len(_dataset_version_ids(foundry, ctx, output_ref)) == 1
     assert any(

@@ -10,6 +10,7 @@ from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.media_processor import MediaProcessingRequest, ProcessorSpec
 from foundry_lite.infrastructure.adapters import pdf_ocr_processor as pdf_ocr
 from foundry_lite.infrastructure.adapters.pdf_ocr_processor import (
+    PdfEmbeddedImage,
     PdfOcrDocumentError,
     PdfOcrLine,
     PdfOcrProcessorAdapter,
@@ -280,6 +281,43 @@ def test_pdf_ocr_rejects_total_raster_pixel_budget(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(PdfOcrDocumentError, match="raster_total_pixel_limit_exceeded"):
         pdf_ocr._require_pdf_raster_bound("a.pdf", pages, 150, 5)
+
+
+def test_pdf_ocr_rejects_large_compressed_image_before_poppler_decode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = PdfPageSelection(start=1, limit=1)
+    monkeypatch.setattr(pdf_ocr, "_selected_pdf_page_numbers", lambda *_args: [1])
+    monkeypatch.setattr(pdf_ocr, "_pdf_page_dimensions", lambda *_args: {1: (612.0, 792.0)})
+    monkeypatch.setattr(
+        pdf_ocr,
+        "_pdf_embedded_images",
+        lambda *_args: (PdfEmbeddedImage(1, 30_000, 30_000),),
+    )
+    monkeypatch.setattr(
+        pdf_ocr,
+        "_run_pdftoppm",
+        lambda *_args: pytest.fail("over-limit embedded image must fail before Poppler decoding"),
+    )
+
+    with pytest.raises(PdfOcrDocumentError, match="embedded_image_pixel_limit_exceeded"):
+        pdf_ocr._poppler_rasterize("a.pdf", str(tmp_path), 1, selection, 150, 5)
+
+
+def test_pdf_ocr_parses_embedded_image_metadata_and_filters_selected_pages() -> None:
+    output = "\n".join(
+        (
+            "page   num  type   width height color comp bpc enc interp object ID x-ppi y-ppi size ratio",
+            "------------------------------------------------------------------------------------------",
+            "   1     0 image     640    480  rgb     3   8  jpeg   no       10  0   72   72  12K 2%",
+            "   2     1 image   30000  30000  rgb     3   8  jpeg   no       11  0   72   72  20K 1%",
+        )
+    )
+
+    assert pdf_ocr._parsed_pdf_embedded_images(output, [2]) == (PdfEmbeddedImage(2, 30_000, 30_000),)
+    with pytest.raises(PdfOcrDocumentError, match="pdf_image_metadata_invalid"):
+        pdf_ocr._parsed_pdf_embedded_images("1 0 image bad 480 rgb 3 8", [1])
 
 
 def test_pdf_ocr_page_discovery_validation(monkeypatch: pytest.MonkeyPatch) -> None:

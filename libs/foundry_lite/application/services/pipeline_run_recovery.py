@@ -59,6 +59,9 @@ class RecoveredPipelineOutput:
     status: str
     is_serving: bool
     ref: Mapping[str, object]
+    manifest: Mapping[str, object]
+    artifact_id: str | None
+    recovery_source: str
     evidence_id: str
 
 
@@ -300,6 +303,9 @@ def _artifact_output(artifact: PipelineRunArtifactRow) -> RecoveredPipelineOutpu
         status=artifact["status"],
         is_serving=artifact["is_serving"],
         ref=artifact["artifact_ref"],
+        manifest=artifact["manifest"],
+        artifact_id=artifact["id"],
+        recovery_source="ARTIFACT_PASSPORT",
         evidence_id=artifact["id"],
     )
 
@@ -322,6 +328,9 @@ def _dataset_commit_output(
             "versionId": row["version_id"],
             "transactionId": row["transaction_id"],
         },
+        manifest={"metadata": dict(row["metadata"])},
+        artifact_id=None,
+        recovery_source="DATASET_TRANSACTION",
         evidence_id=row["transaction_id"],
     )
 
@@ -331,15 +340,27 @@ def _output_key(output: RecoveredPipelineOutput) -> tuple[str, str, str | None]:
 
 
 def _reconciled_output(artifact: RecoveredPipelineOutput) -> dict[str, object]:
-    return {
+    ref = dict(artifact.ref)
+    if artifact.artifact_id is not None:
+        ref["artifactId"] = artifact.artifact_id
+    output: dict[str, object] = {
         "nodeId": artifact.node_id,
         "artifactKind": artifact.artifact_kind,
         "plane": artifact.plane,
         "status": artifact.status,
         "commitKind": "SERVING_ASSET" if artifact.is_serving else "GOVERNED_CANDIDATE",
         "isServing": artifact.is_serving,
-        "ref": dict(artifact.ref),
+        "ref": ref,
+        "manifest": dict(artifact.manifest),
     }
+    if artifact.artifact_id is None:
+        output["artifactEvidence"] = {
+            "status": "RECONCILIATION_REQUIRED",
+            "isDurableRunOutput": True,
+            "recoverySource": artifact.recovery_source,
+            "evidenceId": artifact.evidence_id,
+        }
+    return output
 
 
 def _single_serving_dataset_fields(

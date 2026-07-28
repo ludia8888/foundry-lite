@@ -24,6 +24,7 @@ class TrainedModelDefinition:
     executable_reference: str
     input_fields: tuple[TrainedModelField, ...]
     output_fields: tuple[TrainedModelField, ...]
+    executable_entrypoint: str = ""
     cpu_cores: float = 1.0
     memory_mib: int = 8192
     gpu_type: str = "none"

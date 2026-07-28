@@ -88,6 +88,15 @@ class PdfOcrLine:
     confidence: float
 
 
+@dataclass(frozen=True)
+class PdfEmbeddedImage:
+    """One compressed PDF image stream inspected without decoding its pixels."""
+
+    page_number: int
+    width: int
+    height: int
+
+
 PdfRasterizer = Callable[
     [str, str, int, PdfPageSelection, int, int],
     Sequence[RasterizedPdfPage],
@@ -358,6 +367,68 @@ def _require_pdf_raster_bound(
         total_pixels += page_pixels
         if total_pixels > _MAX_RASTER_TOTAL_PIXELS:
             raise PdfOcrDocumentError("raster_total_pixel_limit_exceeded", page=page_number)
+    _require_pdf_embedded_image_bound(source_path, page_numbers, timeout_seconds)
+
+
+def _require_pdf_embedded_image_bound(
+    source_path: str,
+    page_numbers: Sequence[int],
+    timeout_seconds: int,
+) -> None:
+    total_pixels = 0
+    for image in _pdf_embedded_images(source_path, page_numbers, timeout_seconds):
+        image_pixels = image.width * image.height
+        if image_pixels > _MAX_RASTER_PAGE_PIXELS:
+            raise PdfOcrDocumentError("embedded_image_pixel_limit_exceeded", page=image.page_number)
+        total_pixels += image_pixels
+        if total_pixels > _MAX_RASTER_TOTAL_PIXELS:
+            raise PdfOcrDocumentError("embedded_image_total_pixel_limit_exceeded", page=image.page_number)
+
+
+def _pdf_embedded_images(
+    source_path: str,
+    page_numbers: Sequence[int],
+    timeout_seconds: int,
+) -> tuple[PdfEmbeddedImage, ...]:
+    executable = shutil.which("pdfimages")
+    if executable is None:
+        raise PdfOcrDocumentError("pdfimages_unavailable", kind="unavailable")
+    command = [executable, "-f", str(page_numbers[0]), "-l", str(page_numbers[-1]), "-list", source_path]
+    try:
+        result = subprocess.run(  # nosec B603 - fixed Poppler binary and sandbox-owned source path.
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_seconds, 1),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PdfOcrDocumentError("pdf_image_discovery_timeout", kind="timeout", is_retryable=True) from exc
+    except OSError as exc:
+        raise PdfOcrDocumentError("pdfimages_unavailable", kind="unavailable") from exc
+    if result.returncode != 0:
+        raise PdfOcrDocumentError("corrupt_pdf")
+    return _parsed_pdf_embedded_images(result.stdout, page_numbers)
+
+
+def _parsed_pdf_embedded_images(
+    output: str,
+    page_numbers: Sequence[int],
+) -> tuple[PdfEmbeddedImage, ...]:
+    selected_pages = set(page_numbers)
+    images: list[PdfEmbeddedImage] = []
+    for line in output.splitlines():
+        columns = line.split()
+        if not columns or not columns[0].isdigit():
+            continue
+        if len(columns) < 8 or not all(value.isdigit() for value in (columns[3], columns[4])):
+            raise PdfOcrDocumentError("pdf_image_metadata_invalid")
+        page_number, width, height = int(columns[0]), int(columns[3]), int(columns[4])
+        if width < 1 or height < 1:
+            raise PdfOcrDocumentError("pdf_image_metadata_invalid", page=page_number)
+        if page_number in selected_pages:
+            images.append(PdfEmbeddedImage(page_number, width, height))
+    return tuple(images)
 
 
 def _pdf_page_dimensions(

@@ -468,6 +468,9 @@ def test_committed_legacy_outputs_survive_success_terminal_persistence_failure(
         fixture, fixture.second_output_ref
     )
     assert {item["status"] for item in recovered_outputs.values()} == {"COMMITTED"}
+    assert all(item["ref"]["artifactId"] for item in recovered_outputs.values())
+    assert all(item["manifest"] for item in recovered_outputs.values())
+    assert all("artifactEvidence" not in item for item in recovered_outputs.values())
     assert "terminal evidence requires reconciliation" in reconciled["error"]["message"]
     assert len(_dataset_version_ids(fixture, fixture.first_output_ref)) == 1
     assert len(_dataset_version_ids(fixture, fixture.second_output_ref)) == 1

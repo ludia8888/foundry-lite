@@ -19,6 +19,7 @@ def trained_model_definition_from_snapshot(snapshot: Mapping[str, object]) -> Tr
         version=_text(snapshot, "version"),
         revision=_text(snapshot, "revision"),
         executable_reference=_text(snapshot, "executableReference"),
+        executable_entrypoint=_optional_text(snapshot, "executableEntrypoint"),
         input_fields=_fields(snapshot, "inputFields"),
         output_fields=_fields(snapshot, "outputFields"),
         cpu_cores=_positive_float(snapshot, "cpuCores"),
@@ -63,6 +64,15 @@ def _execution_modes(snapshot: Mapping[str, object]) -> tuple[str, ...]:
 def _text(snapshot: Mapping[str, object], key: str) -> str:
     value = snapshot.get(key)
     if not isinstance(value, str) or not value.strip():
+        raise _invalid_snapshot(key)
+    return value.strip()
+
+
+def _optional_text(snapshot: Mapping[str, object], key: str) -> str:
+    value = snapshot.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
         raise _invalid_snapshot(key)
     return value.strip()
 

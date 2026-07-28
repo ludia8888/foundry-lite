@@ -58,6 +58,7 @@ def _definition() -> TrainedModelDefinition:
         executable_reference="local://demo.risk@rev-7",
         input_fields=(TrainedModelField("amount", "double"),),
         output_fields=(TrainedModelField("riskScore", "double"),),
+        executable_entrypoint="/models/risk_runner.py",
     )
 
 
@@ -91,6 +92,7 @@ def test_deployment_resolves_and_pins_imported_trained_model() -> None:
     assert [(ref.model_id, ref.model_version, ref.revision) for ref in refs] == [("demo.risk", "7", "rev-7")]
     assert port.calls == [("demo.risk", "master", ("staging",))]
     assert refs[0].parameters_fingerprint
+    assert refs[0].definition_snapshot["executableEntrypoint"] == "/models/risk_runner.py"
 
 
 @pytest.mark.parametrize("nodes", [None, {}, "invalid"])

@@ -220,6 +220,7 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg" in e2e_job
     assert "command -v tesseract" in e2e_job
     assert "command -v pdftoppm" in e2e_job
+    assert "command -v pdfimages" in e2e_job
     assert "command -v ffprobe" in e2e_job
     assert "Cache faster-whisper and fastembed models" in e2e_job
     assert "hf-models-whisper-tiny-bge-small-clip-vit-b32-v1" in e2e_job

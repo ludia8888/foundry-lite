@@ -128,6 +128,7 @@ class DuckDBComputeAdapter:
         max_rows: int,
         max_decoded_bytes: int,
     ) -> BoundedParquetRead:
+        _require_flat_parquet_schema(parquet_path)
         metadata_decoded_bytes = _require_parquet_read_bound(parquet_path, max_rows, max_decoded_bytes)
         rows: list[TabularRow] = []
         decoded_byte_count = 0
@@ -611,6 +612,19 @@ def _require_parquet_read_bound(
     if decoded_bytes > max_decoded_bytes:
         raise _parquet_bound_failure("decoded_bytes", decoded_bytes, max_decoded_bytes, parquet_path)
     return decoded_bytes
+
+
+def _require_flat_parquet_schema(parquet_path: Path) -> None:
+    nested_columns = [field.name for field in pq.read_schema(parquet_path) if pa.types.is_nested(field.type)]
+    if nested_columns:
+        raise ValidationFailed(
+            "bounded parquet read requires flat scalar columns",
+            details={
+                "limitKind": "nested_values",
+                "columns": nested_columns,
+                "compressedByteCount": parquet_path.stat().st_size,
+            },
+        )
 
 
 def _require_decoded_result_bound(

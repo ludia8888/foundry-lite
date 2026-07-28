@@ -25,6 +25,7 @@ MODEL_OUTPUT_DIR = "/model-output"
 MODEL_RESULT_PATH = f"{MODEL_OUTPUT_DIR}/result.json"
 MODEL_TMP_DIR = "/model-tmp"
 DEFAULT_MODEL_IMAGE = "foundry-lite-trained-model-transaction-risk:2026.07.1"
+DEFAULT_MODEL_RUNNER_PATH = "/opt/foundry-lite/model/trained_model_runner.py"
 MODEL_ENVIRONMENT: Mapping[str, str] = {
     "HOME": MODEL_TMP_DIR,
     "LANG": "C.UTF-8",
@@ -40,7 +41,7 @@ MODEL_ENVIRONMENT: Mapping[str, str] = {
 class ContainerTrainedModelSpec:
     definition: TrainedModelDefinition
     image_reference: str
-    runner_path: str = "/opt/foundry-lite/model/trained_model_runner.py"
+    runner_path: str = DEFAULT_MODEL_RUNNER_PATH
 
 
 def default_model_policy() -> CodeExecutionSandboxPolicy:

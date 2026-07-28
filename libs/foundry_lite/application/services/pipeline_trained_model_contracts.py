@@ -87,6 +87,7 @@ def trained_model_definition_snapshot(definition: TrainedModelDefinition) -> Jso
         "version": definition.version,
         "revision": definition.revision,
         "executableReference": definition.executable_reference,
+        "executableEntrypoint": definition.executable_entrypoint,
         "inputFields": [_snapshot_field_payload(field) for field in definition.input_fields],
         "outputFields": [_snapshot_field_payload(field) for field in definition.output_fields],
         "cpuCores": definition.cpu_cores,

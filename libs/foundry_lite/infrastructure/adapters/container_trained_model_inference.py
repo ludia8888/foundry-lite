@@ -38,6 +38,7 @@ from foundry_lite.infrastructure.adapters.container_code_execution_runtime impor
     ContainerCommandRunner,
 )
 from foundry_lite.infrastructure.adapters.container_trained_model_runtime import (
+    DEFAULT_MODEL_RUNNER_PATH,
     ContainerTrainedModelConfig,
     ContainerTrainedModelSpec,
     default_model_command_runner,
@@ -208,7 +209,11 @@ def _request_payload(invocation: TrainedModelInvocation) -> dict[str, object]:
 
 
 def _resolved_definition(spec: ContainerTrainedModelSpec) -> TrainedModelDefinition:
-    return replace(spec.definition, executable_reference=spec.image_reference)
+    return replace(
+        spec.definition,
+        executable_reference=spec.image_reference,
+        executable_entrypoint=spec.runner_path,
+    )
 
 
 def _pinned_spec(invocation: TrainedModelInvocation) -> ContainerTrainedModelSpec | None:
@@ -216,7 +221,12 @@ def _pinned_spec(invocation: TrainedModelInvocation) -> ContainerTrainedModelSpe
     if definition is None:
         return None
     image_reference = invocation.expected_executable_reference or definition.executable_reference
-    return ContainerTrainedModelSpec(definition=definition, image_reference=image_reference)
+    runner_path = definition.executable_entrypoint or DEFAULT_MODEL_RUNNER_PATH
+    return ContainerTrainedModelSpec(
+        definition=definition,
+        image_reference=image_reference,
+        runner_path=runner_path,
+    )
 
 
 def _execution_spec(

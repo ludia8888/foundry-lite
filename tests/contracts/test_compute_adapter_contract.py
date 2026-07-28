@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from foundry_lite.application.ports import ComputeAdapter
@@ -264,6 +265,34 @@ def test_duckdb_bounded_parquet_read_rejects_highly_compressed_decoded_payload(
     assert raised.value.details["limitKind"] == "decoded_bytes"
     assert raised.value.details["actual"] > raised.value.details["maximum"]
     assert raised.value.details["compressedByteCount"] < raised.value.details["actual"]
+
+
+def test_duckdb_bounded_parquet_read_rejects_nested_values_before_decode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parquet_path = tmp_path / "nested.parquet"
+    pq.write_table(
+        pa.Table.from_pylist([{"payload": ["x" * 1_000 for _ in range(1_000)]}]),
+        parquet_path,
+        use_dictionary=True,
+        compression="zstd",
+    )
+    monkeypatch.setattr(
+        compute_module,
+        "_tabular_row",
+        lambda _value: pytest.fail("nested values must be rejected before Python row materialization"),
+    )
+
+    with pytest.raises(ValidationFailed, match="flat scalar columns") as raised:
+        DuckDBComputeAdapter().rows_from_parquet_bounded(
+            parquet_path,
+            max_rows=10,
+            max_decoded_bytes=256 * 1024 * 1024,
+        )
+
+    assert raised.value.details["limitKind"] == "nested_values"
+    assert raised.value.details["columns"] == ["payload"]
 
 
 def test_compute_adapter_contract_detects_duplicate_composite_tuple(
