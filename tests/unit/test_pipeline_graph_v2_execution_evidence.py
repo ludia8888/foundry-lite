@@ -8,9 +8,15 @@ from typing import cast
 import pytest
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineNodeAttemptRow,
+    PipelineNodeRunRecord,
     PipelineNodeRunRow,
 )
 from foundry_lite.application.services.pipeline_graph_contracts import PipelineArtifactKind
+from foundry_lite.application.services.pipeline_graph_v2_evidence_contracts import (
+    require_attempt_contract,
+    require_node_contract,
+    skip_or_replay_node,
+)
 from foundry_lite.application.services.pipeline_graph_v2_execution_evidence import (
     PipelineGraphV2ExecutionEvidenceWriter,
 )
@@ -181,6 +187,63 @@ def test_preserves_named_ports_and_input_passport_across_modalities(
     assert metadata["descriptorId"] == "document.extract"
     assert metadata["specVersion"] == 4
     assert output["security_envelope"]["classification"] == "RESTRICTED"
+
+
+def test_preplanned_pending_node_claims_exact_runtime_inputs(
+    evidence: EvidenceHarness,
+) -> None:
+    source_attempt = evidence.writer.start(
+        node_id="planned-source",
+        descriptor_id="source.media-set",
+        spec_version=1,
+        executor_profile="python.media.v2",
+        input_artifacts=(),
+    )
+    source = evidence.writer.succeed(
+        source_attempt,
+        _artifact_spec(
+            node_id="planned-source",
+            port_id="media",
+            artifact_kind=PipelineArtifactKind.MEDIA_SET_SELECTION,
+            plane="media",
+            item_count=1,
+        ),
+    )
+    input_artifact = pipeline_graph_v2_input_artifact(source, target_port_id="media")
+    with evidence.engine.begin() as transaction:
+        evidence.repository.insert_node_run(
+            transaction=transaction,
+            record=PipelineNodeRunRecord(
+                node_run_id="planned-transform-run",
+                tenant_id=_TENANT_ID,
+                run_id=_RUN_ID,
+                node_id="planned-transform",
+                descriptor_id="document.extract",
+                spec_version="4",
+                input_artifacts=[],
+                created_at=_COMMITTED_AT,
+            ),
+        )
+
+    attempt = evidence.writer.start(
+        node_id="planned-transform",
+        descriptor_id="document.extract",
+        spec_version=4,
+        executor_profile="python.media.v2",
+        input_artifacts=(input_artifact,),
+    )
+
+    with evidence.engine.begin() as transaction:
+        row = evidence.repository.node_run_by_run_node(
+            transaction=transaction,
+            tenant_id=_TENANT_ID,
+            run_id=_RUN_ID,
+            node_id="planned-transform",
+        )
+    assert row is not None
+    assert attempt.node_run_id == "planned-transform-run"
+    assert row["status"] == "RUNNING"
+    assert row["input_artifacts"][0]["artifactId"] == source["id"]
 
 
 def test_start_and_success_are_replay_safe_without_duplicate_artifacts(
@@ -418,15 +481,34 @@ def test_writer_rejects_conflicting_terminal_replays(
         changed_ref = {"artifactId": "different"}
 
         with pytest.raises(ConflictDetected, match="attempt success replay"):
-            evidence.writer._complete_attempt_success(transaction, attempt_row, changed_ref, _COMMITTED_AT)
+            evidence.writer._complete_attempt_success(
+                transaction,
+                attempt_row,
+                changed_ref,
+                _COMMITTED_AT,
+                attempt,
+            )
         with pytest.raises(ConflictDetected, match="node success replay"):
             evidence.writer._complete_node_success(transaction, node_row, changed_ref, _COMMITTED_AT)
         with pytest.raises(ConflictDetected, match="attempt cannot fail"):
-            evidence.writer._complete_attempt_failure(transaction, attempt_row, {"code": "LATE"}, _COMMITTED_AT)
+            evidence.writer._complete_attempt_failure(
+                transaction,
+                attempt_row,
+                {"code": "LATE"},
+                _COMMITTED_AT,
+                attempt,
+            )
         with pytest.raises(ConflictDetected, match="node cannot fail"):
             evidence.writer._complete_node_failure(transaction, node_row, {"code": "LATE"}, _COMMITTED_AT)
         with pytest.raises(ConflictDetected, match="cannot be skipped"):
-            evidence.writer._skip_or_replay_node(transaction, node_row, {"code": "LATE"}, _COMMITTED_AT)
+            skip_or_replay_node(
+                evidence.repository,
+                transaction,
+                _TENANT_ID,
+                node_row,
+                {"code": "LATE"},
+                _COMMITTED_AT,
+            )
 
 
 def test_writer_rejects_changed_failure_and_skip_replay_evidence(
@@ -456,6 +538,7 @@ def test_writer_rejects_changed_failure_and_skip_replay_evidence(
                 cast(PipelineNodeAttemptRow, attempt_rows[0]),
                 {"code": "CHANGED"},
                 _COMMITTED_AT,
+                attempt,
             )
         with pytest.raises(ConflictDetected, match="node failure replay"):
             evidence.writer._complete_node_failure(
@@ -465,8 +548,10 @@ def test_writer_rejects_changed_failure_and_skip_replay_evidence(
                 _COMMITTED_AT,
             )
         with pytest.raises(ConflictDetected, match="skipped-node replay"):
-            evidence.writer._skip_or_replay_node(
+            skip_or_replay_node(
+                evidence.repository,
                 transaction,
+                _TENANT_ID,
                 cast(PipelineNodeRunRow, skipped),
                 {"code": "CHANGED"},
                 _COMMITTED_AT,
@@ -506,7 +591,8 @@ def test_writer_rejects_changed_claim_attempt_and_context_coordinates(
                 _COMMITTED_AT,
             )
         with pytest.raises(ConflictDetected, match="node run coordinates"):
-            evidence.writer._require_node_contract(
+            require_node_contract(
+                _RUN_ID,
                 cast(PipelineNodeRunRow, {**node_row, "descriptor_id": "changed"}),
                 attempt.node_id,
                 attempt.descriptor_id,
@@ -514,7 +600,7 @@ def test_writer_rejects_changed_claim_attempt_and_context_coordinates(
                 (),
             )
         with pytest.raises(ConflictDetected, match="attempt coordinates"):
-            evidence.writer._require_attempt_contract(
+            require_attempt_contract(
                 cast(PipelineNodeAttemptRow, {**attempt_row, "executor_profile": "changed"}),
                 attempt.descriptor_id,
                 attempt.spec_version,

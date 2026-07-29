@@ -38,6 +38,7 @@ class LocalPipelineDagOrchestrator:
         self._queue: queue.Queue[PipelineDagDispatchRequest] = queue.Queue()
         self._known: set[str] = set()
         self._cancelled: set[str] = set()
+        self._failures: dict[str, Exception] = {}
         self._driver: Callable[[PipelineDagDispatchRequest], None] | None = None
         self._lock = threading.Lock()
         self._worker_started = False
@@ -79,6 +80,12 @@ class LocalPipelineDagOrchestrator:
             self._cancelled.add(workflow_run_id)
         return True
 
+    def failure_for(self, workflow_run_id: str) -> Exception | None:
+        """Expose a local driver failure without terminating the queue worker."""
+
+        with self._lock:
+            return self._failures.get(workflow_run_id)
+
     def _start_worker(self) -> None:
         if self._worker_started:
             return
@@ -92,6 +99,9 @@ class LocalPipelineDagOrchestrator:
             try:
                 if workflow_run_id not in self._cancelled and self._driver is not None:
                     self._driver(request)
+            except Exception as exc:
+                with self._lock:
+                    self._failures[workflow_run_id] = exc
             finally:
                 self._queue.task_done()
 

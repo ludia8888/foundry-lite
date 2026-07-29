@@ -1300,6 +1300,7 @@ test("Trained Model reusable imports remain isolated by Pipeline graph", async (
 test("Trained Model builds a real scored Dataset with resolved model pins", async ({
   page,
 }) => {
+  test.setTimeout(120_000);
   const pipelineId = e2eSlug("pipeline_trained_model_build");
   const branchName = `trained-model-build-${pipelineId}`;
   const inputRef = `raw.${pipelineId}_orders`;
@@ -1382,12 +1383,13 @@ test("Trained Model builds a real scored Dataset with resolved model pins", asyn
     }),
   );
 
-  const run = await apiPost<PipelineRun>(
+  const queuedRun = await apiPost<PipelineRun>(
     page,
-    `/api/pipelines/${encodeURIComponent(pipelineId)}/runs?waitSeconds=30`,
+    `/api/pipelines/${encodeURIComponent(pipelineId)}/runs`,
     { versionId: version.id },
     { "Idempotency-Key": `e2e-trained-model-build-run-${pipelineId}` },
   );
+  const run = await waitForPipelineRun(page, queuedRun.id);
   expect(run.status).toBe("succeeded");
   const modelArtifact = run.artifacts.find(
     (artifact) => artifact.nodeId === "risk_model",

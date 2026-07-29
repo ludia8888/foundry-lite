@@ -26,22 +26,26 @@ def require_node_contract(
     spec_version: int,
     inputs: tuple[PipelineGraphV2InputArtifact, ...],
 ) -> None:
-    expected = (
+    expected_coordinates = (
         run_id,
         node_id,
         descriptor_id,
         str(spec_version),
-        input_artifact_payloads(inputs),
     )
-    actual = (
+    actual_coordinates = (
         row["run_id"],
         row["node_id"],
         row["descriptor_id"],
         row["spec_version"],
-        row["input_artifacts"],
     )
-    if actual != expected:
+    if actual_coordinates != expected_coordinates:
         raise ConflictDetected("pipeline node run coordinates changed under the same run and node id")
+    expected_inputs = input_artifact_payloads(inputs)
+    if row["input_artifacts"] == expected_inputs:
+        return
+    if row["status"] == "PENDING" and row["input_artifacts"] == []:
+        return
+    raise ConflictDetected("pipeline node run coordinates changed under the same run and node id")
 
 
 def require_attempt_contract(

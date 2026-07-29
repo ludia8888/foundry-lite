@@ -54,6 +54,28 @@ async function apiGet<T>(page: Page, path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function waitForPipelineRun(
+  page: Page,
+  runId: string,
+): Promise<JsonRecord> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await apiGet<JsonRecord>(
+            page,
+            `/api/pipelines/runs/${encodeURIComponent(runId)}`,
+          )
+        ).status,
+      { timeout: 60_000 },
+    )
+    .toMatch(/^(succeeded|partial|failed|cancelled)$/);
+  return apiGet<JsonRecord>(
+    page,
+    `/api/pipelines/runs/${encodeURIComponent(runId)}`,
+  );
+}
+
 async function seedCommittedReport(page: Page, isCanary = false): Promise<{
   mediaSetRef: string;
   mediaItemVersionId: string;
@@ -594,7 +616,7 @@ test("Document Intelligence previews a real long PDF with layout evidence and no
       "Idempotency-Key": `e2e-document-vlm-deploy-${promotionTarget.pipelineId}`,
     },
   );
-  const productionRun = await apiPost<JsonRecord>(
+  const queuedProductionRun = await apiPost<JsonRecord>(
     page,
     `/api/pipelines/${encodeURIComponent(promotionTarget.pipelineId)}/runs`,
     { versionId, parameters: {} },
@@ -602,11 +624,11 @@ test("Document Intelligence previews a real long PDF with layout evidence and no
       "Idempotency-Key": `e2e-document-vlm-run-${promotionTarget.pipelineId}`,
     },
   );
-  expect(productionRun.status).toBe("succeeded");
-  const productionDetail = await apiGet<JsonRecord>(
+  const productionDetail = await waitForPipelineRun(
     page,
-    `/api/pipelines/runs/${encodeURIComponent(String(productionRun.id))}`,
+    String(queuedProductionRun.id),
   );
+  expect(productionDetail.status).toBe("succeeded");
   const artifacts = productionDetail.artifacts as JsonRecord[];
   const semanticArtifact = artifacts.find(
     (artifact) => artifact.nodeId === semanticId,
