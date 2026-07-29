@@ -181,9 +181,11 @@ class PipelinePlanNode:
     spec_version: int
     runtime_capability: str
     config: Mapping[str, object]
+    execution_policy: Mapping[str, object] = MappingProxyType({})
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "config", _freeze_object(self.config))
+        object.__setattr__(self, "execution_policy", _freeze_object(self.execution_policy))
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +306,7 @@ def _node_payload(node: PipelinePlanNode) -> dict[str, object]:
         "specVersion": node.spec_version,
         "runtimeCapability": node.runtime_capability,
         "config": thaw_json_value(node.config),
+        "executionPolicy": thaw_json_value(node.execution_policy),
     }
 
 

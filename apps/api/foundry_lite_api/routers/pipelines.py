@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Header, Query, Request, status
+import asyncio
+import json
+from collections.abc import AsyncIterator
+
+from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
 
 from foundry_lite_api import runtime
@@ -19,6 +25,7 @@ from foundry_lite_api.schemas import (
     PipelinePreviewRunCreateRequest,
     PipelineProposalAssignRequest,
     PipelineProposalDecisionRequest,
+    PipelineRunCancelRequest,
     PipelineRunStartRequest,
     PipelineScheduleUpsertRequest,
 )
@@ -187,7 +194,6 @@ def preview_pipeline_node(
 )
 def create_pipeline_preview_run(
     request: Request,
-    background_tasks: BackgroundTasks,
     branch_id: str,
     payload: PipelinePreviewRunCreateRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -200,11 +206,6 @@ def create_pipeline_preview_run(
             target_node_id=payload.target_node_id,
             limits=payload.limits.model_dump(by_alias=True),
             idempotency_key=idempotency_key,
-            ctx=ctx,
-        )
-        background_tasks.add_task(
-            runtime.foundry.pipelines.execute_preview_run,
-            str(preview["id"]),
             ctx=ctx,
         )
         return preview
@@ -347,10 +348,35 @@ def get_pipeline_run_timeline(request: Request, run_id: str) -> JsonObject:
         raise _handle_error(exc, request) from exc
 
 
-@router.post("/api/pipelines/runs/{run_id}/cancel")
-def cancel_pipeline_run(request: Request, run_id: str) -> JsonObject:
+@router.get("/api/pipelines/runs/{run_id}/events")
+async def stream_pipeline_run_events(
+    request: Request,
+    run_id: str,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    ctx = _ctx(request)
+    after_sequence = _event_sequence(last_event_id)
+    return StreamingResponse(
+        _pipeline_event_stream(request, run_id, after_sequence, ctx),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/api/pipelines/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+def cancel_pipeline_run(
+    request: Request,
+    run_id: str,
+    payload: PipelineRunCancelRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
     try:
-        return runtime.foundry.pipelines.cancel(run_id, ctx=_ctx(request))
+        return runtime.foundry.pipelines.request_cancel(
+            run_id,
+            idempotency_key=idempotency_key,
+            reason=payload.reason,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -421,24 +447,96 @@ def list_pipeline_deployments(
         raise _handle_error(exc, request) from exc
 
 
-@router.post("/api/pipelines/{pipeline_id}/runs")
+@router.get("/api/pipelines/{pipeline_id}/runs")
+def list_pipeline_runs(
+    request: Request,
+    pipeline_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> JsonObject:
+    try:
+        return runtime.foundry.pipelines.list_runs(
+            pipeline_id,
+            cursor=cursor,
+            limit=limit,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/pipelines/{pipeline_id}/runs", status_code=status.HTTP_202_ACCEPTED)
 def start_pipeline_run(
     request: Request,
+    response: Response,
     pipeline_id: str,
     payload: PipelineRunStartRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
+    wait_seconds: int = Query(default=0, ge=0, le=30, alias="waitSeconds"),
 ) -> JsonObject:
     try:
-        return runtime.foundry.pipelines.run(
+        snapshot = runtime.foundry.pipelines.start_async(
             pipeline_id,
             version_id=payload.version_id,
             idempotency_key=idempotency_key,
             parameters=payload.parameters,
             target_node_ids=payload.target_node_ids,
+            wait_seconds=wait_seconds,
             ctx=_ctx(request),
         )
+        if snapshot["status"] in {"succeeded", "partial", "failed", "cancelled"}:
+            response.status_code = status.HTTP_200_OK
+        return snapshot
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+def _event_sequence(value: str | None) -> int:
+    if value is None:
+        return 0
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return 0
+
+
+async def _pipeline_event_stream(
+    request: Request,
+    run_id: str,
+    after_sequence: int,
+    ctx: RequestContext,
+) -> AsyncIterator[str]:
+    cursor = after_sequence
+    heartbeat_count = 0
+    while not await request.is_disconnected():
+        page = runtime.foundry.pipelines.events(
+            run_id,
+            after_sequence=cursor,
+            limit=100,
+            ctx=ctx,
+        )
+        events = page["events"]
+        if isinstance(events, list) and events:
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                cursor = int(event["id"])
+                yield _sse_event(event)
+            heartbeat_count = 0
+            continue
+        snapshot = runtime.foundry.pipelines.get_run(run_id, ctx=ctx)
+        if snapshot["status"] in {"succeeded", "partial", "failed", "cancelled"}:
+            return
+        heartbeat_count += 1
+        if heartbeat_count >= 15:
+            yield ": heartbeat\n\n"
+            heartbeat_count = 0
+        await asyncio.sleep(1)
+
+
+def _sse_event(event: JsonObject) -> str:
+    data = json.dumps(event["data"], separators=(",", ":"), ensure_ascii=False)
+    return f"id: {event['id']}\nevent: {event['event']}\ndata: {data}\n\n"
 
 
 @router.put("/api/pipelines/{pipeline_id}/schedule")

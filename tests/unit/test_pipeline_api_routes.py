@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 
@@ -113,7 +114,7 @@ def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
     deployments = _ok(client.get("/api/pipelines/api_orders_readiness/deployments?limit=10", headers=headers))
     run = _ok(
         client.post(
-            "/api/pipelines/api_orders_readiness/runs",
+            "/api/pipelines/api_orders_readiness/runs?waitSeconds=30",
             json={},
             headers={**headers, "Idempotency-Key": "api-pipeline-run"},
         )
@@ -202,15 +203,20 @@ def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
     assert schedule["enabled"] is True
     assert schedule_detail["id"] == schedule["id"]
     assert due["items"][0]["pipelineId"] == "api_orders_readiness"
-    assert tick["started"][0]["run"]["status"] == "succeeded"
+    assert tick["started"][0]["run"]["status"] in {"queued", "running", "succeeded"}
     assert paused["status"] == "paused"
     assert resumed["status"] == "active"
     assert deleted == {"deleted": True}
     assert branch_detail["status"] == "merged"
     assert branch_list["items"][0]["id"] == branch["id"]
 
-    terminal_cancel = client.post(f"/api/pipelines/runs/{run['id']}/cancel", headers=headers)
-    assert terminal_cancel.status_code == 409
+    terminal_cancel = client.post(
+        f"/api/pipelines/runs/{run['id']}/cancel",
+        json={},
+        headers={**headers, "Idempotency-Key": "api-pipeline-terminal-cancel"},
+    )
+    assert terminal_cancel.status_code == 202
+    assert terminal_cancel.json()["status"] == "succeeded"
     missing_branch = client.get("/api/pipelines/branches/missing-branch", headers=headers)
     assert missing_branch.status_code == 404
 
@@ -578,7 +584,7 @@ def test_pipeline_preview_run_executes_unsaved_graph_without_serving_commit(
     )
     assert created_response.status_code == 202, created_response.text
     created = created_response.json()
-    completed = _ok(client.get(f"/api/pipelines/preview-runs/{created['id']}", headers=headers))
+    completed = _wait_for_preview(client, str(created["id"]), headers)
     datasets = client.get("/api/datasets", headers=headers).json()
     node_types = _ok(client.get("/api/pipelines/node-types", headers=headers))
     processors = _ok(client.get("/api/media/processors", headers=headers))
@@ -683,7 +689,11 @@ def test_pipeline_api_routes_convert_domain_errors(monkeypatch) -> None:
         lambda: client.get("/api/pipelines/versions/v", headers=headers),
         lambda: client.get("/api/pipelines/runs/r", headers=headers),
         lambda: client.get("/api/pipelines/runs/r/timeline", headers=headers),
-        lambda: client.post("/api/pipelines/runs/r/cancel", headers=headers),
+        lambda: client.post(
+            "/api/pipelines/runs/r/cancel",
+            json={},
+            headers={**headers, "Idempotency-Key": "cancel-k"},
+        ),
         lambda: client.get("/api/pipelines/scheduler/due?maxRuns=1", headers=headers),
         lambda: client.post("/api/pipelines/scheduler/tick?maxRuns=1", headers=headers),
         lambda: client.get("/api/pipelines/p/versions", headers=headers),
@@ -903,6 +913,20 @@ def _decide(
 def _ok(response) -> dict[str, Any]:
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def _wait_for_preview(
+    client: TestClient,
+    preview_run_id: str,
+    headers: dict[str, str],
+) -> dict[str, Any]:
+    terminal = {"SUCCEEDED", "FAILED", "CANCELLED"}
+    for _ in range(200):
+        payload = _ok(client.get(f"/api/pipelines/preview-runs/{preview_run_id}", headers=headers))
+        if payload["status"] in terminal:
+            return payload
+        Event().wait(0.01)
+    raise AssertionError("pipeline preview did not reach terminal state")
 
 
 def _orders_pipeline_graph(*, output_ref: str) -> dict[str, object]:

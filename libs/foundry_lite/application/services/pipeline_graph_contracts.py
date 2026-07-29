@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, NotRequired, TypedDict
 
 from foundry_lite.application.services.pipeline_graph_descriptor_payloads import (
     pipeline_node_descriptor_payload,
+)
+from foundry_lite.application.services.pipeline_graph_types import (  # noqa: F401
+    PipelineGraphV2,
+    PipelineV2Edge,
+    PipelineV2Node,
+)
+from foundry_lite.application.services.pipeline_node_execution_policy import (
+    PipelineNodeExecutionPolicy,
+    pipeline_node_execution_policy,
 )
 
 JsonObject = dict[str, object]
@@ -93,33 +101,7 @@ class PipelineNodeDescriptor:
     config_fields: tuple[PipelineConfigFieldDescriptor, ...]
     availability: PipelineNodeAvailability
     runtime_capability: str
-
-
-class PipelineV2Node(TypedDict):
-    id: str
-    kind: Literal["source", "transform", "output"]
-    descriptorId: str
-    specVersion: int
-    config: JsonObject
-
-
-class PipelineV2Edge(TypedDict):
-    id: str
-    sourceNodeId: str
-    sourcePortId: str
-    targetNodeId: str
-    targetPortId: str
-
-
-class PipelineGraphV2(TypedDict):
-    schemaVersion: Literal[2]
-    nodes: list[PipelineV2Node]
-    edges: list[PipelineV2Edge]
-    layout: JsonObject
-    outputContract: JsonObject
-    tests: list[JsonObject]
-    schedule: object | None
-    metadata: NotRequired[JsonObject]
+    execution_policy: PipelineNodeExecutionPolicy = PipelineNodeExecutionPolicy()
 
 
 def pipeline_node_descriptors() -> tuple[PipelineNodeDescriptor, ...]:
@@ -184,6 +166,7 @@ def _legacy_descriptor(
         config_fields,
         PipelineNodeAvailability.LEGACY_EXECUTABLE,
         "tabular_v1_compiler",
+        pipeline_node_execution_policy(descriptor_id),
     )
 
 
@@ -204,6 +187,7 @@ def _planned_descriptor(
         config_fields,
         PipelineNodeAvailability.VALIDATION_ONLY,
         runtime_capability,
+        pipeline_node_execution_policy(descriptor_id),
     )
 
 
@@ -224,6 +208,7 @@ def _graph_v2_descriptor(
         config_fields,
         PipelineNodeAvailability.GRAPH_V2_EXECUTABLE,
         runtime_capability,
+        pipeline_node_execution_policy(descriptor_id),
     )
 
 
@@ -243,6 +228,7 @@ def _candidate_descriptor(
         config_fields,
         PipelineNodeAvailability.GOVERNED_CANDIDATE,
         runtime_capability,
+        pipeline_node_execution_policy(descriptor_id),
     )
 
 

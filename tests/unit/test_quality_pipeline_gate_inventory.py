@@ -47,7 +47,7 @@ def test_pipeline_quality_gate_inventory_writes_machine_report(tmp_path: Path) -
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["gate_pass"] is False
     assert report["count"] == 1
-    assert len(report["required_gates"]) == 8
+    assert len(report["required_gates"]) == 9
 
 
 def _write_fixture(

@@ -798,7 +798,7 @@ def test_stale_run_recovers_media_transaction_committed_before_artifact_passport
             tenant_id=fixture.ctx.tenant_id,
             idempotency_key=key,
         )
-        assert row is not None and row["status"] == "executing"
+        assert row is not None and row["status"] == "running"
         transaction.execute(
             update(db.pipeline_runs)
             .where(

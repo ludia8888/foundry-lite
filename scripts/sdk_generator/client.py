@@ -640,11 +640,23 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    runs: {",
             (
                 "      start(pipelineId: string, payload: PipelineRunStartRequest | undefined, "
-                "options: { idempotencyKey: string }): Promise<PipelineRun>;"
+                "options: { idempotencyKey: string; waitSeconds?: number }): Promise<PipelineRun>;"
+            ),
+            (
+                "      list(pipelineId: string, filters?: { cursor?: string; limit?: number }): "
+                "Promise<PipelineListResult<PipelineRun>>;"
             ),
             "      get(runId: string): Promise<PipelineRun>;",
+            (
+                "      events(runId: string, options?: "
+                "StreamFoundryLiteOperationEventsOptions<PipelineRunEvent> & "
+                "{ lastEventId?: string | number }): AsyncGenerator<PipelineRunEvent, void, unknown>;"
+            ),
             "      timeline(runId: string): Promise<Record<string, unknown>>;",
-            "      cancel(runId: string): Promise<PipelineRun>;",
+            (
+                "      cancel(runId: string, payload: PipelineRunCancelRequest | undefined, "
+                "options: { idempotencyKey: string }): Promise<PipelineRun>;"
+            ),
             "    };",
             "    schedules: {",
             (
@@ -3676,9 +3688,12 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "      runs: {",
         (
             "        start: (pipelineId: string, payload: PipelineRunStartRequest = {}, "
-            "options: { idempotencyKey: string }) =>"
+            "options: { idempotencyKey: string; waitSeconds?: number }) =>"
         ),
-        "          request<PipelineRun>(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs`, {",
+        (
+            "          request<PipelineRun>(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs` + "
+            "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+        ),
         '            method: "POST",',
         "            headers: {",
         '              "Content-Type": "application/json",',
@@ -3686,12 +3701,48 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "            },",
         "            body: JSON.stringify(payload),",
         "          }),",
+        "        list: (pipelineId: string, filters: { cursor?: string; limit?: number } = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.cursor) params.set('cursor', filters.cursor);",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<PipelineListResult<PipelineRun>>(",
+        "            `/api/pipelines/${encodeURIComponent(pipelineId)}/runs${suffix}`,",
+        "          );",
+        "        },",
         "        get: (runId: string) => request<PipelineRun>(`/api/pipelines/runs/${encodeURIComponent(runId)}`),",
+        (
+            "        events: (runId: string, options: "
+            "StreamFoundryLiteOperationEventsOptions<PipelineRunEvent> & "
+            "{ lastEventId?: string | number } = {}) => {"
+        ),
+        "          const { lastEventId, ...streamOptions } = options;",
+        "          return streamFoundryLiteOperationEvents<PipelineRunEvent>(",
+        "            `/api/pipelines/runs/${encodeURIComponent(runId)}/events`,",
+        "            {",
+        "              ...clientOptions,",
+        "              ...streamOptions,",
+        "              headers: {",
+        "                ...(clientOptions.headers ?? {}),",
+        "                ...(streamOptions.headers ?? {}),",
+        "                ...(lastEventId === undefined ? {} : { 'Last-Event-ID': String(lastEventId) }),",
+        "              },",
+        "            },",
+        "          );",
+        "        },",
         "        timeline: (runId: string) =>",
         "          request<Record<string, unknown>>(`/api/pipelines/runs/${encodeURIComponent(runId)}/timeline`),",
-        "        cancel: (runId: string) =>",
+        (
+            "        cancel: (runId: string, payload: PipelineRunCancelRequest = {}, "
+            "options: { idempotencyKey: string }) =>"
+        ),
         "          request<PipelineRun>(`/api/pipelines/runs/${encodeURIComponent(runId)}/cancel`, {",
         '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        ('              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "pipelines.runs.cancel"),'),
+        "            },",
+        "            body: JSON.stringify(payload),",
         "          }),",
         "      },",
         "      schedules: {",

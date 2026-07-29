@@ -2481,20 +2481,54 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "      ),",
         "      runs: {",
         (
-            "        start: (pipelineId, payload = {}, options) => request("
-            "`/api/pipelines/${encodeURIComponent(pipelineId)}/runs`, {"
+            "        start: (pipelineId, payload = {}, runOptions) => request("
+            "`/api/pipelines/${encodeURIComponent(pipelineId)}/runs` + "
+            "`${runOptions?.waitSeconds === undefined ? '' : `?waitSeconds=${runOptions.waitSeconds}`}`, {"
         ),
         '          method: "POST",',
         "          headers: {",
         '            "Content-Type": "application/json",',
-        ('            "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "pipelines.runs.start"),'),
+        ('            "Idempotency-Key": requireIdempotencyKey(runOptions?.idempotencyKey, "pipelines.runs.start"),'),
         "          },",
         "          body: JSON.stringify(payload),",
         "        }),",
+        "        list: (pipelineId, filters = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.cursor) params.set('cursor', filters.cursor);",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs${suffix}`);",
+        "        },",
         "        get: (runId) => request(`/api/pipelines/runs/${encodeURIComponent(runId)}`),",
+        "        events: (runId, streamOptions = {}) => {",
+        "          const { lastEventId, ...eventOptions } = streamOptions;",
+        "          return streamFoundryLiteOperationEvents(",
+        "            `/api/pipelines/runs/${encodeURIComponent(runId)}/events`,",
+        "            {",
+        "              ...options,",
+        "              ...eventOptions,",
+        "              headers: {",
+        "                ...(options.headers ?? {}),",
+        "                ...(eventOptions.headers ?? {}),",
+        "                ...(lastEventId === undefined ? {} : { 'Last-Event-ID': String(lastEventId) }),",
+        "              },",
+        "            },",
+        "          );",
+        "        },",
         "        timeline: (runId) => request(`/api/pipelines/runs/${encodeURIComponent(runId)}/timeline`),",
-        "        cancel: (runId) => request(`/api/pipelines/runs/${encodeURIComponent(runId)}/cancel`, {",
+        (
+            "        cancel: (runId, payload = {}, cancelOptions) => "
+            "request(`/api/pipelines/runs/${encodeURIComponent(runId)}/cancel`, {"
+        ),
         '          method: "POST",',
+        "          headers: {",
+        '            "Content-Type": "application/json",',
+        (
+            '            "Idempotency-Key": requireIdempotencyKey('
+            'cancelOptions?.idempotencyKey, "pipelines.runs.cancel"),'
+        ),
+        "          },",
+        "          body: JSON.stringify(payload),",
         "        }),",
         "      },",
         "      schedules: {",

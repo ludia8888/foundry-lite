@@ -731,6 +731,10 @@ class PipelineRunStartRequest(BaseModel):
     target_node_ids: list[str] = Field(default_factory=list, alias="targetNodeIds")
 
 
+class PipelineRunCancelRequest(BaseModel):
+    reason: str | None = None
+
+
 class PipelineScheduleSpecRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

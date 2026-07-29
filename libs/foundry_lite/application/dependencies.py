@@ -67,6 +67,10 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
+from foundry_lite.application.ports.pipeline_dag_orchestrator import (
+    PipelineDagOrchestrator,
+    UnavailablePipelineDagOrchestrator,
+)
 from foundry_lite.application.ports.pipeline_execution_repository import PipelineExecutionRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
@@ -167,6 +171,7 @@ class CoreDependencies:
     aip: AipDependencies
     media: MediaDependencies
     source: SourceDependencies
+    pipeline_dag_orchestrator: PipelineDagOrchestrator
     profile: RuntimeProfile = RuntimeProfile()
 
     def __init__(
@@ -181,6 +186,7 @@ class CoreDependencies:
         aip: AipDependencies | None = None,
         media: MediaDependencies | None = None,
         source: SourceDependencies | None = None,
+        pipeline_dag_orchestrator: PipelineDagOrchestrator | None = None,
         profile: RuntimeProfile | str | None = None,
         **flat_overrides: object,
     ) -> None:
@@ -199,6 +205,11 @@ class CoreDependencies:
         fill_missing_bundles_from_flat_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
         apply_flat_dependency_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
         assign_dependency_bundles(self, bundles)
+        object.__setattr__(
+            self,
+            "pipeline_dag_orchestrator",
+            pipeline_dag_orchestrator or UnavailablePipelineDagOrchestrator(),
+        )
         object.__setattr__(self, "profile", RuntimeProfile.from_value(profile))
 
     @property

@@ -169,6 +169,8 @@ class PipelineRunRecord:
     parameters: JsonObject | None = None
     target_node_ids: list[str] | None = None
     outputs: list[JsonObject] = field(default_factory=_empty_json_object_list)
+    schedule_id: str | None = None
+    schedule_slot_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -319,6 +321,71 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
 
     def run_by_idempotency_key(
         self, *, transaction: TransactionContext, tenant_id: str, idempotency_key: str
+    ) -> PipelineRunRow | None: ...
+
+    def list_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        pipeline_id: str,
+        after_started_at: str | None,
+        after_run_id: str | None,
+        limit: int,
+    ) -> list[PipelineRunRow]: ...
+
+    def update_run_dispatch(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        workflow_run_id: str,
+        dispatch_status: str,
+        dispatch_error: JsonObject | None,
+    ) -> PipelineRunRow | None: ...
+
+    def pending_dispatch_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str | None,
+        limit: int,
+    ) -> list[PipelineRunRow]: ...
+
+    def unobserved_terminal_schedule_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        limit: int,
+    ) -> list[PipelineRunRow]: ...
+
+    def cancelling_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        limit: int,
+    ) -> list[PipelineRunRow]: ...
+
+    def claim_terminal_schedule_observation(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        observed_at: str,
+    ) -> PipelineRunRow | None: ...
+
+    def request_run_cancel(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        requested_at: str,
+        reason: str | None,
+        idempotency_key: str,
+        request_fingerprint: str,
     ) -> PipelineRunRow | None: ...
 
     def claim_run_execution(

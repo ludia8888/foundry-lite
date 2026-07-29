@@ -51,6 +51,7 @@ from foundry_lite.application.services.pipeline_run_requests import (
     run_request_fingerprint,
 )
 from foundry_lite.application.services.pipeline_run_service_evidence import (
+    audit_pipeline_execution_claim,
     audit_pipeline_run,
     require_pipeline_write_open,
 )
@@ -59,6 +60,14 @@ from foundry_lite.application.services.pipeline_run_terminal import (
     fail_pipeline_run,
     succeed_pipeline_run,
 )
+
+_ACTIVE_OR_TERMINAL_RUN_STATUSES = frozenset(
+    {"cancelled", "cancelling", "running", "executing", "succeeded", "partial", "failed"}
+)
+
+
+def _is_active_or_terminal_run(row: PipelineRunRow) -> bool:
+    return str(row["status"]) in _ACTIVE_OR_TERMINAL_RUN_STATUSES
 
 
 class PipelineRunService(CoreService):
@@ -157,7 +166,7 @@ class PipelineRunService(CoreService):
                 self._reconcile_unknown_commit(ctx, row)
                 return self.get_run(str(row["id"]), ctx=ctx)
         try:
-            return self._execute_run(ctx, row, version)
+            return self.execute_queued_run(ctx, row, version)
         except (
             pipeline_run_recovery.PipelineExecutionLeaseLost,
             pipeline_run_recovery.PipelineTerminalCommitError,
@@ -244,10 +253,14 @@ class PipelineRunService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "pipeline:read")
         with self.engine.begin() as conn:
-            return self._run_payload(
-                conn,
-                ctx,
-                required_pipeline_run(self.pipeline_repository, conn, ctx, run_id),
+            row = required_pipeline_run(self.pipeline_repository, conn, ctx, run_id)
+            version = required_pipeline_version(self.pipeline_repository, conn, ctx, str(row["version_id"]))
+            return run_with_evidence_payload(
+                transaction=conn,
+                repository=self.pipeline_execution_repository,
+                tenant_id=ctx.tenant_id,
+                row=row,
+                execution_plan=version["execution_plan"] or {"nodes": []},
             )
 
     def get_run_timeline(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
@@ -290,7 +303,7 @@ class PipelineRunService(CoreService):
                 )
         return self.get_run(run_id, ctx=ctx)
 
-    def _execute_run(
+    def execute_queued_run(
         self,
         ctx: RequestContext,
         row: PipelineRunRow,
@@ -414,18 +427,10 @@ class PipelineRunService(CoreService):
                 execution_heartbeat_at=lease.heartbeat_at,
             )
             if claimed is not None:
-                audit_pipeline_run(
-                    self.runtime_service,
-                    conn,
-                    ctx,
-                    "execution_claimed",
-                    "pipeline_run",
-                    run_id,
-                    {"version_id": row["version_id"], "execution_lease_expires_at": lease.expires_at},
-                )
+                audit_pipeline_execution_claim(self.runtime_service, conn, ctx, row, lease.expires_at)
                 return claimed
             current = required_pipeline_run(self.pipeline_repository, conn, ctx, run_id)
-            if current["status"] in {"cancelled", "executing", "succeeded", "failed"}:
+            if _is_active_or_terminal_run(current):
                 return None
         raise ConflictDetected(
             "pipeline run execution claim changed concurrently",
@@ -481,19 +486,4 @@ class PipelineRunService(CoreService):
         return PipelineNodeCommitterRegistry(
             dataset=DatasetPipelineNodeCommitter(self.transform_service, evidence, ctx),
             governed_candidate=GovernedCandidatePipelineOutputCommitter(candidate),
-        )
-
-    def _run_payload(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        row: PipelineRunRow,
-    ) -> dict[str, object]:
-        version = required_pipeline_version(self.pipeline_repository, conn, ctx, str(row["version_id"]))
-        return run_with_evidence_payload(
-            transaction=conn,
-            repository=self.pipeline_execution_repository,
-            tenant_id=ctx.tenant_id,
-            row=row,
-            execution_plan=version["execution_plan"] or {"nodes": []},
         )

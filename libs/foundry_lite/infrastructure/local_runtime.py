@@ -77,6 +77,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalEmbeddingAdapter,
     LocalExternalMediaReader,
     LocalMediaStorageAdapter,
+    LocalPipelineDagOrchestrator,
     LocalPreviewRendererAdapter,
     LocalSearchAdapter,
     LocalStreamAdapter,
@@ -95,6 +96,8 @@ from foundry_lite.infrastructure.adapters import (
     S3MediaStorageConfig,
     SparkComputeAdapter,
     SqlAlchemySourceDatabaseAdapter,
+    TemporalPipelineDagConfig,
+    TemporalPipelineDagOrchestrator,
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
     VideoProbeProcessorAdapter,
@@ -384,6 +387,7 @@ def _create_core_dependencies(
     search_adapter = _search_adapter(profiles.search)
     stream_adapter = _stream_adapter(profiles.stream)
     workflow_adapter = _workflow_adapter(profiles.workflow)
+    pipeline_dag_orchestrator = _pipeline_dag_orchestrator(profiles.workflow)
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
@@ -414,6 +418,7 @@ def _create_core_dependencies(
     allow_schema_mutation = not runtime_profile.is_protected
     return CoreDependencies(
         profile=runtime_profile,
+        pipeline_dag_orchestrator=pipeline_dag_orchestrator,
         paths=PathDependencies(root=root, storage_root=object_storage_root),
         security=SecurityDependencies(
             engine=engine,
@@ -754,6 +759,22 @@ def _workflow_adapter(workflow_profile: str) -> WorkflowAdapter:
     if workflow_profile == "fake-storage":
         return FakeWorkflowAdapter()
     raise ValueError(f"unknown workflow profile: {workflow_profile}")
+
+
+def _pipeline_dag_orchestrator(
+    workflow_profile: str,
+) -> LocalPipelineDagOrchestrator | TemporalPipelineDagOrchestrator:
+    workflow_profile = _env_profile(os.environ, "FOUNDRY_LITE_WORKFLOW_PROFILE", workflow_profile)
+    if workflow_profile == "temporal":
+        return TemporalPipelineDagOrchestrator(
+            TemporalPipelineDagConfig(
+                address=os.getenv("FOUNDRY_LITE_TEMPORAL_ADDRESS", "localhost:7233"),
+                namespace=os.getenv("FOUNDRY_LITE_TEMPORAL_NAMESPACE", "default"),
+                task_queue=os.getenv("FOUNDRY_LITE_PIPELINE_DAG_TASK_QUEUE", "foundry-lite-pipeline-dag"),
+                execution_timeout_seconds=int(os.getenv("FOUNDRY_LITE_PIPELINE_DAG_EXECUTION_TIMEOUT", "86400")),
+            )
+        )
+    return LocalPipelineDagOrchestrator()
 
 
 def _schema_mutation_allowed_from_env() -> bool:

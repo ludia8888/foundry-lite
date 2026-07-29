@@ -88,6 +88,7 @@ import type {
   PipelinePreviewNodeRequest,
   PipelineProposalAssignRequest,
   PipelineProposalDecisionRequest,
+  PipelineRunCancelRequest,
   PipelineRunStartRequest,
   PipelineScheduleUpsertRequest,
   OsdkActionPayload,
@@ -1061,11 +1062,23 @@ export function createPipelineBuilderRecipe(
     startRun: (
       pipelineId: string,
       payload: PipelineRunStartRequest | undefined,
-      options: { idempotencyKey: string },
+      options: { idempotencyKey: string; waitSeconds?: number },
     ) => client.pipelines.runs.start(pipelineId, payload, options),
+    listRuns: (
+      pipelineId: string,
+      filters: { cursor?: string; limit?: number } = {},
+    ) => client.pipelines.runs.list(pipelineId, filters),
     getRun: (runId: string) => client.pipelines.runs.get(runId),
+    runEvents: (
+      runId: string,
+      options: Parameters<typeof client.pipelines.runs.events>[1] = {},
+    ) => client.pipelines.runs.events(runId, options),
     timeline: (runId: string) => client.pipelines.runs.timeline(runId),
-    cancelRun: (runId: string) => client.pipelines.runs.cancel(runId),
+    cancelRun: (
+      runId: string,
+      payload: PipelineRunCancelRequest | undefined,
+      options: { idempotencyKey: string },
+    ) => client.pipelines.runs.cancel(runId, payload, options),
     upsertSchedule: (
       pipelineId: string,
       payload: PipelineScheduleUpsertRequest,

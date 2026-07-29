@@ -139,9 +139,13 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type PipelineDeployment = Record<string, unknown> & {" in generated
     assert "export type PipelineDeploymentResult = {" in generated
     assert (
-        'export type PipelineRunStatus = "running" | "executing" | "succeeded" | "partial" | "failed" | "cancelled";'
-        in generated
+        'export type PipelineRunStatus = "queued" | "running" | "cancelling" | '
+        '"succeeded" | "partial" | "failed" | "cancelled";' in generated
     )
+    assert "workerId: string | null;" in generated
+    assert "fencingToken: number;" in generated
+    assert "retryAt: string | null;" in generated
+    assert "leaseToken: string | null;" not in generated
     assert 'export type PipelineRunOutputStatus = "COMMITTED" | "COMMIT_OUTCOME_UNKNOWN" | "FAILED";' in generated
     assert 'export type PipelineRunOutputCommitKind = "SERVING_ASSET" | "GOVERNED_CANDIDATE";' in generated
     pipeline_run_output_start = generated.index("export type PipelineRunOutput =")
@@ -506,7 +510,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "deployments": ["list"],
         "previewRuns": ["create", "get", "cancel"],
         "proposals": ["list", "get", "assign", "decide", "execute", "withdraw"],
-        "runs": ["start", "get", "timeline", "cancel"],
+        "runs": ["start", "list", "get", "events", "timeline", "cancel"],
         "schedules": ["upsert", "get", "pause", "resume", "delete", "previewDue", "tick"],
         "versions": ["list", "get"],
     }
@@ -773,7 +777,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "previewRuns: {",
         'requireIdempotencyKey(options?.idempotencyKey, "pipelines.previewRuns.create")',
         'requireIdempotencyKey(options?.idempotencyKey, "pipelines.deploy")',
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.runs.start")',
+        'runOptions?.idempotencyKey, "pipelines.runs.start"',
+        'cancelOptions?.idempotencyKey, "pipelines.runs.cancel"',
         'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.upsert")',
         'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.pause")',
         'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.resume")',

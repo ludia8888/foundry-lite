@@ -18,6 +18,9 @@ from foundry_lite.application.ports.media_processor_registry import (
     ProcessorPreviewCapability,
     ProcessorResourceRequirements,
 )
+from foundry_lite.application.ports.pipeline_dag_orchestrator import (
+    UnavailablePipelineDagOrchestrator,
+)
 from foundry_lite.application.primitives import _json_hash
 from foundry_lite.application.services.pipeline_preview_executor import PreviewExecutionResult
 from foundry_lite.domain.context import RequestContext, demo_admin_context
@@ -55,9 +58,13 @@ def test_preview_execution_claim_has_one_winner(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    dependencies = create_local_core_dependencies(
+    base_dependencies = create_local_core_dependencies(
         db_url=f"sqlite:///{tmp_path / 'pipeline-preview-claim.db'}",
         storage_root=tmp_path / "preview-claim-flite",
+    )
+    dependencies = _dependencies_with_pipeline_orchestrator(
+        base_dependencies,
+        UnavailablePipelineDagOrchestrator(),
     )
     foundry = FoundryLite(dependencies=dependencies)
     ctx = demo_admin_context()
@@ -95,7 +102,7 @@ def test_preview_execution_claim_has_one_winner(
         fail_if_duplicate_executes,
     )
 
-    replay = foundry.pipelines.execute_preview_run(str(queued["id"]), ctx=ctx)
+    replay = foundry.pipelines.get_preview_run(str(queued["id"]), ctx=ctx)
 
     assert replay["status"] == "RUNNING"
     assert replay["startedAt"] == "2026-07-27T00:00:00Z"
@@ -105,9 +112,13 @@ def test_expired_preview_is_recovered_with_original_caller_context(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    dependencies = create_local_core_dependencies(
+    base_dependencies = create_local_core_dependencies(
         db_url=f"sqlite:///{tmp_path / 'pipeline-preview-recovery.db'}",
         storage_root=tmp_path / "preview-recovery-flite",
+    )
+    dependencies = _dependencies_with_pipeline_orchestrator(
+        base_dependencies,
+        UnavailablePipelineDagOrchestrator(),
     )
     foundry = FoundryLite(dependencies=dependencies)
     ctx = RequestContext(
@@ -164,9 +175,13 @@ def test_preview_recovery_durably_fails_unauthorized_row_and_continues(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    dependencies = create_local_core_dependencies(
+    base_dependencies = create_local_core_dependencies(
         db_url=f"sqlite:///{tmp_path / 'pipeline-preview-poisoned-row.db'}",
         storage_root=tmp_path / "preview-poisoned-row-flite",
+    )
+    dependencies = _dependencies_with_pipeline_orchestrator(
+        base_dependencies,
+        UnavailablePipelineDagOrchestrator(),
     )
     foundry = FoundryLite(dependencies=dependencies)
     ctx = demo_admin_context()
@@ -311,6 +326,8 @@ def test_media_preview_rejects_bytes_changed_after_catalog_verification(
         idempotency_key="media-tamper-branch",
         ctx=ctx,
     )
+    media_storage = foundry._services.pipelines.preview.media_storage
+    monkeypatch.setattr(media_storage, "open_stream", lambda _blob_key: io.BytesIO(b"tampered-media"))
     queued = foundry.pipelines.create_preview_run(
         str(branch["id"]),
         graph=_pdf_page_graph("legal.public_prompt_contracts"),
@@ -319,8 +336,6 @@ def test_media_preview_rejects_bytes_changed_after_catalog_verification(
         idempotency_key="media-tamper-run",
         ctx=ctx,
     )
-    media_storage = foundry._services.pipelines.preview.media_storage
-    monkeypatch.setattr(media_storage, "open_stream", lambda _blob_key: io.BytesIO(b"tampered-media"))
 
     completed = foundry.pipelines.execute_preview_run(str(queued["id"]), ctx=ctx)
 
@@ -342,6 +357,11 @@ def test_media_preview_rejects_secret_source_before_returning_raw_text(tmp_path:
     )
     foundry = FoundryLite(dependencies=dependencies)
     admin = demo_admin_context()
+    data_engineer = RequestContext(
+        tenant_id=admin.tenant_id,
+        actor_user_id="engineer-without-secret-clearance",
+        roles=("data_engineer",),
+    )
     _commit_pdf(foundry, classification="secret")
     branch = foundry.pipelines.create_branch(
         pipeline_id="secret-media-preview",
@@ -355,12 +375,7 @@ def test_media_preview_rejects_secret_source_before_returning_raw_text(tmp_path:
         target_node_id="out",
         limits={"pdfPages": 3, "tableRows": 50},
         idempotency_key="secret-media-preview-run",
-        ctx=admin,
-    )
-    data_engineer = RequestContext(
-        tenant_id=admin.tenant_id,
-        actor_user_id="engineer-without-secret-clearance",
-        roles=("data_engineer",),
+        ctx=data_engineer,
     )
 
     completed = foundry.pipelines.execute_preview_run(str(queued["id"]), ctx=data_engineer)
@@ -777,6 +792,25 @@ def _dependencies_with_language_model(
         source=base.source,
         profile=base.profile,
         language_model_adapter=adapter,
+    )
+
+
+def _dependencies_with_pipeline_orchestrator(
+    base: CoreDependencies,
+    orchestrator: UnavailablePipelineDagOrchestrator,
+) -> CoreDependencies:
+    return CoreDependencies(
+        paths=base.paths,
+        security=base.security,
+        action=base.action,
+        data=base.data,
+        object_store=base.object_store,
+        runtime=base.runtime,
+        aip=base.aip,
+        media=base.media,
+        source=base.source,
+        pipeline_dag_orchestrator=orchestrator,
+        profile=base.profile,
     )
 
 

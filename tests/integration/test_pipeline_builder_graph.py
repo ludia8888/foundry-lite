@@ -253,7 +253,7 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
     assert due["maxRuns"] == 1
     assert due["items"] == []
     assert ticked["reconciled"] == 1
-    assert ticked["started"][0]["run"]["status"] == "succeeded"
+    assert ticked["started"][0]["run"]["status"] in {"queued", "running", "succeeded"}
     assert runtime_config_updated_at == legacy_updated_at
     assert paused_schedule["status"] == "paused"
     assert replayed_pause["status"] == "paused"
@@ -277,9 +277,9 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
         for event in audit_events
     )
     assert any(event["event_type"] == "pipeline.schedule.reconciled" for event in audit_events)
-    assert claimed_run is not None and claimed_run["status"] == "executing"
-    with pytest.raises(ConflictDetected, match="cancellation is no longer safe"):
-        foundry.pipelines.cancel(str(executing_run["id"]), ctx=ctx)
+    assert claimed_run is not None and claimed_run["status"] == "running"
+    executing_cancelled = foundry.pipelines.cancel(str(executing_run["id"]), ctx=ctx)
+    assert executing_cancelled["status"] == "cancelled"
 
     with pytest.raises(ConflictDetected, match="pipeline run is already terminal"):
         foundry.pipelines.cancel(str(run["id"]), ctx=ctx)
@@ -362,7 +362,7 @@ def test_pipeline_unexpected_failure_preserves_execution_claim_timeline(
 
     assert run["status"] == "failed"
     assert [item["event"] for item in run["timeline"]] == [
-        "pipeline.run.started",
+        "pipeline.run.running",
         "pipeline.run.execution_claimed",
         "pipeline.run.failed",
     ]
@@ -415,7 +415,7 @@ def test_pipeline_lease_loss_fences_commit_until_expired_owner_recovery(
             idempotency_key="lease-loss-fences-commit",
         )
         assert row is not None
-        assert row["status"] == "executing"
+        assert row["status"] == "running"
         transaction.execute(
             update(db.pipeline_runs)
             .where(
@@ -555,12 +555,12 @@ def test_idempotent_replay_recovers_queued_run_and_terminalizes_stale_execution(
 
     assert recovered["id"] == queued["id"]
     assert recovered["status"] == "succeeded"
-    assert claimed is not None and claimed["status"] == "executing"
-    assert active_claim is not None and active_claim["status"] == "executing"
+    assert claimed is not None and claimed["status"] == "running"
+    assert active_claim is not None and active_claim["status"] == "running"
     assert failed["id"] == stale["id"]
     assert failed["status"] == "failed"
     assert replayed_failed["status"] == "failed"
-    assert live["status"] == "executing"
+    assert live["status"] == "running"
     assert failed["timeline"][-1]["event"] == "pipeline.run.failed"
     assert failed["error"]["message"] == "expired pipeline execution lease was recovered as terminal failure"
     assert len(failed_audits) == 1
@@ -600,7 +600,7 @@ def test_pre_v2_deployed_version_backfills_pinned_execution_plan_on_first_run(tm
     )
 
 
-def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
+def test_scheduler_takeover_treats_replayed_executing_run_as_enqueued(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -643,8 +643,8 @@ def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
     assert claimed is not None
 
     monkeypatch.setattr(
-        foundry._services.pipelines.run,
-        "start_run",
+        foundry._services.pipelines.async_run,
+        "enqueue",
         lambda *_args, **_kwargs: {"id": "run-still-executing", "status": "executing"},
     )
     takeover_at = parse_schedule_timestamp(slot_start, field="slotStart") + timedelta(seconds=61)
@@ -656,12 +656,15 @@ def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
     )
     current = foundry.pipelines.get_schedule("historical_v1", ctx=ctx)
 
-    assert result["started"] == []
-    assert result["skipped"][0]["reason"] == "run_in_progress"
+    assert result["skipped"] == []
+    assert result["started"][0]["run"]["status"] == "executing"
     assert current["status"] == "active"
     assert current["failureCount"] == 0
-    assert current["nextDueAt"] == slot_start
-    assert current["leaseExpiresAt"] == schedule_iso(takeover_at + timedelta(seconds=60))
+    assert current["nextDueAt"] == schedule_iso(
+        parse_schedule_timestamp(slot_start, field="slotStart") + timedelta(seconds=300)
+    )
+    assert current["leaseOwner"] is None
+    assert current["leaseExpiresAt"] is None
 
 
 def test_pipeline_builder_persisted_v2_tabular_graph_deploys_and_runs(tmp_path: Path) -> None:

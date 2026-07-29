@@ -76,6 +76,8 @@ class PipelineGraphV2RuntimeExecutor:
         evidence: PipelineGraphV2ExecutionEvidenceWriter,
         candidates: GovernedPipelineCandidateCommitter,
         error_payload: ErrorPayload,
+        initial_artifacts: Mapping[str, PipelineV2RuntimeArtifact] | None = None,
+        initial_persisted: Mapping[str, PipelineRunArtifactRow] | None = None,
     ) -> None:
         self._run_id = run_id
         self._nodes = tuple(nodes)
@@ -84,9 +86,14 @@ class PipelineGraphV2RuntimeExecutor:
         self._evidence = evidence
         self._candidates = candidates
         self._error_payload = error_payload
+        self._initial_artifacts = dict(initial_artifacts or {})
+        self._initial_persisted = dict(initial_persisted or {})
 
     def execute(self) -> PipelineV2RunResult:
-        state = _ExecutionState()
+        state = _ExecutionState(
+            artifacts=dict(self._initial_artifacts),
+            persisted=dict(self._initial_persisted),
+        )
         state.timeline.append({"event": "pipeline.graph_v2.started", "at": _now()})
         for node in self._nodes:
             self._execute_or_skip(node, state)
@@ -327,6 +334,7 @@ class _ExecutionState:
             error=self.error,
             failed_node_id=self.failed_node_id,
             skipped_node_ids=tuple(self.skipped),
+            runtime_artifacts=tuple(self.artifacts[key] for key in sorted(self.artifacts)),
         )
 
 

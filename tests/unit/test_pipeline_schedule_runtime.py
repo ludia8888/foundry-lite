@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from foundry_lite.application.ports.pipeline_repository import PipelineScheduleRow
+from foundry_lite.application.ports.pipeline_repository import PipelineRunRow, PipelineScheduleRow
 from foundry_lite.application.services.pipeline_execution_contracts import PipelineScheduleSpec
 from foundry_lite.application.services.pipeline_schedule_runtime import (
     initial_next_due_at,
@@ -22,7 +22,10 @@ from foundry_lite.application.services.pipeline_schedule_runtime import (
     scheduled_run_idempotency_key,
     scheduler_now,
 )
-from foundry_lite.application.services.pipeline_scheduler_results import completion_values
+from foundry_lite.application.services.pipeline_scheduler_results import (
+    completion_values,
+    terminal_observation_values,
+)
 from foundry_lite.domain.errors import ValidationFailed
 
 
@@ -182,6 +185,48 @@ def test_failed_schedule_tick_auto_pauses_at_configured_threshold() -> None:
     assert values["paused_reason"] == "consecutive_failures"
     assert values["next_due_at"] is None
     assert values["last_error"] == {"code": "ADAPTER_FAILURE", "requestId": "request-a"}
+
+
+def test_terminal_observer_applies_failure_only_after_async_run_finishes() -> None:
+    schedule = cast(PipelineScheduleRow, _schedule_row())
+    run = cast(
+        PipelineRunRow,
+        {
+            "id": "run-a",
+            "status": "partial",
+            "schedule_slot_at": "2026-01-01T00:00:00Z",
+            "error": {"code": "OUTPUT_FAILED"},
+        },
+    )
+
+    values = terminal_observation_values(schedule, run, "2026-01-01T00:03:00Z")
+
+    assert values["failure_count"] == 2
+    assert values["status"] == "paused"
+    assert values["enabled"] is False
+    assert values["last_terminal_run_id"] == "run-a"
+    assert values["last_terminal_status"] == "partial"
+    assert values["last_terminal_at"] == "2026-01-01T00:03:00Z"
+
+
+def test_terminal_observer_resets_consecutive_failures_after_success() -> None:
+    schedule = cast(PipelineScheduleRow, _schedule_row())
+    run = cast(
+        PipelineRunRow,
+        {
+            "id": "run-success",
+            "status": "succeeded",
+            "schedule_slot_at": "2026-01-01T00:01:00Z",
+            "error": None,
+        },
+    )
+
+    values = terminal_observation_values(schedule, run, "2026-01-01T00:04:00Z")
+
+    assert values["failure_count"] == 0
+    assert values["last_failure_at"] is None
+    assert values["last_error"] is None
+    assert values["last_terminal_status"] == "succeeded"
 
 
 def test_cron_payload_resume_and_slot_helpers_preserve_full_schedule_contract() -> None:

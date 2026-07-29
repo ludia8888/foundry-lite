@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from foundry_lite.application.ports.pipeline_repository import (
+    PipelineRunRow,
     PipelineScheduleOperationRow,
     PipelineScheduleRow,
 )
@@ -67,22 +68,51 @@ def completion_values(
     run: Mapping[str, object] | None,
     error: Mapping[str, object] | None,
     now: datetime,
-    is_success: bool,
+    is_enqueued: bool,
 ) -> dict[str, object]:
     spec = pipeline_schedule_spec_from_row(claimed["schedule"], is_enabled=True)
-    failure_count = 0 if is_success else int(claimed["failure_count"]) + 1
+    failure_count = int(claimed["failure_count"]) if is_enqueued else int(claimed["failure_count"]) + 1
     should_pause = _should_auto_pause(spec, failure_count)
     return {
         "last_tick_at": schedule_iso(now),
         "last_slot_at": slot_start,
         "next_due_at": None if should_pause else next_due_after_slot(spec, slot_start),
         "failure_count": failure_count,
-        "last_failure_at": None if is_success else schedule_iso(now),
-        "last_error": None if is_success else dict(error or _run_error(run)),
+        "last_failure_at": claimed["last_failure_at"] if is_enqueued else schedule_iso(now),
+        "last_error": claimed["last_error"] if is_enqueued else dict(error or _run_error(run)),
         "status": "paused" if should_pause else "active",
         "enabled": not should_pause,
         "paused_reason": "consecutive_failures" if should_pause else None,
     }
+
+
+def terminal_observation_values(
+    schedule: PipelineScheduleRow,
+    run: PipelineRunRow,
+    observed_at: str,
+) -> dict[str, object]:
+    status = str(run["status"])
+    is_failure = status in {"failed", "partial"}
+    failure_count = int(schedule["failure_count"]) + 1 if is_failure else 0
+    spec = pipeline_schedule_spec_from_row(schedule["schedule"], is_enabled=True)
+    should_pause = _should_auto_pause(spec, failure_count)
+    values: dict[str, object] = {
+        "failure_count": failure_count,
+        "last_failure_at": observed_at if is_failure else None,
+        "last_error": dict(run["error"] or _run_error(run)) if is_failure else None,
+        "last_terminal_run_id": run["id"],
+        "last_terminal_slot_at": run["schedule_slot_at"],
+        "last_terminal_status": status,
+        "last_terminal_at": observed_at,
+    }
+    if should_pause:
+        values.update(
+            status="paused",
+            enabled=False,
+            paused_reason="consecutive_failures",
+            next_due_at=None,
+        )
+    return values
 
 
 def tick_result(

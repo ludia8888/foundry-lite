@@ -122,16 +122,17 @@ def run_record(
     parameters: Mapping[str, object] | None = None,
     target_node_ids: list[str] | None = None,
     now: str,
+    initial_status: str = "running",
 ) -> PipelineRunRecord:
     return PipelineRunRecord(
         run_id=_new_id("prun"),
         tenant_id=ctx.tenant_id,
         pipeline_id=pipeline_id,
         version_id=version_id,
-        status="running",
+        status=initial_status,
         output_dataset_ref=None,
         output_version_id=None,
-        timeline=[{"event": "pipeline.run.started", "at": now, "versionId": version_id}],
+        timeline=[{"event": f"pipeline.run.{initial_status}", "at": now, "versionId": version_id}],
         error=None,
         created_by=ctx.actor_user_id,
         started_at=now,
@@ -141,7 +142,17 @@ def run_record(
         plan_fingerprint=plan_fingerprint,
         parameters=dict(parameters or {}),
         target_node_ids=list(target_node_ids or []),
+        schedule_id=_optional_parameter_text(parameters, "scheduleId"),
+        schedule_slot_at=_optional_parameter_text(parameters, "slotStart"),
     )
+
+
+def _optional_parameter_text(
+    parameters: Mapping[str, object] | None,
+    key: str,
+) -> str | None:
+    value = parameters.get(key) if parameters is not None else None
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def schedule_record(
@@ -268,8 +279,19 @@ def run_payload(row: PipelineRunRow) -> JsonObject:
         "requestFingerprint": row["request_fingerprint"],
         "planFingerprint": row["plan_fingerprint"],
         "workflowRunId": row["workflow_run_id"],
+        "orchestration": {
+            "dispatchStatus": row["dispatch_status"],
+            "dispatchAttemptCount": row["dispatch_attempt_count"],
+            "dispatchError": row["dispatch_error"],
+            "lastEventSequence": row["event_sequence"],
+        },
         "executionLeaseExpiresAt": row["execution_lease_expires_at"],
         "executionHeartbeatAt": row["execution_heartbeat_at"],
+        "cancelRequestedAt": row["cancel_requested_at"],
+        "cancelReason": row["cancel_reason"],
+        "scheduleId": row["schedule_id"],
+        "scheduleSlotAt": row["schedule_slot_at"],
+        "terminalObservedAt": row["terminal_observed_at"],
         "parameters": row["parameters"],
         "targetNodeIds": row["target_node_ids"],
         "outputs": row["outputs"],
@@ -307,6 +329,10 @@ def schedule_payload(row: PipelineScheduleRow | None) -> JsonObject | None:
         "pausedReason": row["paused_reason"],
         "lastFailureAt": row["last_failure_at"],
         "lastError": row["last_error"],
+        "lastTerminalRunId": row["last_terminal_run_id"],
+        "lastTerminalSlotAt": row["last_terminal_slot_at"],
+        "lastTerminalStatus": row["last_terminal_status"],
+        "lastTerminalAt": row["last_terminal_at"],
     }
 
 

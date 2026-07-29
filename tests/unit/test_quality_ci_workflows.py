@@ -773,6 +773,7 @@ def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> N
         "quality:pipeline-preview",
         "quality:pipeline-multimodal",
         "quality:pipeline-scheduler",
+        "quality:pipeline-async-dag",
         "quality:pipeline-collaboration",
         "quality:pipeline-python-isolation",
         "quality:pipeline-trained-model-sidecar",
@@ -796,6 +797,11 @@ def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> N
     assert "tests/integration/trained_model_sidecar_container_live.py" in package_scripts[model_live_gate]
     assert "ensure_trained_model_image" in e2e_driver
     assert f"pnpm --silent {model_live_gate}" in e2e_driver
+    async_live_gate = "quality:pipeline-async-dag-live"
+    assert "tests/integration/pipeline_async_dag_temporal_live.py" in package_scripts[async_live_gate]
+    assert "docker compose -f infra/docker-compose.dev.yml" in package_scripts[async_live_gate]
+    assert f"pnpm --silent {async_live_gate}" in e2e_driver
+    assert e2e_driver.index("quality:pipeline-async-dag") < e2e_driver.index(async_live_gate)
 
     e2e_gate = "quality:pipeline-builder-e2e"
     assert "tests/e2e-foundry/pipeline-builder-flow.spec.ts" in package_scripts[e2e_gate]

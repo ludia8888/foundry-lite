@@ -136,7 +136,7 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
         )
     assert row is not None
     detail = foundry.pipelines.get_run(str(row["id"]), ctx=ctx)
-    assert detail["status"] == "executing"
+    assert detail["status"] == "running"
     assert (
         _artifacts_by_node(detail)["output"]["artifactRef"]["versionId"]
         == _dataset_version_ids(foundry, ctx, output_ref)[0]
@@ -146,7 +146,7 @@ def test_graph_v2_committed_output_survives_success_terminal_persistence_failure
         idempotency_key="run-graph-v2-terminal-reconciliation",
         ctx=ctx,
     )
-    assert replay["status"] == "executing"
+    assert replay["status"] == "running"
     with foundry.engine.begin() as transaction:
         transaction.execute(
             delete(db.pipeline_run_artifacts).where(

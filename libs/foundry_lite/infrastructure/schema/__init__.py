@@ -103,6 +103,7 @@ from foundry_lite.infrastructure.schema.pipeline_execution import (
     pipeline_node_runs,
     pipeline_preview_runs,
     pipeline_run_artifacts,
+    pipeline_run_events,
     pipeline_semantic_row_cache,
     pipelines,
 )
@@ -224,6 +225,7 @@ __all__ = [
     "pipeline_node_runs",
     "pipeline_preview_runs",
     "pipeline_run_artifacts",
+    "pipeline_run_events",
     "pipeline_semantic_row_cache",
     "insight_reviews",
     "object_change_counters",

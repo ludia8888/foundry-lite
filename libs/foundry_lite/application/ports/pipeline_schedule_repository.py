@@ -34,6 +34,10 @@ class PipelineScheduleRow(TypedDict):
     paused_reason: str | None
     last_failure_at: str | None
     last_error: JsonObject | None
+    last_terminal_run_id: str | None
+    last_terminal_slot_at: str | None
+    last_terminal_status: str | None
+    last_terminal_at: str | None
 
 
 class PipelineScheduleOperationRow(TypedDict):
@@ -86,6 +90,19 @@ class PipelineScheduleRepository(Protocol):
 
     def schedule_by_pipeline(
         self, *, transaction: TransactionContext, tenant_id: str, pipeline_id: str
+    ) -> PipelineScheduleRow | None: ...
+
+    def schedule_by_id_for_update(
+        self, *, transaction: TransactionContext, tenant_id: str, schedule_id: str
+    ) -> PipelineScheduleRow | None: ...
+
+    def update_schedule_terminal_observation(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        schedule_id: str,
+        values: JsonObject,
     ) -> PipelineScheduleRow | None: ...
 
     def delete_schedule(self, *, transaction: TransactionContext, tenant_id: str, pipeline_id: str) -> bool: ...

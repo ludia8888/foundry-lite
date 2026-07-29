@@ -8,11 +8,13 @@ from sqlalchemy import and_, desc, func, insert, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
+import foundry_lite.infrastructure.repositories.pipeline_execution_event_rows as event_rows
 import foundry_lite.infrastructure.repositories.pipeline_execution_node_rows as node_rows
 import foundry_lite.infrastructure.repositories.pipeline_preview_rows as preview_rows
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineDeploymentRecord,
     PipelineDeploymentRow,
+    PipelineNodeAttemptClaim,
     PipelineNodeAttemptRecord,
     PipelineNodeAttemptRow,
     PipelineNodeRunRecord,
@@ -21,6 +23,8 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelinePreviewRunRow,
     PipelineRunArtifactRecord,
     PipelineRunArtifactRow,
+    PipelineRunEventRecord,
+    PipelineRunEventRow,
 )
 from foundry_lite.application.state_transitions import StatusTransition
 from foundry_lite.infrastructure import schema as db
@@ -44,6 +48,33 @@ class SqlAlchemyPipelineExecutionRepository:
         self, *, transaction: Any, tenant_id: str, idempotency_key: str
     ) -> PipelinePreviewRunRow | None:
         return preview_rows.preview_by_idempotency_key(transaction, tenant_id, idempotency_key)
+
+    def update_preview_dispatch(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        preview_run_id: str,
+        workflow_run_id: str,
+        dispatch_status: str,
+        dispatch_error: dict[str, object] | None,
+    ) -> PipelinePreviewRunRow | None:
+        return preview_rows.update_preview_dispatch(
+            transaction,
+            tenant_id=tenant_id,
+            preview_run_id=preview_run_id,
+            workflow_run_id=workflow_run_id,
+            dispatch_status=dispatch_status,
+            dispatch_error=dispatch_error,
+        )
+
+    def pending_preview_dispatches(
+        self,
+        *,
+        transaction: Any,
+        limit: int,
+    ) -> list[PipelinePreviewRunRow]:
+        return preview_rows.pending_preview_dispatches(transaction, limit)
 
     def claim_preview(
         self,
@@ -246,6 +277,46 @@ class SqlAlchemyPipelineExecutionRepository:
             updated_at,
         )
 
+    def cancel_inactive_node_runs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+        completed_at: str,
+    ) -> int:
+        return node_rows.cancel_inactive_node_runs(transaction, tenant_id, run_id, completed_at)
+
+    def cancel_active_node_attempt(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+        node_id: str,
+        worker_id: str,
+        external_execution_id: str,
+        completed_at: str,
+    ) -> PipelineNodeAttemptRow | None:
+        return node_rows.cancel_active_node_attempt(
+            transaction,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            node_id=node_id,
+            worker_id=worker_id,
+            external_execution_id=external_execution_id,
+            completed_at=completed_at,
+        )
+
+    def active_node_run_count(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+    ) -> int:
+        return node_rows.active_node_run_count(transaction, tenant_id, run_id)
+
     def insert_node_attempt(self, *, transaction: Any, record: PipelineNodeAttemptRecord) -> PipelineNodeAttemptRow:
         return node_rows.insert_node_attempt(transaction, record)
 
@@ -285,6 +356,89 @@ class SqlAlchemyPipelineExecutionRepository:
             completed_at,
         )
 
+    def claim_node_attempt(
+        self,
+        *,
+        transaction: Any,
+        claim: PipelineNodeAttemptClaim,
+    ) -> PipelineNodeAttemptRow | None:
+        return node_rows.claim_node_attempt(transaction, claim)
+
+    def heartbeat_node_attempt(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        lease_expires_at: str,
+        heartbeat_at: str,
+    ) -> PipelineNodeAttemptRow | None:
+        return node_rows.heartbeat_node_attempt(
+            transaction,
+            tenant_id=tenant_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            fencing_token=fencing_token,
+            lease_expires_at=lease_expires_at,
+            heartbeat_at=heartbeat_at,
+        )
+
+    def update_fenced_node_attempt_terminal(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        status: str,
+        output_manifest: dict[str, object],
+        error: dict[str, object] | None,
+        error_kind: str | None,
+        completed_at: str,
+        retry_at: str | None = None,
+    ) -> PipelineNodeAttemptRow | None:
+        return node_rows.update_fenced_node_attempt_terminal(
+            transaction,
+            tenant_id=tenant_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            fencing_token=fencing_token,
+            status=status,
+            output_manifest=output_manifest,
+            error=error,
+            error_kind=error_kind,
+            completed_at=completed_at,
+            retry_at=retry_at,
+        )
+
+    def schedule_node_retry(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        node_run_id: str,
+        attempt_id: str,
+        fencing_token: int,
+        retry_at: str,
+        error_kind: str,
+    ) -> bool:
+        return node_rows.schedule_node_retry(
+            transaction,
+            tenant_id=tenant_id,
+            node_run_id=node_run_id,
+            attempt_id=attempt_id,
+            fencing_token=fencing_token,
+            retry_at=retry_at,
+            error_kind=error_kind,
+        )
+
     def insert_artifact(self, *, transaction: Any, record: PipelineRunArtifactRecord) -> PipelineRunArtifactRow:
         return node_rows.insert_artifact(transaction, record)
 
@@ -299,6 +453,35 @@ class SqlAlchemyPipelineExecutionRepository:
         idempotency_key: str,
     ) -> PipelineRunArtifactRow | None:
         return node_rows.artifact_by_key(transaction, tenant_id, idempotency_key)
+
+    def insert_fenced_artifact(
+        self,
+        *,
+        transaction: Any,
+        record: PipelineRunArtifactRecord,
+        worker_id: str,
+        lease_token: str,
+    ) -> PipelineRunArtifactRow | None:
+        return node_rows.insert_fenced_artifact(transaction, record, worker_id, lease_token)
+
+    def append_run_event(
+        self,
+        *,
+        transaction: Any,
+        record: PipelineRunEventRecord,
+    ) -> PipelineRunEventRow:
+        return event_rows.append_run_event(transaction, record)
+
+    def run_events(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> list[PipelineRunEventRow]:
+        return event_rows.run_events(transaction, tenant_id, run_id, after_sequence, limit)
 
     def insert_deployment(self, *, transaction: Any, record: PipelineDeploymentRecord) -> PipelineDeploymentRow:
         for attempt in range(_DEPLOYMENT_NUMBER_RETRY_LIMIT):

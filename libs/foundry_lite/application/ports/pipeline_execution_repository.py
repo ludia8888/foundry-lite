@@ -5,6 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.pipeline_async_execution_types import (
+    PipelineNodeAttemptClaim,
+    PipelineNodeAttemptRecord,
+    PipelineNodeAttemptRow,
+    PipelinePreviewRunRecord,
+    PipelinePreviewRunRow,
+    PipelineRunArtifactRecord,
+    PipelineRunArtifactRow,
+    PipelineRunEventRecord,
+    PipelineRunEventRow,
+)
 from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.state_transitions import StatusTransition
 
@@ -21,9 +32,20 @@ class PipelineRunRow(TypedDict):
     request_fingerprint: str | None
     plan_fingerprint: str | None
     workflow_run_id: str | None
+    dispatch_status: str
+    dispatch_attempt_count: int
+    dispatch_error: JsonObject | None
+    event_sequence: int
     execution_lease_token: str | None
     execution_lease_expires_at: str | None
     execution_heartbeat_at: str | None
+    cancel_requested_at: str | None
+    cancel_reason: str | None
+    cancel_idempotency_key: str | None
+    cancel_request_fingerprint: str | None
+    schedule_id: str | None
+    schedule_slot_at: str | None
+    terminal_observed_at: str | None
     parameters: JsonObject | None
     target_node_ids: list[str] | None
     outputs: list[JsonObject]
@@ -33,33 +55,6 @@ class PipelineRunRow(TypedDict):
     error: JsonObject | None
     created_by: str
     started_at: str
-    completed_at: str | None
-
-
-class PipelinePreviewRunRow(TypedDict):
-    id: str
-    tenant_id: str
-    pipeline_id: str
-    branch_id: str
-    status: str
-    graph: JsonObject
-    graph_fingerprint: str
-    target_node_id: str | None
-    limits: JsonObject
-    outputs: list[JsonObject]
-    artifacts: list[JsonObject]
-    idempotency_key: str
-    request_fingerprint: str
-    is_commit_forbidden: bool
-    execution_context: JsonObject
-    execution_lease_token: str | None
-    execution_lease_expires_at: str | None
-    execution_heartbeat_at: str | None
-    cancel_requested_at: str | None
-    error: JsonObject | None
-    created_by: str
-    created_at: str
-    started_at: str | None
     completed_at: str | None
 
 
@@ -79,43 +74,6 @@ class PipelineNodeRunRow(TypedDict):
     completed_at: str | None
     created_at: str
     updated_at: str
-
-
-class PipelineNodeAttemptRow(TypedDict):
-    id: str
-    tenant_id: str
-    node_run_id: str
-    attempt_number: int
-    status: str
-    executor_profile: str
-    lease_owner: str | None
-    lease_token: str | None
-    lease_expires_at: str | None
-    input_manifest: JsonObject
-    output_manifest: JsonObject
-    error: JsonObject | None
-    started_at: str
-    completed_at: str | None
-
-
-class PipelineRunArtifactRow(TypedDict):
-    id: str
-    tenant_id: str
-    run_id: str
-    node_run_id: str | None
-    node_id: str
-    port_id: str
-    artifact_kind: str
-    plane: str
-    artifact_ref: JsonObject
-    manifest: JsonObject
-    content_fingerprint: str
-    security_envelope: JsonObject
-    status: str
-    is_serving: bool
-    idempotency_key: str
-    committed_at: str | None
-    created_at: str
 
 
 class PipelineDeploymentRow(TypedDict):
@@ -142,23 +100,6 @@ class PipelineDeploymentRow(TypedDict):
 
 
 @dataclass(frozen=True)
-class PipelinePreviewRunRecord:
-    preview_run_id: str
-    tenant_id: str
-    pipeline_id: str
-    branch_id: str
-    graph: JsonObject
-    graph_fingerprint: str
-    target_node_id: str | None
-    limits: JsonObject
-    idempotency_key: str
-    request_fingerprint: str
-    execution_context: JsonObject
-    created_by: str
-    created_at: str
-
-
-@dataclass(frozen=True)
 class PipelineNodeRunRecord:
     node_run_id: str
     tenant_id: str
@@ -167,38 +108,6 @@ class PipelineNodeRunRecord:
     descriptor_id: str
     spec_version: str
     input_artifacts: list[JsonObject]
-    created_at: str
-
-
-@dataclass(frozen=True)
-class PipelineNodeAttemptRecord:
-    attempt_id: str
-    tenant_id: str
-    node_run_id: str
-    attempt_number: int
-    executor_profile: str
-    input_manifest: JsonObject
-    started_at: str
-
-
-@dataclass(frozen=True)
-class PipelineRunArtifactRecord:
-    artifact_id: str
-    tenant_id: str
-    run_id: str
-    node_run_id: str | None
-    node_id: str
-    port_id: str
-    artifact_kind: str
-    plane: str
-    artifact_ref: JsonObject
-    manifest: JsonObject
-    content_fingerprint: str
-    security_envelope: JsonObject
-    status: str
-    is_serving: bool
-    idempotency_key: str
-    committed_at: str | None
     created_at: str
 
 
@@ -239,6 +148,24 @@ class PipelineExecutionRepository(Protocol):
     def preview_by_idempotency_key(
         self, *, transaction: TransactionContext, tenant_id: str, idempotency_key: str
     ) -> PipelinePreviewRunRow | None: ...
+
+    def update_preview_dispatch(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        preview_run_id: str,
+        workflow_run_id: str,
+        dispatch_status: str,
+        dispatch_error: JsonObject | None,
+    ) -> PipelinePreviewRunRow | None: ...
+
+    def pending_preview_dispatches(
+        self,
+        *,
+        transaction: TransactionContext,
+        limit: int,
+    ) -> list[PipelinePreviewRunRow]: ...
 
     def update_preview_terminal(
         self,
@@ -367,6 +294,35 @@ class PipelineExecutionRepository(Protocol):
         updated_at: str,
     ) -> PipelineNodeRunRow | None: ...
 
+    def cancel_inactive_node_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        completed_at: str,
+    ) -> int: ...
+
+    def cancel_active_node_attempt(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        node_id: str,
+        worker_id: str,
+        external_execution_id: str,
+        completed_at: str,
+    ) -> PipelineNodeAttemptRow | None: ...
+
+    def active_node_run_count(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+    ) -> int: ...
+
     def insert_node_attempt(
         self, *, transaction: TransactionContext, record: PipelineNodeAttemptRecord
     ) -> PipelineNodeAttemptRow: ...
@@ -396,6 +352,55 @@ class PipelineExecutionRepository(Protocol):
         completed_at: str,
     ) -> PipelineNodeAttemptRow | None: ...
 
+    def claim_node_attempt(
+        self,
+        *,
+        transaction: TransactionContext,
+        claim: PipelineNodeAttemptClaim,
+    ) -> PipelineNodeAttemptRow | None: ...
+
+    def heartbeat_node_attempt(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        lease_expires_at: str,
+        heartbeat_at: str,
+    ) -> PipelineNodeAttemptRow | None: ...
+
+    def update_fenced_node_attempt_terminal(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        attempt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        status: str,
+        output_manifest: JsonObject,
+        error: JsonObject | None,
+        error_kind: str | None,
+        completed_at: str,
+        retry_at: str | None = None,
+    ) -> PipelineNodeAttemptRow | None: ...
+
+    def schedule_node_retry(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        node_run_id: str,
+        attempt_id: str,
+        fencing_token: int,
+        retry_at: str,
+        error_kind: str,
+    ) -> bool: ...
+
     def insert_artifact(
         self, *, transaction: TransactionContext, record: PipelineRunArtifactRecord
     ) -> PipelineRunArtifactRow: ...
@@ -411,6 +416,32 @@ class PipelineExecutionRepository(Protocol):
         tenant_id: str,
         idempotency_key: str,
     ) -> PipelineRunArtifactRow | None: ...
+
+    def insert_fenced_artifact(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: PipelineRunArtifactRecord,
+        worker_id: str,
+        lease_token: str,
+    ) -> PipelineRunArtifactRow | None: ...
+
+    def append_run_event(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: PipelineRunEventRecord,
+    ) -> PipelineRunEventRow: ...
+
+    def run_events(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> list[PipelineRunEventRow]: ...
 
     def insert_deployment(
         self, *, transaction: TransactionContext, record: PipelineDeploymentRecord
