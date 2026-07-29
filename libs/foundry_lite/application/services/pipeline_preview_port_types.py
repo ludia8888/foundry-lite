@@ -20,6 +20,12 @@ from foundry_lite.application.ports.media_repository import (
     MediaSetSelectionRecord,
 )
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
+from foundry_lite.application.ports.semantic_row_cache_repository import (
+    SemanticRowCacheRepository,
+)
+from foundry_lite.application.ports.source_management_repository import (
+    SourceManagementRepository,
+)
 from foundry_lite.application.ports.transaction_context import TransactionManager
 
 __all__ = [
@@ -37,5 +43,7 @@ __all__ = [
     "MediaSetSelectionRecord",
     "MediaStorageAdapter",
     "ProcessorSpec",
+    "SemanticRowCacheRepository",
+    "SourceManagementRepository",
     "TransactionManager",
 ]

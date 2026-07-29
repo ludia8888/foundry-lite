@@ -168,6 +168,19 @@ class FoundryLite:
         )
 
     def _bind_local_workflow_drivers(self, dependencies: CoreDependencies, services: CoreServices) -> None:
+        register_pipeline_driver = getattr(
+            dependencies.pipeline_dag_orchestrator,
+            "register_driver",
+            None,
+        )
+        if callable(register_pipeline_driver):
+            register_pipeline_driver(
+                lambda request: (
+                    services.pipelines.preview.execute_dispatched_preview(request)
+                    if request.is_commit_forbidden
+                    else services.pipelines.async_run.execute_dispatched(request)
+                )
+            )
         register_driver = getattr(dependencies.workflow_adapter, "register_driver", None)
         if not callable(register_driver):
             return

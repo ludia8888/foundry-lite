@@ -16,6 +16,9 @@ from foundry_lite.application.services.pipeline_definition_service_types import 
     PipelineGraphValidationService,
 )
 from foundry_lite.application.services.pipeline_runtime_service_types import (
+    PipelineAsyncRunService,
+    PipelineControlWorkerService,
+    PipelineDistributedNodeService,
     PipelineGraphV2ExecutionService,
     PipelineGraphV2RunCoordinatorService,
     PipelinePreviewService,
@@ -29,11 +32,14 @@ from foundry_lite.application.services.pipeline_runtime_service_types import (
 class PipelineServices:
     """Pipeline Builder use-case services plus the stable entrypoint."""
 
+    async_run: PipelineAsyncRunService
     catalog: PipelineCatalogService
     compiler: PipelineCompilerService
+    control: PipelineControlWorkerService
     dataset_reader: ExactCommittedDatasetVersionReader
     definition: PipelineDefinitionService
     deployment: PipelineDeploymentService
+    distributed_node: PipelineDistributedNodeService
     entrypoint: PipelineService
     governance: PipelineGovernanceService
     graph_v2_execution: PipelineGraphV2ExecutionService
@@ -46,11 +52,14 @@ class PipelineServices:
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> PipelineServices:
         return cls(
+            async_run=build_service(PipelineAsyncRunService, dependencies),
             catalog=build_service(PipelineCatalogService, dependencies),
             compiler=build_service(PipelineCompilerService, dependencies),
+            control=build_service(PipelineControlWorkerService, dependencies),
             dataset_reader=build_service(ExactCommittedDatasetVersionReader, dependencies),
             definition=build_service(PipelineDefinitionService, dependencies),
             deployment=build_service(PipelineDeploymentService, dependencies),
+            distributed_node=build_service(PipelineDistributedNodeService, dependencies),
             entrypoint=build_service(PipelineService, dependencies),
             governance=build_service(PipelineGovernanceService, dependencies),
             graph_v2_execution=build_service(PipelineGraphV2ExecutionService, dependencies),
@@ -66,11 +75,14 @@ class PipelineServices:
 
     def items(self) -> tuple[CoreService, ...]:
         return (
+            self.async_run,
             self.catalog,
             self.compiler,
+            self.control,
             self.dataset_reader,
             self.definition,
             self.deployment,
+            self.distributed_node,
             self.entrypoint,
             self.governance,
             self.graph_v2_execution,

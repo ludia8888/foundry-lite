@@ -116,6 +116,25 @@ def run_request_fingerprint(
     )
 
 
+def cancel_request_fingerprint(run_id: str, reason: str | None) -> str:
+    return _json_hash({"reason": reason, "runId": run_id})
+
+
+def require_idempotent_cancel(
+    row: PipelineRunRow,
+    idempotency_key: str,
+    request_fingerprint: str,
+) -> None:
+    if row["cancel_idempotency_key"] != idempotency_key:
+        return
+    if row["cancel_request_fingerprint"] == request_fingerprint:
+        return
+    raise ConflictDetected(
+        "pipeline run cancellation idempotency key was reused with a different request",
+        details={"idempotency_key": idempotency_key, "run_id": row["id"]},
+    )
+
+
 def new_run_record(
     ctx: RequestContext,
     *,
@@ -125,6 +144,7 @@ def new_run_record(
     request_fingerprint: str,
     parameters: Mapping[str, object] | None,
     target_node_ids: list[str] | None,
+    initial_status: str = "running",
 ) -> PipelineRunRecord:
     return run_record(
         ctx,
@@ -136,6 +156,29 @@ def new_run_record(
         parameters=parameters,
         target_node_ids=target_node_ids,
         now=_now(),
+        initial_status=initial_status,
+    )
+
+
+def new_queued_run_record(
+    ctx: RequestContext,
+    *,
+    pipeline_id: str,
+    version: PipelineVersionRow,
+    idempotency_key: str,
+    request_fingerprint: str,
+    parameters: Mapping[str, object] | None,
+    target_node_ids: list[str] | None,
+) -> PipelineRunRecord:
+    return new_run_record(
+        ctx,
+        pipeline_id=pipeline_id,
+        version=version,
+        idempotency_key=idempotency_key,
+        request_fingerprint=request_fingerprint,
+        parameters=parameters,
+        target_node_ids=target_node_ids,
+        initial_status="queued",
     )
 
 

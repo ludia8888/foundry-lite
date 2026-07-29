@@ -262,6 +262,52 @@ class PipelineWorkspace:
             ctx=ctx,
         )
 
+    def start_async(
+        self,
+        pipeline_id: str,
+        *,
+        version_id: str | None,
+        idempotency_key: str,
+        parameters: Mapping[str, object] | None,
+        target_node_ids: list[str] | None,
+        wait_seconds: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self._pipeline.enqueue_run(
+            pipeline_id,
+            version_id=version_id,
+            idempotency_key=idempotency_key,
+            parameters=parameters,
+            target_node_ids=target_node_ids,
+            wait_seconds=wait_seconds,
+            ctx=ctx,
+        )
+
+    def list_runs(
+        self,
+        pipeline_id: str,
+        *,
+        cursor: str | None,
+        limit: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self._pipeline.list_runs(pipeline_id, cursor=cursor, limit=limit, ctx=ctx)
+
+    def events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int,
+        limit: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self._pipeline.get_run_events(
+            run_id,
+            after_sequence=after_sequence,
+            limit=limit,
+            ctx=ctx,
+        )
+
     def get_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._pipeline.get_run(run_id, ctx=ctx)
 
@@ -270,6 +316,21 @@ class PipelineWorkspace:
 
     def cancel(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._pipeline.cancel_run(run_id, ctx=ctx)
+
+    def request_cancel(
+        self,
+        run_id: str,
+        *,
+        idempotency_key: str,
+        reason: str | None,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self._pipeline.request_run_cancel(
+            run_id,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            ctx=ctx,
+        )
 
     def upsert_schedule(
         self,

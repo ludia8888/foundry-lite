@@ -301,6 +301,17 @@ class SourceSchedulerService(CoreService):
             error=error,
             completed_at=_iso(datetime.now(UTC)),
         )
+        if updated is not None:
+            self.runtime_service._audit(
+                conn,
+                ctx,
+                event_type="source.sync_run.scheduler_reconciled",
+                resource_type="source_sync_run",
+                resource_id=str(run["id"]),
+                action="reconcile_scheduled_run",
+                after_ref={"status": status, "workflowRunId": run.get("workflow_run_id")},
+                correlation_id=str(run["id"]),
+            )
         return updated or run
 
     def _start_due(

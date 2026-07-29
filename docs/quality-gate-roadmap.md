@@ -561,7 +561,7 @@ Self-test: `tests/unit/test_quality_data_platform_sprint_status.py`가 현재 re
 `tests/unit/test_quality_ci_workflows.py`는 이 게이트가 data-pattern matrix 이후, SDK generation
 이전에 static/release lane에서 실행됨을 검증한다.
 
-### Tier G14D — Pipeline Builder public-behavior parity matrix (✅ foundation gate 2026-07-16)
+### Tier G14D — Pipeline Builder public-behavior parity matrix (✅ current async-DAG gate 2026-07-29)
 
 `scripts/quality/check_pipeline_parity_matrix.py`는
 `docs/pipeline-builder-parity-matrix.json`이 Palantir 공식 공개 문서의 동작과 현재 checkout의
@@ -597,14 +597,23 @@ JSON report 생성을 검증한다.
 `tests/unit/test_quality_ci_workflows.py`는 이 게이트가
 `scripts/quality/run_static_checks.py`의 실제 `ci:gate` static inventory에 포함됨을 검증한다.
 
-G14D 실행 증거 inventory는 backend/static 7개
+G14D 실행 증거 inventory는 backend/static 9개
 (`quality:pipeline-graph-v2`, `quality:pipeline-artifact-execution`,
 `quality:pipeline-preview`, `quality:pipeline-multimodal`,
 `quality:pipeline-scheduler`, `quality:pipeline-python-isolation`,
-`quality:pipeline-builder-performance`)와 browser E2E 1개
+`quality:pipeline-builder-performance`, `quality:pipeline-async-dag`,
+`quality:pipeline-async-dag-live`)와 browser E2E 1개
 (`quality:pipeline-builder-e2e`)로 고정한다. E2E gate는 격리된 API `8016`과 Web `4186`을
 새로 시작하고 기존 서버 재사용을 끄므로, 사용자가 작업 중인 기본 포트 `8000`/`4173`을
 재사용하거나 종료하지 않는다.
+
+`quality:pipeline-async-dag`는 SQLite/local 계약과 Temporal 결정성 테스트로 run/node/attempt
+상태, retry 분류, event sequence, cancel/terminal CAS, lease takeover, stale fencing write
+차단을 검증한다. `quality:pipeline-async-dag-live`는 Docker Compose의 PostgreSQL과 실제
+Temporal을 사용하고 같은 task queue를 듣는 worker 프로세스 2개를 띄운다. 장시간 node의
+소유 worker를 강제 종료해 두 번째 worker의 takeover와 Dataset·Media Set serving commit
+각 1회를 증명하고, 별도 run의 취소가 격리 subprocess를 종료하며 downstream을 실행하지
+않는지 확인한다. 이 live gate 없이 `async-dag-scheduler`를 current로 승격할 수 없다.
 
 Python 격리는 static 계약만으로 완료라고 부르지 않는다.
 `quality:code-execution-image`가 runner와 transforms SDK를 포함한 non-root 이미지를 만들고,
@@ -1207,10 +1216,18 @@ function-local lazy import (application/core.py:53)를 P2가 첫 시도에 검�
 **보존**한다. import-linter는 transitive를 강제하고 우리 자체 게이트는
 module-level baseline(0)을 강제 — 서로 다른 사각지대를 잡는 이중 망. 일반 모듈은
 fan-out 10 이하를 유지하고, `CoreDependencies`/`ports`/`CoreService` 같은 명시적
-composition/aggregation root만 현재 source/connector/auth/OSDK 경계까지 반영한 fan-out 35
-budget을 쓴다. `RequestContext`, domain error, primitive DTO, service base, ports aggregate처럼
+composition/aggregation root만 현재 source/connector/auth/OSDK와 Pipeline DAG
+port/adapter 경계까지 반영한 fan-out 37 budget을 쓴다. `RequestContext`, domain error,
+primitive DTO, service base, ports aggregate처럼
 대부분의 application service가 공통으로 가져야 하는 기반 모듈은 업무 결합도 fan-out 계산에서 제외하고,
 service collaborator fan-out ≤10 게이트는 별도로 유지한다.
+
+2026-07-29에는 `pipeline_async_run_service`, `pipeline_distributed_node_service`,
+`pipeline_preview_service`를 Pipeline DAG의 명시적 orchestration/composition root로 등록했다.
+이 예외는 일반 application service의 fan-out 10 제한을 넓히지 않으며, 세 service의 실제
+collaborator 그래프는 기존 cycle 0, depth ≤7, service당 fan-out ≤10 게이트를 그대로 통과해야 한다.
+또한 worker import 예외는 `pipeline_control`, `pipeline_dag`, `pipeline_node_subprocess` 세
+composition entrypoint에서 `local_runtime`을 한 번 조립하는 경로로만 제한한다.
 
 2026-07-16에는
 `foundry_lite_worker.source_streaming -> foundry_lite.infrastructure.local_runtime` 한 경로만
@@ -2247,7 +2264,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 262개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 264개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

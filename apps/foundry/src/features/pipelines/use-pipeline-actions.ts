@@ -220,7 +220,18 @@ export function usePipelineActions(callbacks: ActionCallbacks = {}) {
 
   const cancelRun = useFoundryLiteMutation(
     (payload: { runId: string }): Promise<PipelineRun> =>
-      recipe.cancelRun(payload.runId),
+      runRetainedPipelineMutation(
+        idempotencyRegistry,
+        "pipeline-run-cancel",
+        payload,
+        setLastIdempotencyKey,
+        (key) =>
+          recipe.cancelRun(
+            payload.runId,
+            { reason: "Cancelled from Pipeline Builder" },
+            { idempotencyKey: key },
+          ),
+      ),
     {
       lockKey: (payload) => `pipelines:cancel:${payload.runId}`,
       onSuccess: callbacks.onRunChanged,

@@ -215,7 +215,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("versions", ("list", "get")),
             OperationClientSurface("deployments", ("list",)),
             OperationClientSurface("previewRuns", ("create", "get", "cancel")),
-            OperationClientSurface("runs", ("start", "get", "timeline", "cancel")),
+            OperationClientSurface("runs", ("start", "list", "get", "events", "timeline", "cancel")),
             OperationClientSurface(
                 "schedules",
                 ("upsert", "get", "pause", "resume", "delete", "previewDue", "tick"),

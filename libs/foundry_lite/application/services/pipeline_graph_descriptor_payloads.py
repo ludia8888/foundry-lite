@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
+from foundry_lite.application.services.pipeline_node_execution_policy import (
+    PipelineNodeExecutionPolicy,
+)
+
 JsonObject = dict[str, object]
 
 
@@ -74,8 +78,12 @@ class _NodeDescriptor(Protocol):
     @property
     def config_fields(self) -> Sequence[_ConfigFieldDescriptor]: ...
 
+    @property
+    def execution_policy(self) -> PipelineNodeExecutionPolicy: ...
+
 
 def pipeline_node_descriptor_payload(descriptor: _NodeDescriptor) -> JsonObject:
+    policy = descriptor.execution_policy
     return {
         "descriptorId": descriptor.descriptor_id,
         "specVersion": descriptor.spec_version,
@@ -85,6 +93,13 @@ def pipeline_node_descriptor_payload(descriptor: _NodeDescriptor) -> JsonObject:
         "inputPorts": [_input_port_payload(port) for port in descriptor.input_ports],
         "outputPorts": [_output_port_payload(port) for port in descriptor.output_ports],
         "configFields": [_config_field_payload(field) for field in descriptor.config_fields],
+        "executionPolicy": {
+            "maximumAttempts": policy.maximum_attempts,
+            "initialBackoffSeconds": policy.initial_backoff_seconds,
+            "maximumBackoffSeconds": policy.maximum_backoff_seconds,
+            "timeoutSeconds": policy.timeout_seconds,
+            "requiresStableIdempotency": policy.requires_stable_idempotency,
+        },
     }
 
 

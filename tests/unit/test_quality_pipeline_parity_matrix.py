@@ -144,6 +144,23 @@ test(
     assert "Stream and geospatial nodes expose executable typed configuration boards" in all_test_names(tmp_path)
 
 
+def test_pipeline_parity_matrix_collects_non_discovery_pytest_from_package_gate(tmp_path: Path) -> None:
+    proof = tmp_path / "tests" / "integration" / "pipeline_temporal_live.py"
+    proof.parent.mkdir(parents=True)
+    proof.write_text(
+        "def test_explicit_temporal_fault_proof() -> None:\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {"scripts": {"quality:pipeline-live": ("uv run pytest tests/integration/pipeline_temporal_live.py -q")}}
+        ),
+        encoding="utf-8",
+    )
+
+    assert "test_explicit_temporal_fault_proof" in all_test_names(tmp_path)
+
+
 def _matrix() -> JsonObject:
     return cast(
         JsonObject,

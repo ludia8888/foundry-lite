@@ -84,9 +84,20 @@ pipeline_runs = Table(
     Column("request_fingerprint", String),
     Column("plan_fingerprint", String),
     Column("workflow_run_id", String),
+    Column("dispatch_status", String, nullable=False, server_default=text("'pending'")),
+    Column("dispatch_attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column("dispatch_error", JSON),
+    Column("event_sequence", Integer, nullable=False, server_default=text("0")),
     Column("execution_lease_token", String),
     Column("execution_lease_expires_at", String),
     Column("execution_heartbeat_at", String),
+    Column("cancel_requested_at", String),
+    Column("cancel_reason", Text),
+    Column("cancel_idempotency_key", String),
+    Column("cancel_request_fingerprint", String),
+    Column("schedule_id", String),
+    Column("schedule_slot_at", String),
+    Column("terminal_observed_at", String),
     Column("parameters", JSON),
     Column("target_node_ids", JSON),
     Column("outputs", JSON, nullable=False, server_default=text("'[]'")),
@@ -104,6 +115,19 @@ Index(
     pipeline_runs.c.tenant_id,
     pipeline_runs.c.idempotency_key,
     unique=True,
+)
+
+Index(
+    "ix_pipeline_runs_dispatch_recovery",
+    pipeline_runs.c.dispatch_status,
+    pipeline_runs.c.started_at,
+)
+
+Index(
+    "ix_pipeline_runs_schedule_terminal_observer",
+    pipeline_runs.c.schedule_id,
+    pipeline_runs.c.terminal_observed_at,
+    pipeline_runs.c.completed_at,
 )
 
 
@@ -133,6 +157,10 @@ pipeline_schedules = Table(
     Column("paused_reason", Text),
     Column("last_failure_at", String),
     Column("last_error", JSON),
+    Column("last_terminal_run_id", String),
+    Column("last_terminal_slot_at", String),
+    Column("last_terminal_status", String),
+    Column("last_terminal_at", String),
     UniqueConstraint("tenant_id", "pipeline_id", name="uq_pipeline_schedule_pipeline"),
 )
 

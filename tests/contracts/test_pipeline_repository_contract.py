@@ -265,7 +265,7 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
     assert deployed["plan_fingerprint"] == "plan-fp"
     assert deployed["compiler_version"] == "pipeline-plan-v2.0"
     assert executing_run is not None
-    assert executing_run["status"] == "executing"
+    assert executing_run["status"] == "running"
     assert executing_run["execution_lease_token"] == "lease-a"
     assert terminal_run is not None
     assert terminal_run["status"] == "succeeded"

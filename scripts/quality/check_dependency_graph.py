@@ -224,6 +224,13 @@ def _default_aggregation_roots() -> list[str]:
         # service dependency gates still prevent hidden DB/service coupling.
         "apps.api.foundry_lite_api.main",
         "foundry_lite.application.facades.operations_console",
+        # Pipeline DAG control/worker entrypoints intentionally compose the
+        # immutable plan, evidence, retry, fencing, and execution boundaries.
+        # Their collaborator fan-out remains separately capped at 10 by the
+        # service-call graph gate.
+        "foundry_lite.application.services.pipeline_async_run_service",
+        "foundry_lite.application.services.pipeline_distributed_node_service",
+        "foundry_lite.application.services.pipeline_preview_service",
         "scripts.operations.run_live_media_byte_proof",
         "scripts.operations.run_palantir_live_simulation",
     ]
@@ -246,9 +253,9 @@ def _parser() -> argparse.ArgumentParser:
         # P0b adds the `FakeLanguageModel` + `ProviderCompatibleLanguageModel` governed-gateway
         # seams — coupling by design at an explicit aggregation point, not accidental fan-out.
         #
-        # 36: the ontology function registry adds `FunctionExecutionService` to the
-        # `core_services` composition root — one new bounded capability wired at the DI root.
-        default=36,
+        # 37: the Pipeline DAG orchestrator port/adapter adds one bounded
+        # capability to each explicit package facade.
+        default=37,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument("--aggregation-root", action="append", default=_default_aggregation_roots())

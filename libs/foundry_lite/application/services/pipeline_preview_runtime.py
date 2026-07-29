@@ -6,9 +6,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Protocol
 
-from foundry_lite.application.ports.source_management_repository import (
-    SourceManagementRepository,
-)
 from foundry_lite.application.services.media.read_access import require_media_version_clearance
 from foundry_lite.application.services.media.security_envelopes import (
     validated_media_source_envelope,
@@ -32,6 +29,8 @@ from foundry_lite.application.services.pipeline_preview_port_types import (
     MediaSetSelectionRecord,
     MediaStorageAdapter,
     ProcessorSpec,
+    SemanticRowCacheRepository,
+    SourceManagementRepository,
     TransactionManager,
 )
 from foundry_lite.application.services.pipeline_semantic_interpretation import (
@@ -41,6 +40,7 @@ from foundry_lite.application.services.pipeline_semantic_interpretation import (
 from foundry_lite.application.services.pipeline_semantic_row_cache import (
     SemanticCacheContext,
     SemanticRowCacheSession,
+    semantic_resource_security_policy_fingerprint,
 )
 from foundry_lite.application.services.pipeline_structured_source_contracts import (
     is_committed_stream_run,
@@ -70,6 +70,70 @@ class PipelinePreviewDatasetRegistry(Protocol):
         version: str = "latest",
         partition_filter: Mapping[str, object] | None = None,
     ) -> list[JsonObject]: ...
+
+
+def build_pipeline_preview_runtime(
+    *,
+    engine: TransactionManager,
+    dataset_registry: PipelinePreviewDatasetRegistry,
+    source_management_repository: SourceManagementRepository,
+    media_repository: MediaRepository,
+    media_storage: MediaStorageAdapter,
+    media_processor_registry: MediaProcessorRegistry | None,
+    embedding_model_adapter: EmbeddingModelAdapter,
+    model_gateway: GovernedSemanticModelPort,
+    semantic_cache_repository: SemanticRowCacheRepository,
+    ctx: RequestContext,
+    pipeline_id: str,
+    branch_id: str,
+    policy_reason: str,
+    sensitive_fields: frozenset[str],
+    masked_fields: tuple[str, ...],
+) -> PipelinePreviewRuntime:
+    """Compose the no-commit preview runtime from port-backed dependencies."""
+    return PipelinePreviewRuntime(
+        engine=engine,
+        dataset_registry=dataset_registry,
+        source_management_repository=source_management_repository,
+        media_repository=media_repository,
+        media_storage=media_storage,
+        media_processor_registry=media_processor_registry,
+        embedding_model_adapter=embedding_model_adapter,
+        model_gateway=model_gateway,
+        semantic_cache=_semantic_cache_session(engine, semantic_cache_repository, model_gateway),
+        ctx=ctx,
+        pipeline_id=pipeline_id,
+        branch_id=branch_id,
+        resource_security_policy_fingerprint=_preview_security_policy_fingerprint(
+            policy_reason, sensitive_fields, masked_fields
+        ),
+        sensitive_fields=sensitive_fields,
+    )
+
+
+def _semantic_cache_session(
+    engine: TransactionManager,
+    repository: SemanticRowCacheRepository,
+    model_gateway: GovernedSemanticModelPort,
+) -> SemanticRowCacheSession:
+    return SemanticRowCacheSession(
+        transaction_manager=engine,
+        repository=repository,
+        model_gateway=model_gateway,
+    )
+
+
+def _preview_security_policy_fingerprint(
+    policy_reason: str,
+    sensitive_fields: frozenset[str],
+    masked_fields: tuple[str, ...],
+) -> str:
+    return semantic_resource_security_policy_fingerprint(
+        permission="pipeline:write",
+        policy_reason=policy_reason,
+        sensitive_fields=tuple(sensitive_fields),
+        masked_fields=masked_fields,
+    )
 
 
 class PipelinePreviewRuntime:

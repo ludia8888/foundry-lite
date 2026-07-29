@@ -1260,6 +1260,26 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "pipelines.runs.list",
+      "route": "GET /api/pipelines/{pipeline_id}/runs",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.runs.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Cursor-based history returns durable queued, active, and terminal Pipeline runs without relying on in-memory worker state.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.runs.events",
+      "route": "GET /api/pipelines/runs/{run_id}/events",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.runs.events",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Durable SSE resumes from Last-Event-ID and streams only persisted state transitions; connection heartbeats are not stored as run events.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "pipelines.runs.timeline",
       "route": "GET /api/pipelines/runs/{run_id}/timeline",
       "productArea": "pipeline-builder",
@@ -1275,7 +1295,8 @@
       "productArea": "pipeline-builder",
       "sdkSurface": "pipelines.runs.cancel",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Run cancel is permission checked and can win only before the atomic running-to-executing claim. A successful pre-execution cancel records terminal cancellation evidence; once execution is claimed, cancel fails closed so a cancelled run cannot later publish committed output.",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Run cancel persists the Idempotency-Key and cancelling request in the DB before signalling Temporal. Pending work stops, while already committed immutable outputs remain visible as evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes",
         "test_pipeline_builder_graph_preview_review_deploy_and_run"
@@ -1340,7 +1361,7 @@
       "sdkSurface": "pipelines.runs.start",
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
-      "operatorEvidence": "Run start requires Idempotency-Key, only accepts deployed versions, and records pipeline run timeline evidence without duplicating the requested build.",
+      "operatorEvidence": "Run start requires Idempotency-Key, stores the immutable plan and all node rows first, returns queued with 202 by default, and optionally waits at most 30 seconds without executing nodes in the API process.",
       "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     },

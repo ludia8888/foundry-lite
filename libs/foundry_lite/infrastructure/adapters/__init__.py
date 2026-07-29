@@ -50,6 +50,11 @@ from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapt
 from foundry_lite.infrastructure.adapters.pdf_layout_processor import PdfLayoutProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_ocr_processor import PdfOcrProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
+from foundry_lite.infrastructure.adapters.pipeline_dag_orchestrator import (
+    LocalPipelineDagOrchestrator,
+    TemporalPipelineDagConfig,
+    TemporalPipelineDagOrchestrator,
+)
 from foundry_lite.infrastructure.adapters.provider_compatible_language_model import ProviderCompatibleLanguageModel
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.s3_dataset_storage import (
@@ -133,6 +138,7 @@ __all__ = [
     "ProviderCompatibleLanguageModel",
     "LocalContentIndexAdapter",
     "LocalEmbeddingAdapter",
+    "LocalPipelineDagOrchestrator",
     "RestPullConnectorAdapter",
     "S3MediaStorageAdapter",
     "S3MediaStorageConfig",
@@ -144,4 +150,6 @@ __all__ = [
     "S3DatasetStorageAdapterConfig",
     "TemporalWorkflowAdapter",
     "TemporalWorkflowAdapterConfig",
+    "TemporalPipelineDagConfig",
+    "TemporalPipelineDagOrchestrator",
 ]

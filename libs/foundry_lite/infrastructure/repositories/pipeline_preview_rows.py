@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, insert, or_, select
+from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports.pipeline_execution_repository import (
@@ -89,6 +89,56 @@ def preview_by_idempotency_key(
         .first()
     )
     return _row(row)
+
+
+def update_preview_dispatch(
+    transaction: Any,
+    *,
+    tenant_id: str,
+    preview_run_id: str,
+    workflow_run_id: str,
+    dispatch_status: str,
+    dispatch_error: dict[str, object] | None,
+) -> PipelinePreviewRunRow | None:
+    result = transaction.execute(
+        update(db.pipeline_preview_runs)
+        .where(
+            and_(
+                db.pipeline_preview_runs.c.tenant_id == tenant_id,
+                db.pipeline_preview_runs.c.id == preview_run_id,
+                db.pipeline_preview_runs.c.status == "QUEUED",
+            )
+        )
+        .values(
+            workflow_run_id=workflow_run_id,
+            dispatch_status=dispatch_status,
+            dispatch_attempt_count=db.pipeline_preview_runs.c.dispatch_attempt_count + 1,
+            dispatch_error=dispatch_error,
+        )
+    )
+    return preview_by_id(transaction, tenant_id, preview_run_id) if result.rowcount else None
+
+
+def pending_preview_dispatches(
+    transaction: Any,
+    limit: int,
+) -> list[PipelinePreviewRunRow]:
+    rows = (
+        transaction.execute(
+            select(db.pipeline_preview_runs)
+            .where(
+                and_(
+                    db.pipeline_preview_runs.c.status == "QUEUED",
+                    db.pipeline_preview_runs.c.dispatch_status.in_(("pending", "unknown")),
+                )
+            )
+            .order_by(db.pipeline_preview_runs.c.created_at, db.pipeline_preview_runs.c.id)
+            .limit(limit)
+        )
+        .mappings()
+        .all()
+    )
+    return [_cast_row(row) for row in rows]
 
 
 def claim_preview(
@@ -326,6 +376,10 @@ def _preview_insert_values(record: PipelinePreviewRunRecord) -> dict[str, object
         "idempotency_key": record.idempotency_key,
         "request_fingerprint": record.request_fingerprint,
         "is_commit_forbidden": True,
+        "workflow_run_id": None,
+        "dispatch_status": "pending",
+        "dispatch_attempt_count": 0,
+        "dispatch_error": None,
         "execution_context": record.execution_context,
         "execution_lease_token": None,  # nosec B105 -- Lease ownership state, not a credential.
         "execution_lease_expires_at": None,

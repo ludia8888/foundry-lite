@@ -314,6 +314,13 @@ def _plan_node(
         spec_version=descriptor.spec_version,
         runtime_capability=descriptor.runtime_capability,
         config=config,
+        execution_policy={
+            "maximumAttempts": descriptor.execution_policy.maximum_attempts,
+            "initialBackoffSeconds": descriptor.execution_policy.initial_backoff_seconds,
+            "maximumBackoffSeconds": descriptor.execution_policy.maximum_backoff_seconds,
+            "timeoutSeconds": descriptor.execution_policy.timeout_seconds,
+            "requiresStableIdempotency": descriptor.execution_policy.requires_stable_idempotency,
+        },
     )
 
 

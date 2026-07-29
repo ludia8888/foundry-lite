@@ -6,7 +6,19 @@ services:
       POSTGRES_PASSWORD: foundry_lite
       POSTGRES_DB: foundry_lite
     ports:
-      - "5432:5432"
+      - "${FOUNDRY_LITE_POSTGRES_PORT:-5432}:5432"
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: foundry_lite
+      POSTGRES_PWD: foundry_lite
+      POSTGRES_SEEDS: postgres
+    ports:
+      - "7233:7233"
+    depends_on:
+      - postgres
   cdc-postgres:
     image: postgres:16
     profiles:

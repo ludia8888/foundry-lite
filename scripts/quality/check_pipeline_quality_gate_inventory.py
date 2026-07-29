@@ -78,6 +78,17 @@ PIPELINE_GATE_SPECS = (
         ),
     ),
     PipelineGateSpec(
+        "quality:pipeline-async-dag",
+        "static",
+        (
+            "tests/contracts/test_pipeline_dag_orchestrator_contract.py",
+            "tests/contracts/test_pipeline_async_dag_repository_contract.py",
+            "tests/unit/test_pipeline_dag_workflow.py",
+            "tests/unit/test_pipeline_retry_policy.py",
+            "tests/unit/test_pipeline_async_api.py",
+        ),
+    ),
+    PipelineGateSpec(
         "quality:pipeline-python-isolation",
         "static",
         (

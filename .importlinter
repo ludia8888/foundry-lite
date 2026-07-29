@@ -97,3 +97,8 @@ ignore_imports =
     foundry_lite_worker.cdc_object_indexer -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.transform_scheduler -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.writeback_reconciliation -> foundry_lite.infrastructure.local_runtime
+    # Pipeline worker entrypoints are composition roots: they construct the
+    # application facade once, then activities call application services.
+    foundry_lite_worker.pipeline_control -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.pipeline_dag -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.pipeline_node_subprocess -> foundry_lite.infrastructure.local_runtime

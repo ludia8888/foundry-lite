@@ -41,8 +41,45 @@ type PipelineRunOutput = {
     datasetRef?: string;
     versionId?: string;
   };
+  error?: Record<string, unknown> | null;
 };
 type PreviewRow = Record<string, unknown>;
+
+function pipelineRunSnapshot(
+  runId: string,
+  pipelineId: string,
+  status: string,
+  sequence: number,
+  overrides: Record<string, unknown> = {},
+): PipelineRun {
+  return {
+    id: runId,
+    pipelineId,
+    versionId: "version-browser-evidence",
+    status,
+    workflowRunId: `workflow:${runId}`,
+    startedAt: "2026-07-29T00:00:00Z",
+    completedAt: null,
+    cancelRequestedAt: null,
+    cancelReason: null,
+    error: null,
+    outputs: [],
+    artifacts: [],
+    timeline: [{ event: `pipeline.run.${status}`, at: "2026-07-29T00:00:00Z", sequence }],
+    nodeRuns: [],
+    executionLeaseExpiresAt: null,
+    executionHeartbeatAt: null,
+    outputDatasetRef: null,
+    outputVersionId: null,
+    orchestration: {
+      dispatchStatus: "dispatched",
+      dispatchAttemptCount: 1,
+      dispatchError: null,
+      lastEventSequence: sequence,
+    },
+    ...overrides,
+  };
+}
 
 function e2eSlug(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
@@ -72,6 +109,28 @@ async function apiPost<T>(
   });
   expect(response.ok(), `${path} should return ok`).toBe(true);
   return (await response.json()) as T;
+}
+
+async function waitForPipelineRun(
+  page: Page,
+  runId: string,
+): Promise<PipelineRun> {
+  await expect
+    .poll(
+      async () =>
+        (
+          await apiGet<PipelineRun>(
+            page,
+            `/api/pipelines/runs/${encodeURIComponent(runId)}`,
+          )
+        ).status,
+      { timeout: 30_000 },
+    )
+    .toMatch(/^(succeeded|partial|failed|cancelled)$/);
+  return apiGet<PipelineRun>(
+    page,
+    `/api/pipelines/runs/${encodeURIComponent(runId)}`,
+  );
 }
 
 async function approveProposalAsIndependentReviewer(
@@ -1325,7 +1384,7 @@ test("Trained Model builds a real scored Dataset with resolved model pins", asyn
 
   const run = await apiPost<PipelineRun>(
     page,
-    `/api/pipelines/${encodeURIComponent(pipelineId)}/runs`,
+    `/api/pipelines/${encodeURIComponent(pipelineId)}/runs?waitSeconds=30`,
     { versionId: version.id },
     { "Idempotency-Key": `e2e-trained-model-build-run-${pipelineId}` },
   );
@@ -2647,6 +2706,256 @@ test("Pipeline Builder authors a multimodal Graph v2 with prompt-safe named port
   });
 });
 
+test("Pipeline Builder reconnects durable run events and renders retry takeover partial evidence", async ({
+  page,
+}) => {
+  const pipelineId = e2eSlug("pipeline_async_observer");
+  const branchName = `async-observer-${pipelineId}`;
+  const runId = `run-${pipelineId}`;
+  await apiPost<PipelineBranch>(
+    page,
+    "/api/pipelines/branches",
+    { pipelineId, name: branchName },
+    { "Idempotency-Key": `e2e-async-observer-${pipelineId}` },
+  );
+  const retryAt = new Date(Date.now() + 60_000).toISOString();
+  const queued = pipelineRunSnapshot(runId, pipelineId, "queued", 1, {
+    nodeRuns: [
+      {
+        id: `${runId}:node:data-output`,
+        nodeId: "data-output",
+        status: "pending",
+        attempts: [],
+      },
+    ],
+  });
+  const retrying = pipelineRunSnapshot(runId, pipelineId, "running", 2, {
+    nodeRuns: [
+      {
+        id: `${runId}:node:data-output`,
+        nodeId: "data-output",
+        status: "retry_wait",
+        attempts: [
+          {
+            id: `${runId}:attempt:1`,
+            attemptNumber: 1,
+            status: "failed",
+            workerId: "worker-a",
+            fencingToken: 1,
+            retryAt,
+            errorKind: "adapter_transient",
+          },
+        ],
+      },
+    ],
+  });
+  const partial = pipelineRunSnapshot(runId, pipelineId, "partial", 4, {
+    completedAt: "2026-07-29T00:02:00Z",
+    nodeRuns: [
+      {
+        id: `${runId}:node:data-output`,
+        nodeId: "data-output",
+        status: "succeeded",
+        attempts: [
+          {
+            id: `${runId}:attempt:1`,
+            attemptNumber: 1,
+            status: "lost",
+            workerId: "worker-a",
+            fencingToken: 1,
+            retryAt: null,
+            errorKind: "worker_lost",
+          },
+          {
+            id: `${runId}:attempt:2`,
+            attemptNumber: 2,
+            status: "succeeded",
+            workerId: "worker-b",
+            fencingToken: 2,
+            retryAt: null,
+            errorKind: null,
+          },
+        ],
+      },
+      {
+        id: `${runId}:node:media-output`,
+        nodeId: "media-output",
+        status: "failed",
+        attempts: [
+          {
+            id: `${runId}:media-attempt:1`,
+            attemptNumber: 1,
+            status: "failed",
+            workerId: "worker-b",
+            fencingToken: 1,
+            retryAt: null,
+            errorKind: "validation",
+          },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        nodeId: "data-output",
+        artifactKind: "dataset_version",
+        plane: "dataset",
+        status: "COMMITTED",
+        ref: {
+          datasetRef: "pipelines.async_evidence",
+          versionId: "dataset-version-1",
+        },
+      },
+      {
+        nodeId: "media-output",
+        artifactKind: "media_set_version",
+        plane: "media",
+        status: "FAILED",
+        ref: {},
+        error: { code: "VALIDATION_FAILED", message: "media output rejected" },
+      },
+    ],
+    timeline: [
+      { event: "pipeline.run.queued", at: "2026-07-29T00:00:00Z", sequence: 1 },
+      { event: "pipeline.node.retry_wait", at: "2026-07-29T00:00:10Z", sequence: 2 },
+      { event: "pipeline.node.takeover", at: "2026-07-29T00:01:00Z", sequence: 3 },
+      { event: "pipeline.run.partial", at: "2026-07-29T00:02:00Z", sequence: 4 },
+    ],
+  });
+  let detailReads = 0;
+  const lastEventIds: Array<string | null> = [];
+  await page.route(`**/api/pipelines/${pipelineId}/runs?*`, async (route) => {
+    await route.fulfill({ json: { items: [queued], nextCursor: null } });
+  });
+  await page.route(`**/api/pipelines/runs/${runId}`, async (route) => {
+    const snapshots = [queued, retrying, retrying, partial];
+    const snapshot = snapshots[Math.min(detailReads, snapshots.length - 1)];
+    detailReads += 1;
+    await route.fulfill({ json: snapshot });
+  });
+  await page.route(`**/api/pipelines/runs/${runId}/events`, async (route) => {
+    const lastEventId = await route.request().headerValue("Last-Event-ID");
+    lastEventIds.push(lastEventId);
+    const isFirstConnection = lastEventIds.length === 1;
+    await new Promise((resolve) => setTimeout(resolve, isFirstConnection ? 250 : 1_200));
+    const sequence = isFirstConnection ? 2 : 4;
+    const event = isFirstConnection ? "pipeline.node.retry_wait" : "pipeline.run.partial";
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: `id: ${sequence}\nevent: ${event}\ndata: {"runId":"${runId}"}\n\n`,
+    });
+  });
+
+  await page.goto("/pipelines");
+  await page.getByLabel("파이프라인 브랜치").click();
+  await page.getByRole("option", { name: branchName }).click();
+  await page.getByRole("tab", { name: "히스토리" }).click();
+  const evidence = page.getByRole("region", { name: "분산 DAG 실행 evidence" });
+  await expect(evidence).toContainText("retry_wait");
+  await expect(evidence).toContainText("partial");
+  await expect(evidence).toContainText("worker takeover");
+  await expect(evidence).toContainText("committed 1");
+  await expect(evidence).toContainText("failed 1");
+  await expect(evidence).toContainText("worker-a");
+  await expect(evidence).toContainText("worker-b");
+  await expect.poll(() => lastEventIds).toEqual(["1", "2"]);
+});
+
+test("Pipeline Builder cancellation sends an idempotent request and reaches cancelled evidence", async ({
+  page,
+}) => {
+  const pipelineId = e2eSlug("pipeline_async_cancel");
+  const branchName = `async-cancel-${pipelineId}`;
+  const runId = `run-${pipelineId}`;
+  await apiPost<PipelineBranch>(
+    page,
+    "/api/pipelines/branches",
+    { pipelineId, name: branchName },
+    { "Idempotency-Key": `e2e-async-cancel-${pipelineId}` },
+  );
+  const running = pipelineRunSnapshot(runId, pipelineId, "running", 2, {
+    nodeRuns: [
+      {
+        id: `${runId}:node:long-running`,
+        nodeId: "long-running",
+        status: "running",
+        attempts: [
+          {
+            id: `${runId}:attempt:1`,
+            attemptNumber: 1,
+            status: "running",
+            workerId: "worker-a",
+            fencingToken: 1,
+            retryAt: null,
+            errorKind: null,
+          },
+        ],
+      },
+    ],
+  });
+  const cancelled = pipelineRunSnapshot(runId, pipelineId, "cancelled", 4, {
+    cancelRequestedAt: "2026-07-29T00:01:00Z",
+    cancelReason: "Cancelled from Pipeline Builder",
+    completedAt: "2026-07-29T00:01:05Z",
+    nodeRuns: [
+      {
+        id: `${runId}:node:long-running`,
+        nodeId: "long-running",
+        status: "cancelled",
+        attempts: [
+          {
+            id: `${runId}:attempt:1`,
+            attemptNumber: 1,
+            status: "cancelled",
+            workerId: "worker-a",
+            fencingToken: 1,
+            retryAt: null,
+            errorKind: "cancellation",
+          },
+        ],
+      },
+    ],
+  });
+  let isCancelled = false;
+  let cancelRequest: { idempotencyKey: string | null; reason: string | null } | null = null;
+  await page.route(`**/api/pipelines/${pipelineId}/runs?*`, async (route) => {
+    await route.fulfill({ json: { items: [running], nextCursor: null } });
+  });
+  await page.route(`**/api/pipelines/runs/${runId}`, async (route) => {
+    await route.fulfill({ json: isCancelled ? cancelled : running });
+  });
+  await page.route(`**/api/pipelines/runs/${runId}/events`, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: isCancelled
+        ? `id: 4\nevent: pipeline.run.cancelled\ndata: {"runId":"${runId}"}\n\n`
+        : ": heartbeat\n\n",
+    });
+  });
+  await page.route(`**/api/pipelines/runs/${runId}/cancel`, async (route) => {
+    const payload = route.request().postDataJSON() as { reason?: string };
+    cancelRequest = {
+      idempotencyKey: await route.request().headerValue("Idempotency-Key"),
+      reason: payload.reason ?? null,
+    };
+    isCancelled = true;
+    await route.fulfill({ status: 202, json: cancelled });
+  });
+
+  await page.goto("/pipelines");
+  await page.getByLabel("파이프라인 브랜치").click();
+  await page.getByRole("option", { name: branchName }).click();
+  await page.getByRole("tab", { name: "히스토리" }).click();
+  const evidence = page.getByRole("region", { name: "분산 DAG 실행 evidence" });
+  await evidence.getByRole("button", { name: "취소" }).click();
+  await expect(evidence).toContainText("cancelled");
+  await expect(evidence).toContainText("Cancelled from Pipeline Builder");
+  await expect.poll(() => cancelRequest?.idempotencyKey ?? null).not.toBeNull();
+  expect(cancelRequest?.reason).toBe("Cancelled from Pipeline Builder");
+});
+
 test("Pipeline Builder runs two Graph v2 Dataset outputs with exact UI and serving evidence", async ({
   page,
 }) => {
@@ -2722,8 +3031,9 @@ test("Pipeline Builder runs two Graph v2 Dataset outputs with exact UI and servi
       response.request().method() === "POST",
   );
   await versionRow.getByRole("button", { name: "실행" }).click();
-  const run = (await (await runResponse).json()) as PipelineRun;
-
+  const startedRun = (await (await runResponse).json()) as PipelineRun;
+  expect(["queued", "running", "succeeded"]).toContain(startedRun.status);
+  const run = await waitForPipelineRun(page, startedRun.id);
   expect(run.status).toBe("succeeded");
   expect(run.outputDatasetRef).toBeNull();
   expect(run.outputVersionId).toBeNull();
@@ -2756,8 +3066,6 @@ test("Pipeline Builder runs two Graph v2 Dataset outputs with exact UI and servi
     .locator("..");
   await expect(evidence).toContainText("succeeded");
   await expect(evidence).toContainText("committed 2");
-  await expect(evidence).toContainText("출력 수");
-  await expect(evidence).toContainText("2");
   const outputsEvidence = page.getByRole("region", {
     name: "실행 출력 evidence",
   });
@@ -2986,7 +3294,9 @@ test("Pipeline Builder edits, proposes, deploys, runs, and materializes a backen
       response.request().method() === "POST",
   );
   await runButton.click();
-  const run = (await (await runResponse).json()) as PipelineRun;
+  const startedRun = (await (await runResponse).json()) as PipelineRun;
+  expect(["queued", "running", "succeeded"]).toContain(startedRun.status);
+  const run = await waitForPipelineRun(page, startedRun.id);
   expect(run.status).toBe("succeeded");
   expect(run.outputDatasetRef).toBe(finalOutputRef);
 

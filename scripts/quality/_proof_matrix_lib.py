@@ -98,7 +98,7 @@ def infra_ratchet_text() -> str:
 
 
 def all_test_names(root: Path = ROOT) -> set[str]:
-    """Collect pytest names and Playwright titles used by proof contracts."""
+    """Collect discovered plus explicitly gated pytest names and Playwright titles."""
 
     command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:tach", str(root / "tests")]
     completed = subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)  # nosec B603
@@ -106,7 +106,7 @@ def all_test_names(root: Path = ROOT) -> set[str]:
         python_tests = _parse_collected_test_names(f"{completed.stdout}\n{completed.stderr}")
     else:
         python_tests = _static_test_names(root)
-    return python_tests | _playwright_test_titles(root)
+    return python_tests | _explicit_pytest_test_names(root) | _playwright_test_titles(root)
 
 
 def _parse_collected_test_names(output: str) -> set[str]:
@@ -126,6 +126,24 @@ def _static_test_names(root: Path = ROOT) -> set[str]:
     tests_dir = root / "tests"
     for path in tests_dir.rglob("*.py"):
         names.update(_TEST_DEF_RE.findall(path.read_text(encoding="utf-8")))
+    return names
+
+
+def _explicit_pytest_test_names(root: Path) -> set[str]:
+    """Collect tests from non-discovery files explicitly named by package gates."""
+    package_path = root / "package.json"
+    if not package_path.exists():
+        return set()
+    scripts = json.loads(package_path.read_text(encoding="utf-8")).get("scripts", {})
+    commands = scripts.values() if isinstance(scripts, dict) else ()
+    names: set[str] = set()
+    for command in commands:
+        if not isinstance(command, str) or "pytest" not in command:
+            continue
+        for relative in re.findall(r"tests/[A-Za-z0-9_./-]+\.py", command):
+            path = root / relative
+            if path.exists():
+                names.update(_TEST_DEF_RE.findall(path.read_text(encoding="utf-8")))
     return names
 
 

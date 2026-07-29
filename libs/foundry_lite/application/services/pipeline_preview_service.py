@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.ports.language_model import GovernedSemanticModelPort
+from foundry_lite.application.ports.pipeline_dag_orchestrator import (
+    PipelineDagDispatchRequest,
+    PipelineDagOrchestrator,
+)
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineExecutionRepository,
     PipelinePreviewRunRecord,
@@ -13,6 +17,10 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
 from foundry_lite.application.ports.pipeline_repository import PipelineBranchRow, PipelineRepository
 from foundry_lite.application.ports.semantic_row_cache_repository import SemanticRowCacheRepository
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_preview_dispatch import (
+    dispatch_pipeline_preview,
+    wait_for_preview_terminal,
+)
 from foundry_lite.application.services.pipeline_preview_executor import (
     PreviewExecutionResult,
     execute_pipeline_preview,
@@ -31,6 +39,7 @@ from foundry_lite.application.services.pipeline_preview_recovery import (
 from foundry_lite.application.services.pipeline_preview_runtime import (
     PipelinePreviewDatasetRegistry,
     PipelinePreviewRuntime,
+    build_pipeline_preview_runtime,
 )
 from foundry_lite.application.services.pipeline_preview_values import (
     PIPELINE_PREVIEW_CANCELLED,
@@ -41,10 +50,6 @@ from foundry_lite.application.services.pipeline_preview_values import (
     _preview_record,
     _preview_request_fingerprint,
     _require_valid_preview_graph,
-)
-from foundry_lite.application.services.pipeline_semantic_row_cache import (
-    SemanticRowCacheSession,
-    semantic_resource_security_policy_fingerprint,
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
@@ -60,6 +65,7 @@ class PipelinePreviewService(CoreService):
         "policy",
         "pipeline_repository",
         "pipeline_execution_repository",
+        "pipeline_dag_orchestrator",
         "media_repository",
         "media_storage",
         "media_processor_registry",
@@ -72,6 +78,7 @@ class PipelinePreviewService(CoreService):
     dataset_registry_service: PipelinePreviewDatasetRegistry
     governed_semantic_model_port: GovernedSemanticModelPort
     pipeline_execution_repository: PipelineExecutionRepository
+    pipeline_dag_orchestrator: PipelineDagOrchestrator
     pipeline_repository: PipelineRepository
     semantic_row_cache_repository: SemanticRowCacheRepository
     runtime_service: RuntimeEvidenceBoundary
@@ -109,7 +116,46 @@ class PipelinePreviewService(CoreService):
             request_fingerprint=request_fingerprint,
         )
         row = self._insert_or_replay_preview(ctx, record)
+        row = dispatch_pipeline_preview(
+            self.engine,
+            self.pipeline_execution_repository,
+            self.pipeline_dag_orchestrator,
+            ctx,
+            row,
+        )
         return _idempotent_preview_payload(row, request_fingerprint)
+
+    def execute_dispatched_preview(self, request: PipelineDagDispatchRequest) -> None:
+        if not request.is_commit_forbidden:
+            return
+        with self.engine.begin() as transaction:
+            row = self.pipeline_execution_repository.preview_by_id(
+                transaction=transaction,
+                tenant_id=request.tenant_id,
+                preview_run_id=request.run_id,
+            )
+        if row is not None:
+            self.execute_preview_run(
+                request.run_id,
+                ctx=recovered_pipeline_preview_context(row),
+            )
+
+    def recover_preview_dispatches(self, *, limit: int = 100) -> dict[str, object]:
+        with self.engine.begin() as transaction:
+            rows = self.pipeline_execution_repository.pending_preview_dispatches(
+                transaction=transaction,
+                limit=max(1, min(limit, 500)),
+            )
+        for row in rows:
+            ctx = recovered_pipeline_preview_context(row)
+            dispatch_pipeline_preview(
+                self.engine,
+                self.pipeline_execution_repository,
+                self.pipeline_dag_orchestrator,
+                ctx,
+                row,
+            )
+        return {"recovered": len(rows)}
 
     def execute_preview_run(
         self,
@@ -130,6 +176,8 @@ class PipelinePreviewService(CoreService):
                 row["execution_lease_token"],
             )
         if not is_claimed:
+            if row["status"] == "RUNNING":
+                return wait_for_preview_terminal(lambda: self.get_preview_run(preview_run_id, ctx=ctx))
             return _preview_payload(row)
         return self._execute_claimed_preview(ctx, row)
 
@@ -244,6 +292,13 @@ class PipelinePreviewService(CoreService):
                 row = self._require_preview(conn, ctx, preview_run_id)
             else:
                 self._audit_preview(conn, ctx, row, "cancel_requested")
+        workflow_run_id = row.get("workflow_run_id")
+        if isinstance(workflow_run_id, str):
+            self.pipeline_dag_orchestrator.cancel(
+                ctx.tenant_id,
+                workflow_run_id,
+                reason="preview_cancelled",
+            )
         return _preview_payload(row)
 
     def _insert_or_replay_preview(
@@ -376,7 +431,7 @@ class PipelinePreviewService(CoreService):
     ) -> PipelinePreviewRuntime:
         sensitive_fields = frozenset(self.policy.sensitive_column_names(ctx))
         decision = self.policy.decide(ctx, "pipeline:write")
-        return PipelinePreviewRuntime(
+        return build_pipeline_preview_runtime(
             engine=self.engine,
             dataset_registry=self.dataset_registry_service,
             source_management_repository=self.source_management_repository,
@@ -385,21 +440,13 @@ class PipelinePreviewService(CoreService):
             media_processor_registry=self.media_processor_registry,
             embedding_model_adapter=self.embedding_model_adapter,
             model_gateway=self.governed_semantic_model_port,
-            semantic_cache=SemanticRowCacheSession(
-                transaction_manager=self.engine,
-                repository=self.semantic_row_cache_repository,
-                model_gateway=self.governed_semantic_model_port,
-            ),
+            semantic_cache_repository=self.semantic_row_cache_repository,
             ctx=ctx,
             pipeline_id=str(row["pipeline_id"]),
             branch_id=str(row["branch_id"]),
-            resource_security_policy_fingerprint=semantic_resource_security_policy_fingerprint(
-                permission="pipeline:write",
-                policy_reason=decision.reason,
-                sensitive_fields=tuple(sensitive_fields),
-                masked_fields=tuple(self.policy.masked_column_names(ctx)),
-            ),
+            policy_reason=decision.reason,
             sensitive_fields=sensitive_fields,
+            masked_fields=tuple(self.policy.masked_column_names(ctx)),
         )
 
     def _branch(self, branch_id: str, ctx: RequestContext) -> PipelineBranchRow:

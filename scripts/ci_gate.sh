@@ -273,6 +273,10 @@ run_runtime_full_gate() {
 
   run_runtime_step "Temporal engine integration ratchet" pnpm --silent quality:temporal-engine-integration
 
+  run_runtime_step "Pipeline async DAG contract and determinism ratchet" pnpm --silent quality:pipeline-async-dag
+
+  run_runtime_step "Pipeline async DAG two-worker Temporal fault ratchet" pnpm --silent quality:pipeline-async-dag-live
+
   run_runtime_step "Media workflow Temporal ratchet" pnpm --silent quality:media-workflow-temporal
 
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback

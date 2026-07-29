@@ -405,7 +405,7 @@ def test_pipeline_failed_and_skipped_evidence_rolls_back_with_terminal_run(
 
     run = _run_by_idempotency_key(fixture, "run-terminal-evidence-atomicity")
     detail = fixture.foundry.pipelines.get_run(str(run["id"]), ctx=fixture.ctx)
-    assert detail["status"] == "executing"
+    assert detail["status"] == "running"
     assert _node_runs_by_id(detail)["output_a"]["status"] == "running"
     assert "output_b" not in _node_runs_by_id(detail)
     assert _pipeline_failure_audit_count(fixture, str(run["id"])) == 0
@@ -435,7 +435,7 @@ def test_committed_legacy_outputs_survive_success_terminal_persistence_failure(
 
     row = _run_by_idempotency_key(fixture, "run-success-terminal-reconciliation")
     detail = fixture.foundry.pipelines.get_run(str(row["id"]), ctx=fixture.ctx)
-    assert detail["status"] == "executing"
+    assert detail["status"] == "running"
     assert _node_runs_by_id(detail)["output_a"]["status"] == "succeeded"
     assert _node_runs_by_id(detail)["output_b"]["status"] == "succeeded"
     assert _only_dataset_version_id(fixture, fixture.first_output_ref)
@@ -447,7 +447,7 @@ def test_committed_legacy_outputs_survive_success_terminal_persistence_failure(
         idempotency_key="run-success-terminal-reconciliation",
         ctx=fixture.ctx,
     )
-    assert replay["status"] == "executing"
+    assert replay["status"] == "running"
     _expire_run_lease(fixture, str(row["id"]))
 
     reconciled = fixture.foundry.pipelines.run(

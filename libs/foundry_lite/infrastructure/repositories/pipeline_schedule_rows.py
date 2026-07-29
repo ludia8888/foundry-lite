@@ -57,6 +57,21 @@ def schedule_by_pipeline(
     return _optional_row(row, PipelineScheduleRow)
 
 
+def schedule_by_id_for_update(
+    transaction: Any,
+    tenant_id: str,
+    schedule_id: str,
+) -> PipelineScheduleRow | None:
+    row = (
+        transaction.execute(
+            select(db.pipeline_schedules).where(_schedule_identity(tenant_id, schedule_id)).with_for_update()
+        )
+        .mappings()
+        .first()
+    )
+    return _optional_row(row, PipelineScheduleRow)
+
+
 def list_due_schedules(
     transaction: Any,
     tenant_id: str,
@@ -240,6 +255,28 @@ def update_schedule_status(
     return schedule_by_pipeline(transaction, tenant_id, pipeline_id)
 
 
+def update_schedule_terminal_observation(
+    transaction: Any,
+    *,
+    tenant_id: str,
+    schedule_id: str,
+    values: dict[str, object],
+) -> PipelineScheduleRow | None:
+    result = transaction.execute(
+        update(db.pipeline_schedules)
+        .where(
+            and_(
+                db.pipeline_schedules.c.tenant_id == tenant_id,
+                db.pipeline_schedules.c.id == schedule_id,
+            )
+        )
+        .values(**values)
+    )
+    if not result.rowcount:
+        return None
+    return schedule_by_id(transaction, tenant_id, schedule_id)
+
+
 def reserve_schedule_operation(
     transaction: Any,
     record: PipelineScheduleOperationRecord,
@@ -351,6 +388,10 @@ def _new_schedule_values(record: PipelineScheduleRecord) -> dict[str, object]:
         "failure_count": 0,
         "last_failure_at": None,
         "last_error": None,
+        "last_terminal_run_id": None,
+        "last_terminal_slot_at": None,
+        "last_terminal_status": None,
+        "last_terminal_at": None,
     }
 
 

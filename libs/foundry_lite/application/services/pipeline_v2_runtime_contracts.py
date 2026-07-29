@@ -127,6 +127,7 @@ class PipelineV2RunResult:
     error: Mapping[str, object] | None = None
     failed_node_id: str | None = None
     skipped_node_ids: tuple[str, ...] = ()
+    runtime_artifacts: tuple[PipelineV2RuntimeArtifact, ...] = ()
 
 
 def runtime_plan_nodes(plan: Mapping[str, object]) -> tuple[PipelineV2RuntimeNode, ...]:
@@ -187,6 +188,44 @@ def input_artifacts_for_node(
             )
         grouped.setdefault(edge.target_port_id, []).append(artifact)
     return {port: tuple(values) for port, values in grouped.items()}
+
+
+def pipeline_runtime_artifact_payload(artifact: PipelineV2RuntimeArtifact) -> JsonObject:
+    return {
+        "nodeId": artifact.node_id,
+        "descriptorId": artifact.descriptor_id,
+        "specVersion": artifact.spec_version,
+        "portId": artifact.port_id,
+        "artifactKind": artifact.artifact_kind,
+        "plane": artifact.plane,
+        "items": list(artifact.items),
+        "artifactRef": dict(artifact.artifact_ref),
+        "manifest": dict(artifact.manifest),
+        "securityEnvelope": dict(artifact.security_envelope),
+        "status": artifact.status,
+        "isServing": artifact.is_serving,
+        "committedAt": artifact.committed_at,
+        "contentFingerprint": artifact.content_fingerprint,
+    }
+
+
+def pipeline_runtime_artifact_from_payload(payload: Mapping[str, object]) -> PipelineV2RuntimeArtifact:
+    items = payload.get("items")
+    return PipelineV2RuntimeArtifact(
+        node_id=_required_text(payload, "nodeId"),
+        descriptor_id=_required_text(payload, "descriptorId"),
+        spec_version=_required_int(payload, "specVersion"),
+        port_id=_required_text(payload, "portId"),
+        artifact_kind=_required_text(payload, "artifactKind"),
+        plane=_required_text(payload, "plane"),
+        items=tuple(dict(item) for item in items if isinstance(item, Mapping)) if isinstance(items, list) else (),
+        artifact_ref=_required_mapping(payload, "artifactRef"),
+        manifest=_required_mapping(payload, "manifest"),
+        security_envelope=_required_mapping(payload, "securityEnvelope"),
+        status=_required_text(payload, "status"),
+        is_serving=bool(payload.get("isServing")),
+        committed_at=_optional_text(payload.get("committedAt")),
+    )
 
 
 def single_input_artifact(
@@ -306,6 +345,17 @@ def _required_int(row: Mapping[str, object], field: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise InvariantViolation("pipeline execution plan integer coordinate is invalid", details={"field": field})
     return value
+
+
+def _required_mapping(row: Mapping[str, object], field: str) -> Mapping[str, object]:
+    value = row.get(field)
+    if not isinstance(value, Mapping):
+        raise InvariantViolation("pipeline execution plan object coordinate is invalid", details={"field": field})
+    return value
+
+
+def _optional_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _optional_int(value: object, field: str) -> int | None:

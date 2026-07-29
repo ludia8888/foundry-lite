@@ -135,9 +135,11 @@ class PipelineExecutionLeaseGuard:
 
 
 def replayed_pipeline_run_action(row: Mapping[str, object]) -> str:
+    if is_stale_pipeline_execution(row):
+        return "fail_stale"
     if row.get("status") == "running":
         return "execute"
-    return "fail_stale" if is_stale_pipeline_execution(row) else "read"
+    return "read"
 
 
 def new_pipeline_execution_lease(*, now: datetime | None = None) -> PipelineExecutionLease:
@@ -160,7 +162,7 @@ def stale_pipeline_run_error(row: Mapping[str, object]) -> InvariantViolation:
 
 
 def is_stale_pipeline_execution(row: Mapping[str, object], *, now: datetime | None = None) -> bool:
-    if row.get("status") != "executing":
+    if row.get("status") not in {"running", "executing"}:
         return False
     token = row.get("execution_lease_token")
     expires_at = row.get("execution_lease_expires_at")

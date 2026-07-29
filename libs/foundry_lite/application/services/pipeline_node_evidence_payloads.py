@@ -38,6 +38,23 @@ def run_with_evidence_payload(
     )
     plan = PipelineEvidencePlan(execution_plan)
     payload = run_payload(row)
+    events = repository.run_events(
+        transaction=transaction,
+        tenant_id=tenant_id,
+        run_id=str(row["id"]),
+        after_sequence=0,
+        limit=500,
+    )
+    if events:
+        payload["timeline"] = [
+            {
+                "sequence": event["sequence"],
+                "event": event["event_type"],
+                "at": event["created_at"],
+                **event["payload"],
+            }
+            for event in events
+        ]
     payload["nodeRuns"] = _node_payloads(transaction, repository, tenant_id, node_rows, plan)
     payload["artifacts"] = [_artifact_payload(item) for item in _ordered_artifacts(artifacts, plan)]
     return payload
@@ -95,9 +112,13 @@ def _attempt_payload(row: PipelineNodeAttemptRow) -> JsonObject:
         "attemptNumber": row["attempt_number"],
         "status": row["status"].lower(),
         "executorProfile": row["executor_profile"],
-        "leaseOwner": row["lease_owner"],
-        "leaseToken": row["lease_token"],
+        "workerId": row["lease_owner"],
         "leaseExpiresAt": row["lease_expires_at"],
+        "fencingToken": row["fencing_token"],
+        "heartbeatAt": row["heartbeat_at"],
+        "retryAt": row["retry_at"],
+        "errorKind": row["error_kind"],
+        "externalExecutionId": row["external_execution_id"],
         "inputManifest": row["input_manifest"],
         "outputManifest": row["output_manifest"],
         "error": row["error"],
@@ -122,6 +143,8 @@ def _artifact_payload(row: PipelineRunArtifactRow) -> JsonObject:
         "id": row["id"],
         "runId": row["run_id"],
         "nodeRunId": row["node_run_id"],
+        "attemptId": row["attempt_id"],
+        "fencingToken": row["fencing_token"],
         "nodeId": row["node_id"],
         "portId": row["port_id"],
         "artifactKind": row["artifact_kind"],

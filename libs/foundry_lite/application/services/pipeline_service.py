@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_async_run_service import PipelineAsyncRunService
 from foundry_lite.application.services.pipeline_catalog_service import PipelineCatalogService
 from foundry_lite.application.services.pipeline_definition_service import PipelineDefinitionService
 from foundry_lite.application.services.pipeline_deployment_service import PipelineDeploymentService
@@ -21,6 +22,7 @@ class PipelineService(CoreService):
 
     required_dependencies = ()
     required_collaborators = (
+        "pipeline_async_run_service",
         "pipeline_catalog_service",
         "pipeline_definition_service",
         "pipeline_deployment_service",
@@ -30,6 +32,7 @@ class PipelineService(CoreService):
         "pipeline_run_service",
         "pipeline_scheduler_service",
     )
+    pipeline_async_run_service: PipelineAsyncRunService
     pipeline_catalog_service: PipelineCatalogService
     pipeline_definition_service: PipelineDefinitionService
     pipeline_deployment_service: PipelineDeploymentService
@@ -289,6 +292,57 @@ class PipelineService(CoreService):
             ctx=ctx,
         )
 
+    def enqueue_run(
+        self,
+        pipeline_id: str,
+        *,
+        version_id: str | None,
+        idempotency_key: str,
+        parameters: Mapping[str, object] | None,
+        target_node_ids: list[str] | None,
+        wait_seconds: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self.pipeline_async_run_service.enqueue(
+            pipeline_id,
+            version_id=version_id,
+            idempotency_key=idempotency_key,
+            parameters=parameters,
+            target_node_ids=target_node_ids,
+            wait_seconds=wait_seconds,
+            ctx=ctx,
+        )
+
+    def list_runs(
+        self,
+        pipeline_id: str,
+        *,
+        cursor: str | None,
+        limit: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self.pipeline_async_run_service.list_runs(
+            pipeline_id,
+            cursor=cursor,
+            limit=limit,
+            ctx=ctx,
+        )
+
+    def get_run_events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int,
+        limit: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self.pipeline_async_run_service.events(
+            run_id,
+            after_sequence=after_sequence,
+            limit=limit,
+            ctx=ctx,
+        )
+
     def get_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.pipeline_run_service.get_run(run_id, ctx=ctx)
 
@@ -297,6 +351,21 @@ class PipelineService(CoreService):
 
     def cancel_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.pipeline_run_service.cancel_run(run_id, ctx=ctx)
+
+    def request_run_cancel(
+        self,
+        run_id: str,
+        *,
+        idempotency_key: str,
+        reason: str | None,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return self.pipeline_async_run_service.cancel(
+            run_id,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            ctx=ctx,
+        )
 
     def upsert_schedule(
         self,

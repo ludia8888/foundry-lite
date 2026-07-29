@@ -81,7 +81,7 @@ class PipelineGraphV2ExecutionService(CoreService):
         execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> PipelineV2RunResult:
         return execute_pipeline_graph_v2(
-            self._execution_bindings(execution_lease_guard),
+            self.execution_bindings(execution_lease_guard),
             ctx,
             run_id=run_id,
             pipeline_id=pipeline_id,
@@ -90,7 +90,7 @@ class PipelineGraphV2ExecutionService(CoreService):
             target_node_ids=target_node_ids,
         )
 
-    def _execution_bindings(
+    def execution_bindings(
         self,
         execution_lease_guard: PipelineExecutionLeaseFence,
     ) -> PipelineGraphV2ExecutionBindings:

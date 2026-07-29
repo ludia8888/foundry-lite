@@ -14,6 +14,7 @@ from foundry_lite.application.ports.pipeline_repository import (
 )
 from foundry_lite.application.primitives import _new_id
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_async_run_service import PipelineAsyncRunService
 from foundry_lite.application.services.pipeline_execution_contracts import PipelineScheduleSpec
 from foundry_lite.application.services.pipeline_payloads import (
     bounded_pipeline_limit,
@@ -21,7 +22,6 @@ from foundry_lite.application.services.pipeline_payloads import (
     schedule_record,
 )
 from foundry_lite.application.services.pipeline_run_requests import require_deployed, require_pipeline_match
-from foundry_lite.application.services.pipeline_run_service import PipelineRunService
 from foundry_lite.application.services.pipeline_schedule_runtime import (
     initial_next_due_at,
     normalize_legacy_pipeline_schedule,
@@ -56,15 +56,15 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFai
 
 _LEASE_SECONDS = 60
 _RECONCILIATION_LIMIT = 100
-_SUCCESS_STATUSES = {"succeeded"}
+_SUCCESS_STATUSES = {"queued", "running", "succeeded"}
 _SKIPPED_REASONS = {"lease_not_acquired", "run_in_progress"}
 
 
 class PipelineSchedulerService(CoreService):
     required_dependencies = ("engine", "policy", "pipeline_repository")
-    required_collaborators = ("pipeline_run_service", "runtime_service")
+    required_collaborators = ("pipeline_async_run_service", "runtime_service")
     pipeline_repository: PipelineRepository
-    pipeline_run_service: PipelineRunService
+    pipeline_async_run_service: PipelineAsyncRunService
     runtime_service: RuntimeEvidenceBoundary
 
     def upsert_schedule(
@@ -424,23 +424,18 @@ class PipelineSchedulerService(CoreService):
         slot_start = str(claimed["next_due_at"])
         key = scheduled_run_idempotency_key(str(claimed["id"]), slot_start)
         try:
-            run = self.pipeline_run_service.start_run(
+            run = self.pipeline_async_run_service.enqueue(
                 str(claimed["pipeline_id"]),
                 version_id=str(claimed["version_id"]),
                 idempotency_key=key,
+                parameters={"scheduleId": claimed["id"], "slotStart": slot_start},
+                target_node_ids=None,
+                wait_seconds=0,
                 ctx=ctx,
             )
         except Exception as exc:
             error = dict(self.runtime_service._error_payload(exc, ctx, correlation_id=key))
             return self._finish_claim(ctx, claimed, slot_start, None, error, now)
-        if str(run.get("status")) == "executing":
-            return {
-                "scheduleId": claimed["id"],
-                "slotStart": slot_start,
-                "run": run,
-                "reason": "run_in_progress",
-                "fencingToken": claimed["fencing_token"],
-            }
         run_error = cast(dict[str, object] | None, run.get("error"))
         return self._finish_claim(ctx, claimed, slot_start, run, run_error, now)
 
@@ -473,8 +468,8 @@ class PipelineSchedulerService(CoreService):
         error: dict[str, object] | None,
         now: datetime,
     ) -> dict[str, object]:
-        is_success = run is not None and str(run.get("status")) in _SUCCESS_STATUSES
-        values = completion_values(claimed, slot_start, run, error, now, is_success)
+        is_enqueued = run is not None and str(run.get("status")) in _SUCCESS_STATUSES
+        values = completion_values(claimed, slot_start, run, error, now, is_enqueued)
         with self.engine.begin() as conn:
             completed = self.pipeline_repository.complete_schedule_tick(
                 transaction=conn,

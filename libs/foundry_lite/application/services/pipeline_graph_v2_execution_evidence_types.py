@@ -136,6 +136,9 @@ class PipelineGraphV2AttemptContext:
     attempt_id: str
     attempt_number: int
     input_artifacts: tuple[PipelineGraphV2InputArtifact, ...]
+    worker_id: str | None = None
+    lease_token: str | None = None
+    fencing_token: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.node_id, "pipeline node id")
@@ -145,6 +148,15 @@ class PipelineGraphV2AttemptContext:
         _require_text(self.attempt_id, "pipeline node attempt id")
         if self.spec_version < 1 or self.attempt_number < 1:
             raise ValidationFailed("pipeline node spec and attempt versions must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineGraphV2WorkerLease:
+    worker_id: str
+    lease_token: str
+    lease_expires_at: str
+    heartbeat_at: str
+    external_execution_id: str | None = None
 
 
 def canonical_input_artifacts(

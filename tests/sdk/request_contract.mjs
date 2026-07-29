@@ -2331,10 +2331,10 @@ await expectSdkCall(
     client.pipelines.runs.start(
       "supply-chain",
       { versionId: "version/1", parameters: { mode: "full" }, targetNodeIds: ["out"] },
-      { idempotencyKey: "idem-pipeline-run" },
+      { idempotencyKey: "idem-pipeline-run", waitSeconds: 12 },
     ),
   {
-    path: "/api/pipelines/supply-chain/runs",
+    path: "/api/pipelines/supply-chain/runs?waitSeconds=12",
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-pipeline-run" },
     body: { versionId: "version/1", parameters: { mode: "full" }, targetNodeIds: ["out"] },
@@ -2345,16 +2345,59 @@ assertMissingIdempotencyFailFast(
   () => client.pipelines.runs.start("supply-chain", { versionId: "version/1" }),
   "pipelines.runs.start",
 );
+await expectSdkCall(
+  "pipelines.runs.list",
+  () => client.pipelines.runs.list("supply-chain", { cursor: "cursor/1", limit: 25 }),
+  {
+    path: "/api/pipelines/supply-chain/runs?cursor=cursor%2F1&limit=25",
+  },
+);
 await expectSdkCall("pipelines.runs.get", () => client.pipelines.runs.get("run/1"), {
   path: "/api/pipelines/runs/run%2F1",
 });
+responseQueue.push(
+  streamResponse([
+    'id: 8\nevent: pipeline.run.running\ndata: {"runId":"run/1"}\n\n',
+  ]),
+);
+const pipelineRunEvents = [];
+for await (const event of client.pipelines.runs.events("run/1", { lastEventId: 7 })) {
+  pipelineRunEvents.push(event);
+}
+assert.equal(pipelineRunEvents[0].id, "8");
+assert.equal(pipelineRunEvents[0].eventType, "pipeline.run.running");
+const pipelineEventCall = calls.at(-1);
+assert.equal(
+  pipelineEventCall.url,
+  `${BASE_URL}/api/pipelines/runs/run%2F1/events`,
+  "pipelines.runs.events",
+);
+assertBaseHeaders(pipelineEventCall.init.headers, "pipelines.runs.events");
+assert.equal(pipelineEventCall.init.headers["Last-Event-ID"], "7", "pipelines.runs.events");
+coveredSurfaceIds.add("pipelines.runs.events");
 await expectSdkCall("pipelines.runs.timeline", () => client.pipelines.runs.timeline("run/1"), {
   path: "/api/pipelines/runs/run%2F1/timeline",
 });
-await expectSdkCall("pipelines.runs.cancel", () => client.pipelines.runs.cancel("run/1"), {
-  path: "/api/pipelines/runs/run%2F1/cancel",
-  method: "POST",
-});
+await expectSdkCall(
+  "pipelines.runs.cancel",
+  () =>
+    client.pipelines.runs.cancel(
+      "run/1",
+      { reason: "operator stop" },
+      { idempotencyKey: "idem-pipeline-cancel" },
+    ),
+  {
+    path: "/api/pipelines/runs/run%2F1/cancel",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-pipeline-cancel" },
+    body: { reason: "operator stop" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.runs.cancel",
+  () => client.pipelines.runs.cancel("run/1", {}),
+  "pipelines.runs.cancel",
+);
 await expectSdkCall(
   "pipelines.schedules.upsert",
   () =>

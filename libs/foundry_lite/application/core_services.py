@@ -267,6 +267,7 @@ def _pipeline_dependencies(
         aip=aip,
         media=dependencies.media,
         source=dependencies.source,
+        pipeline_dag_orchestrator=dependencies.pipeline_dag_orchestrator,
         profile=dependencies.profile,
     )
 
@@ -410,6 +411,7 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "transform_graph_service": services.transform.graph,
         "transform_run_service": services.transform.run,
         "transform_scheduler_service": services.transform.scheduler,
+        "pipeline_async_run_service": services.pipelines.async_run,
         "pipeline_catalog_service": services.pipelines.catalog,
         "pipeline_compiler_service": services.pipelines.compiler,
         "pipeline_definition_service": services.pipelines.definition,

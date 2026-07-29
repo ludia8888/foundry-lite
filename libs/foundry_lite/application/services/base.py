@@ -151,6 +151,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "osdk_application_sdk_service": "OsdkApplicationSdkService",
     "osdk_oauth_session_service": "OsdkOAuthSessionService",
     "outbox_publisher_service": "OutboxPublisherService",
+    "pipeline_async_run_service": "PipelineAsyncRunService",
     "pipeline_catalog_service": "PipelineCatalogService",
     "pipeline_compiler_service": "PipelineCompilerService",
     "pipeline_definition_service": "PipelineDefinitionService",

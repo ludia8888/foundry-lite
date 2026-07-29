@@ -240,8 +240,8 @@
         "New browser-authored pipelines persist schemaVersion 2 nodes and named-port edges while legacy v1 graphs remain load-compatible."
       ],
       "gaps": [
-        "Supported Graph v2 descriptors now execute through the engine-neutral plan and persist node, attempt, artifact, output, and terminal evidence, but execution remains an in-process synchronous DAG.",
-        "A durable asynchronous worker with crash resume, retry orchestration, and takeover is not active."
+        "Graph v1 remains dual-read and permanently replayable through its compatibility activity, while Graph v2 is the only new-write execution-plan format.",
+        "Kubernetes worker autoscaling, disruption budgets, and multi-region Temporal operations remain outside the current single-machine multi-process completion boundary."
       ],
       "rolloutPhase": 1,
       "completionRule": "Make Graph v2 the only new-write format while retaining permanent v1 replay compatibility."
@@ -276,8 +276,7 @@
         "Every authored canvas edge renders its artifact kind, exact source and target port ids, descriptor/spec producer pin, and inherited security classification."
       ],
       "gaps": [
-        "Artifact Passport is rendered on every authored canvas edge and preview artifact, while a live per-edge runtime-state overlay for retries, queued attempts, and worker takeover remains incomplete.",
-        "Supported production Graph v2 nodes now emit the runtime artifact-manifest chain, while asynchronous retry and takeover evidence remain incomplete."
+        "Artifact Passport is rendered on every authored canvas edge and preview artifact, while live retry, attempt, and worker-takeover evidence is currently node-level in the History workspace rather than overlaid on each canvas edge."
       ],
       "rolloutPhase": 1,
       "completionRule": "Require named-port validation in save, preview, deploy, and build paths before Graph v2 becomes default."
@@ -325,12 +324,15 @@
         "palantir-pipeline-overview",
         "palantir-mmdp"
       ],
-      "status": "foundation",
+      "status": "current",
       "implementationEvidence": [
         "libs/foundry_lite/application/ports/pipeline_execution_repository.py",
+        "libs/foundry_lite/application/ports/pipeline_dag_orchestrator.py",
         "libs/foundry_lite/infrastructure/repositories/pipeline_execution_repository.py",
         "libs/foundry_lite/infrastructure/schema/pipeline_execution.py",
-        "migrations/versions/b3d5f7a9c1e4_pipeline_builder_v2_execution.py",
+        "migrations/versions/e1a3c5d7f9b2_pipeline_async_dag_control_plane.py",
+        "libs/foundry_lite/application/services/pipeline_distributed_node_service.py",
+        "libs/foundry_lite/infrastructure/adapters/temporal_workflows.py",
         "libs/foundry_lite/application/services/pipeline_preview_service.py",
         "libs/foundry_lite/application/services/pipeline_plan_compiler.py",
         "libs/foundry_lite/application/services/pipeline_deployment_service.py"
@@ -343,22 +345,29 @@
       ],
       "uiSurfaces": [
         "apps/foundry/src/features/document-intelligence/DocumentConfigPanel.tsx",
-        "apps/foundry/src/features/pipelines/components/PipelineCapabilityCatalog.tsx"
+        "apps/foundry/src/features/pipelines/components/PipelineCapabilityCatalog.tsx",
+        "apps/foundry/src/features/pipelines/components/RunHistoryWorkspace.tsx",
+        "apps/foundry/src/features/pipelines/components/RunExecutionEvidence.tsx"
       ],
       "proofTests": [
         "test_preview_run_contract_is_tenant_scoped_and_commit_forbidden",
         "test_node_attempt_and_artifact_contract_preserves_passport",
         "test_pipeline_preview_run_executes_unsaved_graph_without_serving_commit",
         "test_compiler_normalizes_v1_and_freezes_a_descriptor_pinned_plan",
-        "test_deployment_contract_assigns_sequence_and_replays_idempotently"
+        "test_deployment_contract_assigns_sequence_and_replays_idempotently",
+        "test_run_event_sequence_is_monotonic_and_resumable",
+        "test_expired_attempt_takeover_fences_stale_worker_writes",
+        "test_temporal_workers_take_over_cancel_and_commit_each_plane_once"
       ],
       "operatorEvidence": [
         "Preview API responses and durable pipeline_preview_runs rows expose status, artifacts, request identity, commitForbidden, and servingVersionCreated evidence.",
-        "Idempotent deploy and deployment-list API or SDK surfaces expose immutable plan fingerprints, compiler version, compute profile, pins, promotion identity, and sequence."
+        "Idempotent deploy and deployment-list API or SDK surfaces expose immutable plan fingerprints, compiler version, compute profile, pins, promotion identity, and sequence.",
+        "PostgreSQL-backed node attempts persist owner, heartbeat, lease expiry, retry time, external execution identity, and monotonic fencing token; stale owners cannot write artifacts, commits, heartbeats, or terminal state.",
+        "The History workspace projects durable run events and exposes retry countdown, attempt transitions, worker takeover, cancellation, and committed output evidence without exposing lease tokens."
       ],
       "gaps": [
-        "Preview and supported Graph v2 build execution write end-to-end evidence, but build DAG node runs and attempts are not yet driven by a durable asynchronous worker.",
-        "Build retry, worker takeover, and non-Dataset multi-plane commit evidence remain incomplete."
+        "Event retention and archival policy beyond the active append-only run ledger remains an operations follow-up.",
+        "The destructive contract migration that removes legacy running/executing aliases is deferred until the old/new application compatibility window closes."
       ],
       "rolloutPhase": 2,
       "completionRule": "Make every preview and build node transition observable through this repository before enabling async execution."
@@ -403,8 +412,8 @@
         "The PDF OCR descriptor pins the detected Poppler and Tesseract toolchain, rasterizes only the bounded page window, and returns page, bbox, OCR confidence, block content, and a clearly labelled Foundry-lite heuristic structure that may classify title, H1, H2, or body."
       ],
       "gaps": [
-        "The Builder now authors and validates exact image, audio, and video processor pins, but production deployment and build execution do not yet run every registered processor as an asynchronous graph node.",
-        "Processor throughput and live-engine evidence remain separate from Builder execution.",
+        "Production deployment executes supported image, audio, and video processor descriptors through distributed graph activities, but not every future registry descriptor has a live external-engine throughput profile.",
+        "Nightly processor throughput and external-engine capacity evidence remain separate from the async DAG correctness gate.",
         "Palantir public documentation is inconsistent about transformed-media chaining; the product must preserve this source conflict instead of overstating one rule."
       ],
       "rolloutPhase": 5,
@@ -495,7 +504,7 @@
         "The browser displays processor-attested requested versus applied audio/video bounds, timecodes, speaker/language, scene counts, source MediaVersion, model, and processing spec evidence directly below the configuration board."
       ],
       "gaps": [
-        "Search-result preview, durable asynchronous worker cancellation/takeover, and nightly live-engine throughput evidence remain incomplete."
+        "Search-result preview and nightly live-engine throughput evidence remain incomplete; preview dispatch, cancellation, and worker isolation now share the Temporal orchestration path with commitForbidden enforced."
       ],
       "rolloutPhase": 6,
       "completionRule": "A browser-created draft preview must prove zero new serving versions through API and database evidence."
@@ -507,12 +516,19 @@
         "palantir-pipeline-overview",
         "palantir-pipeline-management"
       ],
-      "status": "foundation",
+      "status": "current",
       "implementationEvidence": [
+        "libs/foundry_lite/application/services/pipeline_async_run_service.py",
+        "libs/foundry_lite/application/services/pipeline_control_worker_service.py",
+        "libs/foundry_lite/application/services/pipeline_distributed_node_service.py",
         "libs/foundry_lite/application/services/pipeline_scheduler_service.py",
         "libs/foundry_lite/application/services/pipeline_schedule_runtime.py",
+        "libs/foundry_lite/infrastructure/adapters/pipeline_dag_orchestrator.py",
+        "libs/foundry_lite/infrastructure/adapters/temporal_workflows.py",
         "libs/foundry_lite/infrastructure/repositories/pipeline_schedule_rows.py",
-        "libs/foundry_lite/infrastructure/schema/pipelines.py"
+        "libs/foundry_lite/infrastructure/schema/pipelines.py",
+        "apps/worker/foundry_lite_worker/pipeline_dag.py",
+        "apps/worker/foundry_lite_worker/pipeline_control.py"
       ],
       "apiSurfaces": [
         "apps/api/foundry_lite_api/routers/pipelines.py"
@@ -522,7 +538,9 @@
         "packages/sdk-ts/src/screen-recipes.ts"
       ],
       "uiSurfaces": [
-        "apps/foundry/src/features/pipelines/components/ScheduleCard.tsx"
+        "apps/foundry/src/features/pipelines/components/ScheduleCard.tsx",
+        "apps/foundry/src/features/pipelines/components/RunHistoryWorkspace.tsx",
+        "apps/foundry/src/features/pipelines/components/RunExecutionEvidence.tsx"
       ],
       "proofTests": [
         "test_interval_schedule_normalizes_legacy_minutes_and_advances_exact_slot",
@@ -531,18 +549,26 @@
         "test_pipeline_scheduler_claim_has_one_postgres_winner",
         "test_pipeline_builder_graph_preview_review_deploy_and_run",
         "test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule",
-        "test_pipeline_scheduler_due_scan_measures_current_boundary"
+        "test_pipeline_scheduler_due_scan_measures_current_boundary",
+        "test_retryable_activity_fails_twice_then_succeeds",
+        "test_permanent_failure_is_not_retried_and_blocks_downstream",
+        "test_completed_history_replays_without_executing_node_again",
+        "test_schedule_terminal_observation_claim_is_exactly_once",
+        "test_temporal_workers_take_over_cancel_and_commit_each_plane_once"
       ],
       "operatorEvidence": [
         "Cron and interval definitions persist timezone, nextDueAt, active or paused status, failure evidence, lease state, and monotonic fencing tokens.",
         "A scheduled run uses a deterministic schedule-and-slot idempotency key, so an expired lease takeover cannot create a second run for the same slot.",
         "Pause and resume mutations require an idempotency key, preserve durable evidence, and clear an outstanding lease before changing automatic trigger state.",
-        "The performance gate measures a real bounded due query across 10,000 schedule rows and enforces p95 below one second."
+        "The performance gate measures a real bounded due query across 10,000 schedule rows and enforces p95 below one second.",
+        "POST run returns queued with 202 by default, Temporal drives fork/join activities, and capability-specific allowlisted queues isolate runtime families.",
+        "The live gate kills one of two worker processes during a long multi-node run, proves lease-expiry takeover and fencing-token increase, and observes exactly one Dataset and one Media Set serving commit.",
+        "Cancellation is persisted before Temporal cancel, terminates the isolated child process with TERM then KILL fallback, cancels inactive nodes, and leaves committed immutable outputs intact.",
+        "Durable SSE resumes from Last-Event-ID; the browser falls back to a snapshot and reconnects from its last observed sequence."
       ],
       "gaps": [
-        "Pipeline execution is still an in-process bounded call rather than a durable asynchronous worker with crash resume and retry orchestration.",
         "Data and logic triggers remain unavailable and fail closed instead of silently falling back to time scheduling.",
-        "A continuously deployed scheduler worker, durable server-sent event stream, and full multi-node cancellation or takeover proof remain incomplete."
+        "Kubernetes/Helm/HPA/PDB packaging, multi-region Temporal operations, and a separate hot-stream DAG engine remain outside this completion boundary."
       ],
       "rolloutPhase": 4,
       "completionRule": "Prove one-winner lease fencing, bounded retry, cancellation, and worker takeover for a multi-node run."
@@ -554,7 +580,7 @@
         "palantir-pipeline-outputs",
         "palantir-mmdp"
       ],
-      "status": "foundation",
+      "status": "current",
       "implementationEvidence": [
         "libs/foundry_lite/application/services/pipeline_compiler_service.py",
         "libs/foundry_lite/application/services/pipeline_run_execution.py",
@@ -591,14 +617,16 @@
         "test_media_set_output_commits_exact_source_versions_with_durable_lineage_and_replays_once",
         "test_media_set_output_rejects_an_existing_target_with_a_different_contract",
         "test_media_set_output_rejects_a_committed_derivative_without_durable_bytes",
-        "test_media_set_output_copies_a_committed_derivative_with_verified_durable_bytes"
+        "test_media_set_output_copies_a_committed_derivative_with_verified_durable_bytes",
+        "test_temporal_workers_take_over_cancel_and_commit_each_plane_once"
       ],
       "operatorEvidence": [
         "Pipeline run payloads and the Runs panel expose every selected Dataset output by node, artifact kind, plane, immutable Dataset ref/version, and COMMITTED or FAILED status.",
         "A Dataset job group with an earlier immutable commit and a later failure terminates as partial without hiding the committed result; single-output legacy fields are emitted only when exactly one Dataset output is selected.",
         "The browser golden flow authors, configures, connects, and serializes executable output.media_set, validation-only output.virtual_table, and output.ontology as an immutable governed candidate, so each output shows its actual runtime boundary instead of a placeholder.",
         "Graph v2 output.media_set accepts committed Media Set selections or durable derivative bytes, revalidates source hashes and target contracts, stages and commits immutable target MediaVersions, preserves the exact source security envelope and lineage pins, and creates zero duplicate versions on same-run replay.",
-        "The Pipeline Builder browser E2E creates and deploys a real Graph v2 source.dataset to two output.dataset graph, starts it from the History UI, displays committed 2 and two exact ref/version passports without legacy fallback, and reads three committed rows from both outputs."
+        "The Pipeline Builder browser E2E creates and deploys a real Graph v2 source.dataset to two output.dataset graph, starts it from the History UI, displays committed 2 and two exact ref/version passports without legacy fallback, and reads three committed rows from both outputs.",
+        "The PostgreSQL plus real Temporal two-worker gate commits one Dataset version and one Media Set version from the same run, then proves takeover cannot duplicate either plane's serving commit."
       ],
       "gaps": [
         "Dataset job groups and Graph v2 candidate outputs preserve exact node/ref/version pairing, partial evidence, target pruning, idempotent replay, and durable node-run/attempt/artifact evidence.",
@@ -673,7 +701,7 @@
         "Comparison history and evaluation scorecards are not yet durable first-class resources and the promoted profile is not yet an independently immutable profile resource.",
         "The Anthropic adapter does not yet consume native SSE, accept typed tool schemas, use prompt-cache control or cache usage fields, or synchronize the catalog from the Models API.",
         "Raw audio and video are not direct model inputs; audio must become ASR units and video or live video must become bounded scene-frame and/or ASR micro-batches before semantic interpretation.",
-        "Provider-native citations remain separate from the authoritative ContentUnit citation chain, and managed asynchronous worker deployment remains incomplete."
+        "Provider-native citations remain separate from the authoritative ContentUnit citation chain; Kubernetes-managed autoscaling and provider-native streaming extraction workers remain outside the current single-machine multi-process Temporal completion boundary."
       ],
       "rolloutPhase": 7,
       "completionRule": "Reproduce exact page and region evidence and deploy the selected strategy through a generated transform repository; keep Graph node promotion labelled as a Foundry-lite extension."

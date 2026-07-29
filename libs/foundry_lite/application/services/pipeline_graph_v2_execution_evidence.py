@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 
 from foundry_lite.application.ports import (
     PipelineExecutionLeaseFence,
@@ -16,6 +17,13 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineRunArtifactRow,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.pipeline_graph_v2_evidence_contracts import (
+    attempt_context,
+    require_attempt_contract,
+    require_node_contract,
+    required_execution_rows,
+    skip_or_replay_node,
+)
 from foundry_lite.application.services.pipeline_graph_v2_execution_evidence_records import (
     graph_v2_artifact_record,
     graph_v2_attempt_record,
@@ -28,17 +36,20 @@ from foundry_lite.application.services.pipeline_graph_v2_execution_evidence_type
     PipelineGraphV2ArtifactSpec,
     PipelineGraphV2AttemptContext,
     PipelineGraphV2InputArtifact,
+    PipelineGraphV2WorkerLease,
     canonical_input_artifacts,
     input_artifact_payloads,
     require_node_coordinates,
     require_output_security,
     validated_error_payload,
 )
+from foundry_lite.application.services.pipeline_graph_v2_worker_evidence import (
+    PipelineGraphV2WorkerEvidence,
+)
 from foundry_lite.application.state_transitions import (
     PIPELINE_NODE_ATTEMPT_FAILED,
     PIPELINE_NODE_ATTEMPT_SUCCEEDED,
     PIPELINE_NODE_RUN_FAILED,
-    PIPELINE_NODE_RUN_SKIPPED,
     PIPELINE_NODE_RUN_SUCCEEDED,
 )
 from foundry_lite.domain.context import RequestContext
@@ -56,6 +67,8 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         ctx: RequestContext,
         run_id: str,
         execution_lease_guard: PipelineExecutionLeaseFence,
+        worker_lease: PipelineGraphV2WorkerLease | None = None,
+        on_attempt_started: Callable[[PipelineGraphV2AttemptContext], None] | None = None,
     ) -> None:
         if not run_id.strip():
             raise ValidationFailed("pipeline run id is required")
@@ -64,6 +77,10 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         self._ctx = ctx
         self._run_id = run_id
         self._execution_lease_guard = execution_lease_guard
+        self._worker_evidence = (
+            PipelineGraphV2WorkerEvidence(repository, ctx, run_id, worker_lease) if worker_lease is not None else None
+        )
+        self._on_attempt_started = on_attempt_started
 
     def start(
         self,
@@ -83,19 +100,58 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         inputs = canonical_input_artifacts(input_artifacts)
         now = _now()
         with self._transaction_manager.begin() as transaction:
-            self._execution_lease_guard.require_active(transaction)
-            node_run = self._insert_node_run(
+            node_run, attempt = self._persist_started_attempt(
                 transaction,
                 node_id=node_id,
                 descriptor_id=descriptor_id,
                 spec_version=spec_version,
-                input_artifacts=inputs,
+                executor_profile=executor_profile,
+                inputs=inputs,
                 now=now,
             )
-            node_run = self._claim_or_replay_node(transaction, node_run, inputs, now)
-            attempt = self._ensure_graph_v2_attempt(transaction, node_run, inputs, executor_profile, now)
-            self._require_attempt_contract(attempt, descriptor_id, spec_version, executor_profile, inputs)
-        return self._attempt_context(node_run, attempt, descriptor_id, spec_version, executor_profile, inputs)
+        context = attempt_context(
+            node_run,
+            attempt,
+            descriptor_id,
+            spec_version,
+            executor_profile,
+            inputs,
+        )
+        if self._on_attempt_started is not None:
+            self._on_attempt_started(context)
+        return context
+
+    def _persist_started_attempt(
+        self,
+        transaction: TransactionContext,
+        *,
+        node_id: str,
+        descriptor_id: str,
+        spec_version: int,
+        executor_profile: str,
+        inputs: tuple[PipelineGraphV2InputArtifact, ...],
+        now: str,
+    ) -> tuple[PipelineNodeRunRow, PipelineNodeAttemptRow]:
+        self._execution_lease_guard.require_active(transaction)
+        node_run = self._insert_node_run(
+            transaction,
+            node_id=node_id,
+            descriptor_id=descriptor_id,
+            spec_version=spec_version,
+            input_artifacts=inputs,
+            now=now,
+        )
+        node_run, attempt = self._start_attempt(
+            transaction,
+            node_run,
+            inputs,
+            executor_profile,
+            descriptor_id,
+            spec_version,
+            now,
+        )
+        require_attempt_contract(attempt, descriptor_id, spec_version, executor_profile, inputs)
+        return node_run, attempt
 
     def succeed(
         self,
@@ -121,11 +177,21 @@ class PipelineGraphV2ExecutionEvidenceWriter:
                 artifact_id=artifact_id,
                 now=now,
             )
-            persisted = self._repository.insert_artifact(transaction=transaction, record=record)
+            record = replace(
+                record,
+                attempt_id=attempt.attempt_id,
+                fencing_token=attempt.fencing_token,
+            )
+            persisted = (
+                self._repository.insert_artifact(transaction=transaction, record=record)
+                if self._worker_evidence is None
+                else self._worker_evidence.insert_artifact(transaction, record)
+            )
             require_artifact_record_matches(persisted, record)
             output_ref = graph_v2_output_artifact_ref(persisted, attempt)
-            self._complete_attempt_success(transaction, attempt_row, output_ref, now)
-            self._complete_node_success(transaction, node_run, output_ref, now)
+            self._complete_attempt_success(transaction, attempt_row, output_ref, now, attempt)
+            if attempt.worker_id is None:
+                self._complete_node_success(transaction, node_run, output_ref, now)
         return persisted
 
     def fail(
@@ -138,8 +204,9 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         with self._transaction_manager.begin() as transaction:
             self._execution_lease_guard.require_active(transaction)
             node_run, attempt_row = self._required_execution_rows(transaction, attempt)
-            self._complete_attempt_failure(transaction, attempt_row, error_payload, now)
-            self._complete_node_failure(transaction, node_run, error_payload, now)
+            self._complete_attempt_failure(transaction, attempt_row, error_payload, now, attempt)
+            if attempt.worker_id is None:
+                self._complete_node_failure(transaction, node_run, error_payload, now)
 
     def skip(
         self,
@@ -168,7 +235,14 @@ class PipelineGraphV2ExecutionEvidenceWriter:
                 input_artifacts=inputs,
                 now=now,
             )
-            return self._skip_or_replay_node(transaction, node_run, error_payload, now)
+            return skip_or_replay_node(
+                self._repository,
+                transaction,
+                self._ctx.tenant_id,
+                node_run,
+                error_payload,
+                now,
+            )
 
     def _insert_node_run(
         self,
@@ -190,7 +264,14 @@ class PipelineGraphV2ExecutionEvidenceWriter:
             now=now,
         )
         row = self._repository.insert_node_run(transaction=transaction, record=record)
-        self._require_node_contract(row, node_id, descriptor_id, spec_version, input_artifacts)
+        require_node_contract(
+            self._run_id,
+            row,
+            node_id,
+            descriptor_id,
+            spec_version,
+            input_artifacts,
+        )
         return row
 
     def _claim_or_replay_node(
@@ -220,6 +301,29 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         if claimed is None:
             raise ConflictDetected("pipeline node run could not be claimed")
         return claimed
+
+    def _start_attempt(
+        self,
+        transaction: TransactionContext,
+        node_run: PipelineNodeRunRow,
+        inputs: tuple[PipelineGraphV2InputArtifact, ...],
+        executor_profile: str,
+        descriptor_id: str,
+        spec_version: int,
+        now: str,
+    ) -> tuple[PipelineNodeRunRow, PipelineNodeAttemptRow]:
+        if self._worker_evidence is None:
+            claimed = self._claim_or_replay_node(transaction, node_run, inputs, now)
+            attempt = self._ensure_graph_v2_attempt(transaction, claimed, inputs, executor_profile, now)
+            return claimed, attempt
+        return self._worker_evidence.claim_attempt(
+            transaction,
+            node_run,
+            inputs,
+            executor_profile,
+            descriptor_id,
+            spec_version,
+        )
 
     def _ensure_graph_v2_attempt(
         self,
@@ -258,113 +362,12 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         transaction: TransactionContext,
         attempt: PipelineGraphV2AttemptContext,
     ) -> tuple[PipelineNodeRunRow, PipelineNodeAttemptRow]:
-        node_run = self._repository.node_run_by_run_node(
-            transaction=transaction,
-            tenant_id=self._ctx.tenant_id,
-            run_id=self._run_id,
-            node_id=attempt.node_id,
-        )
-        if node_run is None or node_run["id"] != attempt.node_run_id:
-            raise ConflictDetected("pipeline node attempt does not belong to this run")
-        attempt_row = self._repository.attempt_by_number(
-            transaction=transaction,
-            tenant_id=self._ctx.tenant_id,
-            node_run_id=attempt.node_run_id,
-            attempt_number=attempt.attempt_number,
-        )
-        if attempt_row is None or attempt_row["id"] != attempt.attempt_id:
-            raise ConflictDetected("pipeline node attempt evidence is missing or stale")
-        self._require_context_contract(node_run, attempt_row, attempt)
-        return node_run, attempt_row
-
-    def _require_context_contract(
-        self,
-        node_run: PipelineNodeRunRow,
-        attempt_row: PipelineNodeAttemptRow,
-        attempt: PipelineGraphV2AttemptContext,
-    ) -> None:
-        self._require_node_contract(
-            node_run,
-            attempt.node_id,
-            attempt.descriptor_id,
-            attempt.spec_version,
-            attempt.input_artifacts,
-        )
-        self._require_attempt_contract(
-            attempt_row,
-            attempt.descriptor_id,
-            attempt.spec_version,
-            attempt.executor_profile,
-            attempt.input_artifacts,
-        )
-
-    def _require_node_contract(
-        self,
-        row: PipelineNodeRunRow,
-        node_id: str,
-        descriptor_id: str,
-        spec_version: int,
-        inputs: tuple[PipelineGraphV2InputArtifact, ...],
-    ) -> None:
-        expected = (
+        return required_execution_rows(
+            self._repository,
+            transaction,
+            self._ctx.tenant_id,
             self._run_id,
-            node_id,
-            descriptor_id,
-            str(spec_version),
-            input_artifact_payloads(inputs),
-        )
-        actual = (
-            row["run_id"],
-            row["node_id"],
-            row["descriptor_id"],
-            row["spec_version"],
-            row["input_artifacts"],
-        )
-        if actual != expected:
-            raise ConflictDetected("pipeline node run coordinates changed under the same run and node id")
-
-    def _require_attempt_contract(
-        self,
-        row: PipelineNodeAttemptRow,
-        descriptor_id: str,
-        spec_version: int,
-        executor_profile: str,
-        inputs: tuple[PipelineGraphV2InputArtifact, ...],
-    ) -> None:
-        manifest = row["input_manifest"]
-        expected = (
-            executor_profile,
-            descriptor_id,
-            spec_version,
-            input_artifact_payloads(inputs),
-        )
-        actual = (
-            row["executor_profile"],
-            manifest.get("descriptorId"),
-            manifest.get("specVersion"),
-            manifest.get("artifacts"),
-        )
-        if actual != expected:
-            raise ConflictDetected("pipeline node attempt coordinates changed under the same attempt number")
-
-    def _attempt_context(
-        self,
-        node_run: PipelineNodeRunRow,
-        attempt: PipelineNodeAttemptRow,
-        descriptor_id: str,
-        spec_version: int,
-        executor_profile: str,
-        inputs: tuple[PipelineGraphV2InputArtifact, ...],
-    ) -> PipelineGraphV2AttemptContext:
-        return PipelineGraphV2AttemptContext(
-            node_id=str(node_run["node_id"]),
-            descriptor_id=descriptor_id,
-            spec_version=spec_version,
-            executor_profile=executor_profile,
-            node_run_id=str(node_run["id"]),
-            attempt_id=str(attempt["id"]),
-            attempt_number=int(attempt["attempt_number"]),
-            input_artifacts=inputs,
+            attempt,
         )
 
     def _complete_attempt_success(
@@ -373,6 +376,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         row: PipelineNodeAttemptRow,
         output_ref: JsonObject,
         now: str,
+        attempt: PipelineGraphV2AttemptContext,
     ) -> None:
         expected: JsonObject = {"artifacts": [output_ref]}
         if row["status"] == "SUCCEEDED":
@@ -381,6 +385,16 @@ class PipelineGraphV2ExecutionEvidenceWriter:
             return
         if row["status"] != "RUNNING":
             raise ConflictDetected("pipeline attempt cannot succeed from its current state")
+        if self._worker_evidence is not None:
+            self._worker_evidence.complete_attempt(
+                transaction,
+                attempt,
+                "SUCCEEDED",
+                expected,
+                None,
+                now,
+            )
+            return
         completed = self._repository.update_node_attempt_terminal(
             transaction=transaction,
             tenant_id=self._ctx.tenant_id,
@@ -426,7 +440,18 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         row: PipelineNodeAttemptRow,
         error: JsonObject,
         now: str,
+        attempt: PipelineGraphV2AttemptContext,
     ) -> None:
+        if self._worker_evidence is not None:
+            self._worker_evidence.complete_attempt(
+                transaction,
+                attempt,
+                "FAILED",
+                {},
+                error,
+                now,
+            )
+            return
         if row["status"] == "FAILED":
             if row["error"] != error:
                 raise ConflictDetected("pipeline attempt failure replay has different error evidence")
@@ -470,30 +495,3 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         )
         if completed is None:
             raise ConflictDetected("pipeline node failure evidence changed concurrently")
-
-    def _skip_or_replay_node(
-        self,
-        transaction: TransactionContext,
-        row: PipelineNodeRunRow,
-        error: JsonObject,
-        now: str,
-    ) -> PipelineNodeRunRow:
-        if row["status"] == "SKIPPED":
-            if row["error"] != error:
-                raise ConflictDetected("pipeline skipped-node replay has different error evidence")
-            return row
-        if row["status"] != "PENDING":
-            raise ConflictDetected("pipeline node cannot be skipped from its current state")
-        completed = self._repository.update_node_run_terminal(
-            transaction=transaction,
-            tenant_id=self._ctx.tenant_id,
-            node_run_id=str(row["id"]),
-            transition=PIPELINE_NODE_RUN_SKIPPED,
-            output_artifacts=[],
-            error=error,
-            completed_at=now,
-            updated_at=now,
-        )
-        if completed is None:
-            raise ConflictDetected("pipeline skipped-node evidence changed concurrently")
-        return completed

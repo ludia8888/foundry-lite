@@ -94,6 +94,11 @@ pipeline_node_attempts = Table(
     Column("lease_owner", String),
     Column("lease_token", String),
     Column("lease_expires_at", String),
+    Column("fencing_token", Integer, nullable=False, server_default=text("0")),
+    Column("heartbeat_at", String),
+    Column("retry_at", String),
+    Column("error_kind", String),
+    Column("external_execution_id", String),
     Column("input_manifest", JSON, nullable=False),
     Column("output_manifest", JSON, nullable=False),
     Column("error", JSON),
@@ -110,6 +115,8 @@ pipeline_run_artifacts = Table(
     Column("tenant_id", String, nullable=False),
     Column("run_id", String, nullable=False),
     Column("node_run_id", String),
+    Column("attempt_id", String),
+    Column("fencing_token", Integer),
     Column("node_id", String, nullable=False),
     Column("port_id", String, nullable=False),
     Column("artifact_kind", String, nullable=False),
@@ -133,6 +140,31 @@ Index(
 )
 
 
+pipeline_run_events = Table(
+    "pipeline_run_events",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("run_id", String, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("node_id", String),
+    Column("attempt_number", Integer),
+    Column("worker_id", String),
+    Column("fencing_token", Integer),
+    Column("payload", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "run_id", "sequence", name="uq_pipeline_run_event_sequence"),
+)
+
+Index(
+    "ix_pipeline_run_events_stream",
+    pipeline_run_events.c.tenant_id,
+    pipeline_run_events.c.run_id,
+    pipeline_run_events.c.sequence,
+)
+
+
 pipeline_preview_runs = Table(
     "pipeline_preview_runs",
     metadata,
@@ -150,6 +182,10 @@ pipeline_preview_runs = Table(
     Column("idempotency_key", String, nullable=False),
     Column("request_fingerprint", String, nullable=False),
     Column("is_commit_forbidden", Boolean, nullable=False, server_default=text("true")),
+    Column("workflow_run_id", String),
+    Column("dispatch_status", String, nullable=False, server_default=text("'pending'")),
+    Column("dispatch_attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column("dispatch_error", JSON),
     Column("execution_context", JSON, nullable=False, server_default=text("'{}'")),
     Column("execution_lease_token", String),
     Column("execution_lease_expires_at", String),
@@ -174,6 +210,12 @@ Index(
     "ix_pipeline_preview_recovery",
     pipeline_preview_runs.c.status,
     pipeline_preview_runs.c.execution_lease_expires_at,
+    pipeline_preview_runs.c.created_at,
+)
+
+Index(
+    "ix_pipeline_preview_dispatch_recovery",
+    pipeline_preview_runs.c.dispatch_status,
     pipeline_preview_runs.c.created_at,
 )
 

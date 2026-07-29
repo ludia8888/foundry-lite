@@ -92,6 +92,12 @@ def _preview_payload(row: PipelinePreviewRunRow) -> dict[str, object]:
         "outputs": row["outputs"],
         "artifacts": row["artifacts"],
         "commitForbidden": row["is_commit_forbidden"],
+        "orchestration": {
+            "workflowRunId": row.get("workflow_run_id"),
+            "dispatchStatus": row.get("dispatch_status", "pending"),
+            "dispatchAttemptCount": row.get("dispatch_attempt_count", 0),
+            "dispatchError": row.get("dispatch_error"),
+        },
         "servingVersionCreated": False,
         "notice": "미리보기 전용 · 출력 버전이 생성되지 않음",
         "cancelRequestedAt": row["cancel_requested_at"],
