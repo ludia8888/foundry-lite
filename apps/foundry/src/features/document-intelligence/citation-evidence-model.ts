@@ -8,7 +8,12 @@ import {
 import type { DocumentLabBlock } from "./document-lab-model";
 
 export type CitationNavigationEvidence = SdkCitationNavigationEvidence;
-export type CitationNavigationResolution = SdkCitationNavigationResolution;
+export type CitationNavigationResolution = Omit<
+  SdkCitationNavigationResolution,
+  "evidence"
+> & {
+  evidence: CitationNavigationEvidence;
+};
 
 type CitationRequestClient = Pick<FoundryLiteGeneratedClient, "aip">;
 

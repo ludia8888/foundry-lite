@@ -276,7 +276,7 @@ pnpm worker:outbox-publisher
 | `check_documentation_map.py` / `quality:documentation-map` | README 문서 지도, 대표 gate 표, source-of-truth rules, update order, cross-check command가 서로 어긋나는 문제를 차단합니다. |
 | `check_frontend_backend_surface.py` / `quality:frontend-backend-surface` | FastAPI route 분류, named SDK method, screen recipe export, helper count, Web raw API 우회가 frontend 계약보다 앞서가는 문제를 차단합니다. |
 | `quality:sdk-request-contract` | 브라우저 SDK가 method, path, query, header, body, idempotency key, typed error metadata를 실제 계약과 다르게 보내는 문제를 차단합니다. |
-| `quality:frontend-foundation` | generated SDK, browser SDK helper, Web Operations SDK-only 호출, request id, retryability, typed frontend error가 drift 나는 문제를 차단합니다. |
+| `quality:frontend-foundation` | generated SDK, browser SDK helper, Foundry SPA strict TypeScript 검사, Web Operations SDK-only 호출, request id, retryability, typed frontend error가 drift 나는 문제를 차단합니다. |
 | `quality:proof-matrix` | infra tricky matrix의 proof class가 문서에만 있고 실제 pytest나 CI evidence와 연결되지 않는 문제를 차단합니다. |
 | `quality:source-of-truth` | serving source of truth가 코드, 테스트, 운영 증거, 문서 사이에서 갈라지는 문제를 차단합니다. |
 | `quality:operator-evidence` | 실패 원인이 로그 한 줄에만 남고 audit, run detail, transaction, error payload로 다시 추적되지 않는 문제를 차단합니다. |
