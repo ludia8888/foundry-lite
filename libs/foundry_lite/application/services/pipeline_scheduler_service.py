@@ -56,7 +56,7 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFai
 
 _LEASE_SECONDS = 60
 _RECONCILIATION_LIMIT = 100
-_SUCCESS_STATUSES = {"queued", "running", "succeeded"}
+_SUCCESS_STATUSES = {"queued", "running", "executing", "succeeded"}
 _SKIPPED_REASONS = {"lease_not_acquired", "run_in_progress"}
 
 

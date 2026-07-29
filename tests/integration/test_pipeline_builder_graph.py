@@ -362,7 +362,7 @@ def test_pipeline_unexpected_failure_preserves_execution_claim_timeline(
 
     assert run["status"] == "failed"
     assert [item["event"] for item in run["timeline"]] == [
-        "pipeline.run.started",
+        "pipeline.run.running",
         "pipeline.run.execution_claimed",
         "pipeline.run.failed",
     ]
@@ -600,7 +600,7 @@ def test_pre_v2_deployed_version_backfills_pinned_execution_plan_on_first_run(tm
     )
 
 
-def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
+def test_scheduler_takeover_treats_replayed_executing_run_as_enqueued(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -643,8 +643,8 @@ def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
     assert claimed is not None
 
     monkeypatch.setattr(
-        foundry._services.pipelines.run,
-        "start_run",
+        foundry._services.pipelines.async_run,
+        "enqueue",
         lambda *_args, **_kwargs: {"id": "run-still-executing", "status": "executing"},
     )
     takeover_at = parse_schedule_timestamp(slot_start, field="slotStart") + timedelta(seconds=61)
@@ -656,12 +656,15 @@ def test_scheduler_takeover_does_not_count_replayed_executing_run_as_failure(
     )
     current = foundry.pipelines.get_schedule("historical_v1", ctx=ctx)
 
-    assert result["started"] == []
-    assert result["skipped"][0]["reason"] == "run_in_progress"
+    assert result["skipped"] == []
+    assert result["started"][0]["run"]["status"] == "executing"
     assert current["status"] == "active"
     assert current["failureCount"] == 0
-    assert current["nextDueAt"] == slot_start
-    assert current["leaseExpiresAt"] == schedule_iso(takeover_at + timedelta(seconds=60))
+    assert current["nextDueAt"] == schedule_iso(
+        parse_schedule_timestamp(slot_start, field="slotStart") + timedelta(seconds=300)
+    )
+    assert current["leaseOwner"] is None
+    assert current["leaseExpiresAt"] is None
 
 
 def test_pipeline_builder_persisted_v2_tabular_graph_deploys_and_runs(tmp_path: Path) -> None:

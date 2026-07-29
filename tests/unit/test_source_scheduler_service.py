@@ -53,8 +53,8 @@ class _SourceRepo:
             },
         ]
 
-    def list_sync_runs(self, **_kwargs: object) -> list[dict[str, object]]:
-        return self.runs
+    def list_sync_runs(self, **kwargs: object) -> list[dict[str, object]]:
+        return self.runs if kwargs.get("sync_name") == "orders_hourly" else []
 
     def update_sync_run_result(self, **kwargs: object) -> dict[str, object]:
         self.updated.append(dict(kwargs))
@@ -88,7 +88,11 @@ class _Management:
 
 
 class _RuntimeService:
-    pass
+    def __init__(self) -> None:
+        self.audits: list[dict[str, object]] = []
+
+    def _audit(self, _conn: object, _ctx: RequestContext, **kwargs: object) -> None:
+        self.audits.append(dict(kwargs))
 
 
 def _service(
@@ -130,6 +134,17 @@ def test_source_scheduler_service_reconciles_terminal_workflow_before_starting_d
     assert repo.updated[0]["status"] == "succeeded"
     assert repo.updated[0]["dataset_version_id"] == "version-1"
     assert repo.updated[0]["error"] is None
+    assert isinstance(service.runtime_service, _RuntimeService)
+    assert service.runtime_service.audits == [
+        {
+            "event_type": "source.sync_run.scheduler_reconciled",
+            "resource_type": "source_sync_run",
+            "resource_id": "run-old",
+            "action": "reconcile_scheduled_run",
+            "after_ref": {"status": "succeeded", "workflowRunId": "workflow-1"},
+            "correlation_id": "run-old",
+        }
+    ]
     assert management.started[0]["sync_name"] == "orders_hourly"
     assert management.started[0]["trigger_type"] == "scheduled"
     assert management.started[0]["batch_limit"] == 5
@@ -172,6 +187,11 @@ def test_source_scheduler_service_records_failed_workflow_error_and_validates_ma
     assert repo.updated[0]["status"] == "failed"
     assert repo.updated[0]["dataset_version_id"] is None
     assert repo.updated[0]["error"] == {"code": "boom"}
+    assert isinstance(service.runtime_service, _RuntimeService)
+    assert service.runtime_service.audits[0]["after_ref"] == {
+        "status": "failed",
+        "workflowRunId": "workflow-1",
+    }
     assert len(result["started"]) == 1
     with pytest.raises(ValidationFailed, match="between 1 and 500"):
         service.preview_due_managed_syncs(ctx=RequestContext(), max_runs=0)

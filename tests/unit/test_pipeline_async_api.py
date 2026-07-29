@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from foundry_lite.application.ports.pipeline_execution_repository import PipelineRunRow
 from foundry_lite.application.services.pipeline_run_requests import (
     cancel_request_fingerprint,
     require_idempotent_cancel,
 )
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 from foundry_lite_api import main as api_main
 from foundry_lite_api import runtime as api_runtime
+from foundry_lite_api.routers import pipelines as pipeline_routes
 
 
 class _AsyncPipelineFacade:
@@ -116,6 +120,67 @@ def test_cancel_idempotency_key_rejects_a_different_reason() -> None:
             "cancel-key",
             cancel_request_fingerprint("run-a", "different reason"),
         )
+
+
+def test_pipeline_event_cursor_and_heartbeat_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert pipeline_routes._event_sequence(None) == 0
+    assert pipeline_routes._event_sequence("-7") == 0
+    assert pipeline_routes._event_sequence("invalid") == 0
+
+    class _StreamingPipelines:
+        def __init__(self) -> None:
+            self.event_calls = 0
+
+        def events(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            self.event_calls += 1
+            if self.event_calls == 1:
+                return {"events": ["invalid-event"]}
+            return {"events": []}
+
+        def get_run(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            return {"status": "running"}
+
+    class _ConnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    pipelines = _StreamingPipelines()
+    monkeypatch.setattr(api_runtime, "foundry", SimpleNamespace(pipelines=pipelines))
+    monkeypatch.setattr(pipeline_routes.asyncio, "sleep", no_sleep)
+
+    async def scenario() -> None:
+        stream = pipeline_routes._pipeline_event_stream(
+            cast(Request, _ConnectedRequest()),
+            "run-a",
+            0,
+            RequestContext(tenant_id="tenant-a"),
+        )
+        assert await anext(stream) == ": heartbeat\n\n"
+        await stream.aclose()
+
+    asyncio.run(scenario())
+    assert pipelines.event_calls == 16
+
+
+def test_pipeline_event_stream_stops_after_disconnect() -> None:
+    class _DisconnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return True
+
+    async def scenario() -> None:
+        stream = pipeline_routes._pipeline_event_stream(
+            cast(Request, _DisconnectedRequest()),
+            "run-a",
+            0,
+            RequestContext(tenant_id="tenant-a"),
+        )
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+
+    asyncio.run(scenario())
 
 
 def _headers() -> dict[str, str]:
