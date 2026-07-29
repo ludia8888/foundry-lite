@@ -1065,6 +1065,7 @@ def test_generated_sdk_check_is_release_gate_step() -> None:
 def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
     script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+    package_scripts = json.loads(package_json)["scripts"]
 
     sdk_step = '"scripts/generate_sdk_ts.py", "--check"'
     surface_step = "scripts/quality/check_frontend_backend_surface.py"
@@ -1080,6 +1081,8 @@ def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
     assert "pnpm --silent quality:sdk-request-contract" in package_json
     assert '"quality:sdk-typecheck"' in package_json
     assert "pnpm --silent quality:sdk-typecheck" in package_json
+    assert '"quality:foundry-typecheck"' in package_json
+    assert "pnpm --silent quality:foundry-typecheck" in package_scripts[frontend_step]
     assert '"quality:frontend-foundation"' in package_json
     assert "tests/unit/test_quality_frontend_backend_surface.py" in package_json
     assert "tests/unit/test_sdk_ts_generation.py" in package_json
