@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -14,10 +15,14 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineNodeRunRecord,
 )
 from foundry_lite.application.ports.pipeline_repository import PipelineRunRow
+from foundry_lite.application.services import pipeline_run_recovery
 from foundry_lite.application.services.pipeline_async_run_service import PipelineAsyncRunService
 from foundry_lite.application.services.pipeline_distributed_node_service import (
     PipelineDistributedNodeService,
     PipelineNodeRetryableFailure,
+)
+from foundry_lite.application.services.pipeline_node_execution_policy import (
+    PipelineNodeExecutionPolicy,
 )
 from foundry_lite.application.services.pipeline_run_recovery import PipelineExecutionLeaseLost
 from foundry_lite.application.services.pipeline_v2_runtime_contracts import (
@@ -176,6 +181,92 @@ def test_control_worker_observes_schedule_terminals_once_and_waits_for_active_no
     with foundry.engine.begin() as transaction:
         assert control._locked_schedule(transaction, terminal_row) is None
         control._record_observation(transaction, demo_admin_context(), None, terminal_row)
+
+
+def test_control_worker_recovers_crashed_execution_and_spares_live_lease(tmp_path: Path) -> None:
+    foundry = _foundry(tmp_path)
+    _insert_version(foundry, "version-stale", _plan())
+    with foundry.engine.begin() as transaction:
+        transaction.execute(
+            insert(db.pipeline_runs).values(
+                **_run_values(
+                    "run-crashed",
+                    "version-stale",
+                    status="running",
+                    execution_lease_token="crashed-lease",
+                    execution_lease_expires_at="2020-01-01T00:00:00Z",
+                    execution_heartbeat_at="2020-01-01T00:00:00Z",
+                )
+            )
+        )
+        transaction.execute(
+            insert(db.pipeline_runs).values(
+                **_run_values(
+                    "run-healthy",
+                    "version-stale",
+                    status="running",
+                    execution_lease_token="healthy-lease",
+                    execution_lease_expires_at="2099-01-01T00:00:00Z",
+                    execution_heartbeat_at=NOW,
+                )
+            )
+        )
+
+    control = foundry._services.pipelines.control
+    tick = control.tick(limit=999)
+
+    ctx = demo_admin_context()
+    crashed = foundry._services.pipelines.run.get_run("run-crashed", ctx=ctx)
+    healthy = foundry._services.pipelines.run.get_run("run-healthy", ctx=ctx)
+
+    # Only the run whose lease has actually expired is reclaimed; the still-live
+    # lease is left running so the control loop never fails a healthy executor.
+    assert tick["staleExecutions"] == 1
+    assert crashed["status"] == "failed"
+    assert healthy["status"] == "running"
+
+
+def test_stale_execution_scan_spares_node_running_within_the_run_lease(tmp_path: Path) -> None:
+    node_timeout = timedelta(seconds=PipelineNodeExecutionPolicy().timeout_seconds)
+    lease = pipeline_run_recovery._EXECUTION_LEASE_DURATION
+    # Coordination invariant: a single distributed node can run up to its policy
+    # timeout between run-lease renewals, so the lease must outlast that window.
+    assert lease > node_timeout
+
+    foundry = _foundry(tmp_path)
+    _insert_version(foundry, "version-long-node", _plan())
+    claim = datetime(2020, 1, 1, tzinfo=UTC)
+    with foundry.engine.begin() as transaction:
+        transaction.execute(
+            insert(db.pipeline_runs).values(
+                **_run_values(
+                    "run-long-node",
+                    "version-long-node",
+                    status="running",
+                    execution_lease_token="long-node-lease",
+                    execution_lease_expires_at=pipeline_run_recovery.execution_lease_now(now=claim + lease),
+                    execution_heartbeat_at=pipeline_run_recovery.execution_lease_now(now=claim),
+                )
+            )
+        )
+
+    run_service = foundry._services.pipelines.run
+    ctx = demo_admin_context()
+    mid_node_now = pipeline_run_recovery.execution_lease_now(now=claim + node_timeout)
+    past_lease_now = pipeline_run_recovery.execution_lease_now(now=claim + lease + timedelta(seconds=1))
+
+    # A node still executing within the run lease (past the old 2-minute window)
+    # is NOT reclaimed.
+    spared = run_service.recover_stale_executions(now=mid_node_now, limit=999)
+    still_running = run_service.get_run("run-long-node", ctx=ctx)["status"]
+    # Once the lease genuinely expires the run is driven to a terminal state.
+    reclaimed = run_service.recover_stale_executions(now=past_lease_now, limit=999)
+    terminal = run_service.get_run("run-long-node", ctx=ctx)["status"]
+
+    assert spared == 0
+    assert still_running == "running"
+    assert reclaimed == 1
+    assert terminal == "failed"
 
 
 def test_distributed_worker_begin_execute_finalize_and_terminal_replay(

@@ -37,7 +37,15 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
 from foundry_lite.security.tenant_context import tenant_context
 
-_EXECUTION_LEASE_DURATION = timedelta(minutes=2)
+# The run lease is only renewed at node evidence boundaries (attempt
+# start/success/failure); between two boundaries a single distributed node can
+# legitimately run up to its execution-policy timeout
+# (pipeline_node_execution_policy default: 300s). The background attempt
+# heartbeat renews the *attempt* lease, not this run lease, so the run lease
+# must outlast the longest single-node execution window. Otherwise the control
+# loop's stale-execution scan would spuriously fail a healthy long-running node
+# instead of only reclaiming genuinely crashed executors.
+_EXECUTION_LEASE_DURATION = timedelta(minutes=10)
 _HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 
@@ -149,6 +157,17 @@ def new_pipeline_execution_lease(*, now: datetime | None = None) -> PipelineExec
         heartbeat_at=_timestamp_text(heartbeat),
         expires_at=_timestamp_text(heartbeat + _EXECUTION_LEASE_DURATION),
     )
+
+
+def execution_lease_now(*, now: datetime | None = None) -> str:
+    """Current instant in the run lease's sortable UTC string format.
+
+    Lease expiries are stored as UTC ``...Z`` strings, so the control loop must
+    compare them against a ``now`` in the identical format rather than the
+    local-offset timestamp used elsewhere.
+    """
+
+    return _timestamp_text((now or datetime.now(UTC)).astimezone(UTC))
 
 
 def stale_pipeline_run_error(row: Mapping[str, object]) -> InvariantViolation:

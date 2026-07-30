@@ -60,6 +60,8 @@ from foundry_lite.application.services.pipeline_run_terminal import (
     fail_pipeline_run,
     succeed_pipeline_run,
 )
+from foundry_lite.domain.context import DEMO_ADMIN_ROLES
+from foundry_lite.security.tenant_context import tenant_context
 
 _ACTIVE_OR_TERMINAL_RUN_STATUSES = frozenset(
     {"cancelled", "cancelling", "running", "executing", "succeeded", "partial", "failed"}
@@ -68,6 +70,15 @@ _ACTIVE_OR_TERMINAL_RUN_STATUSES = frozenset(
 
 def _is_active_or_terminal_run(row: PipelineRunRow) -> bool:
     return str(row["status"]) in _ACTIVE_OR_TERMINAL_RUN_STATUSES
+
+
+def _stale_recovery_context(row: PipelineRunRow) -> RequestContext:
+    return RequestContext(
+        tenant_id=str(row["tenant_id"]),
+        actor_user_id="pipeline-control-worker",
+        request_id=f"stale-execution-recovery:{row['id']}",
+        roles=DEMO_ADMIN_ROLES,
+    )
 
 
 class PipelineRunService(CoreService):
@@ -302,6 +313,43 @@ class PipelineRunService(CoreService):
                     {"version_id": row["version_id"], "outputs": list(row["outputs"])},
                 )
         return self.get_run(run_id, ctx=ctx)
+
+    def recover_stale_executions(self, *, now: str, limit: int = 100) -> int:
+        """Reclaim runs whose executor crashed while holding an expired run lease.
+
+        ``recover_dispatches`` only re-drives ``queued`` runs, so a run already
+        claimed into ``running``/``executing`` by ``execute_queued_run`` (or the
+        distributed ``begin`` worker) whose executor then crashes is never
+        re-driven and stays non-terminal forever. This scans such runs whose
+        execution lease has expired and drives ``expire_stale_pipeline_run`` to a
+        reconcilable terminal (FAILED/PARTIAL) state.
+
+        ``now`` is the current instant in the run lease's UTC ``...Z`` string
+        format (see ``pipeline_run_recovery.execution_lease_now``); it is passed
+        in so the control loop can reclaim genuinely stale runs deterministically.
+        """
+        with self.engine.begin() as conn:
+            rows = self.pipeline_repository.stale_execution_runs(
+                transaction=conn,
+                now=now,
+                limit=max(1, min(limit, 500)),
+            )
+        return sum(self._expire_stale_execution(row) for row in rows)
+
+    def _expire_stale_execution(self, row: PipelineRunRow) -> int:
+        ctx = _stale_recovery_context(row)
+        with tenant_context(ctx.tenant_id):
+            expired = pipeline_run_recovery.expire_stale_pipeline_run(
+                self.engine,
+                self.pipeline_repository,
+                self.pipeline_execution_repository,
+                self.dataset_transaction_repository,
+                self.media_repository,
+                self.runtime_service,
+                ctx,
+                row,
+            )
+        return 1 if expired else 0
 
     def execute_queued_run(
         self,

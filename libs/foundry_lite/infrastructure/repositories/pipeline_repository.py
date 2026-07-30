@@ -570,6 +570,32 @@ class SqlAlchemyPipelineRepository:
         )
         return [_cast_row(row, PipelineRunRow) for row in rows]
 
+    def stale_execution_runs(
+        self,
+        *,
+        transaction: Any,
+        now: str,
+        limit: int,
+    ) -> list[PipelineRunRow]:
+        rows = (
+            transaction.execute(
+                select(db.pipeline_runs)
+                .where(
+                    and_(
+                        db.pipeline_runs.c.status.in_(("running", "executing")),
+                        db.pipeline_runs.c.execution_lease_token.is_not(None),
+                        db.pipeline_runs.c.execution_lease_expires_at.is_not(None),
+                        db.pipeline_runs.c.execution_lease_expires_at <= now,
+                    )
+                )
+                .order_by(db.pipeline_runs.c.execution_lease_expires_at, db.pipeline_runs.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [_cast_row(row, PipelineRunRow) for row in rows]
+
     def unobserved_terminal_schedule_runs(
         self,
         *,

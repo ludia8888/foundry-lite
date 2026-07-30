@@ -353,6 +353,14 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
         limit: int,
     ) -> list[PipelineRunRow]: ...
 
+    def stale_execution_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        now: str,
+        limit: int,
+    ) -> list[PipelineRunRow]: ...
+
     def unobserved_terminal_schedule_runs(
         self,
         *,

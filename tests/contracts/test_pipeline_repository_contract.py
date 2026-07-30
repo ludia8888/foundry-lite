@@ -400,6 +400,44 @@ def test_pipeline_run_execution_lease_contract(tmp_path: Path) -> None:
     assert expired["execution_lease_token"] is None
 
 
+def test_pipeline_stale_execution_runs_scan_targets_only_expired_leases(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline_stale_scan.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineRepository(engine)
+
+    with engine.begin() as transaction:
+        claimed_run = repository.insert_run(transaction=transaction, record=_run_record())
+        repository.claim_run_execution(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=claimed_run["id"],
+            timeline=[{"event": "pipeline.run.execution_claimed"}],
+            execution_lease_token="lease-a",
+            execution_lease_expires_at="2026-07-05T00:07:00Z",
+            execution_heartbeat_at="2026-07-05T00:05:00Z",
+        )
+        unclaimed_running = repository.insert_run(
+            transaction=transaction,
+            record=replace(_run_record(), run_id="run_b", idempotency_key="run_b"),
+        )
+        before_expiry = repository.stale_execution_runs(
+            transaction=transaction,
+            now="2026-07-05T00:06:59Z",
+            limit=100,
+        )
+        at_expiry = repository.stale_execution_runs(
+            transaction=transaction,
+            now="2026-07-05T00:07:00Z",
+            limit=100,
+        )
+
+    # A running run that was never claimed carries no lease and is never scanned.
+    assert unclaimed_running["execution_lease_token"] is None
+    # The claimed run only becomes stale once its lease expiry is reached.
+    assert [row["id"] for row in before_expiry] == []
+    assert [row["id"] for row in at_expiry] == ["run_a"]
+
+
 def test_pipeline_scheduler_repository_contract_sqlite(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline_scheduler_contract.db'}", future=True)
     db.create_database(engine)

@@ -19,6 +19,8 @@ from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_async_run_service import (
     PipelineAsyncRunService,
 )
+from foundry_lite.application.services.pipeline_run_recovery import execution_lease_now
+from foundry_lite.application.services.pipeline_run_service import PipelineRunService
 from foundry_lite.application.services.pipeline_scheduler_evidence import (
     record_pipeline_schedule_event,
 )
@@ -39,17 +41,22 @@ class PipelineControlWorkerService(CoreService):
         "pipeline_repository",
         "pipeline_execution_repository",
     )
-    required_collaborators = ("pipeline_async_run_service", "runtime_service")
+    required_collaborators = ("pipeline_async_run_service", "pipeline_run_service", "runtime_service")
     engine: TransactionManager
     pipeline_repository: PipelineRepository
     pipeline_execution_repository: PipelineExecutionRepository
     pipeline_async_run_service: PipelineAsyncRunService
+    pipeline_run_service: PipelineRunService
     runtime_service: RuntimeEvidenceBoundary
 
     def tick(self, *, limit: int = 100) -> dict[str, object]:
         return {
             "dispatches": self.pipeline_async_run_service.recover_dispatches(limit=limit),
             "cancellations": self.recover_cancellations(limit=limit),
+            "staleExecutions": self.pipeline_run_service.recover_stale_executions(
+                now=execution_lease_now(),
+                limit=limit,
+            ),
             "scheduleTerminals": self.observe_schedule_terminals(limit=limit),
         }
 
