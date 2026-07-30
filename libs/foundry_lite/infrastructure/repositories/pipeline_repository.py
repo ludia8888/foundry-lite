@@ -549,19 +549,19 @@ class SqlAlchemyPipelineRepository:
         self,
         *,
         transaction: Any,
-        tenant_id: str | None,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelineRunRow]:
-        conditions = [
-            db.pipeline_runs.c.status == "queued",
-            db.pipeline_runs.c.dispatch_status.in_(("pending", "unknown")),
-        ]
-        if tenant_id is not None:
-            conditions.append(db.pipeline_runs.c.tenant_id == tenant_id)
         rows = (
             transaction.execute(
                 select(db.pipeline_runs)
-                .where(and_(*conditions))
+                .where(
+                    and_(
+                        db.pipeline_runs.c.tenant_id == tenant_id,
+                        db.pipeline_runs.c.status == "queued",
+                        db.pipeline_runs.c.dispatch_status.in_(("pending", "unknown")),
+                    )
+                )
                 .order_by(db.pipeline_runs.c.started_at, db.pipeline_runs.c.id)
                 .limit(limit)
             )
@@ -574,6 +574,7 @@ class SqlAlchemyPipelineRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelineRunRow]:
         rows = (
@@ -581,6 +582,7 @@ class SqlAlchemyPipelineRepository:
                 select(db.pipeline_runs)
                 .where(
                     and_(
+                        db.pipeline_runs.c.tenant_id == tenant_id,
                         db.pipeline_runs.c.schedule_id.is_not(None),
                         db.pipeline_runs.c.terminal_observed_at.is_(None),
                         db.pipeline_runs.c.status.in_(("succeeded", "partial", "failed", "cancelled")),
@@ -598,13 +600,47 @@ class SqlAlchemyPipelineRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelineRunRow]:
         rows = (
             transaction.execute(
                 select(db.pipeline_runs)
-                .where(db.pipeline_runs.c.status == "cancelling")
+                .where(
+                    and_(
+                        db.pipeline_runs.c.tenant_id == tenant_id,
+                        db.pipeline_runs.c.status == "cancelling",
+                    )
+                )
                 .order_by(db.pipeline_runs.c.cancel_requested_at, db.pipeline_runs.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [_cast_row(row, PipelineRunRow) for row in rows]
+
+    def stale_execution_runs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        now: str,
+        limit: int,
+    ) -> list[PipelineRunRow]:
+        rows = (
+            transaction.execute(
+                select(db.pipeline_runs)
+                .where(
+                    and_(
+                        db.pipeline_runs.c.tenant_id == tenant_id,
+                        db.pipeline_runs.c.status.in_(("running", "executing")),
+                        db.pipeline_runs.c.execution_lease_token.is_not(None),
+                        db.pipeline_runs.c.execution_lease_expires_at.is_not(None),
+                        db.pipeline_runs.c.execution_lease_expires_at <= now,
+                    )
+                )
+                .order_by(db.pipeline_runs.c.execution_lease_expires_at, db.pipeline_runs.c.id)
                 .limit(limit)
             )
             .mappings()

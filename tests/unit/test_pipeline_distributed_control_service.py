@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, current_thread
 from typing import cast
 
 import pytest
@@ -14,6 +15,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineNodeRunRecord,
 )
 from foundry_lite.application.ports.pipeline_repository import PipelineRunRow
+from foundry_lite.application.services import pipeline_run_recovery
 from foundry_lite.application.services.pipeline_async_run_service import PipelineAsyncRunService
 from foundry_lite.application.services.pipeline_distributed_node_service import (
     PipelineDistributedNodeService,
@@ -47,7 +49,7 @@ def test_async_run_unknown_dispatch_history_cancel_and_control_recovery(tmp_path
     page = service.list_runs("pipeline-a", cursor=None, limit=1, ctx=ctx)
     next_page = service.list_runs("pipeline-a", cursor=cast(str, page["nextCursor"]), limit=1, ctx=ctx)
     events = service.events(str(first["id"]), after_sequence=-1, limit=999, ctx=ctx)
-    recovered = service.recover_dispatches(limit=999)
+    recovered = service.recover_dispatches(tenant_id="tenant-demo", limit=999)
     cancelling = service.cancel(str(first["id"]), idempotency_key="cancel-a", reason="stop", ctx=ctx)
     control = foundry._services.pipelines.control.tick(limit=999)
     terminal = service.pipeline_run_service.get_run(str(first["id"]), ctx=ctx)
@@ -156,9 +158,9 @@ def test_control_worker_observes_schedule_terminals_once_and_waits_for_active_no
         )
 
     control = foundry._services.pipelines.control
-    assert control.recover_cancellations(limit=0) == 0
-    assert control.observe_schedule_terminals(limit=1000) == 2
-    assert control.observe_schedule_terminals(limit=1000) == 0
+    assert control.recover_cancellations(tenant_id="tenant-demo", limit=0) == 0
+    assert control.observe_schedule_terminals(tenant_id="tenant-demo", limit=1000) == 2
+    assert control.observe_schedule_terminals(tenant_id="tenant-demo", limit=1000) == 0
     schedule = foundry.pipelines.get_schedule("pipeline-a", ctx=demo_admin_context())
     assert schedule is not None
     assert schedule["status"] == "paused"
@@ -345,6 +347,150 @@ def test_distributed_worker_requires_promoted_deployment_evidence(tmp_path: Path
             )
         )
     assert service._deployment_id(ctx, version) == "deployment-a"
+
+
+def test_control_worker_expires_crashed_execution_but_spares_a_warm_lease(tmp_path: Path) -> None:
+    """Reap runs whose executor died, and never reap one whose lease is still warm.
+
+    A crashed async/distributed executor leaves a lapsed run-execution lease that
+    nothing renews; only the synchronous replay path expired those, so those runs sat
+    'running' forever. A healthy executor keeps its lease warm for the whole node
+    (``run_execution_lease_keepalive``), so a future expiry must be left alone.
+    """
+    foundry = _foundry(tmp_path)
+    _insert_version(foundry, "version-stale", _plan())
+    with foundry.engine.begin() as transaction:
+        transaction.execute(insert(db.pipeline_runs).values(**_crashed_run_values("run-crashed")))
+        transaction.execute(
+            insert(db.pipeline_runs).values(
+                **_run_values(
+                    "run-warm",
+                    "version-stale",
+                    status="executing",
+                    execution_lease_token="warm-lease",
+                    execution_lease_expires_at="2099-01-01T00:00:00Z",
+                    execution_heartbeat_at=NOW,
+                )
+            )
+        )
+
+    control = foundry._services.pipelines.control
+    totals = control.tick(limit=999)
+
+    assert totals["staleExecutions"] == 1
+    assert _run_row(foundry, "run-crashed")["status"] == "failed"
+    assert _run_row(foundry, "run-warm")["status"] == "executing"
+    # Idempotent: the already-terminal crashed run is not reaped a second time.
+    assert control.recover_stale_executions(tenant_id="tenant-demo", limit=999) == 0
+
+
+def test_distributed_node_keeps_the_run_lease_warm_so_a_long_node_is_not_reaped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A node that outlives the run-lease window must not be reaped as a crash.
+
+    The run lease is two minutes but a node may legitimately compute up to its policy
+    timeout, and the distributed path otherwise renews the run lease only at
+    evidence-write boundaries. Without the keepalive the stale-lease reaper expires a
+    perfectly healthy long-running node, so a lapsed lease would stop meaning "dead
+    executor". Assert the keepalive thread renews during the node and that the reaper
+    then leaves the run alone.
+    """
+    foundry = _foundry(tmp_path)
+    plan = _plan()
+    _insert_version(foundry, "version-stale", plan)
+    with foundry.engine.begin() as transaction:
+        transaction.execute(insert(db.pipeline_runs).values(**_crashed_run_values("run-long")))
+
+    # Wait on a signal from the renewal itself rather than on a clock, so the test is
+    # deterministic and never races the background keepalive thread.
+    renewed = Event()
+    renewing_threads: list[str] = []
+    original_renew = foundry.pipeline_repository.renew_run_execution_lease
+
+    def signalling_renew(**kwargs: object) -> object:
+        renewing_threads.append(current_thread().name)
+        result = original_renew(**kwargs)  # type: ignore[arg-type]
+        renewed.set()
+        return result
+
+    monkeypatch.setattr(foundry.pipeline_repository, "renew_run_execution_lease", signalling_renew)
+    monkeypatch.setattr(pipeline_run_recovery, "_HEARTBEAT_INTERVAL_SECONDS", 0.0)
+
+    def long_running_node(*_args: object, **_kwargs: object) -> PipelineV2RunResult:
+        assert renewed.wait(10.0), "the keepalive never renewed the run lease"
+        return PipelineV2RunResult(
+            outputs=(),
+            timeline=({"event": "pipeline.node.succeeded", "nodeId": "node-a"},),
+            runtime_artifacts=(_runtime_artifact("node-a"),),
+        )
+
+    monkeypatch.setattr(PipelineDistributedNodeService, "_execute_runtime_node", long_running_node)
+    outcome = foundry._services.pipelines.distributed_node.drive(
+        {
+            **_payload("run-long"),
+            "operation": "execute_node",
+            "node": plan["nodes"][0],
+            "upstreamOutcomes": [],
+        }
+    )
+
+    assert outcome["status"] == "succeeded"
+    # The renewal came from the keepalive thread, not from an evidence-write boundary.
+    assert any(name.startswith("pipeline-lease-run-long") for name in renewing_threads)
+    expires_at = _run_row(foundry, "run-long")["execution_lease_expires_at"]
+    assert expires_at is not None and str(expires_at) > "2020-01-01T00:00:00Z"
+    assert foundry._services.pipelines.control.recover_stale_executions(tenant_id="tenant-demo", limit=999) == 0
+    assert _run_row(foundry, "run-long")["status"] == "running"
+
+
+def test_run_execution_lease_keepalive_renews_the_lease_during_long_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The keepalive renews a claimed lease on its own cadence until the work ends."""
+    foundry = _foundry(tmp_path)
+    _insert_version(foundry, "version-stale", _plan())
+    with foundry.engine.begin() as transaction:
+        transaction.execute(insert(db.pipeline_runs).values(**_crashed_run_values("run-keepalive")))
+    row = _run_row(foundry, "run-keepalive")
+    guard = pipeline_run_recovery.PipelineExecutionLeaseGuard(
+        foundry.engine,
+        foundry.pipeline_repository,
+        demo_admin_context(),
+        row,
+    )
+
+    renewed = Event()
+    original_renew = foundry.pipeline_repository.renew_run_execution_lease
+
+    def signalling_renew(**kwargs: object) -> object:
+        result = original_renew(**kwargs)  # type: ignore[arg-type]
+        renewed.set()
+        return result
+
+    monkeypatch.setattr(foundry.pipeline_repository, "renew_run_execution_lease", signalling_renew)
+    monkeypatch.setattr(pipeline_run_recovery, "_HEARTBEAT_INTERVAL_SECONDS", 0.0)
+
+    with pipeline_run_recovery.run_execution_lease_keepalive(guard) as kept:
+        assert renewed.wait(10.0), "the keepalive never renewed the run lease"
+
+    assert kept is guard
+    expires_at = _run_row(foundry, "run-keepalive")["execution_lease_expires_at"]
+    assert expires_at is not None and str(expires_at) > "2020-01-01T00:00:00Z"
+
+
+def _crashed_run_values(run_id: str) -> dict[str, object]:
+    """A run holding an execution lease that lapsed long ago: a crashed executor."""
+    return _run_values(
+        run_id,
+        "version-stale",
+        status="running",
+        execution_lease_token=f"{run_id}-lease",
+        execution_lease_expires_at="2020-01-01T00:00:00Z",
+        execution_heartbeat_at="2020-01-01T00:00:00Z",
+    )
 
 
 def _foundry(tmp_path: Path) -> FoundryLite:

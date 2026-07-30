@@ -151,16 +151,7 @@ class PipelineRunService(CoreService):
             require_idempotent_run(row, request_fingerprint)
             action = pipeline_run_recovery.replayed_pipeline_run_action(row)
             if action == "fail_stale":
-                pipeline_run_recovery.expire_stale_pipeline_run(
-                    self.engine,
-                    self.pipeline_repository,
-                    self.pipeline_execution_repository,
-                    self.dataset_transaction_repository,
-                    self.media_repository,
-                    self.runtime_service,
-                    ctx,
-                    row,
-                )
+                self.expire_stale_execution_run(ctx, row)
                 return self.get_run(str(row["id"]), ctx=ctx)
             if action == "read":
                 self._reconcile_unknown_commit(ctx, row)
@@ -190,6 +181,24 @@ class PipelineRunService(CoreService):
             self.dataset_transaction_repository,
             self.media_repository,
             self.media_transaction_service,
+            self.runtime_service,
+            ctx,
+            row,
+        )
+
+    def expire_stale_execution_run(self, ctx: RequestContext, row: PipelineRunRow) -> bool:
+        """Fail-close one run whose execution lease lapsed; return whether it did.
+
+        Owned here rather than in the control worker because the terminal recovery
+        needs this service's execution/dataset/media repositories, and the worker
+        should not take those dependencies just to pass them through.
+        """
+        return pipeline_run_recovery.expire_stale_pipeline_run(
+            self.engine,
+            self.pipeline_repository,
+            self.pipeline_execution_repository,
+            self.dataset_transaction_repository,
+            self.media_repository,
             self.runtime_service,
             ctx,
             row,

@@ -209,6 +209,7 @@ def test_schedule_terminal_observation_claim_is_exactly_once(tmp_path: Path) -> 
         )
         pending = repository.unobserved_terminal_schedule_runs(
             transaction=transaction,
+            tenant_id=TENANT,
             limit=10,
         )
         first = repository.claim_terminal_schedule_observation(
@@ -225,6 +226,7 @@ def test_schedule_terminal_observation_claim_is_exactly_once(tmp_path: Path) -> 
         )
         remaining = repository.unobserved_terminal_schedule_runs(
             transaction=transaction,
+            tenant_id=TENANT,
             limit=10,
         )
 

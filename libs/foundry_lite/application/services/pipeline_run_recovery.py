@@ -87,6 +87,11 @@ class PipelineExecutionLeaseGuard:
         self._failure: PipelineExecutionLeaseLost | None = None
         self._lock = Lock()
 
+    @property
+    def run_id(self) -> str:
+        """Return the run this guard fences, so keepalive threads can name themselves."""
+        return self._run_id
+
     def require_active(self, transaction: TransactionContext | None = None) -> None:
         self.raise_if_failed()
         try:
@@ -149,6 +154,11 @@ def new_pipeline_execution_lease(*, now: datetime | None = None) -> PipelineExec
         heartbeat_at=_timestamp_text(heartbeat),
         expires_at=_timestamp_text(heartbeat + _EXECUTION_LEASE_DURATION),
     )
+
+
+def pipeline_run_utc_now() -> str:
+    """Return a UTC 'Z' timestamp comparable to stored execution-lease expiries."""
+    return _timestamp_text(datetime.now(UTC))
 
 
 def stale_pipeline_run_error(row: Mapping[str, object]) -> InvariantViolation:
@@ -315,12 +325,31 @@ def pipeline_execution_heartbeat(
     ctx: RequestContext,
     row: PipelineRunRow,
 ) -> Iterator[PipelineExecutionLeaseGuard]:
-    stop = Event()
     guard = PipelineExecutionLeaseGuard(transaction_manager, repository, ctx, row)
+    with run_execution_lease_keepalive(guard):
+        yield guard
+
+
+@contextmanager
+def run_execution_lease_keepalive(
+    guard: PipelineExecutionLeaseGuard,
+) -> Iterator[PipelineExecutionLeaseGuard]:
+    """Renew a claimed run lease on a background cadence for the wrapped work.
+
+    A run lease only proves liveness while a live executor keeps renewing it. The
+    synchronous path renews inside this keepalive; distributed node activities
+    otherwise renew the run lease only at evidence-write boundaries, so a node that
+    computes longer than the lease window (node policy timeouts exceed the lease
+    duration) would let a *healthy* run's lease lapse. The stale-lease reaper would
+    then expire that run as a crash. Renewing on the heartbeat cadence — well under
+    the lease duration — keeps the lease warm during long nodes so that an expired
+    run lease reliably means the executor died, not that it is busy.
+    """
+    stop = Event()
     thread = Thread(
         target=_renew_execution_lease,
         args=(guard, stop),
-        name=f"pipeline-lease-{row['id']}",
+        name=f"pipeline-lease-{guard.run_id}",
         daemon=True,
     )
     thread.start()

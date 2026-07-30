@@ -72,9 +72,10 @@ class SqlAlchemyPipelineExecutionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelinePreviewRunRow]:
-        return preview_rows.pending_preview_dispatches(transaction, limit)
+        return preview_rows.pending_preview_dispatches(transaction, tenant_id, limit)
 
     def claim_preview(
         self,
