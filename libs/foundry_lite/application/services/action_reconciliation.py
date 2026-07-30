@@ -13,11 +13,8 @@ from foundry_lite.application.action_types import (
     ActionWritebackRecoveryResult,
 )
 from foundry_lite.application.ports import (
-    ACTION_RUN_FAILED,
     ACTION_RUN_RECONCILED,
-    ACTION_RUN_SUCCEEDED,
     ActionRepository,
-    ObjectRecordRow,
     TransactionContext,
     TransactionManager,
 )
@@ -29,10 +26,10 @@ from foundry_lite.application.ports.action_repository import (
 from foundry_lite.application.ports.external_writeback_adapter import (
     ExternalWritebackAdapter,
     ExternalWriteTarget,
-    RemoteOutcome,
     RemoteOutcomeStatus,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.action_external_pending_recovery import ExternalPendingRecovery
 from foundry_lite.application.services.action_mutations import ActionMutationUnitOfWork
 from foundry_lite.application.services.action_protocols import (
     ActionObjectIndexer,
@@ -45,9 +42,6 @@ from foundry_lite.application.services.action_reconciliation_helpers import (
     action_run_has_sensitive_parameters,
     already_reconciled_result,
     approval_required_recovery_item,
-    external_pending_failed_item,
-    external_pending_reconciled_item,
-    external_pending_skipped_item,
     external_writeback_uri,
     failed_recovery_item,
     is_resolvable_writeback,
@@ -61,7 +55,6 @@ from foundry_lite.application.services.action_reconciliation_helpers import (
     validate_queue_limit,
     validate_remote_success,
 )
-from foundry_lite.application.services.action_writebacks import ActionWritebackRecorder
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied, ValidationFailed
 from foundry_lite.security.policy import PolicyService
@@ -143,181 +136,22 @@ class ActionWritebackReconciliationWorkflow:
         # external-pending run that this tick moves to outcome_unknown is picked up by the NEXT batch
         # (the worker loops until empty) rather than double-processed within this tick.
         writeback_rows = self._unresolved_rows(ctx, limit)
-        pending_items = self._recover_external_pending(ctx, limit)
+        pending_items = self._external_pending_recovery().recover(ctx, limit)
         writeback_items = [self._recover_one(ctx, row) for row in writeback_rows]
         result = recovery_result(pending_items + writeback_items)
         self._audit_recovery_tick(ctx, result)
         return result
 
-    def _recover_external_pending(self, ctx: RequestContext, limit: int) -> list[ActionWritebackRecoveryItem]:
-        """Resolve stranded ``external_pending`` runs (a crash between the write-ahead commit and the
-        phase-3 resolve) by HEADing the external system: landed -> succeed, absent -> fail, ambiguous ->
-        outcome_unknown (handed to the writeback sweep)."""
-        with self.engine.begin() as conn:
-            runs = self.action_repository.list_action_runs_by_status(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                statuses=("external_pending",),
-                limit=limit,
-            )
-        return [self._recover_one_external_pending(ctx, run) for run in runs]
-
-    def _recover_one_external_pending(self, ctx: RequestContext, run: ActionRunRow) -> ActionWritebackRecoveryItem:
-        adapter = self.external_writeback_adapter
-        uri = run["external_writeback_uri"]
-        if adapter is None:
-            return external_pending_skipped_item(run, "missing_external_writeback_adapter")
-        if not uri:
-            return external_pending_skipped_item(run, "missing_external_writeback_uri")
-        try:
-            outcome = adapter.remote_lookup(ExternalWriteTarget(uri=uri, idempotency_key=run["idempotency_key"]))
-            with self.engine.begin() as conn:
-                current = self._required_action_run(conn, ctx, run["id"])
-                if current["status"] != "external_pending":
-                    return external_pending_skipped_item(run, "already_resolved")
-                return self._apply_external_pending_outcome(conn, ctx, current, outcome)
-        except Exception as exc:  # noqa: BLE001 - a failed lookup/commit leaves the run recoverable next tick
-            return external_pending_failed_item(run, exc)
-
-    def _apply_external_pending_outcome(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run: ActionRunRow,
-        outcome: RemoteOutcome,
-    ) -> ActionWritebackRecoveryItem:
-        if outcome.status is RemoteOutcomeStatus.LANDED:
-            return self._recover_external_pending_landed(conn, ctx, run, outcome)
-        if outcome.status is RemoteOutcomeStatus.ABSENT:
-            return self._recover_external_pending_absent(conn, ctx, run)
-        return self._recover_external_pending_ambiguous(conn, ctx, run)
-
-    def _recover_external_pending_landed(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run: ActionRunRow,
-        outcome: RemoteOutcome,
-    ) -> ActionWritebackRecoveryItem:
-        resource_id = outcome.remote_resource_id or ""
-        writeback_id = self._external_recorder().record(
-            conn,
-            ctx,
-            run["id"],
-            status="succeeded",
-            idempotency_key=run["idempotency_key"],
-            request_hash=run["request_fingerprint"],
-            response={"status_code": 200, "remote_resource_id": resource_id},
-            external_writeback_uri=run["external_writeback_uri"],
-        )
-        action_type = self.ontology_service._action_type_by_id(conn, ctx, run["action_type_id"])
-        record = self._required_target_record(conn, ctx, run)
-        self._mutation_unit_of_work().commit(
-            conn,
-            ctx,
-            action_type=action_type,
-            action_run_id=run["id"],
-            record=record,
-            params=run["parameters"],
-            idempotency_key=run["idempotency_key"],
-            transition=ACTION_RUN_SUCCEEDED,
-        )
-        self._audit_external_pending_recovered(conn, ctx, run, "succeeded", writeback_id)
-        return external_pending_reconciled_item(run, "succeeded", resource_id)
-
-    def _recover_external_pending_absent(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run: ActionRunRow,
-    ) -> ActionWritebackRecoveryItem:
-        writeback_id = self._external_recorder().record(
-            conn,
-            ctx,
-            run["id"],
-            status="failed",
-            idempotency_key=run["idempotency_key"],
-            request_hash=run["request_fingerprint"],
-            response={"status_code": 404, "remote_status": "absent"},
-            external_writeback_uri=run["external_writeback_uri"],
-        )
-        updated = self.action_repository.update_action_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            action_run_id=run["id"],
-            transition=ACTION_RUN_FAILED,
-            error={"code": "external_write_absent", "message": "external write did not land"},
-            completed_at=_now(),
-        )
-        if not updated:
-            raise ConflictDetected("action run state changed concurrently during recovery")
-        self._audit_external_pending_recovered(conn, ctx, run, "failed", writeback_id)
-        return external_pending_reconciled_item(run, "absent", "")
-
-    def _recover_external_pending_ambiguous(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run: ActionRunRow,
-    ) -> ActionWritebackRecoveryItem:
-        # A still-ambiguous HEAD leaves the run in outcome_unknown for the writeback sweep to finish
-        # (external_writeback_uri travels on the recorded writeback request), never a guaranteed failure.
-        self._external_recorder().outcome_unknown_before_commit(
-            conn,
-            ctx,
-            run["id"],
-            run["idempotency_key"],
-            run["request_fingerprint"],
-            external_writeback_uri=run["external_writeback_uri"],
-        )
-        return external_pending_skipped_item(run, "still_outcome_unknown")
-
-    def _required_target_record(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run: ActionRunRow,
-    ) -> ObjectRecordRow:
-        record = self.object_records_service._object_record(
-            conn,
-            ctx,
-            run["target_object_type_api_name"],
-            run["target_object_id"],
-            object_type_id=run["target_object_type_id"],
-        )
-        if record is None:
-            raise NotFound("target object not found")
-        if record["object_version"] != run["expected_object_version"]:
-            raise ConflictDetected("object version conflict during external-pending recovery")
-        return record
-
-    def _external_recorder(self) -> ActionWritebackRecorder:
-        adapter = self.external_writeback_adapter
-        assert adapter is not None  # nosec B101 - guarded by _recover_one_external_pending
-        return ActionWritebackRecorder(
+    def _external_pending_recovery(self) -> ExternalPendingRecovery:
+        return ExternalPendingRecovery(
+            engine=self.engine,
+            policy=self.policy,
             action_repository=self.action_repository,
+            object_indexing_service=self.object_indexing_service,
+            object_records_service=self.object_records_service,
+            ontology_service=self.ontology_service,
             runtime_service=self.runtime_service,
-            connector_id=adapter.profile_name,
-            is_simulated=False,
-        )
-
-    def _audit_external_pending_recovered(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run: ActionRunRow,
-        resolution: str,
-        writeback_id: str,
-    ) -> None:
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type="action.run.external_pending_recovered",
-            resource_type="action_run",
-            resource_id=run["id"],
-            action="recover",
-            after_ref={"resolution": resolution, "writebackId": writeback_id},
-            correlation_id=run["id"],
+            external_writeback_adapter=self.external_writeback_adapter,
         )
 
     def approve_recovery(

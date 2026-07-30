@@ -305,14 +305,14 @@ def test_external_pending_recovery_skips_without_adapter_or_uri() -> None:
     run_without_uri = _action_run(status="external_pending")
 
     # No external adapter configured: the run cannot be HEADed, so it is skipped (never failed).
-    no_adapter = _workflow(external=None)
-    skipped_no_adapter = no_adapter._recover_one_external_pending(
-        ctx, {**run_without_uri, "external_writeback_uri": "s3://bucket/key"}
-    )
+    no_adapter = _workflow(external=None)._external_pending_recovery()
+    skipped_no_adapter = no_adapter._recover_one(ctx, {**run_without_uri, "external_writeback_uri": "s3://bucket/key"})
 
     # Adapter present but the run has no persisted write-ahead URI: skipped before any remote lookup.
-    with_adapter = _workflow(external=_ExternalAdapter(RemoteOutcome(RemoteOutcomeStatus.LANDED, "remote-1")))
-    skipped_no_uri = with_adapter._recover_one_external_pending(ctx, run_without_uri)
+    with_adapter = _workflow(
+        external=_ExternalAdapter(RemoteOutcome(RemoteOutcomeStatus.LANDED, "remote-1"))
+    )._external_pending_recovery()
+    skipped_no_uri = with_adapter._recover_one(ctx, run_without_uri)
 
     assert skipped_no_adapter["decision"] == "skipped"
     assert skipped_no_adapter.get("reason") == "missing_external_writeback_adapter"
