@@ -1262,6 +1262,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "client.connectors.resources.test" in screen_recipes
     assert "client.connectors.resources.startSync" in screen_recipes
     assert "connectorOnboarding: createConnectorOnboardingRecipe(client)" in screen_recipes
+    assert 'if (workflowRun.status !== "succeeded")' in screen_recipes
+    assert "CONNECTOR_SYNC_WORKFLOW_FAILED" in screen_recipes
     assert "export function insightReviewQueueView" in screen_recipes
     assert "insightReviewWorkspace: createInsightReviewWorkspaceRecipe(client)" in screen_recipes
     assert "client.insights.reviews.list(filters)" in screen_recipes

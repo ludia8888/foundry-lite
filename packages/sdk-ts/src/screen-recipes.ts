@@ -3,6 +3,7 @@ import {
   assertFoundryLiteSdkFresh,
   createFoundryLiteOntologyIndex,
   createFoundryLiteOsdkClient,
+  FoundryLiteApiError,
   getActionType,
   getObjectType,
   normalizeFoundryLiteError,
@@ -38,7 +39,6 @@ import type {
   Dataset,
   DatasetInspectionPayload,
   DeadLetterRecordStatus,
-  FoundryLiteApiError,
   FoundryLiteGeneratedClient,
   FoundryLiteOperationStreamEvent,
   FoundryLiteSdkDriftReport,
@@ -1243,6 +1243,25 @@ export function createConnectorOnboardingRecipe(
         void onState;
         void shouldPollWorkflow;
         const workflowRun = await pollWorkflowRun(startedRun.workflowRunId, pollOptions);
+        if (workflowRun.status !== "succeeded") {
+          const syncError = new FoundryLiteApiError(
+            0,
+            "CONNECTOR_SYNC_WORKFLOW_FAILED",
+            `Connector sync workflow ${startedRun.workflowRunId} ended with status "${workflowRun.status}"`,
+            workflowRun.error ?? {},
+            null,
+            false,
+          );
+          return emit(
+            connectorOnboardingState(state, {
+              phase: "failed",
+              workflowRun,
+              operationsPath: connectorOnboardingOperationsPath(workflowRun),
+              error: syncError,
+            }),
+            options.onState,
+          );
+        }
         return emit(
           connectorOnboardingState(state, {
             phase: "ready",
