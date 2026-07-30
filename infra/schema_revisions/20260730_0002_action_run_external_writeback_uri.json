@@ -1,6 +1,6 @@
 {
-  "description": "action_runs.external_writeback_uri: durable write-ahead target so the recovery sweep can HEAD a stranded external_pending run and drive it to a terminal state.",
-  "revision": "20260730_0001_action_run_external_writeback_uri",
+  "description": "action run external writeback uri",
+  "revision": "20260730_0002_action_run_external_writeback_uri",
   "schema": {
     "tables": [
       {
@@ -3599,6 +3599,12 @@
             "type": "String"
           },
           {
+            "name": "execution_idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
             "name": "review_metadata",
             "nullable": false,
             "primary_key": false,
@@ -3639,6 +3645,13 @@
               "decision_idempotency_key"
             ],
             "name": "uq_insight_review_decision_idempotency"
+          },
+          {
+            "columns": [
+              "tenant_id",
+              "execution_idempotency_key"
+            ],
+            "name": "uq_insight_review_execution_idempotency"
           }
         ]
       },
@@ -10616,9 +10629,9 @@
       }
     ]
   },
-  "schema_fingerprint": "81e27594c87f7c51a6a9462c4254c182911640e2eacfdb1e498aae0ad2b5a2b9",
+  "schema_fingerprint": "645560042ac2234cd95a08d796e95bb9859acffa73c0be9910cdb8f40ad8cabd",
   "summary": {
-    "column_count": 1516,
+    "column_count": 1517,
     "table_count": 119,
     "table_names": [
       "action_runs",
