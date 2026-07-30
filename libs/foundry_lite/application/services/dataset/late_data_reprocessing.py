@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.ports import DatasetRow, DatasetTransactionRow, StreamArchiveConfig, StreamEvent
 from foundry_lite.application.services.dataset.platform_watermark import platform_watermark_metadata
 from foundry_lite.application.services.dataset.stream_archive import stream_transaction_metadata
+from foundry_lite.application.services.dataset.stream_archive_time import parse_iso_datetime
 
 
 def stream_commit_metadata(
@@ -106,9 +107,12 @@ def _late_event_ids(rows: Sequence[Mapping[str, object]]) -> list[str]:
 
 def _min_text_value(rows: Sequence[Mapping[str, object]], key: str) -> str | None:
     values = [value for row in rows if isinstance((value := row.get(key)), str) and value]
-    return min(values) if values else None
+    # Order by the parsed instant, not the raw string. Event times can carry
+    # different UTC offsets, so a lexical min/max of the ISO strings can pick the
+    # wrong (chronologically later/earlier) value for the reprocess-from bound.
+    return min(values, key=lambda value: parse_iso_datetime(value, key)) if values else None
 
 
 def _max_text_value(rows: Sequence[Mapping[str, object]], key: str) -> str | None:
     values = [value for row in rows if isinstance((value := row.get(key)), str) and value]
-    return max(values) if values else None
+    return max(values, key=lambda value: parse_iso_datetime(value, key)) if values else None

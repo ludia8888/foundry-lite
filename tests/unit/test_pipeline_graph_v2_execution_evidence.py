@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +13,10 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineNodeAttemptRow,
     PipelineNodeRunRecord,
     PipelineNodeRunRow,
+)
+from foundry_lite.application.primitives import _utc_now
+from foundry_lite.application.services.pipeline_distributed_node_support import (
+    timestamp as distributed_timestamp,
 )
 from foundry_lite.application.services.pipeline_graph_contracts import PipelineArtifactKind
 from foundry_lite.application.services.pipeline_graph_v2_evidence_contracts import (
@@ -705,3 +712,37 @@ def _assert_artifact_passport(
     assert manifest["rowCount"] == row_count
     assert manifest["itemCount"] == item_count
     assert manifest["byteCount"] == 1024
+
+
+def test_execution_evidence_timestamp_stays_lease_comparable_outside_utc() -> None:
+    """Evidence timestamps must order chronologically against lease strings.
+
+    ``update_fenced_node_attempt_terminal`` and ``insert_fenced_artifact`` fence
+    stale workers with ``lease_expires_at >= completed_at`` over ``String``
+    columns, so the comparison is lexicographic. Lease writers emit UTC ``...Z``;
+    when the evidence writer emitted a local-offset timestamp instead, the two
+    forms no longer ordered chronologically: east of UTC a live lease compared as
+    expired (every distributed node failed to record terminal evidence and the
+    activity was retried, re-executing the node), and west of UTC an expired
+    lease compared as live (the fence stopped preventing split-brain evidence).
+    Only a UTC host happened to behave correctly, which is why the fixed-string
+    fixtures in the repository contract tests never caught it.
+    """
+    original_tz = os.environ.get("TZ")
+    try:
+        for zone in ("Asia/Seoul", "America/New_York", "UTC"):
+            os.environ["TZ"] = zone
+            time.tzset()
+            now = datetime.now(UTC)
+            live_lease = distributed_timestamp(now + timedelta(seconds=30))
+            expired_lease = distributed_timestamp(now - timedelta(hours=2))
+            evidence_now = _utc_now()
+
+            assert live_lease >= evidence_now, f"live lease rejected as stale in {zone}"
+            assert expired_lease < evidence_now, f"expired lease accepted as live in {zone}"
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()

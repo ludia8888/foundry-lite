@@ -23,6 +23,8 @@ from foundry_lite.application.services.dataset.stream_archive_time import (
     late_data_watermark_metadata,
     next_late_data_watermark,
     payload_named_time,
+    previous_stream_watermarks,
+    stream_watermark_key,
     validate_late_data_policy,
 )
 from foundry_lite.domain.context import RequestContext
@@ -291,8 +293,16 @@ def stream_transaction_metadata(
     cursors[_stream_cursor_key(stream)] = cursor
     metadata: dict[str, object] = {"streamCursor": cursor, "streamCursors": cursors}
     watermark = next_late_data_watermark(previous_metadata, rows or (), stream)
+    # Watermarks are kept per stream, carried forward like cursors, so a commit
+    # from one partition cannot overwrite (and regress) another partition's
+    # watermark stored in a single shared slot.
+    watermarks = previous_stream_watermarks(previous_metadata)
     if watermark is not None:
-        metadata["lateDataWatermark"] = late_data_watermark_metadata(stream, watermark, rows or ())
+        entry = late_data_watermark_metadata(stream, watermark, rows or ())
+        watermarks[stream_watermark_key(stream)] = entry
+        metadata["lateDataWatermark"] = entry
+    if watermarks:
+        metadata["lateDataWatermarks"] = watermarks
     return metadata
 
 

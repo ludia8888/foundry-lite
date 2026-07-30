@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 
 from foundry_lite.application.ports import RuntimeRow, TransactionContext
 from foundry_lite.application.ports.materialization_repository import MaterializationRepository, MaterializationRow
 from foundry_lite.application.services.materialization_protocols import MaterializationRuntimeBoundary
+from foundry_lite.application.services.observability_time import parse_optional_time
 from foundry_lite.domain.context import RequestContext
+
+_MIN_INSTANT = datetime.min.replace(tzinfo=UTC)
 
 
 def object_snapshot_watermark(
@@ -101,8 +105,11 @@ def _is_late_index_run(row: RuntimeRow, object_type: str) -> bool:
 
 
 def _row_completed_after(candidate: RuntimeRow, baseline: RuntimeRow) -> bool:
-    candidate_time = _row_time(candidate)
-    baseline_time = _row_time(baseline)
+    # Compare parsed instants, not raw ISO strings. Run timestamps are stamped with
+    # the process's local UTC offset, so a lexical compare of offset-bearing strings
+    # can order two runs backwards across hosts in different zones or a DST change.
+    candidate_time = parse_optional_time(_row_time(candidate))
+    baseline_time = parse_optional_time(_row_time(baseline))
     if candidate_time is None or baseline_time is None:
         return False
     return candidate_time > baseline_time
@@ -111,7 +118,10 @@ def _row_completed_after(candidate: RuntimeRow, baseline: RuntimeRow) -> bool:
 def _latest_runtime_row(rows: Sequence[RuntimeRow]) -> RuntimeRow | None:
     if not rows:
         return None
-    return sorted(rows, key=lambda row: (_row_time(row) or "", str(row.get("id", ""))))[-1]
+    return sorted(
+        rows,
+        key=lambda row: (parse_optional_time(_row_time(row)) or _MIN_INSTANT, str(row.get("id", ""))),
+    )[-1]
 
 
 def _row_time(row: RuntimeRow) -> str | None:

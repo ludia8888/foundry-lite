@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from typing import TypedDict
 
 from foundry_lite.application.ports import (
@@ -12,6 +13,9 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.services.observability_time import parse_optional_time
+
+_MIN_INSTANT = datetime.min.replace(tzinfo=UTC)
 
 LineageLookup = Callable[[str], list[LineageEdgeRow]]
 # Resolves a run id to its (type, row) without loading the full run snapshot.
@@ -224,7 +228,13 @@ def _row_indexes_late_event(row: RuntimeRow, event_id: str) -> bool:
 def _latest_runtime_row(rows: Sequence[RuntimeRow]) -> RuntimeRow | None:
     if not rows:
         return None
-    return sorted(rows, key=lambda row: (str(row.get("completed_at") or ""), str(row.get("id") or "")))[-1]
+    # Order by the parsed instant: completed_at carries the process's local UTC
+    # offset, so a lexical string sort can pick the wrong "latest" run across hosts
+    # in different zones or a DST transition.
+    return sorted(
+        rows,
+        key=lambda row: (parse_optional_time(row.get("completed_at")) or _MIN_INSTANT, str(row.get("id") or "")),
+    )[-1]
 
 
 def _resource(value: object, reason: str) -> dict[str, object]:
