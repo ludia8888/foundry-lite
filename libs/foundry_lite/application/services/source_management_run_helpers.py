@@ -20,6 +20,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.secret_provider import SecretVault
 from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
+from foundry_lite.application.private_network_policy import require_private_network_bypass_allowed
 from foundry_lite.application.services.source_management_helpers import (
     CommitResultLike,
     commit_result_payload,
@@ -121,6 +122,9 @@ def explore_source_payload(
     source_type: str,
     request: Mapping[str, object],
 ) -> dict[str, object]:
+    # Refuse the private-network bypass on a protected runtime before any probe
+    # runs, so a stored allowPrivateNetwork flag cannot open an SSRF path here.
+    require_private_network_bypass_allowed(bool(request.get("allowPrivateNetwork", False)), resource=source_name)
     if source_type in {"rest_api", "sap_odata"}:
         return _explore_rest(dependencies, ctx, source_name, request)
     if source_type == "postgres_jdbc":

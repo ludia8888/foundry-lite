@@ -994,11 +994,12 @@ def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch)
 def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     secret = "local-webhook-secret"
+    signing_key = api_main._derive_tenant_webhook_signing_key(secret, ctx.tenant_id)
     body = b'{"order_id":"O-9001","status":"PENDING"}'
     timestamp = _webhook_timestamp()
     headers = {
         "Content-Type": "application/json",
-        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+        "X-Foundry-Lite-Signature": _webhook_signature(body, signing_key, timestamp),
         "X-Foundry-Lite-Timestamp": timestamp,
         "X-Foundry-Lite-Event-ID": "evt-order-9001",
         "X-User-ID": ctx.actor_user_id,
@@ -1031,7 +1032,10 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
     rejected_shape = client.post(
         "/api/connectors/webhooks/mock_saas/orders",
         params={"datasetRef": "raw.webhook_orders"},
-        headers={**headers, "X-Foundry-Lite-Signature": _webhook_signature(rejected_shape_body, secret, timestamp)},
+        headers={
+            **headers,
+            "X-Foundry-Lite-Signature": _webhook_signature(rejected_shape_body, signing_key, timestamp),
+        },
         content=rejected_shape_body,
     )
 
@@ -1072,6 +1076,7 @@ def test_api_webhook_service_principal_auth_records_service_actor(foundry, monke
     resource_name = "orders"
     service_principal = "mock-saas-webhook"
     actor_user_id = f"{api_main.WEBHOOK_SERVICE_ACTOR_PREFIX}{service_principal}"
+    signing_key = api_main._derive_tenant_webhook_signing_key(secret, ctx.tenant_id)
     body = b'{"order_id":"O-9101","status":"PENDING"}'
     timestamp = _webhook_timestamp()
     headers = {
@@ -1085,7 +1090,7 @@ def test_api_webhook_service_principal_auth_records_service_actor(foundry, monke
         **headers,
         "X-Foundry-Lite-Signature": _webhook_service_principal_signature(
             body,
-            secret,
+            signing_key,
             timestamp,
             tenant_id=ctx.tenant_id,
             actor_user_id=actor_user_id,
@@ -1097,7 +1102,7 @@ def test_api_webhook_service_principal_auth_records_service_actor(foundry, monke
     legacy_signed_headers = {
         **headers,
         "X-Foundry-Lite-Event-ID": "evt-order-legacy-signature",
-        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+        "X-Foundry-Lite-Signature": _webhook_signature(body, signing_key, timestamp),
     }
     foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["event_id"])
     monkeypatch.setattr(api_runtime, "foundry", foundry)
@@ -1159,6 +1164,7 @@ def test_api_webhook_ingest_service_principal_bypasses_strict_user_auth_provider
     resource_name = "orders"
     service_principal = "mock-saas-webhook"
     actor_user_id = f"{api_main.WEBHOOK_SERVICE_ACTOR_PREFIX}{service_principal}"
+    signing_key = api_main._derive_tenant_webhook_signing_key(secret, ctx.tenant_id)
     body = b'{"order_id":"O-9102","status":"PENDING"}'
     timestamp = _webhook_timestamp()
     headers = {
@@ -1169,7 +1175,7 @@ def test_api_webhook_ingest_service_principal_bypasses_strict_user_auth_provider
         "X-Foundry-Lite-Event-ID": "evt-order-service-principal-oidc",
         "X-Foundry-Lite-Signature": _webhook_service_principal_signature(
             body,
-            secret,
+            signing_key,
             timestamp,
             tenant_id=ctx.tenant_id,
             actor_user_id=actor_user_id,
@@ -1272,6 +1278,7 @@ def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch
     first_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:00Z"}'
     duplicate_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:05Z"}'
     changed_body = b'{"order_id":"O-9002","status":"SHIPPED","timestamp":"2026-06-15T01:00:06Z"}'
+    signing_key = api_main._derive_tenant_webhook_signing_key(secret, ctx.tenant_id)
     foundry.datasets.ensure("raw.webhook_dedupe_orders", ctx=ctx, primary_key=["event_id"])
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
@@ -1281,7 +1288,7 @@ def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch
         timestamp = _webhook_timestamp()
         return {
             "Content-Type": "application/json",
-            "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+            "X-Foundry-Lite-Signature": _webhook_signature(body, signing_key, timestamp),
             "X-Foundry-Lite-Timestamp": timestamp,
             "X-Foundry-Lite-Event-ID": event_id,
             "X-User-ID": ctx.actor_user_id,
@@ -1320,11 +1327,12 @@ def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch
 def test_webhook_signature_replay_and_clock_skew_policy(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     secret = "local-webhook-secret"
+    signing_key = api_main._derive_tenant_webhook_signing_key(secret, ctx.tenant_id)
     body = b'{"order_id":"O-9004","status":"PENDING"}'
     stale_timestamp = "2000-01-01T00:00:00+00:00"
     headers = {
         "Content-Type": "application/json",
-        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, stale_timestamp),
+        "X-Foundry-Lite-Signature": _webhook_signature(body, signing_key, stale_timestamp),
         "X-Foundry-Lite-Timestamp": stale_timestamp,
         "X-Foundry-Lite-Event-ID": "evt-order-stale-signature",
         "X-User-ID": ctx.actor_user_id,
@@ -1356,11 +1364,12 @@ def test_webhook_signature_replay_and_clock_skew_policy(foundry, monkeypatch) ->
 def test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy(tmp_path, monkeypatch) -> None:
     ctx = demo_admin_context()
     secret = "local-webhook-secret"
+    signing_key = api_main._derive_tenant_webhook_signing_key(secret, ctx.tenant_id)
     body = b'{"order_id":"O-9003","status":"PENDING"}'
     timestamp = _webhook_timestamp()
     headers = {
         "Content-Type": "application/json",
-        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+        "X-Foundry-Lite-Signature": _webhook_signature(body, signing_key, timestamp),
         "X-Foundry-Lite-Timestamp": timestamp,
         "X-Foundry-Lite-Event-ID": "evt-order-commit-fail",
         "X-User-ID": ctx.actor_user_id,
@@ -1388,6 +1397,57 @@ def test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy(tmp_pa
     assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
     assert not [tx for tx in append_transactions if tx["status"] == "COMMITTED"]
     assert [tx for tx in append_transactions if tx["status"] == "ABORTED"]
+
+
+def test_api_webhook_signing_key_is_per_tenant_and_blocks_cross_tenant_forgery(foundry, monkeypatch) -> None:
+    """A tenant holding only its own derived key cannot sign for another tenant.
+
+    The connector webhook derives the acting tenant from a client-set header. When
+    the HMAC was verified with one deployment-wide secret, any tenant that knew
+    that shared secret could sign a request as another tenant and inject rows into
+    the victim's dataset. The signing key is now derived per tenant from a single
+    root secret, so a key issued for one tenant does not validate for another.
+    """
+    ctx = demo_admin_context()  # victim tenant: tenant-demo
+    root_secret = "local-webhook-root-secret"
+    victim_key = api_main._derive_tenant_webhook_signing_key(root_secret, ctx.tenant_id)
+    attacker_key = api_main._derive_tenant_webhook_signing_key(root_secret, "tenant-attacker")
+
+    # An attacker's key is distinct from the victim tenant's key.
+    assert attacker_key != victim_key
+
+    foundry.datasets.ensure("raw.webhook_forgery_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, root_secret)
+    client = TestClient(app)
+
+    body = b'{"order_id":"O-forge","status":"PENDING"}'
+
+    def post(signing_key: str, event_id: str) -> int:
+        timestamp = _webhook_timestamp()
+        return client.post(
+            "/api/connectors/webhooks/mock_saas/orders",
+            params={"datasetRef": "raw.webhook_forgery_orders"},
+            headers={
+                "Content-Type": "application/json",
+                "X-Foundry-Lite-Signature": _webhook_signature(body, signing_key, timestamp),
+                "X-Foundry-Lite-Timestamp": timestamp,
+                "X-Foundry-Lite-Event-ID": event_id,
+                "X-User-ID": ctx.actor_user_id,
+                "X-Roles": ",".join(ctx.roles),
+            },
+            content=body,
+        ).status_code
+
+    # Forgery attempt: the attacker holds only its own tenant's derived key and
+    # targets the victim tenant's dataset. It must be rejected.
+    assert post(attacker_key, "evt-forge-1") == 403
+    assert foundry.datasets.list_versions("raw.webhook_forgery_orders", ctx=ctx) == []
+
+    # The victim tenant's own derived key still ingests normally — proving only the
+    # correct per-tenant key is accepted, not that the endpoint is simply broken.
+    assert post(victim_key, "evt-forge-2") == 200
+    assert len(foundry.datasets.list_versions("raw.webhook_forgery_orders", ctx=ctx)) == 1
 
 
 def test_api_operations_runs_cursor_pages_action_runs(foundry, monkeypatch) -> None:
