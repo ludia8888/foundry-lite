@@ -64,17 +64,19 @@ class SqlAlchemyInsightReviewRepository:
         tenant_id: str,
         idempotency_key: str,
     ) -> InsightReviewRow | None:
-        rows = (
-            transaction.execute(select(db.insight_reviews).where(db.insight_reviews.c.tenant_id == tenant_id))
+        row = (
+            transaction.execute(
+                select(db.insight_reviews).where(
+                    and_(
+                        db.insight_reviews.c.tenant_id == tenant_id,
+                        db.insight_reviews.c.execution_idempotency_key == idempotency_key,
+                    )
+                )
+            )
             .mappings()
-            .all()
+            .first()
         )
-        for row in rows:
-            record = cast(InsightReviewRow, dict(row))
-            claim = _approval_execution_claim(record)
-            if claim.get("idempotencyKey") == idempotency_key:
-                return record
-        return None
+        return cast(InsightReviewRow, dict(row)) if row else None
 
     def list_reviews(
         self,
@@ -223,7 +225,12 @@ class SqlAlchemyInsightReviewRepository:
                     db.insight_reviews.c.execution_status == "pending_review",
                 )
             )
-            .values(execution_status="executing", review_metadata=metadata, updated_at=updated_at)
+            .values(
+                execution_status="executing",
+                execution_idempotency_key=execution_idempotency_key,
+                review_metadata=metadata,
+                updated_at=updated_at,
+            )
         )
         if updated.rowcount != 1:
             return None
@@ -421,11 +428,6 @@ def _keyset_before(created_before: str, before_id: str) -> Any:
         db.insight_reviews.c.created_at < created_before,
         and_(db.insight_reviews.c.created_at == created_before, db.insight_reviews.c.id < before_id),
     )
-
-
-def _approval_execution_claim(row: InsightReviewRow) -> dict[str, object]:
-    value = dict(row["review_metadata"]).get("approvalExecution")
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def _metadata_with_execution_claim(

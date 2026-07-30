@@ -189,12 +189,14 @@ insight_reviews = Table(
     Column("assignment_idempotency_key", String),
     Column("decision", JSON),
     Column("decision_idempotency_key", String),
+    Column("execution_idempotency_key", String),
     Column("review_metadata", JSON, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     UniqueConstraint("tenant_id", "created_idempotency_key", name="uq_insight_review_create_idempotency"),
     UniqueConstraint("tenant_id", "assignment_idempotency_key", name="uq_insight_review_assignment_idempotency"),
     UniqueConstraint("tenant_id", "decision_idempotency_key", name="uq_insight_review_decision_idempotency"),
+    UniqueConstraint("tenant_id", "execution_idempotency_key", name="uq_insight_review_execution_idempotency"),
 )
 
 

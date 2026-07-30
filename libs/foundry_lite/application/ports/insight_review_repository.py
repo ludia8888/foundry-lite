@@ -40,6 +40,7 @@ class InsightReviewRow(TypedDict):
     assignment_idempotency_key: str | None
     decision: InsightReviewJson | None
     decision_idempotency_key: str | None
+    execution_idempotency_key: str | None
     review_metadata: InsightReviewJson
     created_at: str
     updated_at: str
