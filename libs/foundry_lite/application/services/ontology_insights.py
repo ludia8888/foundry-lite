@@ -10,6 +10,7 @@ service stays a thin query orchestrator and payload shapes stay testable.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Literal, TypedDict
 
 from foundry_lite.application.ports import (
@@ -19,6 +20,7 @@ from foundry_lite.application.ports import (
     LinkTypeRow,
 )
 from foundry_lite.application.ports.runtime_repository import RuntimeRow
+from foundry_lite.application.services.observability_time import parse_optional_time
 
 OntologyResourceType = Literal["object_type", "action_type", "link_type"]
 
@@ -159,13 +161,19 @@ def audit_usage_payload(
     immutable row id (both patterns exist in indexing services), so callers
     pass every identifier that denotes the same resource.
     """
-    matched_at = sorted(
-        str(row["created_at"])
-        for row in rows
-        if str(row.get("resource_type")) in resource_types
-        and str(row.get("resource_id")) in resource_ids
-        and str(row.get("created_at", "")) >= since
-    )
+    # Compare/sort by parsed instants, not raw strings. The window bound and the
+    # stored created_at values carry the process's local UTC offset, so a lexical
+    # comparison can drop or mis-order events across a DST change or mixed offsets.
+    since_instant = parse_optional_time(since)
+    in_window: list[tuple[datetime, str]] = []
+    for row in rows:
+        if str(row.get("resource_type")) not in resource_types or str(row.get("resource_id")) not in resource_ids:
+            continue
+        created = parse_optional_time(row.get("created_at"))
+        if created is None or (since_instant is not None and created < since_instant):
+            continue
+        in_window.append((created, str(row["created_at"])))
+    matched_at = [text for _, text in sorted(in_window, key=lambda item: item[0])]
     return {"totalEvents": len(matched_at), "lastEventAt": matched_at[-1] if matched_at else None}
 
 

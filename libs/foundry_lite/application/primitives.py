@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -43,6 +43,19 @@ class StagedFileStats:
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat()
+
+
+def _utc_now() -> str:
+    """Canonical UTC timestamp for values compared lexicographically against leases.
+
+    Lease columns (``lease_expires_at``, ``heartbeat_at``) are stored as UTC
+    ``...Z`` strings, so any timestamp a fencing predicate compares against them
+    must use the same representation. ``_now()`` renders a local UTC offset, and
+    a lexicographic compare of the two forms is not a chronological compare: east
+    of UTC a live lease reads as expired, west of UTC an expired lease reads as
+    live. Emit the same sortable form the lease writers use.
+    """
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _new_id(prefix: str) -> str:

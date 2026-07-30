@@ -16,7 +16,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineNodeRunRow,
     PipelineRunArtifactRow,
 )
-from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.primitives import _new_id, _utc_now
 from foundry_lite.application.services.pipeline_graph_v2_evidence_contracts import (
     attempt_context,
     require_attempt_contract,
@@ -98,7 +98,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
             executor_profile=executor_profile,
         )
         inputs = canonical_input_artifacts(input_artifacts)
-        now = _now()
+        now = _utc_now()
         with self._transaction_manager.begin() as transaction:
             node_run, attempt = self._persist_started_attempt(
                 transaction,
@@ -159,7 +159,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         artifact: PipelineGraphV2ArtifactSpec,
     ) -> PipelineRunArtifactRow:
         require_output_security(attempt, artifact)
-        now = _now()
+        now = _utc_now()
         with self._transaction_manager.begin() as transaction:
             self._execution_lease_guard.require_active(transaction)
             node_run, attempt_row = self._required_execution_rows(transaction, attempt)
@@ -200,7 +200,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         error: Mapping[str, object],
     ) -> None:
         error_payload = validated_error_payload(error)
-        now = _now()
+        now = _utc_now()
         with self._transaction_manager.begin() as transaction:
             self._execution_lease_guard.require_active(transaction)
             node_run, attempt_row = self._required_execution_rows(transaction, attempt)
@@ -224,7 +224,7 @@ class PipelineGraphV2ExecutionEvidenceWriter:
         )
         inputs = canonical_input_artifacts(input_artifacts)
         error_payload = validated_error_payload(error)
-        now = _now()
+        now = _utc_now()
         with self._transaction_manager.begin() as transaction:
             self._execution_lease_guard.require_active(transaction)
             node_run = self._insert_node_run(

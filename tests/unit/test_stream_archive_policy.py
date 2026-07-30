@@ -167,6 +167,39 @@ def test_slow_partition_does_not_silently_drop_data() -> None:
     assert str(platform["sourceKey"]).split(":")[2] == "1"
 
 
+def test_watermark_is_per_partition_and_survives_other_partition_commit() -> None:
+    """A commit on one partition must not overwrite another partition's watermark.
+
+    Watermarks were stored in a single ``lateDataWatermark`` slot even though a
+    dataset can be fed by several stream partitions, so a commit on partition B
+    replaced partition A's watermark. The next partition-A poll then read no prior
+    watermark and regressed it, re-classifying already-late events as on-time.
+    """
+    partition_a = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", partition=0)
+    partition_b = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", partition=1)
+
+    a_event_time = _iso_seconds_ago(120)
+    b_event_time = _iso_seconds_ago(60)
+
+    batch_a = prepare_stream_archive_batch([_event({"event_time": a_event_time})], partition_a)
+    metadata_a = stream_transaction_metadata(partition_a, [_event({"event_time": a_event_time})], None, batch_a.rows)
+
+    # Partition B commits next, seeded from the dataset's latest committed metadata
+    # (which belongs to partition A).
+    batch_b = prepare_stream_archive_batch([_event({"event_time": b_event_time})], partition_b, metadata_a)
+    metadata_b = stream_transaction_metadata(
+        partition_b, [_event({"event_time": b_event_time})], metadata_a, batch_b.rows
+    )
+
+    # Partition A's watermark must still be readable from B's metadata.
+    from foundry_lite.application.services.dataset.stream_archive_time import previous_watermark_datetime
+
+    watermark_a = previous_watermark_datetime(metadata_b, partition_a)
+    watermark_b = previous_watermark_datetime(metadata_b, partition_b)
+    assert watermark_a == datetime.fromisoformat(a_event_time)
+    assert watermark_b == datetime.fromisoformat(b_event_time)
+
+
 def test_stream_archive_naive_event_time_defaults_to_utc() -> None:
     stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", clock_skew_seconds=0)
     event_time = datetime.now(UTC).replace(tzinfo=None).isoformat()

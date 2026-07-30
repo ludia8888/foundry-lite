@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import TypeGuard
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from foundry_lite.application.ports import LateDataStatus, StreamArchiveConfig
@@ -90,21 +91,71 @@ def late_data_watermark_metadata(
     }
 
 
+def stream_watermark_key(stream: StreamArchiveConfig) -> str:
+    return f"{stream.topic}:{stream.consumer_group}:{stream.partition}"
+
+
+def previous_stream_watermarks(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    """Return the per-stream watermark map, absorbing any legacy single-slot entry.
+
+    A dataset can be fed by several stream partitions, so watermarks — like
+    cursors — must be kept per stream. Older transactions stored the watermark in
+    a single ``lateDataWatermark`` slot; fold that into the keyed map so its
+    stream's watermark survives a commit from a different partition.
+    """
+    if not isinstance(metadata, Mapping):
+        return {}
+    raw = metadata.get("lateDataWatermarks")
+    watermarks = dict(raw) if isinstance(raw, Mapping) else {}
+    legacy = metadata.get("lateDataWatermark")
+    if isinstance(legacy, Mapping):
+        key = _watermark_key_from_payload(legacy)
+        if key is not None:
+            watermarks.setdefault(key, legacy)
+    return watermarks
+
+
 def previous_watermark_datetime(metadata: Mapping[str, object] | None, stream: StreamArchiveConfig) -> datetime | None:
     if metadata is None:
         return None
-    watermark = metadata.get("lateDataWatermark")
-    if not isinstance(watermark, Mapping):
+    entry = _stream_watermark_entry(metadata, stream)
+    if entry is None:
         return None
-    if (
-        watermark.get("streamName") != stream.stream_name
-        or watermark.get("topic") != stream.topic
-        or watermark.get("partition") != stream.partition
-        or watermark.get("consumerGroup") != stream.consumer_group
-    ):
-        return None
-    value = watermark.get("watermarkEventTime")
+    value = entry.get("watermarkEventTime")
     return parse_iso_datetime(value, "watermarkEventTime") if isinstance(value, str) else None
+
+
+def _stream_watermark_entry(metadata: Mapping[str, object], stream: StreamArchiveConfig) -> Mapping[str, object] | None:
+    watermarks = metadata.get("lateDataWatermarks")
+    if isinstance(watermarks, Mapping):
+        candidate = watermarks.get(stream_watermark_key(stream))
+        if _watermark_entry_matches(candidate, stream):
+            return candidate
+    legacy = metadata.get("lateDataWatermark")
+    if _watermark_entry_matches(legacy, stream):
+        return legacy
+    return None
+
+
+def _watermark_entry_matches(entry: object, stream: StreamArchiveConfig) -> TypeGuard[Mapping[str, object]]:
+    return (
+        isinstance(entry, Mapping)
+        and entry.get("streamName") == stream.stream_name
+        and entry.get("topic") == stream.topic
+        and entry.get("partition") == stream.partition
+        and entry.get("consumerGroup") == stream.consumer_group
+    )
+
+
+def _watermark_key_from_payload(payload: Mapping[str, object]) -> str | None:
+    topic = payload.get("topic")
+    group = payload.get("consumerGroup")
+    partition = payload.get("partition")
+    if not isinstance(topic, str) or not isinstance(group, str):
+        return None
+    if not isinstance(partition, int) or isinstance(partition, bool):
+        return None
+    return f"{topic}:{group}:{partition}"
 
 
 def parse_iso_datetime(value: str, field: str) -> datetime:
