@@ -354,6 +354,7 @@ def _action_run(status: str) -> ActionRunRow:
         "request_fingerprint": "hash-1",
         "result": None,
         "error": None,
+        "external_writeback_uri": None,
         "created_at": "2026-06-19T00:00:00Z",
         "completed_at": None,
     }

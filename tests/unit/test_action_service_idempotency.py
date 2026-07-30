@@ -65,7 +65,10 @@ class _AllowOsdkScope:
 
 
 class _UnusedWriteback:
-    pass
+    def real_writeback_runner(self, _command: object) -> None:
+        # No external writeback URI on these commands, so there is no real runner and the
+        # apply takes the single-transaction local path.
+        return None
 
 
 class _WriteOpenRuntime:
@@ -254,6 +257,7 @@ def _action_run_row() -> ActionRunRow:
             "newObjectVersion": 2,
         },
         "error": None,
+        "external_writeback_uri": None,
         "created_at": "2026-06-13T00:00:00Z",
         "completed_at": "2026-06-13T00:00:01Z",
     }

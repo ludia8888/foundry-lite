@@ -93,10 +93,36 @@ class SqlAlchemyActionRepository:
                 request_fingerprint=record.request_fingerprint,
                 result=dict(record.result) if record.result is not None else None,
                 error=dict(record.error) if record.error is not None else None,
+                external_writeback_uri=record.external_writeback_uri,
                 created_at=record.created_at,
                 completed_at=record.completed_at,
             )
         )
+
+    def list_action_runs_by_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        statuses: Sequence[str],
+        limit: int,
+    ) -> list[ActionRunRow]:
+        rows = (
+            transaction.execute(
+                select(db.action_runs)
+                .where(
+                    and_(
+                        db.action_runs.c.tenant_id == tenant_id,
+                        db.action_runs.c.status.in_(tuple(statuses)),
+                    )
+                )
+                .order_by(db.action_runs.c.created_at.asc(), db.action_runs.c.id.asc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(ActionRunRow, dict(row)) for row in rows]
 
     def insert_action_run_or_get_existing(self, *, transaction: Any, record: ActionRunRecord) -> ActionRunRow | None:
         inserted_id = transaction.execute(_action_run_insert_or_ignore(transaction, record)).scalar_one_or_none()
@@ -121,7 +147,7 @@ class SqlAlchemyActionRepository:
         action_run_id: str,
         transition: StatusTransition,
         error: Mapping[str, object] | None,
-        completed_at: str,
+        completed_at: str | None,
         result: Mapping[str, object] | None = None,
     ) -> bool:
         return cas_status_update(
@@ -300,6 +326,7 @@ def _action_run_values(record: ActionRunRecord) -> dict[str, object]:
         "request_fingerprint": record.request_fingerprint,
         "result": dict(record.result) if record.result is not None else None,
         "error": dict(record.error) if record.error is not None else None,
+        "external_writeback_uri": record.external_writeback_uri,
         "created_at": record.created_at,
         "completed_at": record.completed_at,
     }

@@ -434,6 +434,7 @@ from foundry_lite.application.ports.stream_adapter import (
 from foundry_lite.application.ports.transaction_context import (
     ACTION_RUN_COMPENSATION_REQUIRED,
     ACTION_RUN_CONFLICT,
+    ACTION_RUN_EXTERNAL_PENDING,
     ACTION_RUN_FAILED,
     ACTION_RUN_OUTCOME_UNKNOWN,
     ACTION_RUN_RECONCILED,

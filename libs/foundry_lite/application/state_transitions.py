@@ -92,12 +92,20 @@ ONTOLOGY_PROPOSAL_WITHDRAWN = StatusTransition(("pending", "approved"), "rejecte
 # holder. Both transitions are terminal and CAS-guarded.
 ONTOLOGY_BRANCH_MERGED = StatusTransition(("open",), "merged")
 ONTOLOGY_BRANCH_ABANDONED = StatusTransition(("open",), "abandoned")
-ACTION_RUN_SUCCEEDED = StatusTransition(("received",), "succeeded")
-ACTION_RUN_FAILED = StatusTransition(("received",), "failed")
+# An action with a real external side effect is committed into the non-terminal
+# ``external_pending`` write-ahead state BEFORE the external write, so the DB connection is
+# released for the network round-trip. A crash between that commit and the resolve is recoverable:
+# the recovery sweep HEADs the external system and drives the stranded run to a terminal state.
+ACTION_RUN_EXTERNAL_PENDING = StatusTransition(("received",), "external_pending")
+# ``succeeded``/``failed``/``outcome_unknown``/``compensation_required`` fire either inline from the
+# transient ``received`` state (simulated / no-adapter path) or from the committed ``external_pending``
+# write-ahead marker (real-adapter path, inline resolve or recovery sweep).
+ACTION_RUN_SUCCEEDED = StatusTransition(("received", "external_pending"), "succeeded")
+ACTION_RUN_FAILED = StatusTransition(("received", "external_pending"), "failed")
 ACTION_RUN_CONFLICT = StatusTransition(("received",), "conflict")
 ACTION_RUN_RETRYABLE = StatusTransition(("received",), "retryable")
-ACTION_RUN_OUTCOME_UNKNOWN = StatusTransition(("received",), "outcome_unknown")
-ACTION_RUN_COMPENSATION_REQUIRED = StatusTransition(("received",), "compensation_required")
+ACTION_RUN_OUTCOME_UNKNOWN = StatusTransition(("received", "external_pending"), "outcome_unknown")
+ACTION_RUN_COMPENSATION_REQUIRED = StatusTransition(("received", "external_pending"), "compensation_required")
 ACTION_RUN_RECONCILED = StatusTransition(("outcome_unknown", "compensation_required"), "reconciled")
 ACTION_WRITEBACK_RECONCILED = StatusTransition(("outcome_unknown", "compensation_required"), "reconciled")
 DEAD_LETTER_REPLAY_REQUESTED = StatusTransition(("QUARANTINED",), "REPLAY_REQUESTED")

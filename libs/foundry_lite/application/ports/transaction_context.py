@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 from foundry_lite.application.state_transitions import (
     ACTION_RUN_COMPENSATION_REQUIRED,
     ACTION_RUN_CONFLICT,
+    ACTION_RUN_EXTERNAL_PENDING,
     ACTION_RUN_FAILED,
     ACTION_RUN_OUTCOME_UNKNOWN,
     ACTION_RUN_RECONCILED,
@@ -87,6 +88,7 @@ class TransactionManager(Protocol):
 __all__ = [
     "ACTION_RUN_COMPENSATION_REQUIRED",
     "ACTION_RUN_CONFLICT",
+    "ACTION_RUN_EXTERNAL_PENDING",
     "ACTION_RUN_FAILED",
     "ACTION_RUN_OUTCOME_UNKNOWN",
     "ACTION_RUN_RECONCILED",

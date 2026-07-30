@@ -55,6 +55,24 @@ class _MemoryExternalWritebackAdapter:
         )
 
 
+class _StrandingExternalWritebackAdapter:
+    """``write()`` raises a hard (non-timeout) error, so the run strands committed as ``external_pending``;
+    ``remote_lookup()`` HEADs the external system and reports the write LANDED (recovery drives it forward)."""
+
+    profile_name = "stranding-external-writeback"
+
+    def __init__(self) -> None:
+        self.write_calls = 0
+
+    def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
+        del target, payload
+        self.write_calls += 1
+        raise RuntimeError("external system crashed mid-write")
+
+    def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id=f"remote-{target.idempotency_key}")
+
+
 class _InjectedLocalCommitFailure(RuntimeError):
     pass
 
@@ -227,6 +245,56 @@ def test_recovery_marks_retryable_writeback_as_retry_candidate(tmp_path: Path) -
     assert _audit_after_ref(snapshot, "action.writeback.recovery_tick")["skipped"] == 1
 
 
+def test_recovery_resolves_stranded_external_pending_run(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _StrandingExternalWritebackAdapter()
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "stranded-external-pending"
+    uri = "memory://erp/orders/O-1001"
+
+    # A hard error mid-write (a crash) propagates after the write-ahead marker is already committed.
+    with pytest.raises(RuntimeError, match="crashed mid-write"):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "process crashed after the write-ahead commit"},
+            idempotency_key=idempotency_key,
+            external_writeback_uri=uri,
+            ctx=ctx,
+        )
+
+    stranded = foundry.operations.list_runs(ctx=ctx)
+    stranded_run = _run_for_key(stranded, idempotency_key)
+    before = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    # The run is committed as external_pending (recoverable), the object is untouched, and no terminal
+    # writeback exists yet — the phase-3 resolve never ran.
+    assert stranded_run["status"] == "external_pending"
+    assert before["objectVersion"] == order["objectVersion"]
+    assert before["properties"]["status"] == "PENDING"
+    assert not any(w["idempotency_key"] == idempotency_key for w in stranded["actionWritebacks"])
+
+    result = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    resolved_run = _run_for_key(snapshot, idempotency_key)
+    # The sweep HEADs the external system (LANDED) and drives the stranded run to succeeded, applying the
+    # mutation exactly once — the external write is never re-issued (recovery reads, never re-writes).
+    assert result["processed"] == 1
+    assert result["reconciled"] == 1
+    assert result["items"][0]["decision"] == "reconciled"
+    assert result["items"][0]["actionRunId"] == stranded_run["id"]
+    assert result["items"][0].get("remoteResourceId") == f"remote-{idempotency_key}"
+    assert resolved_run["status"] == "succeeded"
+    assert after["objectVersion"] == order["objectVersion"] + 1
+    assert after["properties"]["status"] == "APPROVED"
+    assert adapter.write_calls == 1
+
+
 def test_writeback_reconciliation_worker_config_from_env(tmp_path: Path) -> None:
     config = config_from_env(
         {
@@ -340,6 +408,11 @@ def test_writeback_reconciliation_worker_rejects_required_context_values() -> No
 
 def _writeback_for_key(runs: Mapping[str, object], idempotency_key: str) -> dict[str, object]:
     rows = cast(list[dict[str, object]], runs["actionWritebacks"])
+    return next(row for row in rows if row["idempotency_key"] == idempotency_key)
+
+
+def _run_for_key(runs: Mapping[str, object], idempotency_key: str) -> dict[str, object]:
+    rows = cast(list[dict[str, object]], runs["actionRuns"])
     return next(row for row in rows if row["idempotency_key"] == idempotency_key)
 
 

@@ -112,6 +112,40 @@ def reconciled_recovery_item(
     return item
 
 
+def _base_external_pending_item(run: ActionRunRow, *, decision: str) -> ActionWritebackRecoveryItem:
+    # An external-pending run has no writeback yet (it strands before the phase-3 resolve records one),
+    # so the sweep is run-centric: both ids carry the run id.
+    return {
+        "writebackId": run["id"],
+        "actionRunId": run["id"],
+        "status": run["status"],
+        "decision": decision,
+    }
+
+
+def external_pending_reconciled_item(
+    run: ActionRunRow,
+    remote_status: str,
+    remote_resource_id: str,
+) -> ActionWritebackRecoveryItem:
+    item = _base_external_pending_item(run, decision="reconciled")
+    item["remoteStatus"] = remote_status
+    item["remoteResourceId"] = remote_resource_id
+    return item
+
+
+def external_pending_skipped_item(run: ActionRunRow, reason: str) -> ActionWritebackRecoveryItem:
+    item = _base_external_pending_item(run, decision="skipped")
+    item["reason"] = reason
+    return item
+
+
+def external_pending_failed_item(run: ActionRunRow, exc: Exception) -> ActionWritebackRecoveryItem:
+    item = _base_external_pending_item(run, decision="failed")
+    item["reason"] = _failure_reason(exc)
+    return item
+
+
 def reconciled_writeback_response(
     writeback: ActionWritebackRecord,
     remote_status: str,
