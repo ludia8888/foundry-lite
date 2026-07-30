@@ -177,6 +177,36 @@ def recoverable_pipeline_previews(
     return rows
 
 
+def recoverable_preview_dispatches(
+    transaction_manager: TransactionManager,
+    repository: PipelineExecutionRepository,
+    metadata_repository: MetadataRepository,
+    *,
+    limit: int,
+) -> list[PipelinePreviewRunRow]:
+    """Scan every tenant's undispatched previews inside that tenant's RLS context.
+
+    ``pipeline_preview_runs`` is tenant-scoped under ``FORCE ROW LEVEL SECURITY``, so a
+    tenant-blind scan with no tenant bound returns zero rows under a production
+    non-superuser role and the control loop silently redispatches nothing. Enumerate
+    tenants and bind each one, exactly as ``recoverable_pipeline_previews`` does.
+    """
+    remaining = max(1, min(limit, 500))
+    rows: list[PipelinePreviewRunRow] = []
+    for tenant_id in dict.fromkeys(metadata_repository.list_tenant_ids()):
+        with tenant_context(tenant_id), transaction_manager.begin() as transaction:
+            tenant_rows = repository.pending_preview_dispatches(
+                transaction=transaction,
+                tenant_id=tenant_id,
+                limit=remaining,
+            )
+        rows.extend(tenant_rows)
+        remaining -= len(tenant_rows)
+        if remaining <= 0:
+            break
+    return rows
+
+
 def pipeline_preview_lease_claim_values() -> dict[str, str]:
     """Build repository values for the initial queued-to-running claim."""
     lease = new_pipeline_preview_execution_lease()

@@ -164,6 +164,7 @@ class PipelineExecutionRepository(Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelinePreviewRunRow]: ...
 

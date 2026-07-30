@@ -231,6 +231,12 @@ def _default_aggregation_roots() -> list[str]:
         "foundry_lite.application.services.pipeline_async_run_service",
         "foundry_lite.application.services.pipeline_distributed_node_service",
         "foundry_lite.application.services.pipeline_preview_service",
+        # Same family: the control worker composes every durable recovery scan
+        # (dispatch, cancellation, schedule terminal, stale execution) and must also
+        # enumerate tenants and bind tenant_context so each scan runs inside its RLS
+        # context. Its fan-out grows by one per new recovery concern; its collaborator
+        # fan-out stays capped at 10 by the service-call graph gate.
+        "foundry_lite.application.services.pipeline_control_worker_service",
         "scripts.operations.run_live_media_byte_proof",
         "scripts.operations.run_palantir_live_simulation",
     ]

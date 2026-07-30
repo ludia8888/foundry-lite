@@ -15,6 +15,7 @@ from foundry_lite.application.services.pipeline_preview_recovery import (
     pipeline_preview_lease_reclaim_values,
     pipeline_preview_utc_now,
     recoverable_pipeline_previews,
+    recoverable_preview_dispatches,
     recovered_pipeline_preview_context,
 )
 from foundry_lite.domain.context import RequestContext
@@ -54,6 +55,24 @@ class _RecoveryRepository:
         tenant_id = current_tenant_id()
         self.calls.append((tenant_id, limit))
         return [_recovery_row(str(tenant_id), index) for index in range(limit)]
+
+
+class _DispatchScanRepository:
+    """Record the bound RLS tenant alongside the tenant the scan was filtered by."""
+
+    def __init__(self, rows_per_tenant: int = 1) -> None:
+        self.rows_per_tenant = rows_per_tenant
+        self.calls: list[tuple[str | None, str, int]] = []
+
+    def pending_preview_dispatches(
+        self,
+        *,
+        tenant_id: str,
+        limit: int,
+        **_kwargs: object,
+    ) -> list[PipelinePreviewRunRow]:
+        self.calls.append((current_tenant_id(), tenant_id, limit))
+        return [_recovery_row(tenant_id, index) for index in range(min(self.rows_per_tenant, limit))]
 
 
 def _row() -> PipelinePreviewRunRow:
@@ -206,3 +225,46 @@ def test_preview_recovery_rotates_and_reserves_a_fair_tenant_share() -> None:
     assert {row["tenant_id"] for row in first} == {"tenant-a", "tenant-b"}
     assert repository.calls == [("tenant-b", 1)]
     assert [row["tenant_id"] for row in second] == ["tenant-b"]
+
+
+def test_preview_dispatch_recovery_binds_and_filters_by_every_tenant() -> None:
+    """A tenant-blind dispatch scan returns nothing under FORCE RLS, so scan per tenant.
+
+    ``pipeline_preview_runs`` is tenant-scoped with row level security forced, and the
+    control loop that drives redispatch has no ambient tenant. Every scan must
+    therefore run inside ``tenant_context`` *and* carry the tenant as a predicate.
+    """
+    transaction_manager = _TransactionManager()
+    repository = _DispatchScanRepository()
+
+    rows = recoverable_preview_dispatches(
+        transaction_manager,  # type: ignore[arg-type]
+        repository,  # type: ignore[arg-type]
+        _MetadataRepository(),  # type: ignore[arg-type]
+        limit=100,
+    )
+
+    # Each tenant is scanned with its own tenant bound as the ambient RLS context.
+    assert [(bound, filtered) for bound, filtered, _ in repository.calls] == [
+        ("tenant-a", "tenant-a"),
+        ("tenant-b", "tenant-b"),
+    ]
+    # The transaction that runs the scan is opened with the tenant already bound.
+    assert transaction_manager.tenant_ids == ["tenant-a", "tenant-b"]
+    assert [row["tenant_id"] for row in rows] == ["tenant-a", "tenant-b"]
+
+
+def test_preview_dispatch_recovery_stops_once_the_limit_is_consumed() -> None:
+    """The bounded scan must not exceed its limit while fanning out over tenants."""
+    transaction_manager = _TransactionManager()
+    repository = _DispatchScanRepository(rows_per_tenant=2)
+
+    rows = recoverable_preview_dispatches(
+        transaction_manager,  # type: ignore[arg-type]
+        repository,  # type: ignore[arg-type]
+        _MetadataRepository(),  # type: ignore[arg-type]
+        limit=2,
+    )
+
+    assert len(rows) == 2
+    assert [filtered for _, filtered, _ in repository.calls] == ["tenant-a"]

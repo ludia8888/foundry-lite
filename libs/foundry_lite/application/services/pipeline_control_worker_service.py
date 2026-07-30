@@ -22,6 +22,7 @@ from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_async_run_service import (
     PipelineAsyncRunService,
 )
+from foundry_lite.application.services.pipeline_run_recovery import pipeline_run_utc_now
 from foundry_lite.application.services.pipeline_run_service import PipelineRunService
 from foundry_lite.application.services.pipeline_scheduler_evidence import (
     record_pipeline_schedule_event,
@@ -52,11 +53,7 @@ class PipelineControlWorkerService(CoreService):
         "pipeline_repository",
         "pipeline_execution_repository",
     )
-    required_collaborators = (
-        "pipeline_async_run_service",
-        "pipeline_run_service",
-        "runtime_service",
-    )
+    required_collaborators = ("pipeline_async_run_service", "pipeline_run_service", "runtime_service")
     engine: TransactionManager
     metadata_repository: MetadataRepository
     pipeline_repository: PipelineRepository
@@ -73,10 +70,29 @@ class PipelineControlWorkerService(CoreService):
                 totals["dispatches"] += cast(int, dispatched["recovered"])
                 totals["cancellations"] += self.recover_cancellations(tenant_id=tenant_id, limit=limit)
                 totals["scheduleTerminals"] += self.observe_schedule_terminals(tenant_id=tenant_id, limit=limit)
-                totals["staleExecutions"] += self.pipeline_run_service.recover_stale_executions(
-                    tenant_id=tenant_id, limit=limit
-                )
+                totals["staleExecutions"] += self.recover_stale_executions(tenant_id=tenant_id, limit=limit)
         return totals
+
+    def recover_stale_executions(self, *, tenant_id: str, now: str | None = None, limit: int = 100) -> int:
+        """Fail-close runs whose execution lease lapsed because their executor died.
+
+        A live executor keeps its run lease warm for the whole node (see
+        ``run_execution_lease_keepalive``), so a lapsed lease is a crash, not a slow
+        node. Only the synchronous replay path expired those, leaving crashed
+        async/distributed runs stuck 'running' forever.
+        """
+        with self.engine.begin() as transaction:
+            rows = self.pipeline_repository.stale_execution_runs(
+                transaction=transaction,
+                tenant_id=tenant_id,
+                now=now or pipeline_run_utc_now(),
+                limit=max(1, min(limit, 500)),
+            )
+        return sum(self._expire_stale_execution(row) for row in rows)
+
+    def _expire_stale_execution(self, row: PipelineRunRow) -> int:
+        ctx = _control_context(row, purpose="stale-execution-recovery")
+        return 1 if self.pipeline_run_service.expire_stale_execution_run(ctx, row) else 0
 
     def recover_cancellations(self, *, tenant_id: str, limit: int = 100) -> int:
         with self.engine.begin() as transaction:
@@ -168,10 +184,10 @@ class PipelineControlWorkerService(CoreService):
         )
 
 
-def _control_context(row: PipelineRunRow) -> RequestContext:
+def _control_context(row: PipelineRunRow, *, purpose: str = "pipeline-control") -> RequestContext:
     return RequestContext(
         tenant_id=str(row["tenant_id"]),
         actor_user_id="pipeline-control-worker",
-        request_id=f"pipeline-control:{row['id']}",
+        request_id=f"{purpose}:{row['id']}",
         roles=DEMO_ADMIN_ROLES,
     )

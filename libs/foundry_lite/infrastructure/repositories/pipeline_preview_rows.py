@@ -121,6 +121,7 @@ def update_preview_dispatch(
 
 def pending_preview_dispatches(
     transaction: Any,
+    tenant_id: str,
     limit: int,
 ) -> list[PipelinePreviewRunRow]:
     rows = (
@@ -128,6 +129,7 @@ def pending_preview_dispatches(
             select(db.pipeline_preview_runs)
             .where(
                 and_(
+                    db.pipeline_preview_runs.c.tenant_id == tenant_id,
                     db.pipeline_preview_runs.c.status == "QUEUED",
                     db.pipeline_preview_runs.c.dispatch_status.in_(("pending", "unknown")),
                 )

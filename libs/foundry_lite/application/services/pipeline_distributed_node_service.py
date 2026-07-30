@@ -82,6 +82,7 @@ from foundry_lite.application.services.pipeline_retry_policy import pipeline_ret
 from foundry_lite.application.services.pipeline_run_recovery import (
     PipelineExecutionLeaseGuard,
     new_pipeline_execution_lease,
+    run_execution_lease_keepalive,
 )
 from foundry_lite.application.services.pipeline_run_requests import (
     required_pipeline_run,
@@ -169,33 +170,37 @@ class PipelineDistributedNodeService(CoreService):
         node = _required_runtime_node(plan.nodes, _node_id(payload))
         bindings = self.pipeline_graph_v2_execution_service.execution_bindings(guard)
         upstream_artifacts, persisted = self._upstream_state(ctx, row, payload)
-        heartbeat = _AttemptHeartbeat(self.engine, self.pipeline_execution_repository, ctx)
-        evidence = PipelineGraphV2ExecutionEvidenceWriter(
-            transaction_manager=self.engine,
-            repository=self.pipeline_execution_repository,
-            ctx=ctx,
-            run_id=str(row["id"]),
-            execution_lease_guard=guard,
-            worker_lease=_worker_lease(payload),
-            on_attempt_started=heartbeat.start,
-        )
+        heartbeat, evidence = self._attempt_evidence_writer(ctx, str(row["id"]), guard, payload)
         try:
-            result = self._execute_runtime_node(
-                ctx,
-                row,
-                version,
-                plan,
-                node,
-                bindings,
-                evidence,
-                upstream_artifacts,
-                persisted,
-            )
+            # Keep the run lease warm while the node computes: a node may legitimately
+            # run past the run-lease window, and the distributed path otherwise renews
+            # only at evidence boundaries, so the stale-lease reaper would expire a
+            # healthy long node as if its executor had crashed.
+            with run_execution_lease_keepalive(guard):
+                result = self._execute_runtime_node(
+                    ctx, row, version, plan, node, bindings, evidence, upstream_artifacts, persisted
+                )
         finally:
             heartbeat.stop()
         outcome = self._node_outcome(ctx, row, node.node_id, result)
         self._raise_if_retryable(ctx, row, node.config, version, outcome)
         return outcome
+
+    def _attempt_evidence_writer(
+        self, ctx: RequestContext, run_id: str, guard: PipelineExecutionLeaseGuard, payload: Mapping[str, object]
+    ) -> tuple[_AttemptHeartbeat, PipelineGraphV2ExecutionEvidenceWriter]:
+        """Bind one activity delivery's attempt heartbeat to its evidence writer."""
+        heartbeat = _AttemptHeartbeat(self.engine, self.pipeline_execution_repository, ctx)
+        evidence = PipelineGraphV2ExecutionEvidenceWriter(
+            transaction_manager=self.engine,
+            repository=self.pipeline_execution_repository,
+            ctx=ctx,
+            run_id=run_id,
+            execution_lease_guard=guard,
+            worker_lease=_worker_lease(payload),
+            on_attempt_started=heartbeat.start,
+        )
+        return heartbeat, evidence
 
     def cancel_node(self, payload: Mapping[str, object]) -> JsonObject:
         ctx = _worker_context(payload)

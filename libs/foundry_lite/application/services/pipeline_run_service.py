@@ -60,7 +60,6 @@ from foundry_lite.application.services.pipeline_run_terminal import (
     fail_pipeline_run,
     succeed_pipeline_run,
 )
-from foundry_lite.domain.context import DEMO_ADMIN_ROLES
 
 _ACTIVE_OR_TERMINAL_RUN_STATUSES = frozenset(
     {"cancelled", "cancelling", "running", "executing", "succeeded", "partial", "failed"}
@@ -152,16 +151,7 @@ class PipelineRunService(CoreService):
             require_idempotent_run(row, request_fingerprint)
             action = pipeline_run_recovery.replayed_pipeline_run_action(row)
             if action == "fail_stale":
-                pipeline_run_recovery.expire_stale_pipeline_run(
-                    self.engine,
-                    self.pipeline_repository,
-                    self.pipeline_execution_repository,
-                    self.dataset_transaction_repository,
-                    self.media_repository,
-                    self.runtime_service,
-                    ctx,
-                    row,
-                )
+                self.expire_stale_execution_run(ctx, row)
                 return self.get_run(str(row["id"]), ctx=ctx)
             if action == "read":
                 self._reconcile_unknown_commit(ctx, row)
@@ -191,6 +181,24 @@ class PipelineRunService(CoreService):
             self.dataset_transaction_repository,
             self.media_repository,
             self.media_transaction_service,
+            self.runtime_service,
+            ctx,
+            row,
+        )
+
+    def expire_stale_execution_run(self, ctx: RequestContext, row: PipelineRunRow) -> bool:
+        """Fail-close one run whose execution lease lapsed; return whether it did.
+
+        Owned here rather than in the control worker because the terminal recovery
+        needs this service's execution/dataset/media repositories, and the worker
+        should not take those dependencies just to pass them through.
+        """
+        return pipeline_run_recovery.expire_stale_pipeline_run(
+            self.engine,
+            self.pipeline_repository,
+            self.pipeline_execution_repository,
+            self.dataset_transaction_repository,
+            self.media_repository,
             self.runtime_service,
             ctx,
             row,
@@ -303,42 +311,6 @@ class PipelineRunService(CoreService):
                     {"version_id": row["version_id"], "outputs": list(row["outputs"])},
                 )
         return self.get_run(run_id, ctx=ctx)
-
-    def recover_stale_executions(
-        self,
-        *,
-        tenant_id: str,
-        now: str | None = None,
-        limit: int = 100,
-    ) -> int:
-        """Fail-close crashed runs whose execution lease has expired for one tenant.
-
-        Callers bind ``tenant_context(tenant_id)`` so the FORCE-RLS scan and the
-        terminal write both see the tenant's rows under a production DB role.
-        """
-        as_of = now or pipeline_run_recovery.pipeline_run_utc_now()
-        with self.engine.begin() as transaction:
-            rows = self.pipeline_repository.stale_execution_runs(
-                transaction=transaction,
-                tenant_id=tenant_id,
-                now=as_of,
-                limit=max(1, min(limit, 500)),
-            )
-        recovered = 0
-        for row in rows:
-            ctx = _stale_recovery_context(row)
-            if pipeline_run_recovery.expire_stale_pipeline_run(
-                self.engine,
-                self.pipeline_repository,
-                self.pipeline_execution_repository,
-                self.dataset_transaction_repository,
-                self.media_repository,
-                self.runtime_service,
-                ctx,
-                row,
-            ):
-                recovered += 1
-        return recovered
 
     def execute_queued_run(
         self,
@@ -524,12 +496,3 @@ class PipelineRunService(CoreService):
             dataset=DatasetPipelineNodeCommitter(self.transform_service, evidence, ctx),
             governed_candidate=GovernedCandidatePipelineOutputCommitter(candidate),
         )
-
-
-def _stale_recovery_context(row: PipelineRunRow) -> RequestContext:
-    return RequestContext(
-        tenant_id=str(row["tenant_id"]),
-        actor_user_id="pipeline-control-worker",
-        request_id=f"stale-execution-recovery:{row['id']}",
-        roles=DEMO_ADMIN_ROLES,
-    )

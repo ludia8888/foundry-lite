@@ -34,6 +34,7 @@ from foundry_lite.application.services.pipeline_preview_recovery import (
     pipeline_preview_lease_reclaim_values,
     pipeline_preview_utc_now,
     recoverable_pipeline_previews,
+    recoverable_preview_dispatches,
     recovered_pipeline_preview_context,
 )
 from foundry_lite.application.services.pipeline_preview_runtime import (
@@ -54,6 +55,7 @@ from foundry_lite.application.services.pipeline_preview_values import (
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class PipelinePreviewService(CoreService):
@@ -141,20 +143,21 @@ class PipelinePreviewService(CoreService):
             )
 
     def recover_preview_dispatches(self, *, limit: int = 100) -> dict[str, object]:
-        with self.engine.begin() as transaction:
-            rows = self.pipeline_execution_repository.pending_preview_dispatches(
-                transaction=transaction,
-                limit=max(1, min(limit, 500)),
-            )
+        """Redispatch every tenant's undispatched previews, one RLS context at a time."""
+        rows = recoverable_preview_dispatches(
+            self.engine,
+            self.pipeline_execution_repository,
+            self.metadata_repository,
+            limit=limit,
+        )
         for row in rows:
             ctx = recovered_pipeline_preview_context(row)
-            dispatch_pipeline_preview(
-                self.engine,
-                self.pipeline_execution_repository,
-                self.pipeline_dag_orchestrator,
-                ctx,
-                row,
-            )
+            # The redispatch write is tenant-scoped too, and the control loop that calls
+            # this has no ambient tenant of its own, so bind the row's tenant.
+            with tenant_context(ctx.tenant_id):
+                dispatch_pipeline_preview(
+                    self.engine, self.pipeline_execution_repository, self.pipeline_dag_orchestrator, ctx, row
+                )
         return {"recovered": len(rows)}
 
     def execute_preview_run(
