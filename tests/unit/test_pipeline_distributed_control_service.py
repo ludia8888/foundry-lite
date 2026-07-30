@@ -384,6 +384,64 @@ def test_control_worker_expires_crashed_execution_but_spares_a_warm_lease(tmp_pa
     assert control.recover_stale_executions(tenant_id="tenant-demo", limit=999) == 0
 
 
+def test_control_worker_reconciles_partial_runs_with_unknown_commit_outputs(tmp_path: Path) -> None:
+    """The tick must resolve 'partial' runs stuck on an unresolved external commit.
+
+    Async/distributed runs can lose a media-commit acknowledgement and land 'partial'
+    with a COMMIT_OUTCOME_UNKNOWN output. Only the synchronous start-run replay ever
+    resolved those and it has no async entrypoint, so they sat in limbo forever. The
+    scan is also tenant-scoped, since a tenant-blind scan returns nothing under RLS.
+    """
+    foundry = _foundry(tmp_path)
+    _insert_version(foundry, "version-partial", _plan())
+    with foundry.engine.begin() as transaction:
+        transaction.execute(
+            insert(db.pipeline_runs).values(
+                **_run_values(
+                    "run-unknown-commit",
+                    "version-partial",
+                    status="partial",
+                    outputs=[{"nodeId": "output", "status": "COMMIT_OUTCOME_UNKNOWN"}],
+                    completed_at=NOW,
+                )
+            )
+        )
+        transaction.execute(
+            insert(db.pipeline_runs).values(
+                **_run_values(
+                    "run-already-committed",
+                    "version-partial",
+                    status="partial",
+                    outputs=[{"nodeId": "output", "status": "COMMITTED"}],
+                    completed_at=NOW,
+                )
+            )
+        )
+
+    control = foundry._services.pipelines.control
+    reconciled_ids: list[str] = []
+
+    def track(ctx: RequestContext, row: PipelineRunRow) -> bool:
+        outputs = row.get("outputs")
+        has_unknown = isinstance(outputs, list) and any(
+            isinstance(item, dict) and item.get("status") == "COMMIT_OUTCOME_UNKNOWN" for item in outputs
+        )
+        if not has_unknown:
+            return False
+        assert ctx.tenant_id == "tenant-demo"
+        reconciled_ids.append(str(row["id"]))
+        return True
+
+    control.pipeline_run_service.reconcile_unknown_commit_output_for_run = track  # type: ignore[method-assign]
+    totals = control.tick(limit=999)
+
+    # Only the unknown-commit run counts; the already-committed 'partial' run is skipped.
+    assert totals["unknownCommitReconciliations"] == 1
+    assert reconciled_ids == ["run-unknown-commit"]
+    # The scan is tenant-scoped, so another tenant's context sees nothing to reconcile.
+    assert control.reconcile_unknown_commit_outputs(tenant_id="tenant-other", limit=999) == 0
+
+
 def test_distributed_node_keeps_the_run_lease_warm_so_a_long_node_is_not_reaped(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
