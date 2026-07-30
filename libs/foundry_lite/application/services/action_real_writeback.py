@@ -10,6 +10,13 @@ three shapes onto the existing outcome_unknown / compensation recording paths:
   external side effect is already live, so a silent local-only rollback would diverge state).
 - ``write`` returns LANDED and the local mutation succeeds -> the action commits normally.
 
+The external ``write`` is split off from the DB recording on purpose: :meth:`write_external` performs
+the remote reach-out with **no DB connection held** (the caller has committed the ``received`` run in
+its own short transaction beforehand), and :meth:`record_receipt_before_commit` records the receipt
+together with the local mutation in a fresh transaction. Holding a pooled connection open across a
+remote call would exhaust the pool under fleet load, so the connection is only taken for the short
+local write.
+
 ``remote_lookup`` (an idempotent HEAD-style re-read keyed by the action idempotency key) lets the
 reconciliation workflow resolve an outcome_unknown against the *real* external system instead of an
 operator-provided remote_status.
@@ -68,21 +75,36 @@ class RealExternalWritebackRunner:
             is_simulated=False,
         )
 
-    def complete_before_commit(
+    def write_external(self, command: ActionApplyCommand) -> WriteReceipt:
+        """Perform the external side effect with **no DB connection held**.
+
+        The action idempotency key addresses the write, so a replay reaches out to the same target
+        (idempotent, not a blind new write). A timeout/connection error returns an AMBIGUOUS receipt
+        (outcome_unknown, never a guaranteed failure); a clean rejection raises (the write did not
+        land, so the caller records the run as failed rather than losing a phantom external success).
+        """
+        uri = command.external_writeback_uri
+        if uri is None:
+            raise InvariantViolation("real external writeback requires a target uri")
+        target = ExternalWriteTarget(uri=uri, idempotency_key=command.idempotency_key)
+        return self.adapter.write(target, {"params": dict(command.params)})
+
+    def record_receipt_before_commit(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
         command: ActionApplyCommand,
+        receipt: WriteReceipt,
         *,
         commit: Callable[[], ActionApplyResponse],
     ) -> ActionApplyOutcome:
-        """Run the real external write, then the local commit, mapping the three reach-out shapes."""
-        uri = command.external_writeback_uri
-        if uri is None:
-            raise InvariantViolation("real external writeback requires a target uri")
-        target = ExternalWriteTarget(uri=uri, idempotency_key=command.idempotency_key)
-        receipt = self.adapter.write(target, {"params": dict(command.params)})
+        """Record the already-issued external receipt, then the local commit, in the caller's fresh tx.
+
+        ``receipt`` comes from :meth:`write_external`, which ran outside any transaction. This maps the
+        two landed/ambiguous shapes onto the recording + local-commit paths, holding the connection
+        only for the short local write.
+        """
         if receipt.status is RemoteOutcomeStatus.AMBIGUOUS:
             # A timeout is outcome_unknown (the write may have landed), never a guaranteed failure.
             unknown = self._recorder().outcome_unknown_before_commit(
@@ -91,7 +113,7 @@ class RealExternalWritebackRunner:
                 action_run_id,
                 command.idempotency_key,
                 command.request_fingerprint,
-                external_writeback_uri=uri,
+                external_writeback_uri=command.external_writeback_uri,
             )
             return ActionApplyOutcome(deferred_error=unknown)
         self._record_succeeded(conn, ctx, action_run_id, command, receipt)

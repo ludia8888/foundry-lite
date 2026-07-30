@@ -68,6 +68,61 @@ class _MemoryExternalWritebackAdapter:
         return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id="remote-sensitive-writeback")
 
 
+class _HardFailExternalWritebackAdapter:
+    """write() raises a non-timeout error: a clean rejection, so the write definitively did not land."""
+
+    profile_name = "hard-fail-external-writeback"
+
+    def __init__(self) -> None:
+        self.write_calls = 0
+
+    def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
+        del target, payload
+        self.write_calls += 1
+        # Not a timeout/connection error (which a real adapter maps to AMBIGUOUS); a hard rejection.
+        raise RuntimeError("external system rejected the write")
+
+    def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        del target
+        raise AssertionError("remote_lookup must not run when the write hard-failed")
+
+
+class _FailTerminalOnceActionRepository:
+    """Fails the first terminal update to ``fail_to_status`` once, mimicking a lost CAS race."""
+
+    def __init__(self, delegate: Any, *, fail_to_status: str) -> None:
+        self.delegate = delegate
+        self.fail_to_status = fail_to_status
+        self.armed = True
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.delegate, name)
+
+    def update_action_run_terminal(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_run_id: str,
+        transition: StatusTransition,
+        error: Mapping[str, object] | None,
+        completed_at: str,
+        result: Mapping[str, object] | None = None,
+    ) -> bool:
+        if self.armed and transition.to_status == self.fail_to_status:
+            self.armed = False
+            return False
+        return self.delegate.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            action_run_id=action_run_id,
+            transition=transition,
+            error=error,
+            completed_at=completed_at,
+            result=result,
+        )
+
+
 class _FailingActionRepository:
     def __init__(self, delegate: Any, *, fail_method: str) -> None:
         self.delegate = delegate
@@ -1071,6 +1126,113 @@ def test_compensation_is_idempotent(
     assert replay["actionRunId"] == first_run["id"]
     assert [run["id"] for run in replay_runs] == [first_run["id"]]
     assert len(replay_writebacks) == 1
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_external_write_hard_error_marks_run_failed(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _HardFailExternalWritebackAdapter()
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "writeback-hard-error"
+
+    with pytest.raises(RuntimeError, match="external system rejected the write"):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "ERP hard-rejected the write"},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    # A hard write error means the side effect definitively did not land: the durable 'received' run is
+    # marked failed (never left dangling), the object is untouched, and no writeback/edit is recorded.
+    assert adapter.write_calls == 1
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+    assert _rows_for_key(snapshot, "actionWritebacks", idempotency_key) == []
+    assert _rows_for_key(snapshot, "objectEdits", idempotency_key) == []
+    assert any(
+        event["event_type"] == "action.run.failed" and event["resource_id"] == runs[0]["id"]
+        for event in snapshot["auditEvents"]
+    )
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_simulated_writeback_short_circuits_before_external_write(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _HardFailExternalWritebackAdapter()
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "writeback-simulate-short-circuit"
+
+    # A simulated outcome is resolved inside the received transaction, before the external reach-out, so
+    # the real adapter (which would raise) is never called even though an adapter + uri are configured.
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "simulated outcome wins over the real adapter"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    writebacks = _rows_for_key(snapshot, "actionWritebacks", idempotency_key)
+    assert adapter.write_calls == 0
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert runs[0]["status"] == "outcome_unknown"
+    assert writebacks[0]["status"] == "outcome_unknown"
+
+
+def test_external_flow_records_conflict_when_received_terminal_cas_is_lost(tmp_path: Path) -> None:
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    repository = _FailTerminalOnceActionRepository(dependencies.action_repository, fail_to_status="failed")
+    foundry = FoundryLite(dependencies=replace(dependencies, action_repository=repository))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _HardFailExternalWritebackAdapter()
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "writeback-phase1-conflict"
+
+    with pytest.raises(ConflictDetected):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "phase-1 terminal CAS lost before any external write"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_failure=True,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    # The received-run terminal CAS was lost during phase 1 (before any external reach-out): the flow
+    # rolls the received transaction back, re-runs in a fresh transaction, and records a conflict -- and
+    # the real adapter is never called.
+    assert adapter.write_calls == 0
+    assert after["objectVersion"] == order["objectVersion"]
+    assert len(runs) == 1
+    assert runs[0]["status"] == "conflict"
 
 
 @pytest.mark.parametrize(
