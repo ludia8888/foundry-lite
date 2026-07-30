@@ -16,7 +16,13 @@ from foundry_lite.application.ports.external_writeback_adapter import (
     RemoteOutcomeStatus,
     WriteReceipt,
 )
-from foundry_lite.domain.errors import ExternalCompensationRequired, ExternalOutcomeUnknown, ExternalRetryableWriteback
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    ExternalCompensationRequired,
+    ExternalOutcomeUnknown,
+    ExternalRetryableWriteback,
+    ExternalSystemError,
+)
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_worker.writeback_reconciliation import (
     WritebackReconciliationWorkerConfig,
@@ -56,12 +62,17 @@ class _MemoryExternalWritebackAdapter:
 
 
 class _StrandingExternalWritebackAdapter:
-    """``write()`` raises a hard (non-timeout) error, so the run strands committed as ``external_pending``;
-    ``remote_lookup()`` HEADs the external system and reports the write LANDED (recovery drives it forward)."""
+    """``write()`` raises a hard (non-timeout) error, so the run strands committed as ``external_pending``.
+
+    ``remote_lookup()`` then reports the configured outcome (or raises), driving the recovery sweep down
+    each branch: LANDED -> apply+succeed, ABSENT -> fail, AMBIGUOUS -> outcome_unknown, raise -> retry-later.
+    """
 
     profile_name = "stranding-external-writeback"
 
-    def __init__(self) -> None:
+    def __init__(self, *, lookup: RemoteOutcome | None = None, lookup_error: Exception | None = None) -> None:
+        self.lookup = lookup
+        self.lookup_error = lookup_error
         self.write_calls = 0
 
     def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
@@ -70,6 +81,10 @@ class _StrandingExternalWritebackAdapter:
         raise RuntimeError("external system crashed mid-write")
 
     def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        if self.lookup is not None:
+            return self.lookup
         return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id=f"remote-{target.idempotency_key}")
 
 
@@ -293,6 +308,340 @@ def test_recovery_resolves_stranded_external_pending_run(tmp_path: Path) -> None
     assert after["objectVersion"] == order["objectVersion"] + 1
     assert after["properties"]["status"] == "APPROVED"
     assert adapter.write_calls == 1
+
+
+def test_external_writeback_landed_commits_inline_and_replays(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _MemoryExternalWritebackAdapter(RemoteOutcomeStatus.LANDED)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "external-landed-inline"
+    uri = "memory://erp/orders/O-1001"
+
+    def _apply() -> Mapping[str, Any]:
+        return foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "external write landed, local commit succeeds"},
+            idempotency_key=idempotency_key,
+            external_writeback_uri=uri,
+            ctx=ctx,
+        )
+
+    result = _apply()
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # The external write landed and the local mutation committed atomically in phase 3.
+    assert result["status"] == "succeeded"
+    assert result["newObjectVersion"] == order["objectVersion"] + 1
+    assert after["objectVersion"] == order["objectVersion"] + 1
+    assert after["properties"]["status"] == "APPROVED"
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "succeeded"
+    assert _writeback_for_key(snapshot, idempotency_key)["status"] == "succeeded"
+    assert adapter.targets[idempotency_key].uri == uri
+
+    # A replay attaches to the same succeeded run and never issues a second external write.
+    replay = _apply()
+    assert replay["idempotentReplay"] is True
+    assert replay["status"] == "succeeded"
+    assert replay["actionRunId"] == result["actionRunId"]
+    assert list(adapter.targets) == [idempotency_key]
+
+
+class _VersionBumpingLandedAdapter:
+    """``write()`` LANDS but first runs a callback that moves the target's version, so the inline phase-3
+    version check fails -> compensation (the external side effect is live, never a silent local rollback)."""
+
+    profile_name = "version-bumping-landed"
+
+    def __init__(self, on_write: Any) -> None:
+        self.on_write = on_write
+        self.write_calls = 0
+
+    def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
+        del payload
+        self.write_calls += 1
+        self.on_write()
+        return WriteReceipt(status=RemoteOutcomeStatus.LANDED, remote_resource_id=f"remote-{target.idempotency_key}")
+
+    def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id=f"remote-{target.idempotency_key}")
+
+
+def test_external_writeback_landed_requires_compensation_when_target_moved(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    def _move_target() -> None:
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "local mutation moves the target between the write-ahead and the resolve"},
+            idempotency_key="inline-target-mover",
+            ctx=ctx,
+        )
+
+    adapter = _VersionBumpingLandedAdapter(_move_target)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "inline-landed-target-moved"
+
+    with pytest.raises(ExternalCompensationRequired):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "external landed but the local target moved"},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    writebacks = [w for w in snapshot["actionWritebacks"] if w["idempotency_key"] == idempotency_key]
+    # The external write landed but the local target moved, so the run requires compensation.
+    assert adapter.write_calls == 1
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "compensation_required"
+    assert any(w["status"] == "compensation_required" for w in writebacks)
+
+
+class _SelfResolvingLandedAdapter:
+    """``write()`` runs the recovery sweep (which resolves the just-committed ``external_pending`` run via a
+    LANDED HEAD) before returning the configured receipt, so the inline phase-3 finds the run already
+    resolved and returns an idempotent replay (no double mutation) — whether the write LANDED or was ambiguous."""
+
+    profile_name = "self-resolving-landed"
+
+    def __init__(self, on_write: Any, *, write_status: RemoteOutcomeStatus = RemoteOutcomeStatus.LANDED) -> None:
+        self.on_write = on_write
+        self.write_status = write_status
+        self.write_calls = 0
+        self.lookup_calls = 0
+
+    def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
+        del payload
+        self.write_calls += 1
+        self.on_write()
+        if self.write_status is RemoteOutcomeStatus.AMBIGUOUS:
+            return WriteReceipt(status=RemoteOutcomeStatus.AMBIGUOUS)
+        return WriteReceipt(status=RemoteOutcomeStatus.LANDED, remote_resource_id=f"remote-{target.idempotency_key}")
+
+    def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        self.lookup_calls += 1
+        return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id=f"remote-{target.idempotency_key}")
+
+
+@pytest.mark.parametrize("write_status", [RemoteOutcomeStatus.LANDED, RemoteOutcomeStatus.AMBIGUOUS])
+def test_external_writeback_inline_resolve_replays_when_recovery_wins(
+    tmp_path: Path, write_status: RemoteOutcomeStatus
+) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    def _recover() -> None:
+        # The recovery sweep resolves the run committed by phase 1 while the external write is in flight.
+        foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+
+    adapter = _SelfResolvingLandedAdapter(_recover, write_status=write_status)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = f"inline-resolve-race-{write_status.value}"
+
+    result = foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "recovery resolves the run before the inline phase-3 runs"},
+        idempotency_key=idempotency_key,
+        external_writeback_uri="memory://erp/orders/O-1001",
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # Recovery applied the mutation during write(); the inline resolve (landed or ambiguous branch) returns
+    # an idempotent replay and never applies it a second time.
+    assert result.get("idempotentReplay") is True
+    assert result["status"] == "succeeded"
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "succeeded"
+    assert after["objectVersion"] == order["objectVersion"] + 1
+    assert after["properties"]["status"] == "APPROVED"
+
+
+def _apply_stranded_run(foundry: FoundryLite, ctx: Any, order: Mapping[str, Any], idempotency_key: str) -> None:
+    with pytest.raises(RuntimeError, match="crashed mid-write"):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "process crashed after the write-ahead commit"},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+
+def test_recovery_fails_stranded_run_when_external_write_absent(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _StrandingExternalWritebackAdapter(lookup=RemoteOutcome(status=RemoteOutcomeStatus.ABSENT))
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "stranded-then-absent"
+    _apply_stranded_run(foundry, ctx, order, idempotency_key)
+
+    result = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # The write provably did NOT land, so the stranded run fails and the object is never touched.
+    assert result["reconciled"] == 1
+    assert result["items"][0]["decision"] == "reconciled"
+    assert result["items"][0].get("remoteStatus") == "absent"
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "failed"
+    assert _writeback_for_key(snapshot, idempotency_key)["status"] == "failed"
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+
+
+def test_recovery_defers_stranded_run_when_remote_lookup_ambiguous(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _StrandingExternalWritebackAdapter(lookup=RemoteOutcome(status=RemoteOutcomeStatus.AMBIGUOUS))
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "stranded-then-ambiguous"
+    _apply_stranded_run(foundry, ctx, order, idempotency_key)
+
+    result = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # A still-ambiguous HEAD moves the run to outcome_unknown for the writeback sweep to finish later.
+    assert result["skipped"] == 1
+    assert result["items"][0]["decision"] == "skipped"
+    assert result["items"][0].get("reason") == "still_outcome_unknown"
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "outcome_unknown"
+    assert _writeback_for_key(snapshot, idempotency_key)["status"] == "outcome_unknown"
+    assert after["objectVersion"] == order["objectVersion"]
+
+
+def test_recovery_leaves_stranded_run_pending_when_remote_lookup_fails(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _StrandingExternalWritebackAdapter(lookup_error=ConnectionError("external source unreachable"))
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "stranded-then-unreachable"
+    _apply_stranded_run(foundry, ctx, order, idempotency_key)
+
+    result = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # A transient/unreachable HEAD leaves the run external_pending — recoverable on a later tick.
+    assert result["failed"] == 1
+    assert result["items"][0]["decision"] == "failed"
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "external_pending"
+    assert after["objectVersion"] == order["objectVersion"]
+
+
+def test_recovery_fails_when_target_moved_before_landed_recovery(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _StrandingExternalWritebackAdapter(
+        lookup=RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id="remote-moved")
+    )
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "stranded-then-target-moved"
+    _apply_stranded_run(foundry, ctx, order, idempotency_key)
+
+    # A local action bumps the target version before recovery runs (no external URI -> local path).
+    foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "target moved on before recovery"},
+        idempotency_key="local-mover",
+        ctx=ctx,
+    )
+
+    result = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # The write landed remotely, but the target version no longer matches, so recovery cannot apply the
+    # mutation this tick: the run stays external_pending (recoverable) and the sweep reports it failed.
+    assert result["failed"] == 1
+    assert result["items"][0]["decision"] == "failed"
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "external_pending"
+
+
+def test_external_writeback_apply_fails_fast_on_version_conflict_without_writing(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _MemoryExternalWritebackAdapter(RemoteOutcomeStatus.LANDED)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "external-version-conflict"
+
+    with pytest.raises(ConflictDetected):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"] + 5,
+            params={"reason": "stale version must fail before any external write"},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # Phase 1 rejects the stale version before phase 2, so the external write is never attempted.
+    assert adapter.targets == {}
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "conflict"
+    assert after["objectVersion"] == order["objectVersion"]
+
+
+def test_external_writeback_simulated_failure_short_circuits_before_writing(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    adapter = _MemoryExternalWritebackAdapter(RemoteOutcomeStatus.LANDED)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    idempotency_key = "external-simulated-failure"
+
+    with pytest.raises(ExternalSystemError):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "simulated failure precedes the real external write"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_failure=True,
+            external_writeback_uri="memory://erp/orders/O-1001",
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    # The simulated before-commit failure short-circuits phase 1, so the real adapter is never called.
+    assert adapter.targets == {}
+    assert _run_for_key(snapshot, idempotency_key)["status"] == "failed"
+    assert after["objectVersion"] == order["objectVersion"]
 
 
 def test_writeback_reconciliation_worker_config_from_env(tmp_path: Path) -> None:
