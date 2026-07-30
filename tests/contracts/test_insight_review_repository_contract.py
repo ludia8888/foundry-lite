@@ -208,6 +208,58 @@ def test_insight_review_execution_status_links_action_once() -> None:
     assert late_failure is None
 
 
+def test_insight_review_lookup_by_execution_idempotency_key_is_indexed_and_tenant_scoped() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_1", create_key="create-1", execution_status="pending_review"),
+        )
+        harness.repository.decide_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            status="approved",
+            decision={"decision": "approved"},
+            decision_idempotency_key="decision-1",
+            updated_at="2026-06-19T00:00:01Z",
+        )
+        started = harness.repository.mark_execution_started(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            execution_idempotency_key="execute-lookup",
+            execution_request_fingerprint="sha256:execution-request",
+            proposal_fingerprint="sha256:proposal",
+            updated_at="2026-06-19T00:00:02Z",
+        )
+        found = harness.repository.review_by_execution_idempotency_key(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            idempotency_key="execute-lookup",
+        )
+        missing_key = harness.repository.review_by_execution_idempotency_key(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            idempotency_key="never-claimed",
+        )
+        other_tenant = harness.repository.review_by_execution_idempotency_key(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            idempotency_key="execute-lookup",
+        )
+
+    # The key is persisted in a dedicated column (not scanned out of the JSON blob).
+    assert started is not None
+    assert started["execution_idempotency_key"] == "execute-lookup"
+    # Lookup resolves the owning review by the indexed column.
+    assert found is not None
+    assert found["id"] == "review_1"
+    # A key nobody claimed, and a matching key under another tenant, both miss.
+    assert missing_key is None
+    assert other_tenant is None
+
+
 def test_insight_review_execution_success_can_merge_result_metadata() -> None:
     harness = _sqlalchemy_harness()
     with harness.transaction() as transaction:
