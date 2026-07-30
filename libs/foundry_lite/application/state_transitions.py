@@ -162,6 +162,16 @@ OSDK_OAUTH_REFRESH_REVOKED = StatusTransition(("active", "rotated"), "revoked")
 OSDK_OAUTH_REFRESH_ROTATED = StatusTransition(("active",), "rotated")
 OSDK_OAUTH_SESSION_COMPROMISED = StatusTransition(("active",), "compromised")
 OSDK_OAUTH_SESSION_REVOKED = StatusTransition(("active",), "revoked")
+OBSERVABILITY_INCIDENT_ACKNOWLEDGED = StatusTransition(("open",), "acknowledged")
+OBSERVABILITY_INCIDENT_RESOLVED = StatusTransition(("open", "acknowledged"), "resolved")
+
+
+def observability_incident_transition(status: str) -> StatusTransition:
+    if status == "acknowledged":
+        return OBSERVABILITY_INCIDENT_ACKNOWLEDGED
+    if status == "resolved":
+        return OBSERVABILITY_INCIDENT_RESOLVED
+    raise ValueError(f"unsupported observability incident status transition: {status}")
 
 
 def dataset_run_failed_transition(run_kind: str) -> StatusTransition:

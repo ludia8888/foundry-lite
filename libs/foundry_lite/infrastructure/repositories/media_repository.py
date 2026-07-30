@@ -289,6 +289,23 @@ class SqlAlchemyMediaRepository:
         )
         return [_media_version_from_row(row) for row in rows]
 
+    def lock_media_item_for_version_allocation(self, *, transaction: Any, tenant_id: str, media_item_id: str) -> None:
+        """Serialize version-number allocation for a media item.
+
+        ``next_version_number`` reads ``MAX(version_number)+1`` with no lock, so
+        two concurrent uploads to the same logical path both computed the same
+        number and one failed the ``uq_media_item_version_number`` constraint
+        instead of getting the next version. Taking a row lock on the media item
+        first (a no-op on SQLite, which serializes writers anyway) makes the
+        read-max-then-insert atomic on PostgreSQL, mirroring
+        ``lock_dataset_for_version_allocation``.
+        """
+        transaction.execute(
+            select(db.media_items.c.id)
+            .where(and_(db.media_items.c.tenant_id == tenant_id, db.media_items.c.id == media_item_id))
+            .with_for_update()
+        ).first()
+
     def next_version_number(self, *, transaction: Any, media_item_id: str) -> int:
         current = transaction.execute(
             select(func.max(db.media_item_versions.c.version_number)).where(

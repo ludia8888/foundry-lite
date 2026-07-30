@@ -181,9 +181,20 @@ class RuntimeRepository(Protocol):
         ...
 
     def rows_for_tenant(
-        self, *, transaction: TransactionContext, table: RuntimeRowsTable, tenant_id: str
+        self,
+        *,
+        transaction: TransactionContext,
+        table: RuntimeRowsTable,
+        tenant_id: str,
+        event_types: Sequence[str] | None = None,
     ) -> list[RuntimeRow]:
-        """Return rows by tenant from an allowlisted runtime table."""
+        """Return rows by tenant from an allowlisted runtime table.
+
+        ``event_types`` narrows the scan for tables that record an event type.
+        Callers that only consume a few event types must pass it: ``audit_events``
+        grows with every write in the tenant, so an unfiltered read is a
+        full-table scan that gets slower with age.
+        """
         ...
 
     def pending_outbox_events(self, *, transaction: TransactionContext, tenant_id: str, limit: int) -> list[RuntimeRow]:

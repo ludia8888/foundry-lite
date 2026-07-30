@@ -193,30 +193,22 @@ class VirtualMediaSetService(CoreService):
         envelope: dict[str, object],
         now: str,
     ) -> MediaItemVersionRecord:
-        etag = _pinned_etag(source_ref) or ""
-        raw_size = source_ref.get("byte_size", 0)
-        byte_size = raw_size if isinstance(raw_size, int) else 0
-        record = MediaItemVersionRecord(
-            media_item_version_id=_new_id("miv"),
-            tenant_id=ctx.tenant_id,
-            media_item_id=item.media_item_id,
-            media_transaction_id=media_transaction_id,
-            version_number=self.media_repository.next_version_number(
-                transaction=conn, media_item_id=item.media_item_id
-            ),
-            blob_key=str(source_ref["uri"]),
-            content_hash=etag,
-            byte_size=byte_size,
-            supplied_mime_type=supplied_mime_type,
-            sniffed_mime_type=supplied_mime_type,
-            schema_type=schema_type,
-            format=format,
-            probe_metadata={},
-            security_envelope=envelope,
-            source_ref=source_ref,
-            status="COMMITTED",
-            created_at=now,
-            committed_at=now,
+        # Serialize version-number allocation for this item so two concurrent
+        # external commits cannot read the same next version_number.
+        self.media_repository.lock_media_item_for_version_allocation(
+            transaction=conn, tenant_id=ctx.tenant_id, media_item_id=item.media_item_id
+        )
+        record = _external_version_record(
+            ctx,
+            item,
+            media_transaction_id,
+            self.media_repository.next_version_number(transaction=conn, media_item_id=item.media_item_id),
+            source_ref,
+            supplied_mime_type,
+            schema_type,
+            format,
+            envelope,
+            now,
         )
         inserted = self.media_repository.insert_version(transaction=conn, record=record)
         return inserted if inserted is not None else record
@@ -245,6 +237,42 @@ class VirtualMediaSetService(CoreService):
             after_ref=payload,
             correlation_id=ctx.request_id,
         )
+
+
+def _external_version_record(
+    ctx: RequestContext,
+    item: MediaItemRecord,
+    media_transaction_id: str,
+    version_number: int,
+    source_ref: dict[str, object],
+    supplied_mime_type: str,
+    schema_type: str,
+    format: str,
+    envelope: dict[str, object],
+    now: str,
+) -> MediaItemVersionRecord:
+    """Build the immutable version row for an externally-hosted media reference."""
+    raw_size = source_ref.get("byte_size", 0)
+    return MediaItemVersionRecord(
+        media_item_version_id=_new_id("miv"),
+        tenant_id=ctx.tenant_id,
+        media_item_id=item.media_item_id,
+        media_transaction_id=media_transaction_id,
+        version_number=version_number,
+        blob_key=str(source_ref["uri"]),
+        content_hash=_pinned_etag(source_ref) or "",
+        byte_size=raw_size if isinstance(raw_size, int) else 0,
+        supplied_mime_type=supplied_mime_type,
+        sniffed_mime_type=supplied_mime_type,
+        schema_type=schema_type,
+        format=format,
+        probe_metadata={},
+        security_envelope=envelope,
+        source_ref=source_ref,
+        status="COMMITTED",
+        created_at=now,
+        committed_at=now,
+    )
 
 
 def _require_version_or_marker(source_ref: dict[str, object]) -> None:

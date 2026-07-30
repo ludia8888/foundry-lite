@@ -111,7 +111,9 @@ class OAuthSessionRepository(Protocol):
 
     def mark_authorization_code_consumed(
         self, *, transaction: TransactionContext, tenant_id: str, code_id: str, consumed_at: str
-    ) -> None: ...
+    ) -> bool:
+        """Consume the code if still unconsumed; return False if it was already consumed."""
+        ...
 
     def insert_session(self, *, transaction: TransactionContext, record: OAuthSessionRecord) -> OAuthSessionRow: ...
 
@@ -153,7 +155,9 @@ class OAuthSessionRepository(Protocol):
         token_id: str,
         replacement_token_id: str,
         used_at: str,
-    ) -> None: ...
+    ) -> bool:
+        """Rotate the presented refresh token; return False if it was no longer active."""
+        ...
 
     def revoke_refresh_token(
         self, *, transaction: TransactionContext, tenant_id: str, token_id: str, revoked_at: str

@@ -256,6 +256,12 @@ class MediaRepository(Protocol):
         """Return tenant-scoped immutable version rows for the given ids (batch-first)."""
         ...
 
+    def lock_media_item_for_version_allocation(
+        self, *, transaction: TransactionContext, tenant_id: str, media_item_id: str
+    ) -> None:
+        """Row-lock the media item so concurrent version-number allocation serializes."""
+        ...
+
     def next_version_number(self, *, transaction: TransactionContext, media_item_id: str) -> int:
         """Return the next monotonic version number for a logical-path item."""
         ...

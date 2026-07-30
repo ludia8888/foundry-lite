@@ -101,6 +101,9 @@ class MediaUploadService(CoreService):
             item = self.media_repository.upsert_media_item(
                 transaction=conn, record=_item_record(ctx, inputs.media_set_id, inputs.logical_path, now)
             )
+            self.media_repository.lock_media_item_for_version_allocation(
+                transaction=conn, tenant_id=ctx.tenant_id, media_item_id=item.media_item_id
+            )
             version_number = self.media_repository.next_version_number(
                 transaction=conn, media_item_id=item.media_item_id
             )

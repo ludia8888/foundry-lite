@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.pipeline_repository import (
     PipelineBranchRow,
@@ -121,8 +123,11 @@ class PipelineGovernanceService(CoreService):
                 updated_at=_now(),
             )
             if after is None:
+                # A terminal proposal read at the start yields the clearer
+                # "not in the required state"; a valid `before` whose CAS still
+                # lost is a true concurrent change.
                 require_proposal_status(before, ("submitted", "in_review"))
-            assert after is not None
+                self._raise_proposal_conflict(conn, ctx, proposal_id)
             self._audit(conn, ctx, "assigned", after, before=before)
             return self._proposal_view(conn, ctx, after)
 
@@ -155,8 +160,7 @@ class PipelineGovernanceService(CoreService):
                 updated_at=_now(),
             )
             if after is None:
-                require_proposal_status(before, ("submitted", "in_review"))
-            assert after is not None
+                self._raise_proposal_conflict(conn, ctx, proposal_id)
             self._audit(conn, ctx, status, after, before=before)
             return self._proposal_view(conn, ctx, after)
 
@@ -208,7 +212,7 @@ class PipelineGovernanceService(CoreService):
             )
             if after is None:
                 require_proposal_status(before, ("submitted", "in_review", "approved"))
-            assert after is not None
+                self._raise_proposal_conflict(conn, ctx, proposal_id)
             self._audit(conn, ctx, "withdrawn", after, before=before)
             return self._proposal_view(conn, ctx, after)
 
@@ -217,6 +221,23 @@ class PipelineGovernanceService(CoreService):
         if row is None:
             raise NotFound("pipeline branch not found", details={"branch_id": branch_id})
         return row
+
+    def _raise_proposal_conflict(self, conn: TransactionContext, ctx: RequestContext, proposal_id: str) -> NoReturn:
+        """Report a concurrent proposal change after a guarded CAS matched no rows.
+
+        The CAS UPDATE guards on the allowed source statuses, so a miss means the
+        row's status changed under a concurrent writer. The caller's ``before``
+        row was read before that change and already passed the same status guard,
+        so re-checking it can never fire; re-read the row and report its actual
+        current status instead of falling through to a bare AssertionError.
+        """
+        current = self.pipeline_repository.proposal_by_id(
+            transaction=conn, tenant_id=ctx.tenant_id, proposal_id=proposal_id
+        )
+        raise ConflictDetected(
+            "pipeline proposal changed concurrently",
+            details={"proposalId": proposal_id, "status": current["status"] if current is not None else None},
+        )
 
     def _require_proposal(
         self,

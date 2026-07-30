@@ -63,17 +63,24 @@ class SqlAlchemyOAuthSessionRepository:
 
     def mark_authorization_code_consumed(
         self, *, transaction: Any, tenant_id: str, code_id: str, consumed_at: str
-    ) -> None:
-        transaction.execute(
+    ) -> bool:
+        # Compare-and-set on the still-unconsumed code so single-use is atomic.
+        # A plain UPDATE keyed only on (tenant_id, id) let two concurrent exchanges
+        # of the same code both pass the earlier `consumed_at is None` read and
+        # both mint a session + refresh token. Guarding on `consumed_at IS NULL`
+        # makes exactly one exchange win; the loser sees rowcount 0 and must abort.
+        result = transaction.execute(
             db.osdk_oauth_authorization_codes.update()
             .where(
                 and_(
                     db.osdk_oauth_authorization_codes.c.tenant_id == tenant_id,
                     db.osdk_oauth_authorization_codes.c.id == code_id,
+                    db.osdk_oauth_authorization_codes.c.consumed_at.is_(None),
                 )
             )
             .values(consumed_at=consumed_at)
         )
+        return result.rowcount == 1
 
     def insert_session(self, *, transaction: Any, record: OAuthSessionRecord) -> OAuthSessionRow:
         values = _session_values(record)
@@ -175,8 +182,8 @@ class SqlAlchemyOAuthSessionRepository:
         token_id: str,
         replacement_token_id: str,
         used_at: str,
-    ) -> None:
-        cas_status_update(
+    ) -> bool:
+        return cas_status_update(
             transaction,
             db.osdk_oauth_refresh_tokens,
             tenant_id=tenant_id,
