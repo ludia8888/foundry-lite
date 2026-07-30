@@ -24,7 +24,7 @@ from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_oauth_session_refs import safe_code_ref, safe_session_ref
 from foundry_lite.application.services.osdk_oauth_session_support import _OAuthAuditBoundary, _OAuthRateLimiter
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
 
 _DEFAULT_CODE_TTL_SECONDS = 300
 # Access tokens are stateless: the JWT verifier cannot consult the session store, so a
@@ -105,9 +105,15 @@ class OsdkOAuthSessionService(CoreService):
                 self._validate_code_exchange(code_row, client_id, redirect_uri, code_verifier)
                 session = self._create_session(conn, code_row, client, now)
                 refresh = self._create_refresh_token(conn, ctx, cast(str, session["id"]), client, now)
-                self.oauth_session_repository.mark_authorization_code_consumed(
+                consumed = self.oauth_session_repository.mark_authorization_code_consumed(
                     transaction=conn, tenant_id=ctx.tenant_id, code_id=code_row["id"], consumed_at=now
                 )
+                if not consumed:
+                    # A concurrent exchange already consumed this single-use code:
+                    # the earlier SELECT read it as unconsumed before the winner
+                    # committed. Abort so this transaction's session and refresh
+                    # token are rolled back rather than becoming a second grant.
+                    raise ConflictDetected("OSDK OAuth authorization code was already consumed")
                 self._audit(conn, ctx, "osdk.oauth.session.created", session, safe_session_ref(session))
         if invalid_code or session is None or client is None or refresh is None:
             raise PermissionDenied("OSDK OAuth authorization code is invalid")
@@ -128,13 +134,20 @@ class OsdkOAuthSessionService(CoreService):
                 session = self._require_session(conn, ctx, cast(str, old_token["session_id"]), now)
                 self._rate_limiter.check(ctx, "refresh", cast(str, session["client_id"]))
                 new_refresh = self._create_refresh_token(conn, ctx, cast(str, session["id"]), session, now)
-                self.oauth_session_repository.rotate_refresh_token(
+                rotated = self.oauth_session_repository.rotate_refresh_token(
                     transaction=conn,
                     tenant_id=ctx.tenant_id,
                     token_id=cast(str, old_token["id"]),
                     replacement_token_id=cast(str, new_refresh["refreshTokenId"]),
                     used_at=now,
                 )
+                if not rotated:
+                    # A concurrent refresh already rotated this token: the plain
+                    # SELECT above read it as active before the winner committed.
+                    # Abort so the just-inserted replacement token is rolled back
+                    # rather than left as a second live refresh token for the
+                    # session, which would also evade reuse detection.
+                    raise ConflictDetected("OSDK OAuth refresh token was already rotated")
                 self.oauth_session_repository.update_session_refresh(
                     transaction=conn, tenant_id=ctx.tenant_id, session_id=cast(str, session["id"]), refreshed_at=now
                 )

@@ -212,10 +212,25 @@ def try_acquire_migration_lock(connection: Connection) -> bool:
 
 def release_migration_lock(connection: Connection, *, has_migration_succeeded: bool) -> None:
     if connection.dialect.name == "postgresql":
+        # Acquiring the advisory lock autobegins a transaction on the future
+        # engine, so Alembic runs its DDL inside it (migrations/env.py takes the
+        # `in_transaction()` branch and does not open — or commit — its own).
+        # Without an explicit commit here the `engine.connect()` block closes
+        # with that transaction still open and PostgreSQL rolls every migration
+        # back while the runner reports success. Session-level advisory locks are
+        # not transactional, so ending the transaction does not release the lock
+        # and the unlock below still applies.
+        if connection.in_transaction():
+            if has_migration_succeeded:
+                connection.commit()
+            else:
+                connection.rollback()
         connection.execute(
             text("SELECT pg_advisory_unlock(:namespace, :lock_id)"),
             {"namespace": POSTGRES_LOCK_NAMESPACE, "lock_id": POSTGRES_LOCK_ID},
         )
+        if connection.in_transaction():
+            connection.commit()
         return
     if connection.dialect.name == "sqlite" and connection.in_transaction():
         if has_migration_succeeded:

@@ -60,6 +60,31 @@ def test_oauth_session_repository_contract_round_trips_code_session_and_refresh_
     assert revoked is not None and revoked["status"] == "revoked"
 
 
+def test_authorization_code_consumption_is_single_winner_compare_and_set() -> None:
+    """Consuming an authorization code is atomic: only the first attempt wins.
+
+    A plain UPDATE keyed only on (tenant_id, id) let two concurrent exchanges of
+    the same single-use code both consume it and each mint a session + refresh
+    token. Consumption must be a compare-and-set on the unconsumed row so the
+    second attempt reports it was already consumed and its exchange aborts.
+    """
+    engine = _engine()
+    repository: OAuthSessionRepository = SqlAlchemyOAuthSessionRepository(engine)
+
+    with engine.begin() as conn:
+        repository.insert_authorization_code(transaction=conn, record=_code_record())
+
+        first = repository.mark_authorization_code_consumed(
+            transaction=conn, tenant_id="tenant-a", code_id="code-1", consumed_at="2026-07-01T00:01:00+00:00"
+        )
+        second = repository.mark_authorization_code_consumed(
+            transaction=conn, tenant_id="tenant-a", code_id="code-1", consumed_at="2026-07-01T00:01:05+00:00"
+        )
+
+    assert first is True
+    assert second is False
+
+
 def test_oauth_token_issuer_contract_emits_public_jwks_and_osdk_claims(tmp_path) -> None:
     issuer: OAuthTokenIssuer = LocalOAuthTokenIssuer.from_key_path(tmp_path / "oauth-private-key.pem")
 

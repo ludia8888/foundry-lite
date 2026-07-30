@@ -13,7 +13,7 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import OAuthAccessTokenClaims, OsdkApplicationBundle
 from foundry_lite.application.services.osdk_oauth_session_service import _access_ttl, _require_redirect_uri
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import PermissionDenied, RateLimited, ValidationFailed
+from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, RateLimited, ValidationFailed
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider, LocalOAuthTokenIssuer
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
@@ -438,3 +438,68 @@ def _assert_oauth_audit_is_raw_token_free(
     assert cast(str, token["accessToken"]) not in payload
     assert cast(str, token["refreshToken"]) not in payload
     assert cast(str, refreshed["refreshToken"]) not in payload
+
+
+def test_osdk_oauth_refresh_aborts_when_rotation_cas_loses_the_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh whose rotation CAS loses must not leave a second live token.
+
+    Two concurrent refreshes of the same active token both read it as active
+    under READ COMMITTED and both insert a replacement. The winner flips the old
+    token active->rotated; the loser's CAS matches zero rows. When that CAS
+    result was ignored, the loser still committed its freshly-inserted token, so
+    the session ended with two active refresh tokens and reuse detection (which
+    only fires when a *rotated* token is re-presented) never flagged the theft.
+
+    Here we simulate the loser directly: force ``rotate_refresh_token`` to report
+    a lost CAS. The refresh must raise and roll back, leaving exactly the one
+    original active token, which still works.
+    """
+    from foundry_lite.infrastructure import schema as db
+    from foundry_lite.infrastructure.repositories.oauth_session_repository import (
+        SqlAlchemyOAuthSessionRepository,
+    )
+
+    foundry, _verifier = _oauth_foundry(tmp_path)
+    ctx = demo_admin_context()
+    _create_app_and_client(foundry, ctx)
+    verifier_text = "orders-race-verifier"
+    authorized = foundry.auth.osdk_oauth_authorize(
+        client_id="orders-web",
+        redirect_uri=_REDIRECT_URI,
+        code_challenge=_s256_challenge(verifier_text),
+        code_challenge_method="S256",
+        scopes=(_READ_SCOPE,),
+        ctx=ctx,
+    )
+    token = foundry.auth.osdk_oauth_token(
+        client_id="orders-web",
+        code=cast(str, authorized["code"]),
+        redirect_uri=_REDIRECT_URI,
+        code_verifier=verifier_text,
+        ctx=ctx,
+    )
+
+    def active_refresh_token_count() -> int:
+        with foundry.engine.connect() as conn:
+            rows = conn.execute(
+                db.osdk_oauth_refresh_tokens.select().where(db.osdk_oauth_refresh_tokens.c.status == "active")
+            ).all()
+        return len(rows)
+
+    assert active_refresh_token_count() == 1
+
+    monkeypatch.setattr(SqlAlchemyOAuthSessionRepository, "rotate_refresh_token", lambda *a, **k: False)
+
+    with pytest.raises(FoundryLiteError):
+        foundry.auth.osdk_oauth_refresh(refresh_token=cast(str, token["refreshToken"]), ctx=ctx)
+
+    # The just-inserted replacement was rolled back: still exactly one active token.
+    assert active_refresh_token_count() == 1
+
+    # The original token remains usable once the race is not simulated.
+    monkeypatch.undo()
+    refreshed = foundry.auth.osdk_oauth_refresh(refresh_token=cast(str, token["refreshToken"]), ctx=ctx)
+    assert refreshed["refreshToken"] != token["refreshToken"]

@@ -412,6 +412,38 @@ def test_media_version_insert_dedups_and_commits_with_monotonic_numbers(
     assert committed[0].status == "COMMITTED" and committed[0].committed_at == "2026-06-23T01:00:00Z"
 
 
+def test_lock_media_item_for_version_allocation_serializes_monotonic_numbers(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    """Version allocation takes a row lock before reading MAX(version_number)+1.
+
+    Without the lock, two concurrent uploads to the same logical path both read
+    the same max and one failed the uq_media_item_version_number constraint. The
+    lock (a no-op on SQLite, real on PostgreSQL) makes the read-max-then-insert
+    atomic; allocation stays monotonic across sequential inserts.
+    """
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_open_transaction(transaction=conn, record=_transaction())
+        repo.upsert_media_item(transaction=conn, record=_item())
+
+        repo.lock_media_item_for_version_allocation(transaction=conn, tenant_id="tenant-demo", media_item_id="mi-1")
+        first = repo.next_version_number(transaction=conn, media_item_id="mi-1")
+        repo.insert_version(
+            transaction=conn, record=_version("miv-1", version_number=first, blob_key="blob-1", content_hash="h1")
+        )
+
+        repo.lock_media_item_for_version_allocation(transaction=conn, tenant_id="tenant-demo", media_item_id="mi-1")
+        second = repo.next_version_number(transaction=conn, media_item_id="mi-1")
+        repo.insert_version(
+            transaction=conn, record=_version("miv-2", version_number=second, blob_key="blob-2", content_hash="h2")
+        )
+
+    assert first == 1
+    assert second == 2
+
+
 def test_fetch_transaction_versions_returns_all_statuses_and_is_tenant_scoped(
     media_repo: tuple[SqlAlchemyMediaRepository, Engine],
 ) -> None:

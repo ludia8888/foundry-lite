@@ -33,6 +33,7 @@ from foundry_lite.application.ports.transaction_context import (
     StatusTransition,
 )
 from foundry_lite.application.ports.workflow_adapter import WorkflowLedgerStatus, WorkflowRunRecord, WorkflowRunRow
+from foundry_lite.application.state_transitions import observability_incident_transition
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.runtime_observability_sql import (
     _observability_incident_by_dedupe,
@@ -375,17 +376,19 @@ class SqlAlchemyRuntimeRepository:
         resolution_reason: str | None,
     ) -> StoredObservabilityIncident | None:
         values = _observability_status_values(status, actor_user_id, updated_at, resolution_reason)
-        result = transaction.execute(
-            db.observability_incidents.update()
-            .where(
-                and_(
-                    db.observability_incidents.c.tenant_id == tenant_id,
-                    db.observability_incidents.c.id == incident_id,
-                )
-            )
-            .values(**values)
+        # The transition owns the status column; cas_status_update sets it from the
+        # transition's target and guards on the allowed source statuses, so a
+        # concurrent change makes the CAS match zero rows instead of clobbering it.
+        values.pop("status", None)
+        updated = cas_status_update(
+            transaction,
+            db.observability_incidents,
+            tenant_id=tenant_id,
+            row_id=incident_id,
+            transition=observability_incident_transition(status),
+            values=values,
         )
-        if result.rowcount != 1:
+        if not updated:
             return None
         return self.observability_incident_by_id(
             transaction=transaction,
@@ -410,9 +413,19 @@ class SqlAlchemyRuntimeRepository:
         )
         return cast(RuntimeRow, dict(row)) if row else None
 
-    def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[RuntimeRow]:
+    def rows_for_tenant(
+        self,
+        *,
+        transaction: Any,
+        table: RuntimeRowsTable,
+        tenant_id: str,
+        event_types: Sequence[str] | None = None,
+    ) -> list[RuntimeRow]:
         runtime_table = _rows_table(table)
-        rows = transaction.execute(select(runtime_table).where(runtime_table.c.tenant_id == tenant_id)).mappings().all()
+        query = select(runtime_table).where(runtime_table.c.tenant_id == tenant_id)
+        if event_types is not None:
+            query = query.where(runtime_table.c.event_type.in_(tuple(event_types)))
+        rows = transaction.execute(query).mappings().all()
         return [cast(RuntimeRow, dict(row)) for row in rows]
 
     def pending_outbox_events(self, *, transaction: Any, tenant_id: str, limit: int) -> list[RuntimeRow]:

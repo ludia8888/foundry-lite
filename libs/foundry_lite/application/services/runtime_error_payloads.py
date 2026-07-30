@@ -16,6 +16,9 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.services.backup_restore_mode import (
+    RESTORE_MODE_EVENTS,
+)
+from foundry_lite.application.services.backup_restore_mode import (
     active_restore_mode_report as active_restore_mode_report,
 )
 from foundry_lite.application.services.runtime_redaction import redact_sensitive as redact_sensitive
@@ -361,7 +364,12 @@ def require_outbox_retry_open(
     conn: TransactionContext,
     ctx: RequestContext,
 ) -> None:
-    audit_events = runtime_repository.rows_for_tenant(transaction=conn, table="audit_events", tenant_id=ctx.tenant_id)
+    audit_events = runtime_repository.rows_for_tenant(
+        transaction=conn,
+        table="audit_events",
+        tenant_id=ctx.tenant_id,
+        event_types=RESTORE_MODE_EVENTS,
+    )
     restore_mode = active_restore_mode_report(audit_events)
     if restore_mode is None:
         return
@@ -389,6 +397,7 @@ def require_write_traffic_open(
             transaction=conn,
             table="audit_events",
             tenant_id=ctx.tenant_id,
+            event_types=RESTORE_MODE_EVENTS,
         )
     decide_write_traffic(
         active_restore_mode_report(audit_events),

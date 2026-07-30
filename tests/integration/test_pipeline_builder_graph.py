@@ -45,6 +45,51 @@ def _assign_and_approve(
     foundry.pipelines.approve(str(proposal["id"]), ctx=reviewer)
 
 
+def test_proposal_decision_cas_race_raises_conflict_not_assertion(tmp_path: Path, monkeypatch) -> None:
+    """A lost proposal CAS must surface as ConflictDetected, not a bare AssertionError.
+
+    The decide/assign/withdraw guards re-check the ``before`` row when the CAS
+    matches zero rows, but ``before`` already passed that same status guard, so
+    the fallback could not fire and control fell through to ``assert after is not
+    None``. A concurrent decision that flips the status between the read and the
+    CAS must instead report a proper conflict.
+    """
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,10\n", encoding="utf-8")
+    foundry.datasets.ensure("raw.pipeline_orders", ctx=ctx)
+    foundry.datasets.upload_csv("raw.pipeline_orders", csv_path, ctx=ctx)
+
+    branch = foundry.pipelines.create_branch(
+        pipeline_id="orders_cas_race",
+        name="candidate",
+        idempotency_key="pipeline-branch-cas-race",
+        ctx=ctx,
+    )
+    foundry.pipelines.update_graph(
+        str(branch["id"]),
+        graph=_orders_pipeline_graph(output_ref="clean.orders_cas_race"),
+        expected_fingerprint=str(branch["graphFingerprint"]),
+        ctx=ctx,
+    )
+    proposal = foundry.pipelines.propose(
+        str(branch["id"]),
+        title="CAS race candidate",
+        idempotency_key="pipeline-proposal-cas-race",
+        ctx=ctx,
+    )
+    reviewer_id = f"{ctx.actor_user_id}-reviewer"
+    foundry.pipelines.assign(str(proposal["id"]), assignee_user_id=reviewer_id, ctx=ctx)
+    reviewer = RequestContext(tenant_id=ctx.tenant_id, actor_user_id=reviewer_id, roles=ctx.roles)
+
+    # Force the guarded CAS to report a miss, as a concurrent decision would.
+    monkeypatch.setattr(foundry.pipeline_repository, "update_proposal_decision", lambda **_kwargs: None)
+
+    with pytest.raises(ConflictDetected, match="changed concurrently"):
+        foundry.pipelines.decide(str(proposal["id"]), decision="approve", ctx=reviewer)
+
+
 def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
