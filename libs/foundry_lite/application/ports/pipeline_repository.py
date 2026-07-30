@@ -349,7 +349,7 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
         self,
         *,
         transaction: TransactionContext,
-        tenant_id: str | None,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelineRunRow]: ...
 
@@ -357,6 +357,7 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         limit: int,
     ) -> list[PipelineRunRow]: ...
 
@@ -364,6 +365,16 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
+        limit: int,
+    ) -> list[PipelineRunRow]: ...
+
+    def stale_execution_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        now: str,
         limit: int,
     ) -> list[PipelineRunRow]: ...
 

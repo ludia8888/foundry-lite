@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.services.pipeline_preview_recovery import (
     PipelinePreviewRecoveryCursor,
     recoverable_pipeline_previews,
 )
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.repositories.metadata_repository import (
     SqlAlchemyMetadataRepository,
@@ -124,6 +128,41 @@ def test_preview_recovery_enumerates_tenants_and_binds_rls_context(postgres_fixt
     }
 
 
+def test_control_tick_recovers_crashed_running_run_under_rls(postgres_fixture, tmp_path: Path) -> None:
+    engine = postgres_fixture.engine
+    role_name = f"foundry_lite_control_recovery_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+
+    # Build the control worker on its own engine. Bootstrap runs as the container
+    # superuser (before the role listener downgrades the connection), so schema
+    # DDL and demo seeding succeed; only the later tick() runs under the role.
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(
+            db_url=engine.url.render_as_string(hide_password=False),
+            storage_root=tmp_path / "control-worker",
+        )
+    )
+    # A crashed run: still "running" with an execution lease whose expiry is long
+    # past. Seeded as superuser so it lands regardless of RLS.
+    with engine.begin() as conn:
+        conn.execute(insert(db.pipeline_runs), [_crashed_running_run("run-crashed", "tenant-demo")])
+
+    # From here the worker's connections run as the dedicated non-superuser role,
+    # so FORCE ROW LEVEL SECURITY applies exactly as it does in production.
+    event.listen(foundry.engine, "begin", _set_rls_test_role(role_name))
+    try:
+        totals = foundry._services.pipelines.control.tick(limit=100)
+    finally:
+        cast(Engine, foundry.engine).dispose()
+
+    assert _rls_forced(engine, db.pipeline_runs.name)
+    # The tenant-blind scan (tenant_id=None, no bound context) would see zero rows
+    # under the role and recover nothing; enumerating tenants + binding context
+    # makes the crashed run visible and fails it closed.
+    assert totals["staleExecutions"] == 1
+    assert _run_status(engine, "run-crashed") == "failed"
+
+
 def _grant_rls_role(engine: Engine, role_name: str) -> None:
     with engine.begin() as conn:
         role = _role_identifier(conn, role_name)
@@ -235,6 +274,33 @@ def _preview_row(row_id: str, tenant_id: str) -> dict[str, object]:
         "started_at": None,
         "completed_at": None,
     }
+
+
+def _crashed_running_run(run_id: str, tenant_id: str) -> dict[str, object]:
+    # A run whose worker crashed mid-execution: still "running", holding an
+    # execution lease whose expiry is far in the past so stale recovery reclaims it.
+    return {
+        "id": run_id,
+        "tenant_id": tenant_id,
+        "pipeline_id": f"pipeline-{tenant_id}",
+        "version_id": f"version-{tenant_id}",
+        "status": "running",
+        "idempotency_key": f"run-key-{run_id}",
+        "request_fingerprint": f"request-{run_id}",
+        "plan_fingerprint": f"plan-{run_id}",
+        "execution_lease_token": "lease-crashed",
+        "execution_lease_expires_at": "2000-01-01T00:00:00.000000Z",
+        "execution_heartbeat_at": "2000-01-01T00:00:00.000000Z",
+        "outputs": [],
+        "timeline": [{"event": "pipeline.run.execution_claimed", "at": "2000-01-01T00:00:00.000000Z"}],
+        "created_by": f"user-{tenant_id}",
+        "started_at": "2000-01-01T00:00:00.000000Z",
+    }
+
+
+def _run_status(engine: Engine, run_id: str) -> str:
+    with engine.begin() as conn:
+        return str(conn.execute(select(db.pipeline_runs.c.status).where(db.pipeline_runs.c.id == run_id)).scalar_one())
 
 
 def _set_rls_test_role(role_name: str):

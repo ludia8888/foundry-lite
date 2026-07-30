@@ -47,7 +47,7 @@ def test_async_run_unknown_dispatch_history_cancel_and_control_recovery(tmp_path
     page = service.list_runs("pipeline-a", cursor=None, limit=1, ctx=ctx)
     next_page = service.list_runs("pipeline-a", cursor=cast(str, page["nextCursor"]), limit=1, ctx=ctx)
     events = service.events(str(first["id"]), after_sequence=-1, limit=999, ctx=ctx)
-    recovered = service.recover_dispatches(limit=999)
+    recovered = service.recover_dispatches(tenant_id="tenant-demo", limit=999)
     cancelling = service.cancel(str(first["id"]), idempotency_key="cancel-a", reason="stop", ctx=ctx)
     control = foundry._services.pipelines.control.tick(limit=999)
     terminal = service.pipeline_run_service.get_run(str(first["id"]), ctx=ctx)
@@ -156,9 +156,9 @@ def test_control_worker_observes_schedule_terminals_once_and_waits_for_active_no
         )
 
     control = foundry._services.pipelines.control
-    assert control.recover_cancellations(limit=0) == 0
-    assert control.observe_schedule_terminals(limit=1000) == 2
-    assert control.observe_schedule_terminals(limit=1000) == 0
+    assert control.recover_cancellations(tenant_id="tenant-demo", limit=0) == 0
+    assert control.observe_schedule_terminals(tenant_id="tenant-demo", limit=1000) == 2
+    assert control.observe_schedule_terminals(tenant_id="tenant-demo", limit=1000) == 0
     schedule = foundry.pipelines.get_schedule("pipeline-a", ctx=demo_admin_context())
     assert schedule is not None
     assert schedule["status"] == "paused"

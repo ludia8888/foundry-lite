@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import cast
+
+from foundry_lite.application.ports.metadata_repository import MetadataRepository
 from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineExecutionRepository,
 )
@@ -19,6 +22,7 @@ from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_async_run_service import (
     PipelineAsyncRunService,
 )
+from foundry_lite.application.services.pipeline_run_service import PipelineRunService
 from foundry_lite.application.services.pipeline_scheduler_evidence import (
     record_pipeline_schedule_event,
 )
@@ -29,34 +33,56 @@ from foundry_lite.application.services.runtime_evidence_boundary import (
     RuntimeEvidenceBoundary,
 )
 from foundry_lite.domain.context import DEMO_ADMIN_ROLES, RequestContext
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class PipelineControlWorkerService(CoreService):
-    """Recover dispatch/cancellation and observe schedule terminal state."""
+    """Recover dispatch/cancellation/stale executions and observe schedule terminal state.
+
+    Every scan targets tenant-scoped tables under ``FORCE ROW LEVEL SECURITY``, so
+    the worker enumerates tenants (``metadata_repository.list_tenant_ids``) and binds
+    ``tenant_context`` per tenant before each scan and its follow-up writes. Without
+    the ambient tenant, a production non-superuser DB role sees zero rows and the
+    worker silently recovers nothing (mirrors ``recoverable_pipeline_previews``).
+    """
 
     required_dependencies = (
         "engine",
+        "metadata_repository",
         "pipeline_repository",
         "pipeline_execution_repository",
     )
-    required_collaborators = ("pipeline_async_run_service", "runtime_service")
+    required_collaborators = (
+        "pipeline_async_run_service",
+        "pipeline_run_service",
+        "runtime_service",
+    )
     engine: TransactionManager
+    metadata_repository: MetadataRepository
     pipeline_repository: PipelineRepository
     pipeline_execution_repository: PipelineExecutionRepository
     pipeline_async_run_service: PipelineAsyncRunService
+    pipeline_run_service: PipelineRunService
     runtime_service: RuntimeEvidenceBoundary
 
-    def tick(self, *, limit: int = 100) -> dict[str, object]:
-        return {
-            "dispatches": self.pipeline_async_run_service.recover_dispatches(limit=limit),
-            "cancellations": self.recover_cancellations(limit=limit),
-            "scheduleTerminals": self.observe_schedule_terminals(limit=limit),
-        }
+    def tick(self, *, limit: int = 100) -> dict[str, int]:
+        totals = {"dispatches": 0, "cancellations": 0, "scheduleTerminals": 0, "staleExecutions": 0}
+        for tenant_id in self.metadata_repository.list_tenant_ids():
+            with tenant_context(tenant_id):
+                dispatched = self.pipeline_async_run_service.recover_dispatches(tenant_id=tenant_id, limit=limit)
+                totals["dispatches"] += cast(int, dispatched["recovered"])
+                totals["cancellations"] += self.recover_cancellations(tenant_id=tenant_id, limit=limit)
+                totals["scheduleTerminals"] += self.observe_schedule_terminals(tenant_id=tenant_id, limit=limit)
+                totals["staleExecutions"] += self.pipeline_run_service.recover_stale_executions(
+                    tenant_id=tenant_id, limit=limit
+                )
+        return totals
 
-    def recover_cancellations(self, *, limit: int = 100) -> int:
+    def recover_cancellations(self, *, tenant_id: str, limit: int = 100) -> int:
         with self.engine.begin() as transaction:
             rows = self.pipeline_repository.cancelling_runs(
                 transaction=transaction,
+                tenant_id=tenant_id,
                 limit=max(1, min(limit, 500)),
             )
         return sum(self._finish_cancelled(row) for row in rows)
@@ -74,10 +100,11 @@ class PipelineControlWorkerService(CoreService):
         self.pipeline_async_run_service._complete_cancelled(ctx, row)
         return 1
 
-    def observe_schedule_terminals(self, *, limit: int = 100) -> int:
+    def observe_schedule_terminals(self, *, tenant_id: str, limit: int = 100) -> int:
         with self.engine.begin() as transaction:
             rows = self.pipeline_repository.unobserved_terminal_schedule_runs(
                 transaction=transaction,
+                tenant_id=tenant_id,
                 limit=max(1, min(limit, 500)),
             )
         return sum(self._observe_schedule_terminal(row) for row in rows)

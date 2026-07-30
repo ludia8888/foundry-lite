@@ -151,6 +151,11 @@ def new_pipeline_execution_lease(*, now: datetime | None = None) -> PipelineExec
     )
 
 
+def pipeline_run_utc_now() -> str:
+    """Return a UTC 'Z' timestamp comparable to stored execution-lease expiries."""
+    return _timestamp_text(datetime.now(UTC))
+
+
 def stale_pipeline_run_error(row: Mapping[str, object]) -> InvariantViolation:
     return InvariantViolation(
         "expired pipeline execution lease was recovered as terminal failure",

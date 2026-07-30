@@ -207,11 +207,11 @@ class PipelineAsyncRunService(CoreService):
                 return
             raise
 
-    def recover_dispatches(self, *, limit: int = 100) -> JsonObject:
+    def recover_dispatches(self, *, tenant_id: str, limit: int = 100) -> JsonObject:
         with self.engine.begin() as transaction:
             rows = self.pipeline_repository.pending_dispatch_runs(
                 transaction=transaction,
-                tenant_id=None,
+                tenant_id=tenant_id,
                 limit=max(1, min(limit, 500)),
             )
         recovered = 0
