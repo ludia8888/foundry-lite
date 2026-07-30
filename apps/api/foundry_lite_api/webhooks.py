@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import time
 from dataclasses import dataclass
 
@@ -32,6 +34,11 @@ WEBHOOK_SERVICE_ROLE = "connector_ingest"
 
 
 WEBHOOK_SERVICE_ACTOR_PREFIX = "service-principal:"
+
+
+# Label domain-separates the webhook-signing KDF from any other use of the root
+# secret, and carries a version so the derivation can be rotated later.
+_WEBHOOK_TENANT_KEY_DERIVATION_LABEL = b"foundry-lite/webhook-signing/v1"
 
 
 @dataclass(frozen=True)
@@ -126,11 +133,33 @@ def _webhook_signing_key(
     connector_name: str,
     resource_name: str,
 ) -> str:
+    """Return the per-tenant signing key for a connector webhook.
+
+    The connector webhook endpoint derives the request tenant from a client-set
+    header, so verifying the HMAC with one deployment-wide secret let any tenant
+    that knew that shared secret sign a request as another tenant and inject rows
+    into the victim's dataset. Instead, derive a distinct key per tenant from a
+    single root secret: an operator hands each tenant only its own derived key, so
+    a tenant cannot compute — and therefore cannot forge a signature valid under —
+    another tenant's key without the root secret. An empty root is returned
+    unchanged so the "webhook secret is not configured" check still fires.
+    """
     try:
-        return runtime.foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
+        root_secret = runtime.foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
     except FoundryLiteError as exc:
         _audit_webhook_secret_failure(ctx, dataset_ref, connector_name, resource_name, exc)
         raise
+    if not root_secret:
+        return root_secret
+    return _derive_tenant_webhook_signing_key(root_secret, ctx.tenant_id)
+
+
+def _derive_tenant_webhook_signing_key(root_secret: str, tenant_id: str) -> str:
+    return hmac.new(
+        root_secret.encode("utf-8"),
+        _WEBHOOK_TENANT_KEY_DERIVATION_LABEL + b"\0" + tenant_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _audit_webhook_secret_failure(

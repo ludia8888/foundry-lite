@@ -19,6 +19,7 @@ from foundry_lite.application.ports import (
     SourceManagementRepository,
     SourceRegistryRepository,
 )
+from foundry_lite.application.private_network_policy import require_private_network_bypass_allowed
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.connector_onboarding_config import (
     ConnectorBundle,
@@ -93,6 +94,7 @@ class ConnectorOnboardingService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_write(ctx, "create_connection", connector_name)
+        require_private_network_bypass_allowed(allow_private_network, resource=connector_name)
         _require_idempotency_key(idempotency_key)
         record = _connection_record(
             ctx,
@@ -144,6 +146,7 @@ class ConnectorOnboardingService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_write(ctx, "update_connection", connector_name)
+        require_private_network_bypass_allowed(allow_private_network, resource=connector_name)
         _require_idempotency_key(idempotency_key)
         with self.engine.begin() as conn:
             current = self._connection_row(conn, ctx, connector_name)

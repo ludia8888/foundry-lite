@@ -35,6 +35,7 @@ from foundry_lite.application.ports.connector_adapter import (
     RestSourceConfig,
 )
 from foundry_lite.application.ports.secret_provider import REDACTED_VALUE, SecretProvider
+from foundry_lite.application.private_network_policy import private_network_bypass_permitted
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters.source_agent_proxy_transport import connect_source_target
 
@@ -700,10 +701,15 @@ def _validated_http_target(url: str, *, allow_private_network: bool = False) -> 
         raise ValidationFailed("REST connector URL must include a host", details={"url": url})
     port = _validated_port(url) or (443 if split.scheme == "https" else 80)
     normalized_host = unquote(host.strip("[]").rstrip(".")).lower()
-    if not allow_private_network:
+    # The bypass is a local-harness convenience only. In a protected runtime
+    # profile it is forced off here, the last chokepoint every outbound fetch and
+    # redirect passes through, so a flag stored by a connection created under a
+    # non-protected profile cannot open an SSRF path once run in production.
+    effective_allow_private = private_network_bypass_permitted(allow_private_network)
+    if not effective_allow_private:
         _reject_private_literal_host(url, host, normalized_host)
     target_addresses = _resolved_target_addresses(normalized_host, port)
-    if not allow_private_network:
+    if not effective_allow_private:
         _reject_private_resolved_host(url, host, normalized_host, target_addresses)
     return _ValidatedHttpTarget(url=url, host=host, port=port, resolved_host=str(target_addresses[0]))
 

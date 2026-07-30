@@ -19,8 +19,12 @@ PRIVACY_TRANSFORM_MODES: Final = frozenset({"passthrough", "pseudonymize", "anon
 PRIVACY_PROTECTING_MODES: Final = frozenset({"pseudonymize", "anonymize", "redact_text"})
 
 _EMAIL_RE: Final = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-_SSN_RE: Final = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-_PHONE_RE: Final = re.compile(r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b")
+# Separators are optional so contiguous forms are redacted too: an SSN
+# (``123456789``) and a 10-digit phone number (``1234567890``) leaked through the
+# earlier separator-mandatory patterns. redact_text is a best-effort scrub for a
+# field already declared PII, so over-redacting bare digit runs is the safe side.
+_SSN_RE: Final = re.compile(r"\b\d{3}-?\d{2}-?\d{4}\b")
+_PHONE_RE: Final = re.compile(r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b")
 _OPENLINEAGE_SCHEMA_URL: Final = "https://openlineage.io/spec/1-0-5/OpenLineage.json#/$defs/RunEvent"
 _OPENLINEAGE_PRODUCER: Final = "https://github.com/ludia8888/foundry-lite/libs/foundry_lite/security/privacy.py"
 _PRIVACY_OPENLINEAGE_RUN_NAMESPACE: Final = uuid.UUID("14ea8b78-5d65-44c2-b9f7-7ad4ec5c6fb4")

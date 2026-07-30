@@ -10,9 +10,37 @@ from foundry_lite.security.privacy import (
     PrivacyReplicationPolicy,
     PrivacyTransformPlan,
     build_privacy_openlineage_event,
+    redact_text_pii,
     transform_privacy_rows,
     validate_privacy_replication_policy,
 )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "call 123-456-7890 today",  # separated phone
+        "call 1234567890 today",  # contiguous phone
+        "(123) 456-7890",  # parenthesized phone
+        "+1 123 456 7890",  # country-code phone
+        "ssn 123-45-6789",  # hyphenated SSN
+        "ssn 123456789 on file",  # contiguous SSN
+        "mail ada@example.com",  # email
+    ],
+)
+def test_redact_text_pii_scrubs_formatted_and_bare_digit_pii(text: str) -> None:
+    """redact_text must scrub PII whether or not the digits carry separators.
+
+    The phone matcher required separators between digit groups and the SSN matcher
+    required hyphens, so bare-digit phone/SSN forms leaked verbatim into less-trusted
+    replication targets even though the field was declared privacy-protected.
+    """
+    redacted = redact_text_pii(text)
+    assert REDACTED_PII_VALUE in redacted
+
+
+def test_redact_text_pii_keeps_short_non_pii_numbers() -> None:
+    assert redact_text_pii("order 42 total 100") == "order 42 total 100"
 
 
 def test_same_identifier_maps_to_same_pseudonym_within_scope() -> None:

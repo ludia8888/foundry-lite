@@ -209,6 +209,7 @@ from foundry_lite_api.webhooks import (  # noqa: F401
     WEBHOOK_SERVICE_TENANT_HEADER,
     WEBHOOK_SIGNING_KEY_ENV,
     _bounded_webhook_body,
+    _derive_tenant_webhook_signing_key,
     _request_content_length,
     _webhook_identity_header,
     _webhook_request_context,

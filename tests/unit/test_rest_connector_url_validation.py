@@ -61,3 +61,33 @@ def test_rejects_private_or_local_targets(url: str) -> None:
 
 def test_allows_private_when_explicitly_enabled() -> None:
     assert _validated_http_url("http://127.0.0.1/x", allow_private_network=True) == "http://127.0.0.1/x"
+
+
+@pytest.mark.parametrize("profile", ["production", "prod", "staging", "stage"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata IP
+        "http://127.0.0.1/x",  # loopback
+        "http://10.0.0.1/x",  # private
+    ],
+)
+def test_private_network_bypass_is_neutralized_in_protected_runtime(
+    profile: str, url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The allow_private_network bypass is honored only outside protected profiles.
+
+    The flag is a local-harness convenience. In production/staging it is forced
+    off at this chokepoint so a connection created (and its flag stored) under a
+    non-protected profile cannot open an SSRF path to internal hosts once run in
+    production — even though the caller still passes allow_private_network=True.
+    """
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", profile)
+    with pytest.raises(ValidationFailed, match="private or local"):
+        _validated_http_url(url, allow_private_network=True)
+
+
+@pytest.mark.parametrize("profile", ["local", "dev", "development", "demo", "test"])
+def test_private_network_bypass_still_honored_in_local_profiles(profile: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", profile)
+    assert _validated_http_url("http://127.0.0.1/x", allow_private_network=True) == "http://127.0.0.1/x"

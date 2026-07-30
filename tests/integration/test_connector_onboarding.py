@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
-from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import RestPullConnectorAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -15,6 +15,51 @@ from foundry_lite.infrastructure.secrets import EnvSecretProvider
 from sqlalchemy import func, select
 
 from tests.contracts.test_rest_connector_adapter_contract import MockRestServer
+
+
+def test_create_connection_rejects_private_network_bypass_in_protected_runtime(tmp_path, monkeypatch) -> None:
+    """A routine role cannot enable the SSRF bypass in production/staging.
+
+    ``allow_private_network`` turns off the connector SSRF guard, so accepting it
+    from a client request in a protected runtime profile would let any holder of
+    the routine ``connector:write`` permission open a path to internal hosts. The
+    onboarding service refuses the flag there before it can be stored.
+    """
+    foundry = _foundry_with_rest_connector(tmp_path, {"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
+    ctx = demo_admin_context()
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+
+    with pytest.raises(PermissionDenied, match="protected runtime profiles"):
+        foundry.connectors.create_connection(
+            connector_name="erp",
+            display_name="ERP",
+            base_url="https://erp.example.test",
+            auth={"mode": "bearer", "tokenSecretRef": "erp-token"},
+            idempotency_key="create-erp-private",
+            allow_private_network=True,
+            ctx=ctx,
+        )
+
+    # Nothing was stored: the connection does not exist.
+    with foundry.engine.begin() as conn:
+        count = conn.execute(
+            select(func.count())
+            .select_from(db.connector_connections)
+            .where(db.connector_connections.c.tenant_id == ctx.tenant_id)
+        ).scalar_one()
+    assert count == 0
+
+    # The same request with the bypass off is not blocked by the gate.
+    created = foundry.connectors.create_connection(
+        connector_name="erp",
+        display_name="ERP",
+        base_url="https://erp.example.test",
+        auth={"mode": "bearer", "tokenSecretRef": "erp-token"},
+        idempotency_key="create-erp-public",
+        allow_private_network=False,
+        ctx=ctx,
+    )
+    assert created["connectorName"] == "erp"
 
 
 def test_connector_onboarding_tests_resource_without_dataset_commit(tmp_path) -> None:
