@@ -18,29 +18,98 @@ recovery sweep. The shared received-state helpers (replay, validation, mutation 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyOutcome
 from foundry_lite.application.ports import (
     ACTION_RUN_EXTERNAL_PENDING,
+    ActionRepository,
     ActionRunRow,
     ActionTypeRow,
     ObjectRecordRow,
     TransactionContext,
+    TransactionManager,
 )
 from foundry_lite.application.ports.external_writeback_adapter import RemoteOutcomeStatus
 from foundry_lite.application.services.action_helpers import require_action_target_api_name
+from foundry_lite.application.services.action_protocols import (
+    ActionObjectRecordLookup,
+    ActionOntologyLookup,
+    ActionRuntimeBoundary,
+)
 from foundry_lite.application.services.action_workflow import (
+    ActionMutationUnitOfWork,
     LocalCommitFailed,
     RealExternalWritebackRunner,
     WriteReceipt,
 )
+from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, NotFound
 
-if TYPE_CHECKING:
-    from foundry_lite.application.services.action_apply_service import ActionApplyService
+
+class ApplyServiceCallbacks(Protocol):
+    """Structural view of ``ActionApplyService`` — the collaborators and received-state helpers the
+    external-writeback saga reuses. Declared here rather than imported so the saga does not depend back
+    on the apply-service module (keeps the application dependency graph acyclic)."""
+
+    engine: TransactionManager
+    action_repository: ActionRepository
+    object_records_service: ActionObjectRecordLookup
+    ontology_service: ActionOntologyLookup
+    runtime_service: ActionRuntimeBoundary
+    action_writeback_service: ActionWritebackService
+
+    def _replay_or_none(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        action_run_id: str,
+        command: ActionApplyCommand,
+    ) -> ActionApplyOutcome | None: ...
+
+    def _visible_target_record(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        command: ActionApplyCommand,
+    ) -> ObjectRecordRow | None: ...
+
+    def _action_request_error(
+        self,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow | None,
+        expected_object_version: int,
+        params: Mapping[str, object],
+    ) -> Exception | None: ...
+
+    def _fail_action_run(
+        self, conn: TransactionContext, ctx: RequestContext, action_run_id: str, error: Exception
+    ) -> None: ...
+
+    def _record_rolled_back_action_conflict(
+        self,
+        ctx: RequestContext,
+        command: ActionApplyCommand,
+        action_run_id: str,
+        action_type: ActionTypeRow,
+        error: ConflictDetected,
+    ) -> ActionApplyOutcome: ...
+
+    def _replay_existing_action_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        existing: ActionRunRow,
+        request_fingerprint: str,
+    ) -> ActionApplyOutcome: ...
+
+    def _mutation_unit_of_work(self) -> ActionMutationUnitOfWork: ...
 
 
 @dataclass(frozen=True)
@@ -58,7 +127,7 @@ class _ExternalPendingPrep:
 class ExternalActionApply:
     """Drives the three-phase real external-writeback apply, delegating shared helpers to the service."""
 
-    service: ActionApplyService
+    service: ApplyServiceCallbacks
 
     def run(
         self,
