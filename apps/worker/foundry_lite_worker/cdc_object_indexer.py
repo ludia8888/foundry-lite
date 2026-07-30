@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -27,6 +28,8 @@ from foundry_lite.application.services.runtime_error_payloads import runtime_err
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, ValidationFailed
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -77,7 +80,7 @@ class ContinuousCdcObjectIndexerResult:
     events_indexed: int
     last_version_id: str | None
     last_index_run_id: str | None
-    stop_reason: Literal["empty_polls", "max_batches", "stop_requested", "lease_lost"]
+    stop_reason: Literal["empty_polls", "max_batches", "stop_requested", "lease_lost", "version_oversized"]
     workflow_run_id: str | None = None
     lease_owner_id: str | None = None
 
@@ -131,12 +134,29 @@ def run_cdc_object_indexer_continuously(
             return _finish_continuous_result(config, runtime, lease, state, "max_batches")
         if not _worker_lease_is_current(runtime, config.request_context(), lease):
             return _continuous_result(state, "lease_lost", lease)
-        result = _run_cdc_object_indexer_once(
-            config,
-            runtime,
-            cursor=lease.cursor,
-            ctx=config.request_context(batch_number=state.iterations + 1),
-        )
+        try:
+            result = _run_cdc_object_indexer_once(
+                config,
+                runtime,
+                cursor=lease.cursor,
+                ctx=config.request_context(batch_number=state.iterations + 1),
+            )
+        except ValidationFailed as exc:
+            # An oversized committed version raises the row-limit guard. Letting it
+            # propagate crashed the whole continuous loop, and because the cursor
+            # never advanced past the poison version the process crash-looped on
+            # restart. Stop cleanly with a durable terminal reason instead so an
+            # operator can raise the limit or split the version — without skipping
+            # CDC events (which would break ordering).
+            if not _is_oversized_version_error(exc):
+                raise
+            _LOGGER.warning(
+                "cdc.object_indexer.version_oversized tenant_id=%s workflow_run_id=%s details=%s",
+                config.tenant_id,
+                lease.workflow_run_id,
+                exc.details,
+            )
+            return _finish_continuous_result(config, runtime, lease, state, "version_oversized")
         state = state.after_iteration(result)
         lease = _claim_worker_lease(config, runtime, ctx=config.request_context(), lease=lease, cursor=state.cursor)
         if result is None and state.empty_polls >= config.continuous_max_empty_polls:
@@ -427,17 +447,29 @@ def _finish_continuous_result(
     runtime: CdcObjectIndexerWorkerRuntime,
     lease: _WorkerLease,
     state: _LoopState,
-    stop_reason: Literal["empty_polls", "max_batches", "stop_requested"],
+    stop_reason: Literal["empty_polls", "max_batches", "stop_requested", "version_oversized"],
 ) -> ContinuousCdcObjectIndexerResult:
     result = _continuous_result(state, stop_reason, lease)
-    status: WorkflowLedgerStatus = "cancelled" if stop_reason == "stop_requested" else "succeeded"
+    status: WorkflowLedgerStatus = _continuous_workflow_status(stop_reason)
     _release_worker_lease(config, runtime, lease, _continuous_output(config, result, state.cursor or {}), status, None)
     return result
 
 
+def _continuous_workflow_status(stop_reason: str) -> WorkflowLedgerStatus:
+    if stop_reason == "stop_requested":
+        return "cancelled"
+    if stop_reason == "version_oversized":
+        return "failed"
+    return "succeeded"
+
+
+def _is_oversized_version_error(exc: ValidationFailed) -> bool:
+    return "maxRowsPerVersion" in exc.details
+
+
 def _continuous_result(
     state: _LoopState,
-    stop_reason: Literal["empty_polls", "max_batches", "stop_requested", "lease_lost"],
+    stop_reason: Literal["empty_polls", "max_batches", "stop_requested", "lease_lost", "version_oversized"],
     lease: _WorkerLease,
 ) -> ContinuousCdcObjectIndexerResult:
     return ContinuousCdcObjectIndexerResult(

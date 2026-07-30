@@ -41,9 +41,22 @@ def tenant_context(tenant_id: str) -> Generator[None]:
         reset_tenant_context(token)
 
 
-def bind_tenant_context_public_methods[T](cls: type[T], *, include_inherited: bool = True) -> type[T]:
-    classes = reversed(cls.mro()) if include_inherited else (cls,)
-    for base in classes:
+def bind_tenant_context_public_methods[T](cls: type[T], *, self_binding_base: type) -> type[T]:
+    """Bind ``cls``'s own public methods and those contributed by plain mixins.
+
+    Subclasses of ``self_binding_base`` bind themselves as they are created, so
+    rebinding them here would be redundant. A base that is *not* such a subclass
+    never runs that hook, so public operations it contributes reach the database
+    with no tenant bound. Under PostgreSQL RLS that is not a silent no-op: reads
+    match zero rows and writes fail their ``WITH CHECK`` policy.
+
+    Bases are bound before ``cls.__dict__`` so a subclass override still wins.
+    """
+    for base in reversed(cls.__mro__):
+        if base is object:
+            continue
+        if base is not cls and issubclass(base, self_binding_base):
+            continue
         _bind_class_dict(cls, base.__dict__)
     return cls
 

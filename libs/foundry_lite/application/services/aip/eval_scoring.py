@@ -34,7 +34,11 @@ def summarize(results: Sequence[EvalCaseResult], request: EvalRunRequest) -> Eva
     missing_axes = sorted(set(request.required_axes) - set(axis_summary))
     variance_failures = sum(1 for result in results if result.reason == "repeated_run_variance")
     passed = weighted_score >= request.min_score and not missing_axes and variance_failures == 0
-    passed = passed and all(axis_passed(axis) for axis in axis_summary.values())
+    # Gate on the configured required (critical) axes rather than every axis. When
+    # every axis had to fully pass, the weighted_score >= min_score threshold was
+    # inert (an all-pass run always scores 1.0), so min_score never influenced the
+    # outcome. A run now passes on the score threshold plus its required axes.
+    passed = passed and all(axis_passed(axis_summary[axis]) for axis in request.required_axes)
     return {
         "score": weighted_score,
         "passed": passed,

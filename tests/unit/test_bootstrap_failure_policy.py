@@ -60,3 +60,38 @@ def test_protected_bootstrap_model_registry_failure_fails_fast(monkeypatch: pyte
 
     with pytest.raises(RuntimeError, match="seed boom"):
         _foundry_with_profile("production").bootstrap()
+
+
+class _RecordingMetadataRepository(_MetadataRepository):
+    """Metadata repository that records schema initialization attempts."""
+
+    def __init__(self) -> None:
+        self.initialize_schema_calls = 0
+
+    def initialize_schema(self) -> None:
+        self.initialize_schema_calls += 1
+
+
+def test_protected_profile_skips_schema_initialization() -> None:
+    """Protected runtimes take their schema from Alembic, not from create_all.
+
+    ``SqlAlchemyMetadataRepository`` is built with ``allow_schema_mutation=False``
+    whenever the runtime profile is protected, so ``initialize_schema()`` raises
+    ``SchemaMutationDisabledError`` there. Calling it unconditionally in
+    ``FoundryLite.__init__`` meant every production/staging API, CLI, and worker
+    process raised while constructing ``FoundryLite`` — before ``bootstrap()``
+    ever ran. Local profiles must still self-initialize so dev/test keep working.
+    """
+    for profile in ("production", "prod", "staging", "stage"):
+        foundry = _foundry_with_profile(profile)
+        repository = _RecordingMetadataRepository()
+        foundry.metadata_repository = repository
+        foundry._initialize_schema_for_unprotected_profile()
+        assert repository.initialize_schema_calls == 0, profile
+
+    for profile in ("local", "dev", "development", "demo", "test"):
+        foundry = _foundry_with_profile(profile)
+        repository = _RecordingMetadataRepository()
+        foundry.metadata_repository = repository
+        foundry._initialize_schema_for_unprotected_profile()
+        assert repository.initialize_schema_calls == 1, profile

@@ -260,7 +260,7 @@ class CoreService:
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        bind_tenant_context_public_methods(cls, include_inherited=False)
+        bind_tenant_context_public_methods(cls, self_binding_base=CoreService)
         trace_direct_public_methods(cls)
 
     def __init__(self, **dependencies: object) -> None:

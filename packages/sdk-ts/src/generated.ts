@@ -5247,29 +5247,35 @@ async function* streamObjectSubscriptionWebSocket<TItem = GenericObject>(
   socket.onerror = () => { failure = new FoundryLiteApiError(0, 'WEBSOCKET_ERROR', 'WebSocket subscription failed', {}, null, true); wake(); };
   socket.onclose = () => { closed = true; wake(); };
   options.signal?.addEventListener('abort', () => socket.close(), { once: true });
-  while (!closed || queue.length > 0) {
-    if (queue.length === 0) {
-      if (failure) throw failure;
-      await new Promise<void>((resolve) => { notify = resolve; });
-      continue;
+  // Close the socket on any generator finalization, including an early
+  // consumer `break`/`return`, so the subscription never leaks a socket.
+  try {
+    while (!closed || queue.length > 0) {
+      if (queue.length === 0) {
+        if (failure) throw failure;
+        await new Promise<void>((resolve) => { notify = resolve; });
+        continue;
+      }
+      const raw = String(queue.shift());
+      const payloadEvent = parseObjectSubscriptionPayload<TItem>(raw);
+      if (payloadEvent.event === 'error' && isTerminalSubscriptionError(payloadEvent.error)) {
+        const code = String(payloadEvent.error.code);
+        const status = code === 'RATE_LIMITED' ? 429 : 403;
+        throw new FoundryLiteApiError(
+          status,
+          code,
+          String(payloadEvent.error.message ?? code),
+          payloadEvent.error,
+          null,
+          code === 'RATE_LIMITED',
+        );
+      }
+      yield { id: null, eventType: payloadEvent.event, retryMs: null, payload: payloadEvent, raw };
     }
-    const raw = String(queue.shift());
-    const payloadEvent = parseObjectSubscriptionPayload<TItem>(raw);
-    if (payloadEvent.event === 'error' && isTerminalSubscriptionError(payloadEvent.error)) {
-      const code = String(payloadEvent.error.code);
-      const status = code === 'RATE_LIMITED' ? 429 : 403;
-      throw new FoundryLiteApiError(
-        status,
-        code,
-        String(payloadEvent.error.message ?? code),
-        payloadEvent.error,
-        null,
-        code === 'RATE_LIMITED',
-      );
-    }
-    yield { id: null, eventType: payloadEvent.event, retryMs: null, payload: payloadEvent, raw };
+    if (failure) throw failure;
+  } finally {
+    socket.close();
   }
-  if (failure) throw failure;
 }
 
 function objectSubscriptionOptionsWithCursor(

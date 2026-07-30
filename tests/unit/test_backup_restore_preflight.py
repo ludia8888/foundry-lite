@@ -207,6 +207,77 @@ def test_backup_restore_artifact_execute_restores_historical_dataset_head(
     assert any(event["event_type"] == "backup_restore.dataset_version_restored" for event in audit_events)
 
 
+def test_artifact_restore_retry_after_blocked_validation_does_not_duplicate_heads(
+    foundry: FoundryLite,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restore that committed heads but then blocked validation must be idempotent.
+
+    Heads are committed before post-restore validation runs, and a blocked
+    validation records an EXECUTE_FAILED event. When idempotency matched only the
+    EXECUTED event, a retry with the same restore id re-ran the restore and
+    committed a second set of head versions. The retry must instead short-circuit
+    on the prior head-commit.
+    """
+    import foundry_lite.application.services.backup_restore_artifact_restore as restore_mod
+
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_blocked_retry", ctx=ctx, primary_key=["order_id"])
+    original = foundry.datasets.upload_csv(
+        "raw.restore_blocked_retry",
+        _csv_with_status(tmp_path, "blocked-retry-a.csv", "PENDING"),
+        ctx=ctx,
+    )
+    receipt = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-blocked-retry")
+    foundry.datasets.upload_csv(
+        "raw.restore_blocked_retry",
+        _csv_with_status(tmp_path, "blocked-retry-b.csv", "SHIPPED"),
+        ctx=ctx,
+    )
+
+    real_report = restore_mod.post_restore_validation_report
+
+    def blocked_report(*args: Any, **kwargs: Any) -> dict[str, object]:
+        report = dict(real_report(*args, **kwargs))
+        report["status"] = "blocked"
+        return report
+
+    monkeypatch.setattr(restore_mod, "post_restore_validation_report", blocked_report)
+
+    def dataset_version_count() -> int:
+        with foundry.engine.begin() as conn:
+            return int(cast(Any, conn).execute(select(func.count()).select_from(db.dataset_versions)).scalar_one())
+
+    first = foundry.operations.execute_backup_artifact_restore(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-blocked-retry",
+        should_run_post_restore_validation=True,
+    )
+    assert first["status"] == "blocked"
+    assert first["isHistoricalRepointExecuted"] is True
+    assert first["restoredDatasetVersions"]  # heads were committed before validation blocked
+    versions_after_first = dataset_version_count()
+
+    replay = foundry.operations.execute_backup_artifact_restore(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-blocked-retry",
+        should_run_post_restore_validation=True,
+    )
+
+    # The retry short-circuits on the prior head-commit: no new dataset version is
+    # committed, and the dataset still serves the restored (PENDING) head.
+    assert dataset_version_count() == versions_after_first
+    assert replay["restoreId"] == first["restoreId"]
+    preview = foundry.datasets.preview("raw.restore_blocked_retry", ctx=ctx)
+    assert preview[0]["status"] == "PENDING"
+    assert original.version_id  # original captured for context
+
+
 def test_backup_restore_artifact_execute_fails_closed_when_source_storage_is_missing(
     foundry: FoundryLite,
     tmp_path: Path,

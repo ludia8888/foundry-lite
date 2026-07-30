@@ -815,6 +815,61 @@ def test_source_media_upload_wraps_media_transaction_commit(tmp_path: Path) -> N
     assert media_commit["committedVersionIds"]
 
 
+def test_managed_db_sync_empty_poll_preserves_checkpoint_and_avoids_reingest(tmp_path: Path) -> None:
+    """A caught-up incremental tick must not reset the checkpoint or re-ingest.
+
+    The database adapter returns an empty checkpoint when a batch has no rows, and
+    a caught-up APPEND sync normally reads zero new rows. Persisting that empty
+    checkpoint reset the resume cursor to None, so the following tick re-read the
+    whole table and appended every row again as duplicates. The prior checkpoint
+    must survive an empty poll.
+    """
+    source_db = _sqlite_customer_erp(tmp_path)  # ids 1,2,3
+    foundry = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+
+    foundry.sources.create_managed_sync(
+        sync_name="orders_incremental_empty_poll",
+        source_name="customer_erp_empty_poll",
+        display_name="Orders incremental empty poll",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.empty_poll_orders",
+        schedule={"mode": "manual"},
+        config_summary={
+            "databaseUrlSecretRef": secret_ref["name"],
+            "tableName": "orders",
+            "checkpointColumn": "id",
+            "batchLimit": 10,
+        },
+        idempotency_key="source-sync-empty-poll",
+        ctx=ctx,
+    )
+
+    first = foundry.sources.start_managed_sync_run(
+        "orders_incremental_empty_poll", idempotency_key="empty-poll-run-1", batch_limit=10, ctx=ctx
+    )
+    assert first["status"] == "succeeded"
+    assert first["checkpointEnd"] == {"checkpointColumn": "id", "lastValue": 3}
+    assert len(foundry.datasets.preview("raw.empty_poll_orders", ctx=ctx)) == 3
+
+    # Second tick reads no new rows. The checkpoint must carry forward, not reset.
+    second = foundry.sources.start_managed_sync_run(
+        "orders_incremental_empty_poll", idempotency_key="empty-poll-run-2", batch_limit=10, ctx=ctx
+    )
+    assert second["status"] == "succeeded"
+    assert second["checkpointEnd"] == {"checkpointColumn": "id", "lastValue": 3}
+
+    # Third tick proves the resume cursor was preserved: no rows are re-appended.
+    third = foundry.sources.start_managed_sync_run(
+        "orders_incremental_empty_poll", idempotency_key="empty-poll-run-3", batch_limit=10, ctx=ctx
+    )
+    assert third["status"] == "succeeded"
+    assert len(foundry.datasets.preview("raw.empty_poll_orders", ctx=ctx)) == 3
+
+
 def _foundry(tmp_path: Path) -> FoundryLite:
     return FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
 

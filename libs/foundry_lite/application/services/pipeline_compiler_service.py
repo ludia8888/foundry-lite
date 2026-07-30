@@ -403,7 +403,14 @@ def _inputs_for_node(
         source = str(edge["source"])
         if source not in refs_by_node:
             raise ValidationFailed("pipeline node input is not compiled", details={"source": source})
-        inputs[_alias_for_source(source, len(inputs))] = refs_by_node[source]
+        alias = _alias_for_source(source, len(inputs))
+        # Two edges from the same source (a self-join) derive the same alias, which
+        # would collapse to one dict entry — the join then sees a single input and
+        # compilation fails even though validation passed. Disambiguate a repeated
+        # alias so each incoming edge remains a distinct input.
+        if alias in inputs:
+            alias = f"{alias}_{len(inputs)}"
+        inputs[alias] = refs_by_node[source]
     return inputs
 
 

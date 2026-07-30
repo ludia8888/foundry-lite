@@ -75,7 +75,7 @@ class SourceAgentProxyServer(socketserver.ThreadingTCPServer):
 
 class _SourceAgentConnectHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
-        request_line, headers = _read_connect_request(self.request)
+        request_line, headers, buffered = _read_connect_request(self.request)
         method, authority = _request_target(request_line)
         if method != "CONNECT":
             _send_status(self.request, 405, "CONNECT required")
@@ -93,6 +93,8 @@ class _SourceAgentConnectHandler(socketserver.BaseRequestHandler):
             return
         try:
             _send_status(self.request, 200, "Connection established")
+            if buffered:
+                upstream.sendall(buffered)
             _relay(self.request, upstream)
         finally:
             upstream.close()
@@ -179,7 +181,7 @@ def _control_plane_request(
             raise OSError(f"control plane returned HTTP {response.status}")
 
 
-def _read_connect_request(sock: socket.socket) -> tuple[str, dict[str, str]]:
+def _read_connect_request(sock: socket.socket) -> tuple[str, dict[str, str], bytes]:
     payload = bytearray()
     while b"\r\n\r\n" not in payload:
         chunk = sock.recv(1024)
@@ -188,10 +190,14 @@ def _read_connect_request(sock: socket.socket) -> tuple[str, dict[str, str]]:
         payload.extend(chunk)
         if len(payload) > _MAX_HEADER_BYTES:
             raise OSError("CONNECT request exceeded header limit")
-    lines = bytes(payload).split(b"\r\n")
+    # Split on the FIRST header terminator only. A client may pipeline tunnel bytes
+    # in the same segment as the CONNECT header; those trailing bytes must be
+    # forwarded to upstream, not discarded (which silently truncated the stream).
+    header_bytes, _, buffered = bytes(payload).partition(b"\r\n\r\n")
+    lines = header_bytes.split(b"\r\n")
     request_line = lines[0].decode("ascii", errors="strict")
     headers = _header_map(lines[1:])
-    return request_line, headers
+    return request_line, headers, buffered
 
 
 def _header_map(lines: Sequence[bytes]) -> dict[str, str]:

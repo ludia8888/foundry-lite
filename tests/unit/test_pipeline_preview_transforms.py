@@ -252,6 +252,29 @@ def test_union_join_and_output_cover_inner_and_outer_row_semantics() -> None:
     assert bridge_or_output(node, {"input": inputs["left"]}, {"tableRows": 1}, _runtime()) == [inputs["left"][0]]
 
 
+def test_join_keeps_strongest_input_security_classification() -> None:
+    """A joined row must carry the strongest classification of its inputs.
+
+    The row dict-merge let the right input's securityEnvelope overwrite the left's,
+    so a joined row that mixed a CONFIDENTIAL left with an INTERNAL right lost the
+    CONFIDENTIAL label and understated the preview's governance passport.
+    """
+    node = _node("transform.join", leftKey="id", rightKey="key", joinType="inner")
+    inputs = {
+        "left": [{"id": 1, "left": "a", "securityEnvelope": {"classification": "confidential"}}],
+        "right": [{"key": 1, "right": "x", "securityEnvelope": {"classification": "internal"}}],
+    }
+
+    (row,) = join(node, inputs, _LIMITS, _runtime())
+    assert row["securityEnvelope"]["classification"] == "confidential"
+
+    # Symmetric: a stronger right classification must also win over a weaker left.
+    inputs["left"][0]["securityEnvelope"] = {"classification": "internal"}
+    inputs["right"][0]["securityEnvelope"] = {"classification": "restricted"}
+    (row2,) = join(node, inputs, _LIMITS, _runtime())
+    assert row2["securityEnvelope"]["classification"] == "restricted"
+
+
 def test_media_document_embedding_and_chunk_handlers_preserve_evidence() -> None:
     runtime = _runtime()
     media_node = _node(

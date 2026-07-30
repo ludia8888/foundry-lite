@@ -229,6 +229,34 @@ def test_ai_eval_supports_list_expected_values() -> None:
     assert result.is_passed is True
 
 
+def test_ai_eval_min_score_gates_pass_with_required_axes() -> None:
+    """min_score is a real threshold: a run can pass below 1.0 if required axes pass.
+
+    When every axis had to fully pass, an all-pass run always scored 1.0 and
+    min_score never affected the outcome. A partial-score run whose required
+    (critical) axes pass must now pass at or above the configured min_score, and
+    fail below it.
+    """
+    env = _eval_service()
+    cases = (
+        _case("security-ok", "security", {"decision": "denied"}),
+        _case("retrieval-miss", "retrieval", {"answer": "x"}, expected_json={"answer": "y"}),
+    )
+
+    passing = env.run_eval(
+        _CTX,
+        _request(eval_run_id="eval-min-pass", cases=cases, min_score=0.5, required_axes=("security",)),
+    )
+    assert passing.is_passed is True
+    assert passing.summary_json["score"] == 0.5
+
+    failing = env.run_eval(
+        _CTX,
+        _request(eval_run_id="eval-min-fail", cases=cases, min_score=0.9, required_axes=("security",)),
+    )
+    assert failing.is_passed is False
+
+
 def test_ai_eval_nested_mapping_mismatch_fails_closed() -> None:
     env = _eval_service()
 

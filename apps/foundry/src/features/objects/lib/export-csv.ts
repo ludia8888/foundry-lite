@@ -5,7 +5,11 @@ function csvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
   const text =
     typeof value === "object" ? JSON.stringify(value) : String(value);
-  return `"${text.replaceAll('"', '""')}"`;
+  // Neutralize spreadsheet formula injection: a cell that opens with =, +, -, @,
+  // tab, or CR is executed as a formula by Excel/Sheets. Prefix a single quote so
+  // the value is treated as literal text.
+  const neutralized = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return `"${neutralized.replaceAll('"', '""')}"`;
 }
 
 /** 현재 결과 페이지를 CSV로 만들어 클라이언트에서 다운로드한다 (BOM 포함, Excel 한글 호환). */

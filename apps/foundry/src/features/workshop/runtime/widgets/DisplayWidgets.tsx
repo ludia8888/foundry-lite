@@ -372,9 +372,15 @@ function exportCsv(
 ): void {
   const escape = (value: unknown): string => {
     const text = value === null || value === undefined ? "" : String(value);
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    // Neutralize spreadsheet formula injection before quoting.
+    const neutralized = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    return /[",\n]/.test(neutralized)
+      ? `"${neutralized.replace(/"/g, '""')}"`
+      : neutralized;
   };
-  const header = columns.map((name) => columnDisplayName(objectView, name));
+  const header = columns.map((name) =>
+    escape(columnDisplayName(objectView, name)),
+  );
   const rows = objects.map((object) =>
     columns.map((name) => escape(object.properties[name])).join(","),
   );

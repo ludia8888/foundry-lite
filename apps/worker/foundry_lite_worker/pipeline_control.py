@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
-import time
+import signal
+from threading import Event
 
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 
+_LOGGER = logging.getLogger(__name__)
 
-def run_control_loop() -> None:
+
+def run_control_loop(stop_event: Event | None = None) -> None:
+    requested_stop = stop_event or Event()
     foundry = FoundryLite(
         dependencies=create_runtime_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
@@ -17,14 +22,37 @@ def run_control_loop() -> None:
         )
     )
     interval = max(1.0, float(os.getenv("FOUNDRY_LITE_PIPELINE_CONTROL_INTERVAL_SECONDS", "5")))
-    while True:
-        foundry._services.pipelines.control.tick(limit=100)
-        foundry._services.pipelines.preview.recover_preview_dispatches(limit=100)
-        time.sleep(interval)
+    worker_id = os.getenv("FOUNDRY_LITE_WORKER_ID", "pipeline-control")
+    tick_number = 0
+    while not requested_stop.is_set():
+        # The loop is cross-tenant, so a tick carries no single tenant: correlate a
+        # failure to its tick with a per-tick request_id instead.
+        tick_number += 1
+        request_id = f"{worker_id}:tick:{tick_number}"
+        # A single failing tick must not kill the durable recovery loop; log it and
+        # continue to the next interval so transient DB/adapter errors self-heal.
+        try:
+            foundry._services.pipelines.control.tick(limit=100)
+            foundry._services.pipelines.preview.recover_preview_dispatches(limit=100)
+        except Exception:  # noqa: BLE001 - keep the durable control loop alive
+            _LOGGER.exception("pipeline.control.tick_failed request_id=%s", request_id)
+        # wait() returns immediately when a shutdown signal sets the event, so the
+        # loop exits promptly instead of finishing the full sleep interval.
+        requested_stop.wait(interval)
+
+
+def _install_signal_handlers(stop_event: Event) -> None:
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
 
 
 def main() -> None:
-    run_control_loop()
+    stop_event = Event()
+    _install_signal_handlers(stop_event)
+    run_control_loop(stop_event)
 
 
 if __name__ == "__main__":

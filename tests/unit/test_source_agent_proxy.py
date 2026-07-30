@@ -256,9 +256,15 @@ def test_source_agent_protocol_helpers_fail_closed(monkeypatch: pytest.MonkeyPat
             self.sent += payload
 
     request_socket = _Socket([b"CONNECT db.internal:5432 HTTP/1.1\r\nX-Test: yes\r\n\r\n"])
-    request_line, headers = agent_module._read_connect_request(request_socket)
+    request_line, headers, buffered = agent_module._read_connect_request(request_socket)
     assert request_line == "CONNECT db.internal:5432 HTTP/1.1"
     assert headers == {"x-test": "yes"}
+    assert buffered == b""
+
+    # Bytes pipelined in the same segment as the CONNECT header must be preserved.
+    pipelined = _Socket([b"CONNECT db.internal:5432 HTTP/1.1\r\n\r\nhello-tunnel-bytes"])
+    _, _, leftover = agent_module._read_connect_request(pipelined)
+    assert leftover == b"hello-tunnel-bytes"
     assert agent_module._request_target(request_line) == ("CONNECT", "db.internal:5432")
     assert agent_module._authority("db.internal:5432") == ("db.internal", 5432)
     assert agent_module._destination_matches("DB.INTERNAL", "db.internal.", 5432) is True

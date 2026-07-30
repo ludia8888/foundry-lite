@@ -26,13 +26,90 @@ def evaluate_safe_expression(expression: str, properties: Mapping[str, object]) 
     match = OBJECT_IN_PATTERN.match(expression)
     if match:
         prop = match.group(1)
-        raw_values = match.group(2)
-        values = [part.strip().strip("'\"") for part in raw_values.split(",")]
-        return properties.get(prop) in values
+        return _comparable_value(properties.get(prop)) in _in_list_values(match.group(2), expression)
     match = OBJECT_EQ_PATTERN.match(expression)
     if match:
-        return properties.get(match.group(1)) == match.group(2)
+        return _comparable_value(properties.get(match.group(1))) == match.group(2)
     raise ValidationFailed("unsupported safe expression", details={"expression": expression})
+
+
+def _comparable_value(value: object) -> object:
+    """Coerce a property value for comparison against a string literal.
+
+    Expression literals are always quoted strings, so a numeric or boolean
+    property value would never equal (or appear in) them and the precondition
+    could only ever be satisfied by string properties. Stringify non-string
+    scalars consistently (booleans as ``true``/``false``, numbers as their text)
+    so numeric and boolean guards evaluate as authored. ``None`` is left unchanged
+    so a missing property never matches a string literal.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    return value
+
+
+def _in_list_values(raw_values: str, expression: str) -> tuple[str, ...]:
+    """Split an ``in [...]`` member list without breaking quoted literals.
+
+    Splitting on every comma before stripping quotes made a quoted member that
+    contains a comma parse as several members: ``in ['a,b', 'c']`` admitted the
+    values ``a`` and ``b`` while rejecting the member ``a,b`` that was actually
+    declared. Because this gates action preconditions, that widened the accepted
+    set beyond what the ontology author wrote. The same split turned the empty
+    list ``in []`` into a single empty-string member, so a property whose value
+    was ``""`` satisfied a precondition that listed nothing.
+
+    Malformed lists raise, matching how an unsupported expression is handled: a
+    precondition that cannot be parsed must not silently admit the write.
+    """
+    values: list[str] = []
+    index = 0
+    end = len(raw_values)
+    while index < end:
+        index = _skip_spaces(raw_values, index, end)
+        if index >= end:
+            break
+        if raw_values[index] in "'\"":
+            value, index = _quoted_member(raw_values, index, end, expression)
+        else:
+            value, index = _bare_member(raw_values, index, end, expression)
+        values.append(value)
+    return tuple(values)
+
+
+def _skip_spaces(raw_values: str, index: int, end: int) -> int:
+    while index < end and raw_values[index].isspace():
+        index += 1
+    return index
+
+
+def _quoted_member(raw_values: str, index: int, end: int, expression: str) -> tuple[str, int]:
+    """Read one quoted member and consume the separator that must follow it."""
+    quote = raw_values[index]
+    closing = raw_values.find(quote, index + 1)
+    if closing == -1:
+        raise ValidationFailed("unterminated safe expression literal", details={"expression": expression})
+    value = raw_values[index + 1 : closing]
+    index = _skip_spaces(raw_values, closing + 1, end)
+    if index < end:
+        if raw_values[index] != ",":
+            raise ValidationFailed("malformed safe expression list", details={"expression": expression})
+        index += 1
+    return value, index
+
+
+def _bare_member(raw_values: str, index: int, end: int, expression: str) -> tuple[str, int]:
+    """Read one unquoted member up to the next separator, rejecting stray quotes."""
+    separator = raw_values.find(",", index)
+    token = raw_values[index:] if separator == -1 else raw_values[index:separator]
+    next_index = end if separator == -1 else separator + 1
+    if "'" in token or '"' in token:
+        raise ValidationFailed("malformed safe expression list", details={"expression": expression})
+    return token.strip(), next_index
 
 
 def validate_action_request(

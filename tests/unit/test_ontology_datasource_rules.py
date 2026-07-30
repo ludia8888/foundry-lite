@@ -192,6 +192,32 @@ def test_migration_adding_a_datasource_is_a_warning() -> None:
     assert _changes(current, candidate) == {"object_datasource_added": "warning"}
 
 
+def test_migration_single_to_multi_required_role_change_on_continuation_warns() -> None:
+    """Converting single->multi and changing the continuation's requiredRole must warn.
+
+    The continuation keeps the same dataset under a new segment name, so it lands
+    in neither the added, removed, nor common-name comparison — and its
+    requiredRole change was silently dropped.
+    """
+    current = _current_object(dict(_SINGLE_BACKING))
+    candidate = _candidate(
+        {
+            "mode": "snapshot",
+            "datasources": [
+                {
+                    "name": "erp",
+                    "dataset": "clean.orders",
+                    "primaryKeyColumns": ["order_id"],
+                    "requiredRole": "finance",
+                }
+            ],
+        }
+    )
+
+    kinds = _changes(current, candidate)
+    assert kinds.get("object_datasource_required_role_changed") == "warning"
+
+
 def test_migration_removing_a_datasource_is_blocked() -> None:
     current = _current_object(
         dict(_MULTI_BACKING),

@@ -73,6 +73,16 @@ from foundry_lite.domain.context import RequestContext
 __all__ = ("AgentRuntimeError", "AgentRuntimeRequest", "AgentRuntimeResult", "AgentRuntimeService")
 
 
+def _aggregate_charged(charged: list[ModelResponse]) -> ModelResponse | None:
+    """Combine every billed model response so the failure path records full spend."""
+    if not charged:
+        return None
+    aggregated = charged[0]
+    for response in charged[1:]:
+        aggregated = aggregate_response(aggregated, response)
+    return aggregated
+
+
 class AgentRuntimeService(CoreService):
     """Retrieve context, compile prompt, call model gateway, and write ledger evidence."""
 
@@ -101,7 +111,10 @@ class AgentRuntimeService(CoreService):
         session_id: str | None = None
         seeded = False
         resolution: ModelResolution | None = None
-        charged_response: ModelResponse | None = None
+        # Every charged provider call is appended here, including a follow-up call
+        # made inside the tool loop, so a failure after the 2nd call still records
+        # the real spend. Capturing only the first response under-billed the run.
+        charged: list[ModelResponse] = []
         try:
             validate_request(ctx, request)
             ai_run_id = request.ai_run_id or new_ai_run_id()
@@ -111,30 +124,49 @@ class AgentRuntimeService(CoreService):
             resolution = self.model_gateway_service.resolve_model(ctx, request.model_alias, request.environment)
             self._seed_ledger(ctx, request, ai_run_id, session_id, context_items, compiled, resolution)
             seeded = True
-            self._record_initial_prompt_artifact(ctx, ai_run_id, compiled)
-            response = self.model_gateway_service.invoke(ctx, model_request(request, ai_run_id, compiled))
-            # The provider was already called and charged for this attempt; capture it so a failure in a
-            # LATER step (tool/citation/final call) still records the real spend in the usage ledger.
-            charged_response = response
-            final_response, answer, tool_execution, action_proposal = self._complete_model_turn(
-                ctx, request, ai_run_id, compiled, response
+            aggregated, answer, tool_execution, action_proposal = self._model_turn_and_finish(
+                ctx, request, ai_run_id, session_id, context_items, compiled, resolution, charged
             )
         except Exception as exc:
             if seeded and ai_run_id is not None:
-                self._fail_seeded_run(ctx, ai_run_id, exc, resolution, charged_response)
+                self._fail_seeded_run(ctx, ai_run_id, exc, resolution, _aggregate_charged(charged))
             return failed_result(request, ai_run_id if seeded else None, session_id if seeded else None, exc)
-        return self._finish_result(
-            ctx,
-            request,
-            ai_run_id,
-            session_id,
-            context_items,
-            aggregate_response(response, final_response),
-            answer,
-            tool_execution,
-            action_proposal,
-            resolution,
+        return success_result(
+            request, ai_run_id, session_id, context_items, aggregated, answer, tool_execution, action_proposal
         )
+
+    def _model_turn_and_finish(
+        self,
+        ctx: RequestContext,
+        request: AgentRuntimeRequest,
+        ai_run_id: str,
+        session_id: str,
+        context_items: tuple[RetrievedContextItem, ...],
+        compiled: CompiledContext,
+        resolution: ModelResolution,
+        charged: list[ModelResponse],
+    ) -> tuple[
+        ModelResponse,
+        AgentRuntimeAnswer,
+        AgentRuntimeToolExecution | None,
+        AgentRuntimeActionProposalExecution | None,
+    ]:
+        """Invoke the model, run any tool turn, then durably finish the run.
+
+        Finalization stays inside the caller's guarded region: when it was outside,
+        a transient failure rolled back the terminal CAS and stranded the run in
+        'running'. The response payload is built after the run is durably succeeded.
+        """
+        self._record_initial_prompt_artifact(ctx, ai_run_id, compiled)
+        response = self.model_gateway_service.invoke(ctx, model_request(request, ai_run_id, compiled))
+        charged.append(response)
+        final_response, answer, tool_execution, action_proposal = self._complete_model_turn(
+            ctx, request, ai_run_id, compiled, response, charged
+        )
+        aggregated = aggregate_response(response, final_response)
+        outcome = (aggregated, answer, tool_execution, action_proposal)
+        self._finish_success(ctx, request, ai_run_id, session_id, context_items, *outcome, resolution)
+        return outcome
 
     def _retrieve_context(self, ctx: RequestContext, request: AgentRuntimeRequest) -> tuple[RetrievedContextItem, ...]:
         return retrieve_runtime_context(
@@ -152,37 +184,6 @@ class AgentRuntimeService(CoreService):
             compiled_prompt_text=compiled_prompt_text(compiled),
         )
 
-    def _finish_result(
-        self,
-        ctx: RequestContext,
-        request: AgentRuntimeRequest,
-        ai_run_id: str | None,
-        session_id: str | None,
-        context_items: tuple[RetrievedContextItem, ...],
-        response: ModelResponse,
-        answer: AgentRuntimeAnswer,
-        tool_execution: AgentRuntimeToolExecution | None,
-        action_proposal: AgentRuntimeActionProposalExecution | None,
-        resolution: ModelResolution,
-    ) -> AgentRuntimeResult:
-        assert ai_run_id is not None
-        assert session_id is not None
-        self._finish_success(
-            ctx,
-            request,
-            ai_run_id,
-            session_id,
-            context_items,
-            response,
-            answer,
-            tool_execution,
-            action_proposal,
-            resolution,
-        )
-        return success_result(
-            request, ai_run_id, session_id, context_items, response, answer, tool_execution, action_proposal
-        )
-
     def _complete_model_turn(
         self,
         ctx: RequestContext,
@@ -190,6 +191,7 @@ class AgentRuntimeService(CoreService):
         ai_run_id: str,
         compiled: CompiledContext,
         response: ModelResponse,
+        charged: list[ModelResponse],
     ) -> tuple[
         ModelResponse,
         AgentRuntimeAnswer,
@@ -201,7 +203,9 @@ class AgentRuntimeService(CoreService):
             answer = AgentRuntimeAnswer(answer=action_proposal.answer, citations=())
             return response, answer, None, action_proposal
         tool_execution = self._execute_model_tool_call(ctx, request, ai_run_id, compiled, response)
-        final_response = self._final_model_response(ctx, request, ai_run_id, compiled, response, tool_execution)
+        final_response = self._final_model_response(
+            ctx, request, ai_run_id, compiled, response, tool_execution, charged
+        )
         answer = self._resolve_answer_citations(ctx, request, ai_run_id, final_response)
         return final_response, answer, tool_execution, None
 
@@ -385,6 +389,7 @@ class AgentRuntimeService(CoreService):
         compiled: CompiledContext,
         first_response: ModelResponse,
         tool_execution: AgentRuntimeToolExecution | None,
+        charged: list[ModelResponse],
     ) -> ModelResponse:
         if tool_execution is None:
             return first_response
@@ -396,6 +401,9 @@ class AgentRuntimeService(CoreService):
             artifact_id=f"{ai_run_id}-compiled-prompt-model-2",
         )
         response = self.model_gateway_service.invoke(ctx, followup_model_request(request, ai_run_id, tool_execution))
+        # The follow-up call is billed even if the guard below rejects the response,
+        # so record it before guarding so the failure path bills both calls.
+        charged.append(response)
         guard_final_response(response)
         return response
 
