@@ -36,8 +36,13 @@ _EQUALITY_PATTERN = re.compile(
 
 def infer_sql_partition_filters(sql_template: str) -> dict[str, dict[str, object]]:
     """Infer safe partition filters from a narrow single-input SQL shape."""
-    dataset_refs = sorted(set(INPUT_PATTERN.findall(sql_template)))
-    if len(dataset_refs) != 1:
+    all_refs = INPUT_PATTERN.findall(sql_template)
+    dataset_refs = sorted(set(all_refs))
+    # Require the input to be referenced exactly once. A self-join references the
+    # same input more than once (often under different aliases), so pushing a
+    # WHERE predicate down against the single dataset would prune rows for the
+    # wrong side and return silently wrong results.
+    if len(dataset_refs) != 1 or len(all_refs) != 1:
         return {}
     where_clause = _where_clause(sql_template)
     if where_clause is None or _contains_boolean_operator(where_clause, "or"):

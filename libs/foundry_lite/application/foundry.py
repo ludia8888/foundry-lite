@@ -80,8 +80,23 @@ class FoundryLite:
         self._services = services
         self._attach_facades(services)
         self._bind_local_workflow_drivers(dependencies, services)
-        self.metadata_repository.initialize_schema()
+        self._initialize_schema_for_unprotected_profile()
         self.bootstrap()
+
+    def _initialize_schema_for_unprotected_profile(self) -> None:
+        """Create metadata tables for local runtimes only.
+
+        Protected profiles take their schema from the Alembic migration chain, so
+        the metadata repository refuses schema mutation there and
+        ``initialize_schema`` raises ``SchemaMutationDisabledError``. Calling it
+        unconditionally meant constructing ``FoundryLite`` under a production or
+        staging profile always raised, before ``bootstrap()`` ever ran — the API,
+        CLI, and every worker failed at startup. Only the schema call is gated;
+        the tenant/user bootstrap writes below are ordinary inserts.
+        """
+        if self.runtime_profile.is_protected:
+            return
+        self.metadata_repository.initialize_schema()
 
     def _attach_dependencies(self, dependencies: CoreDependencies) -> None:
         self.runtime_profile = dependencies.profile

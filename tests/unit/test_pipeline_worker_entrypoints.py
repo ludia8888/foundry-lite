@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 from foundry_lite_worker import pipeline_control, pipeline_dag, pipeline_node_subprocess
-
-
-class _StopControlLoop(Exception):
-    pass
 
 
 class _FakeControl:
@@ -55,6 +52,7 @@ def test_pipeline_control_loop_ticks_both_recovery_paths(
 ) -> None:
     control = _FakeControl()
     preview = _FakePreview()
+    stop_event = Event()
     foundry = SimpleNamespace(
         _services=SimpleNamespace(
             pipelines=SimpleNamespace(control=control, preview=preview),
@@ -64,21 +62,50 @@ def test_pipeline_control_loop_ticks_both_recovery_paths(
     monkeypatch.setattr(pipeline_control, "FoundryLite", lambda **_kwargs: foundry)
     monkeypatch.setenv("FOUNDRY_LITE_PIPELINE_CONTROL_INTERVAL_SECONDS", "0")
 
-    def stop_after_tick(interval: float) -> None:
-        assert interval == 1.0
-        raise _StopControlLoop
+    # Stop the loop after the first tick so it runs exactly once.
+    def tick(*, limit: int) -> None:
+        control.limits.append(limit)
+        stop_event.set()
 
-    monkeypatch.setattr(pipeline_control.time, "sleep", stop_after_tick)
-    with pytest.raises(_StopControlLoop):
-        pipeline_control.run_control_loop()
+    monkeypatch.setattr(control, "tick", tick)
+
+    pipeline_control.run_control_loop(stop_event)
 
     assert control.limits == [100]
     assert preview.recovery_limits == [100]
 
-    called: list[bool] = []
-    monkeypatch.setattr(pipeline_control, "run_control_loop", lambda: called.append(True))
+    called: list[object] = []
+    monkeypatch.setattr(pipeline_control, "run_control_loop", lambda stop_event=None: called.append(stop_event))
     pipeline_control.main()
-    assert called == [True]
+    assert len(called) == 1
+
+
+def test_pipeline_control_loop_survives_a_failing_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single failing tick must not kill the durable recovery loop."""
+    control = _FakeControl()
+    preview = _FakePreview()
+    stop_event = Event()
+    foundry = SimpleNamespace(
+        _services=SimpleNamespace(pipelines=SimpleNamespace(control=control, preview=preview)),
+    )
+    monkeypatch.setattr(pipeline_control, "create_runtime_core_dependencies", lambda **_kwargs: object())
+    monkeypatch.setattr(pipeline_control, "FoundryLite", lambda **_kwargs: foundry)
+    monkeypatch.setenv("FOUNDRY_LITE_PIPELINE_CONTROL_INTERVAL_SECONDS", "0")
+
+    ticks: list[int] = []
+
+    def tick(*, limit: int) -> None:
+        ticks.append(limit)
+        if len(ticks) == 1:
+            raise RuntimeError("transient tick failure")
+        stop_event.set()
+
+    monkeypatch.setattr(control, "tick", tick)
+
+    pipeline_control.run_control_loop(stop_event)
+
+    # The first tick raised; the loop continued to a second successful tick.
+    assert len(ticks) == 2
 
 
 def test_pipeline_dag_worker_registers_control_and_capability_queues(

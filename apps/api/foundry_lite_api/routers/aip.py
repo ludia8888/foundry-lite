@@ -29,29 +29,38 @@ router = APIRouter()
 
 @router.post("/api/aip/builder/validate")
 def validate_aip_builder(request: Request, payload: AipBuilderValidateRequest) -> JsonObject:
-    result = runtime.foundry.aip.validate_builder_payload(
-        payload=payload.model_dump(by_alias=True),
-        ctx=_ctx(request),
-    )
-    return result.to_payload()
+    try:
+        result = runtime.foundry.aip.validate_builder_payload(
+            payload=payload.model_dump(by_alias=True),
+            ctx=_ctx(request),
+        )
+        return result.to_payload()
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.post("/api/aip/builder/run")
 def run_aip_builder(request: Request, payload: AipBuilderRunRequest) -> JsonObject:
-    result = runtime.foundry.aip.run_builder_payload(
-        payload=payload.model_dump(by_alias=True),
-        ctx=_ctx(request),
-    )
-    return result.to_payload()
+    try:
+        result = runtime.foundry.aip.run_builder_payload(
+            payload=payload.model_dump(by_alias=True),
+            ctx=_ctx(request),
+        )
+        return result.to_payload()
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.post("/api/aip/agent/run")
 def run_aip_agent(request: Request, payload: AipAgentRunRequest) -> JsonObject:
-    result = runtime.foundry.aip.run_agent_payload(
-        payload=payload.model_dump(by_alias=True),
-        ctx=_ctx(request),
-    )
-    return result.to_payload()
+    try:
+        result = runtime.foundry.aip.run_agent_payload(
+            payload=payload.model_dump(by_alias=True),
+            ctx=_ctx(request),
+        )
+        return result.to_payload()
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.post("/api/aip/citations/navigation/resolve")

@@ -15,6 +15,7 @@ from foundry_lite.application.ports import (
     SourceDatabaseAdapter,
     SourceManagementRepository,
     SourceRegistryRepository,
+    SourceTableBatch,
     TransactionContext,
     TransactionManager,
 )
@@ -358,17 +359,11 @@ def complete_database_run(
 ) -> dict[str, object]:
     summary = mapping(sync["config_summary"])
     dataset_ref = target_dataset_ref(sync)
-    database_url = service.secret_vault.get_secret(required_text(summary, "databaseUrlSecretRef")).value
-    route = _database_network_route(service, ctx, sync)
-    batch = service.source_database_adapter.read_table_batch(
-        database_url,
-        table_name=required_text(summary, "tableName"),
-        batch_limit=int_value(run.get("batch_limit") or summary.get("batchLimit"), 100),
-        checkpoint_column=optional_text(summary.get("checkpointColumn")),
-        after_value=mapping(run["checkpoint_start"]).get("lastValue"),
-        network_route=route,
-        connection_id=f"{ctx.request_id}:{run['id']}",
-    )
+    batch = _read_database_batch(service, ctx, sync, run, summary)
+    # An empty (caught-up) batch returns an empty checkpoint; persisting that would
+    # reset the resume cursor to None and the next tick would re-ingest the whole
+    # table as duplicates. Carry the prior checkpoint forward instead.
+    checkpoint: Mapping[str, object] = dict(batch.checkpoint) or mapping(run["checkpoint_start"])
     commit = dataset_ingest_service.sync_rows_batch(
         dataset_ref,
         batch.rows,
@@ -378,13 +373,32 @@ def complete_database_run(
         tx_type=str(sync["mode"]),
         source_type=f"source.{sync['source_type']}",
         transaction_metadata={
-            "sourceManagedSync": {"runId": run["id"], "checkpoint": dict(batch.checkpoint)},
+            "sourceManagedSync": {"runId": run["id"], "checkpoint": dict(checkpoint)},
             "sourceNetworkEvidence": dict(batch.network_evidence),
         },
     )
     result = commit_result_payload(commit, batch)
     return finish_run(
-        service, ctx, sync, run, "succeeded", None, result.get("datasetVersionId"), batch.checkpoint, result, None
+        service, ctx, sync, run, "succeeded", None, result.get("datasetVersionId"), checkpoint, result, None
+    )
+
+
+def _read_database_batch(
+    service: SourceRunStore,
+    ctx: RequestContext,
+    sync: Mapping[str, object],
+    run: Mapping[str, object],
+    summary: Mapping[str, object],
+) -> SourceTableBatch:
+    database_url = service.secret_vault.get_secret(required_text(summary, "databaseUrlSecretRef")).value
+    return service.source_database_adapter.read_table_batch(
+        database_url,
+        table_name=required_text(summary, "tableName"),
+        batch_limit=int_value(run.get("batch_limit") or summary.get("batchLimit"), 100),
+        checkpoint_column=optional_text(summary.get("checkpointColumn")),
+        after_value=mapping(run["checkpoint_start"]).get("lastValue"),
+        network_route=_database_network_route(service, ctx, sync),
+        connection_id=f"{ctx.request_id}:{run['id']}",
     )
 
 

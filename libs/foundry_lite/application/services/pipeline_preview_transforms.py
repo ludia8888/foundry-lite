@@ -13,6 +13,7 @@ from foundry_lite.application.services.pipeline_media_reference import (
     required_source_media_reference,
 )
 from foundry_lite.application.services.pipeline_preview_errors import PipelineCodeIsolationRequired
+from foundry_lite.application.services.pipeline_preview_joins import join_rows as _join_rows
 from foundry_lite.application.services.pipeline_preview_runtime import PipelinePreviewRuntime
 from foundry_lite.application.services.pipeline_preview_structured import (
     output_geospatial,
@@ -439,37 +440,6 @@ def _bool_value(value: object) -> bool:
     if normalized in {"false", "0", "no", "n"}:
         return False
     raise ValidationFailed("cannot cast preview value to boolean", details={"value": str(value)})
-
-
-def _join_rows(
-    left: Sequence[JsonObject],
-    right: Sequence[JsonObject],
-    left_key: str,
-    right_key: str,
-    join_type: str,
-) -> list[JsonObject]:
-    rows, matched_right = _left_join_rows(left, right, left_key, right_key, join_type)
-    if join_type in {"right", "full outer"}:
-        rows.extend(dict(row) for index, row in enumerate(right) if index not in matched_right)
-    return rows
-
-
-def _left_join_rows(
-    left: Sequence[JsonObject],
-    right: Sequence[JsonObject],
-    left_key: str,
-    right_key: str,
-    join_type: str,
-) -> tuple[list[JsonObject], set[int]]:
-    rows: list[JsonObject] = []
-    matched_right: set[int] = set()
-    for left_row in left:
-        matches = [(index, row) for index, row in enumerate(right) if left_row.get(left_key) == row.get(right_key)]
-        rows.extend({**left_row, **right_row} for _, right_row in matches)
-        matched_right.update(index for index, _ in matches)
-        if not matches and join_type in {"left", "full outer"}:
-            rows.append(dict(left_row))
-    return rows, matched_right
 
 
 def _chunk_unit(unit: Mapping[str, object], *, size: int, overlap: int) -> list[JsonObject]:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from collections.abc import AsyncIterator
 
+import anyio.to_thread
 from fastapi import APIRouter, Header, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from foundry_lite.domain.context import RequestContext
@@ -509,11 +511,12 @@ async def _pipeline_event_stream(
     cursor = after_sequence
     heartbeat_count = 0
     while not await request.is_disconnected():
-        page = runtime.foundry.pipelines.events(
-            run_id,
-            after_sequence=cursor,
-            limit=100,
-            ctx=ctx,
+        # These are synchronous SQLAlchemy calls; running them directly on the
+        # event loop (once per second per open stream) would block every other
+        # async request. Offload to the threadpool like the object-subscription
+        # SSE route does.
+        page = await anyio.to_thread.run_sync(
+            functools.partial(runtime.foundry.pipelines.events, run_id, after_sequence=cursor, limit=100, ctx=ctx)
         )
         events = page["events"]
         if isinstance(events, list) and events:
@@ -524,7 +527,7 @@ async def _pipeline_event_stream(
                 yield _sse_event(event)
             heartbeat_count = 0
             continue
-        snapshot = runtime.foundry.pipelines.get_run(run_id, ctx=ctx)
+        snapshot = await anyio.to_thread.run_sync(functools.partial(runtime.foundry.pipelines.get_run, run_id, ctx=ctx))
         if snapshot["status"] in {"succeeded", "partial", "failed", "cancelled"}:
             return
         heartbeat_count += 1

@@ -318,6 +318,75 @@ def test_agent_runtime_records_usage_when_model_call_succeeds_then_step_fails(fo
     assert row["estimated_cost"] > 0.0
 
 
+def test_agent_runtime_finalization_failure_terminalizes_run_and_returns(foundry: Any, monkeypatch) -> None:
+    """A failure while finalizing a successful run must mark it failed, not stuck 'running'.
+
+    The success-finalization writes (usage, assistant message, succeeded event, and
+    the running->succeeded CAS) used to run outside the try/except. A transient
+    failure there rolled back the terminal CAS and raised straight out of run(),
+    leaving a dangling 'running' ledger row that Operations never saw resolved.
+    """
+    prepare_indexed_demo(foundry)
+
+    def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("finalization boom")
+
+    monkeypatch.setattr("foundry_lite.application.services.aip.agent_runtime.mark_execution_run_succeeded", boom)
+
+    # run() must return a failed result, not raise.
+    result = foundry.aip.run_agent_payload(
+        payload={**_payload(), "agentRunId": "agent-runtime-finalize-fail"},
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    with foundry.engine.begin() as conn:
+        status = (
+            conn.execute(
+                select(db.ai_execution_runs.c.status).where(db.ai_execution_runs.c.id == (result.ai_run_id or ""))
+            )
+            .scalars()
+            .one()
+        )
+    assert status == "failed"
+
+
+def test_aggregate_charged_sums_usage_across_billed_calls() -> None:
+    """Failure-path usage must reflect every billed call, not just the first.
+
+    A tool loop makes a follow-up (2nd) model call that is billed even if the run
+    then fails; capturing only the first response under-reported spend. The charged
+    accumulator combines the token usage of all billed responses.
+    """
+    from foundry_lite.application.services.aip.agent_runtime import _aggregate_charged
+
+    first = ModelResponse(
+        provider="fake",
+        resolved_model_id="m",
+        resolved_model_revision="r",
+        content="a",
+        finish_reason="stop",
+        input_tokens=3,
+        output_tokens=5,
+    )
+    second = ModelResponse(
+        provider="fake",
+        resolved_model_id="m",
+        resolved_model_revision="r",
+        content="b",
+        finish_reason="stop",
+        input_tokens=7,
+        output_tokens=11,
+    )
+
+    assert _aggregate_charged([]) is None
+    assert _aggregate_charged([first]) is first
+    combined = _aggregate_charged([first, second])
+    assert combined is not None
+    assert combined.input_tokens == 10
+    assert combined.output_tokens == 16
+
+
 def test_agent_runtime_citation_payload_plain_text_and_empty_claims_skip_resolver() -> None:
     resolver = _UnexpectedCitationResolver()
 

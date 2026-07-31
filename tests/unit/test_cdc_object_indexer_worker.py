@@ -85,6 +85,35 @@ def test_cdc_object_indexer_continuous_loop_indexes_until_empty_and_releases_lea
     assert order["properties"]["status"] == "DELIVERED"
 
 
+def test_cdc_object_indexer_continuous_loop_stops_cleanly_on_oversized_version(tmp_path: Path) -> None:
+    """An oversized committed version must stop the loop cleanly, not crash it.
+
+    The row-limit guard raises for an oversized version; when that propagated out
+    of the continuous loop the process crashed, and because the cursor never moved
+    past the poison version it crash-looped on every restart. The loop now returns
+    a durable ``version_oversized`` terminal result (workflow failed) instead.
+    """
+    storage_root = tmp_path / "continuous-oversized"
+    foundry = _seed_order_cdc_runtime(storage_root, tmp_path)
+    _commit_multi_row_cdc_version(foundry, tmp_path)
+
+    result = run_cdc_object_indexer_continuously(
+        CdcObjectIndexerWorkerConfig(
+            object_type_api_name="Order",
+            source_dataset_ref="raw_cdc.erp_orders",
+            storage_root=storage_root,
+            is_continuous=True,
+            continuous_max_empty_polls=1,
+            max_rows_per_version=1,
+            worker_id="cdc-continuous-oversized",
+        )
+    )
+
+    workflow = _workflow_row(storage_root)
+    assert result.stop_reason == "version_oversized"
+    assert workflow["status"] == "failed"
+
+
 def test_cdc_object_indexer_continuous_loop_stops_when_lease_is_lost(tmp_path: Path) -> None:
     storage_root = tmp_path / "lease-lost"
     foundry = _seed_order_cdc_runtime(storage_root, tmp_path)

@@ -1809,6 +1809,42 @@ def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monk
     assert "Explain Order O-1001 for the operator." in {message["content"] for message in prompt_payload["messages"]}
 
 
+def test_api_aip_agent_run_maps_domain_error_to_status_not_500(foundry, monkeypatch) -> None:
+    """AIP builder/agent routes must map domain errors, not drop them to HTTP 500.
+
+    Unlike every other router, the builder/agent/validate routes did not wrap their
+    handler in ``except FoundryLiteError``, so a PermissionDenied (e.g. an auth
+    failure under a strict profile) surfaced as an opaque 500 instead of 403.
+    """
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+
+    def deny(**_kwargs: object) -> object:
+        raise PermissionDenied("agent run is not permitted", details={"reason": "test"})
+
+    monkeypatch.setattr(foundry.aip, "run_agent_payload", deny)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/aip/agent/run",
+        headers={"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin"},
+        json={
+            "agentRunId": "agent-denied-1",
+            "agentVersionId": "agent.order-ops.v1",
+            "modelAlias": "default-completion",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "userMessage": "hi",
+            "agentInstruction": "answer",
+            "securityPartition": "tenant-demo:internal",
+            "allowedSecurityPartitions": ["tenant-demo:internal"],
+            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
+            "dataClassification": "internal",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
 def test_api_aip_eval_and_release_surface_persists_gate_evidence(foundry, monkeypatch) -> None:
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)

@@ -27,3 +27,19 @@ def test_sql_partition_pushdown_ignores_or_and_multi_input_queries() -> None:
 
     assert with_or == {}
     assert multi_input == {}
+
+
+def test_sql_partition_pushdown_bails_on_self_join_repeated_input() -> None:
+    """A self-join references the single input more than once, so no predicate is safe.
+
+    De-duplicating the input refs made a self-join look like a single-input query,
+    and the WHERE predicate was pushed down against the one dataset — pruning rows
+    for the wrong side of the join and returning silently wrong results.
+    """
+    self_join = infer_sql_partition_filters(
+        "select a.id from {{ input('raw.orders') }} a "
+        "join {{ input('raw.orders') }} b on a.parent_id = b.id "
+        "where a.bucket = 'b'"
+    )
+
+    assert self_join == {}

@@ -77,6 +77,13 @@ def _segment_shape_changes(
         changes.append(warning_datasource_added(api_name, name))
     for name in sorted(set(current_by_name) & set(candidate_by_name)):
         changes.extend(_common_segment_changes(api_name, current_by_name[name], candidate_by_name[name]))
+    # An implicit single->multi rename keeps the same dataset under a new segment
+    # name, so it appears in neither the removed, added, nor common-name sets. Its
+    # requiredRole change would be silently dropped without comparing the pair here.
+    for current_name, candidate_name in sorted(renamed.items()):
+        changes.extend(
+            _common_segment_changes(api_name, current_by_name[current_name], candidate_by_name[candidate_name])
+        )
     return changes
 
 

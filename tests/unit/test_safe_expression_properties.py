@@ -170,3 +170,59 @@ def test_validate_action_request_enforces_numeric_and_boolean_types() -> None:
     assert isinstance(validate_action_request(action_type, record, {"qty": 1.5}), ValidationFailed)
     assert isinstance(validate_action_request(action_type, record, {"margin": True}), ValidationFailed)
     assert isinstance(validate_action_request(action_type, record, {"qty": True}), ValidationFailed)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# evaluate_safe_expression: `in [...]` must honour quoted literals.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_in_list_does_not_split_quoted_members_on_commas() -> None:
+    """A quoted member containing a comma is one member, not several.
+
+    Splitting the raw list on every comma before stripping quotes widened the
+    accepted set beyond what the ontology author declared: ``in ['a,b', 'c']``
+    admitted ``a`` and ``b``, neither of which was listed, while rejecting the
+    member ``a,b`` that was. Action preconditions gate writes, so the widened
+    set let an action run against object states it was meant to exclude.
+    """
+    expression = "object.status in ['a,b', 'c']"
+
+    assert evaluate_safe_expression(expression, {"status": "a,b"}) is True
+    assert evaluate_safe_expression(expression, {"status": "c"}) is True
+    assert evaluate_safe_expression(expression, {"status": "a"}) is False
+    assert evaluate_safe_expression(expression, {"status": "b"}) is False
+
+
+def test_in_empty_list_matches_nothing() -> None:
+    """``in []`` declares no members, so nothing satisfies it.
+
+    Splitting an empty list yielded a single empty-string member, so a property
+    whose value was "" passed a precondition that listed no values at all.
+    """
+    assert evaluate_safe_expression("object.status in []", {"status": ""}) is False
+    assert evaluate_safe_expression("object.status in []", {"status": "PENDING"}) is False
+    # An explicitly declared empty literal still matches an empty value.
+    assert evaluate_safe_expression("object.status in ['']", {"status": ""}) is True
+
+
+def test_in_list_with_unterminated_literal_fails_closed() -> None:
+    """An unparseable precondition must not silently admit the write."""
+    with pytest.raises(ValidationFailed):
+        evaluate_safe_expression("object.status in ['PENDING]", {"status": "PENDING"})
+
+
+def test_evaluate_safe_expression_coerces_numeric_and_boolean_properties() -> None:
+    """Numeric and boolean property guards must evaluate, not silently never pass.
+
+    Expression literals are always quoted strings, so an int/bool property could
+    never equal (or appear in) them; every numeric/boolean precondition failed
+    regardless of the object state. Coercing the property value fixes that.
+    """
+    assert evaluate_safe_expression("object.count == '5'", {"count": 5}) is True
+    assert evaluate_safe_expression("object.count == '5'", {"count": 6}) is False
+    assert evaluate_safe_expression("object.count in ['5', '6']", {"count": 6}) is True
+    assert evaluate_safe_expression("object.active == 'true'", {"active": True}) is True
+    assert evaluate_safe_expression("object.active == 'false'", {"active": False}) is True
+    # A missing property still never matches a string literal.
+    assert evaluate_safe_expression("object.missing == 'x'", {}) is False

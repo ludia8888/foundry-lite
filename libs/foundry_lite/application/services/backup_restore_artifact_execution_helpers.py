@@ -66,8 +66,19 @@ def restore_candidates(
     datasets: Mapping[str, DatasetRow],
 ) -> list[RestoreCandidate]:
     latest = _latest_versions_by_dataset(current_preflight["datasetVersions"])
+    # The artifact inventory lists every committed version of each dataset, so
+    # iterating it raw produced one restore candidate per historical version and
+    # committed each as a new head in turn — the final head ended up being a copy
+    # of some intermediate version rather than the backup's head, and even an
+    # unchanged dataset was rewritten. Restore only the backup head per
+    # (dataset, branch), which is what "restore to the backup" means.
+    artifact_head_ids = {
+        str(head["versionId"]) for head in _latest_versions_by_dataset(artifact_preflight["datasetVersions"]).values()
+    }
     candidates: list[RestoreCandidate] = []
     for artifact_version in artifact_preflight["datasetVersions"]:
+        if str(artifact_version["versionId"]) not in artifact_head_ids:
+            continue
         current = latest.get((artifact_version["datasetId"], artifact_version["branch"]))
         if current is None or current["versionId"] == artifact_version["versionId"]:
             continue
@@ -350,15 +361,31 @@ def existing_execution_report(
     ctx: RequestContext,
     restore_id: str,
 ) -> BackupRestoreArtifactRestoreReport | None:
+    # Idempotency must key on whether the restore already mutated dataset heads,
+    # not only on a validated outcome. `_restore_dataset_heads` commits heads
+    # before post-restore validation runs, and a blocked validation records an
+    # EXECUTE_FAILED event; matching only EXECUTED let a retry re-run the restore
+    # and commit duplicate head versions. Short-circuit on any prior restore event
+    # for this id whose report shows the historical repoint was executed.
     rows = [
         row
         for row in repository.list_runs(tenant_id=ctx.tenant_id)["auditEvents"]
-        if row.get("event_type") == ARTIFACT_RESTORE_EXECUTED_EVENT and row.get("resource_id") == restore_id
+        if row.get("resource_id") == restore_id and _restore_event_is_idempotency_marker(row)
     ]
     if not rows:
         return None
     latest = max(rows, key=lambda row: str(row.get("created_at") or ""))
     return cast(BackupRestoreArtifactRestoreReport, latest["after_ref"])
+
+
+def _restore_event_is_idempotency_marker(row: Mapping[str, object]) -> bool:
+    event_type = row.get("event_type")
+    if event_type == ARTIFACT_RESTORE_EXECUTED_EVENT:
+        return True
+    if event_type != ARTIFACT_RESTORE_EXECUTE_FAILED_EVENT:
+        return False
+    after_ref = row.get("after_ref")
+    return isinstance(after_ref, Mapping) and bool(after_ref.get("isHistoricalRepointExecuted"))
 
 
 def require_same_artifact(
