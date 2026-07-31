@@ -378,6 +378,16 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
         limit: int,
     ) -> list[PipelineRunRow]: ...
 
+    def partial_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        limit: int,
+    ) -> list[PipelineRunRow]:
+        """Return this tenant's terminal 'partial' runs for unknown-commit reconciliation."""
+        ...
+
     def claim_terminal_schedule_observation(
         self,
         *,

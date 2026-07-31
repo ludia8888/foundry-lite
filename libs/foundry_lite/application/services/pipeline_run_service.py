@@ -154,7 +154,7 @@ class PipelineRunService(CoreService):
                 self.expire_stale_execution_run(ctx, row)
                 return self.get_run(str(row["id"]), ctx=ctx)
             if action == "read":
-                self._reconcile_unknown_commit(ctx, row)
+                self.reconcile_unknown_commit_output_for_run(ctx, row)
                 return self.get_run(str(row["id"]), ctx=ctx)
         try:
             return self.execute_queued_run(ctx, row, version)
@@ -167,13 +167,14 @@ class PipelineRunService(CoreService):
             fail_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row, exc)
             return self.get_run(str(row["id"]), ctx=ctx)
 
-    def _reconcile_unknown_commit(
-        self,
-        ctx: RequestContext,
-        row: PipelineRunRow,
-    ) -> None:
+    def reconcile_unknown_commit_output_for_run(self, ctx: RequestContext, row: PipelineRunRow) -> bool:
+        """Reconcile one run's COMMIT_OUTCOME_UNKNOWN outputs; return whether it had any.
+
+        The synchronous start-run replay was the only caller and has no async entrypoint,
+        so async/distributed runs left 'partial' were never reconciled until this ran.
+        """
         if not pipeline_run_unknown_commit_recovery.has_unknown_commit_output(row):
-            return
+            return False
         pipeline_run_unknown_commit_recovery.reconcile_unknown_commit_outputs(
             self.engine,
             self.pipeline_repository,
@@ -185,6 +186,7 @@ class PipelineRunService(CoreService):
             ctx,
             row,
         )
+        return True
 
     def expire_stale_execution_run(self, ctx: RequestContext, row: PipelineRunRow) -> bool:
         """Fail-close one run whose execution lease lapsed; return whether it did.

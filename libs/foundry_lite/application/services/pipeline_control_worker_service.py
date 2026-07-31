@@ -63,7 +63,13 @@ class PipelineControlWorkerService(CoreService):
     runtime_service: RuntimeEvidenceBoundary
 
     def tick(self, *, limit: int = 100) -> dict[str, int]:
-        totals = {"dispatches": 0, "cancellations": 0, "scheduleTerminals": 0, "staleExecutions": 0}
+        totals = {
+            "dispatches": 0,
+            "cancellations": 0,
+            "scheduleTerminals": 0,
+            "staleExecutions": 0,
+            "unknownCommitReconciliations": 0,
+        }
         for tenant_id in self.metadata_repository.list_tenant_ids():
             with tenant_context(tenant_id):
                 dispatched = self.pipeline_async_run_service.recover_dispatches(tenant_id=tenant_id, limit=limit)
@@ -71,7 +77,32 @@ class PipelineControlWorkerService(CoreService):
                 totals["cancellations"] += self.recover_cancellations(tenant_id=tenant_id, limit=limit)
                 totals["scheduleTerminals"] += self.observe_schedule_terminals(tenant_id=tenant_id, limit=limit)
                 totals["staleExecutions"] += self.recover_stale_executions(tenant_id=tenant_id, limit=limit)
+                totals["unknownCommitReconciliations"] += self.reconcile_unknown_commit_outputs(
+                    tenant_id=tenant_id, limit=limit
+                )
         return totals
+
+    def reconcile_unknown_commit_outputs(self, *, tenant_id: str, limit: int = 100) -> int:
+        """Resolve terminal 'partial' runs whose outputs are COMMIT_OUTCOME_UNKNOWN.
+
+        Async/distributed runs commit media outputs whose acknowledgement can be lost,
+        leaving the run 'partial' with a RECONCILIATION_REQUIRED output. Only the
+        synchronous start-run replay resolved those, and it has no async entrypoint, so
+        the outputs sat in limbo forever. Reconcile them here, alongside the other
+        durable recovery scans.
+        """
+        with self.engine.begin() as transaction:
+            rows = self.pipeline_repository.partial_runs(
+                transaction=transaction,
+                tenant_id=tenant_id,
+                limit=max(1, min(limit, 500)),
+            )
+        reconciled = 0
+        for row in rows:
+            ctx = _control_context(row, purpose="unknown-commit-reconciliation")
+            if self.pipeline_run_service.reconcile_unknown_commit_output_for_run(ctx, row):
+                reconciled += 1
+        return reconciled
 
     def recover_stale_executions(self, *, tenant_id: str, now: str | None = None, limit: int = 100) -> int:
         """Fail-close runs whose execution lease lapsed because their executor died.

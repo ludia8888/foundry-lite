@@ -648,6 +648,36 @@ class SqlAlchemyPipelineRepository:
         )
         return [_cast_row(row, PipelineRunRow) for row in rows]
 
+    def partial_runs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        limit: int,
+    ) -> list[PipelineRunRow]:
+        """Scan this tenant's terminal 'partial' runs for unknown-commit reconciliation.
+
+        Tenant-scoped like every other control-worker scan: ``pipeline_runs`` is under
+        ``FORCE ROW LEVEL SECURITY``, so a tenant-blind scan returns zero rows under a
+        production non-superuser role.
+        """
+        rows = (
+            transaction.execute(
+                select(db.pipeline_runs)
+                .where(
+                    and_(
+                        db.pipeline_runs.c.tenant_id == tenant_id,
+                        db.pipeline_runs.c.status == "partial",
+                    )
+                )
+                .order_by(db.pipeline_runs.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [_cast_row(row, PipelineRunRow) for row in rows]
+
     def claim_terminal_schedule_observation(
         self,
         *,
