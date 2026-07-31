@@ -360,10 +360,9 @@ def complete_database_run(
     summary = mapping(sync["config_summary"])
     dataset_ref = target_dataset_ref(sync)
     batch = _read_database_batch(service, ctx, sync, run, summary)
-    # A caught-up incremental tick reads zero new rows, and the adapter returns an
-    # empty checkpoint for an empty batch. Persisting that over the prior checkpoint
-    # would reset the resume cursor to None, so the next tick re-reads the whole
-    # table and appends it as duplicates. Carry the prior checkpoint forward instead.
+    # An empty (caught-up) batch returns an empty checkpoint; persisting that would
+    # reset the resume cursor to None and the next tick would re-ingest the whole
+    # table as duplicates. Carry the prior checkpoint forward instead.
     checkpoint: Mapping[str, object] = dict(batch.checkpoint) or mapping(run["checkpoint_start"])
     commit = dataset_ingest_service.sync_rows_batch(
         dataset_ref,
@@ -391,7 +390,6 @@ def _read_database_batch(
     run: Mapping[str, object],
     summary: Mapping[str, object],
 ) -> SourceTableBatch:
-    """Read one bounded incremental batch, resuming from the run's start checkpoint."""
     database_url = service.secret_vault.get_secret(required_text(summary, "databaseUrlSecretRef")).value
     return service.source_database_adapter.read_table_batch(
         database_url,
