@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Barrier
 from typing import Any, Protocol
@@ -107,6 +107,20 @@ class FakeActionRepository:
         self.action_runs.append(_action_run_row(record))
         return None
 
+    def list_action_runs_by_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        statuses: Any,
+        limit: int,
+    ) -> list[ActionRunRow]:
+        del transaction
+        matches = [
+            row.copy() for row in self.action_runs if row["tenant_id"] == tenant_id and row["status"] in tuple(statuses)
+        ]
+        return matches[:limit]
+
     def update_action_run_terminal(
         self,
         *,
@@ -115,7 +129,7 @@ class FakeActionRepository:
         action_run_id: str,
         transition: StatusTransition,
         error: Mapping[str, object] | None,
-        completed_at: str,
+        completed_at: str | None,
         result: Mapping[str, object] | None = None,
     ) -> bool:
         del transaction
@@ -345,6 +359,7 @@ def _action_run_row(record: ActionRunRecord) -> ActionRunRow:
         "request_fingerprint": record.request_fingerprint,
         "result": record.result,
         "error": record.error,
+        "external_writeback_uri": record.external_writeback_uri,
         "created_at": record.created_at,
         "completed_at": record.completed_at,
     }
@@ -529,6 +544,51 @@ def test_action_repository_contract_inserts_and_replays_idempotent_runs(harness:
     assert found["parameters"] == {"status": "APPROVED"}
     assert found["request_fingerprint"] == "fingerprint-1"
     assert missing_actor is None
+
+
+def test_action_repository_contract_lists_external_pending_runs_for_recovery(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=replace(
+                _action_run_record("arun_pending_1", idempotency_key="idem-p1", status="external_pending"),
+                external_writeback_uri="s3://bucket/order/O-1",
+            ),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record("arun_pending_2", idempotency_key="idem-p2", status="external_pending"),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record("arun_done", idempotency_key="idem-done", status="succeeded"),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record(
+                "arun_other_tenant", tenant_id="tenant-other", idempotency_key="idem-o", status="external_pending"
+            ),
+        )
+        pending = harness.repository.list_action_runs_by_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            statuses=("external_pending",),
+            limit=10,
+        )
+        limited = harness.repository.list_action_runs_by_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            statuses=("external_pending",),
+            limit=1,
+        )
+
+    # Only tenant-demo external_pending runs are returned (the write-ahead URI round-trips), the succeeded
+    # run and the other tenant's run are excluded, and the limit is honored.
+    assert {run["id"] for run in pending} == {"arun_pending_1", "arun_pending_2"}
+    assert all(run["status"] == "external_pending" for run in pending)
+    uris = {run["id"]: run["external_writeback_uri"] for run in pending}
+    assert uris == {"arun_pending_1": "s3://bucket/order/O-1", "arun_pending_2": None}
+    assert len(limited) == 1
 
 
 def test_action_repository_contract_insert_or_get_existing_replays_duplicate(harness: ActionHarness) -> None:

@@ -17,16 +17,14 @@ operator-provided remote_status.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyOutcome, ActionApplyResponse
+from foundry_lite.application.action_types import ActionApplyCommand
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.action_repository import ActionRepository
 from foundry_lite.application.ports.external_writeback_adapter import (
     ExternalWritebackAdapter,
     ExternalWriteTarget,
-    RemoteOutcomeStatus,
     WriteReceipt,
 )
 from foundry_lite.application.services.action_protocols import ActionRuntimeBoundary
@@ -34,6 +32,7 @@ from foundry_lite.application.services.action_writebacks import ActionWritebackR
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ExternalCompensationRequired,
+    ExternalOutcomeUnknown,
     InvariantViolation,
 )
 
@@ -68,39 +67,45 @@ class RealExternalWritebackRunner:
             is_simulated=False,
         )
 
-    def complete_before_commit(
+    def write(self, command: ActionApplyCommand) -> WriteReceipt:
+        """Phase 2: perform the real external write with NO DB connection held.
+
+        Returns a ``WriteReceipt`` (LANDED / AMBIGUOUS). A hard, non-timeout adapter error propagates:
+        the run stays committed as ``external_pending`` and the recovery sweep resolves it by HEAD.
+        """
+        uri = command.external_writeback_uri
+        if uri is None:
+            raise InvariantViolation("real external writeback requires a target uri")
+        target = ExternalWriteTarget(uri=uri, idempotency_key=command.idempotency_key)
+        return self.adapter.write(target, {"params": dict(command.params)})
+
+    def record_outcome_unknown(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
         command: ActionApplyCommand,
-        *,
-        commit: Callable[[], ActionApplyResponse],
-    ) -> ActionApplyOutcome:
-        """Run the real external write, then the local commit, mapping the three reach-out shapes."""
-        uri = command.external_writeback_uri
-        if uri is None:
-            raise InvariantViolation("real external writeback requires a target uri")
-        target = ExternalWriteTarget(uri=uri, idempotency_key=command.idempotency_key)
-        receipt = self.adapter.write(target, {"params": dict(command.params)})
-        if receipt.status is RemoteOutcomeStatus.AMBIGUOUS:
-            # A timeout is outcome_unknown (the write may have landed), never a guaranteed failure.
-            unknown = self._recorder().outcome_unknown_before_commit(
-                conn,
-                ctx,
-                action_run_id,
-                command.idempotency_key,
-                command.request_fingerprint,
-                external_writeback_uri=uri,
-            )
-            return ActionApplyOutcome(deferred_error=unknown)
+    ) -> ExternalOutcomeUnknown:
+        """AMBIGUOUS: the write may have landed, so record ``outcome_unknown`` (never a guaranteed failure)."""
+        return self._recorder().outcome_unknown_before_commit(
+            conn,
+            ctx,
+            action_run_id,
+            command.idempotency_key,
+            command.request_fingerprint,
+            external_writeback_uri=command.external_writeback_uri,
+        )
+
+    def record_succeeded(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        command: ActionApplyCommand,
+        receipt: WriteReceipt,
+    ) -> None:
+        """LANDED: record the succeeded writeback (the run terminal transition rides on the local commit)."""
         self._record_succeeded(conn, ctx, action_run_id, command, receipt)
-        try:
-            return ActionApplyOutcome(response=commit())
-        except Exception as exc:
-            # The external write already LANDED (proven by the receipt), but the local mutation failed:
-            # roll back and require compensation in a fresh transaction (never a silent local rollback).
-            raise LocalCommitFailed(receipt) from exc
 
     def _record_succeeded(
         self,

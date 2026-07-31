@@ -47,6 +47,7 @@ class ActionRunRow(TypedDict):
     request_fingerprint: str
     result: ActionResultPayload | None
     error: ActionErrorPayload | None
+    external_writeback_uri: str | None
     created_at: str
     completed_at: str | None
 
@@ -70,6 +71,7 @@ class ActionRunRecord:
     error: ActionErrorPayload | None
     created_at: str
     completed_at: str | None
+    external_writeback_uri: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,17 @@ class ActionRepository(Protocol):
         """Return one tenant-scoped action run."""
         ...
 
+    def list_action_runs_by_status(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        statuses: Sequence[str],
+        limit: int,
+    ) -> list[ActionRunRow]:
+        """Return tenant-scoped action runs in the given statuses (for the external-pending recovery sweep)."""
+        ...
+
     def insert_action_run(self, *, transaction: TransactionContext, record: ActionRunRecord) -> None:
         """Persist a newly received action run."""
         ...
@@ -167,10 +180,10 @@ class ActionRepository(Protocol):
         action_run_id: str,
         transition: StatusTransition,
         error: ActionErrorPayload | None,
-        completed_at: str,
+        completed_at: str | None,
         result: ActionResultPayload | None = None,
     ) -> bool:
-        """CAS an action run from an allowed state into a terminal state."""
+        """CAS an action run across a status transition (``completed_at`` is ``None`` for a non-terminal move)."""
         ...
 
     def action_run_usage(

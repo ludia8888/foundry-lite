@@ -29,6 +29,7 @@ from foundry_lite.application.ports.external_writeback_adapter import (
     RemoteOutcomeStatus,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.action_external_pending_recovery import ExternalPendingRecovery
 from foundry_lite.application.services.action_mutations import ActionMutationUnitOfWork
 from foundry_lite.application.services.action_protocols import (
     ActionObjectIndexer,
@@ -131,11 +132,27 @@ class ActionWritebackReconciliationWorkflow:
     ) -> ActionWritebackRecoveryResult:
         self._require_operations_retry(ctx, "action_writeback_recovery")
         validate_queue_limit(limit)
-        rows = self._unresolved_rows(ctx, limit)
-        items = [self._recover_one(ctx, row) for row in rows]
-        result = recovery_result(items)
+        # Snapshot the unresolved writebacks BEFORE resolving external-pending runs, so an
+        # external-pending run that this tick moves to outcome_unknown is picked up by the NEXT batch
+        # (the worker loops until empty) rather than double-processed within this tick.
+        writeback_rows = self._unresolved_rows(ctx, limit)
+        pending_items = self._external_pending_recovery().recover(ctx, limit)
+        writeback_items = [self._recover_one(ctx, row) for row in writeback_rows]
+        result = recovery_result(pending_items + writeback_items)
         self._audit_recovery_tick(ctx, result)
         return result
+
+    def _external_pending_recovery(self) -> ExternalPendingRecovery:
+        return ExternalPendingRecovery(
+            engine=self.engine,
+            policy=self.policy,
+            action_repository=self.action_repository,
+            object_indexing_service=self.object_indexing_service,
+            object_records_service=self.object_records_service,
+            ontology_service=self.ontology_service,
+            runtime_service=self.runtime_service,
+            external_writeback_adapter=self.external_writeback_adapter,
+        )
 
     def approve_recovery(
         self,

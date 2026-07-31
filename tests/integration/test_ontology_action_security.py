@@ -101,7 +101,7 @@ class _FailingActionRepository:
         action_run_id: str,
         transition: StatusTransition,
         error: Mapping[str, object] | None,
-        completed_at: str,
+        completed_at: str | None,
         result: Mapping[str, object] | None = None,
     ) -> bool:
         if self.enabled and self.fail_method == "update_action_run_terminal" and transition.to_status == "succeeded":

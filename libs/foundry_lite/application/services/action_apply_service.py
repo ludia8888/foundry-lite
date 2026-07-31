@@ -19,6 +19,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.safe_expression import validate_action_request
+from foundry_lite.application.services.action_external_apply import ExternalActionApply
 from foundry_lite.application.services.action_helpers import (
     action_command,
     action_failure_transition,
@@ -41,8 +42,6 @@ from foundry_lite.application.services.action_workflow import (
     ActionObjectRecordLookup,
     ActionOntologyLookup,
     ActionRuntimeBoundary,
-    LocalCommitFailed,
-    WriteReceipt,
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
@@ -176,6 +175,18 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
         action_run_id: str,
     ) -> ActionApplyOutcome:
+        runner = self.action_writeback_service.real_writeback_runner(command)
+        if runner is not None:
+            return ExternalActionApply(self).run(ctx, command, action_run_id, runner)
+        return self._run_local_action_command(ctx, command, action_run_id)
+
+    def _run_local_action_command(
+        self,
+        ctx: RequestContext,
+        command: ActionApplyCommand,
+        action_run_id: str,
+    ) -> ActionApplyOutcome:
+        """No external side effect: insert, validate, mutate, and commit atomically in one transaction."""
         action_type_for_failure: ActionTypeRow | None = None
         try:
             with self.engine.begin() as conn:
@@ -185,27 +196,31 @@ class ActionApplyService(CoreService):
                 replay = self._replay_or_none(conn, ctx, action_type, action_run_id, command)
                 if replay is not None:
                     return replay
-                record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
-                # A target hidden by row policies becomes NotFound (record=None
-                # path) so restricted users cannot act on rows they cannot see.
-                target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
-                record = visible_record(record, target_type, ctx.roles)
-                if record is not None and (error := action_target_record_error(action_type, record)) is not None:
-                    raise error
+                record = self._visible_target_record(conn, ctx, action_type, command)
                 outcome = self._complete_received_action_run(
                     conn, ctx, action_type=action_type, action_run_id=action_run_id, command=command, record=record
                 )
-        except LocalCommitFailed as exc:
-            if action_type_for_failure is None:
-                raise
-            return self._record_compensation_required_after_local_failure(
-                ctx, command, action_run_id, action_type_for_failure, exc.receipt
-            )
         except ConflictDetected as exc:
             if action_type_for_failure is None:
                 raise
             return self._record_rolled_back_action_conflict(ctx, command, action_run_id, action_type_for_failure, exc)
         return outcome
+
+    def _visible_target_record(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        command: ActionApplyCommand,
+    ) -> ObjectRecordRow | None:
+        record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
+        # A target hidden by row policies becomes NotFound (record=None path) so restricted
+        # users cannot act on rows they cannot see.
+        target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
+        record = visible_record(record, target_type, ctx.roles)
+        if record is not None and (error := action_target_record_error(action_type, record)) is not None:
+            raise error
+        return record
 
     def _replay_or_none(
         self,
@@ -275,20 +290,7 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
         record: ObjectRecordRow,
     ) -> ActionApplyOutcome:
-        def commit() -> ActionApplyResponse:
-            return self._mutation_unit_of_work().commit(
-                conn,
-                ctx,
-                action_type=action_type,
-                action_run_id=action_run_id,
-                record=record,
-                params=command.params,
-                idempotency_key=command.idempotency_key,
-            )
-
-        real_runner = self.action_writeback_service.real_writeback_runner(command)
-        if real_runner is not None:
-            return real_runner.complete_before_commit(conn, ctx, action_run_id, command, commit=commit)
+        """Local (no external side effect): record the writeback then commit ``received -> succeeded``."""
         self.action_writeback_service.writeback_recorder().record(
             conn,
             ctx,
@@ -298,25 +300,16 @@ class ActionApplyService(CoreService):
             request_hash=command.request_fingerprint,
             response={"status_code": 200},
         )
-        return ActionApplyOutcome(response=commit())
-
-    def _record_compensation_required_after_local_failure(
-        self,
-        ctx: RequestContext,
-        command: ActionApplyCommand,
-        action_run_id: str,
-        action_type: ActionTypeRow,
-        receipt: WriteReceipt,
-    ) -> ActionApplyOutcome:
-        runner = self.action_writeback_service.real_writeback_runner(command)
-        if runner is None:
-            raise InvariantViolation("compensation requires a real external writeback adapter")
-        with self.engine.begin() as conn:
-            replay = self._replay_or_none(conn, ctx, action_type, action_run_id, command)
-            if replay is not None:
-                return replay
-            error = runner.record_compensation_required(conn, ctx, action_run_id, command, receipt)
-        return ActionApplyOutcome(deferred_error=error)
+        response = self._mutation_unit_of_work().commit(
+            conn,
+            ctx,
+            action_type=action_type,
+            action_run_id=action_run_id,
+            record=record,
+            params=command.params,
+            idempotency_key=command.idempotency_key,
+        )
+        return ActionApplyOutcome(response=response)
 
     def _existing_action_run(
         self,
@@ -360,6 +353,7 @@ class ActionApplyService(CoreService):
                 request_fingerprint=command.request_fingerprint,
                 result=None,
                 error=None,
+                external_writeback_uri=command.external_writeback_uri,
                 created_at=_now(),
                 completed_at=None,
             ),

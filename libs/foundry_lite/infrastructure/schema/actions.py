@@ -24,6 +24,9 @@ action_runs = Table(
     Column("request_fingerprint", String, nullable=False),
     Column("result", JSON),
     Column("error", JSON),
+    # Persisted before the external write so the recovery sweep can HEAD a stranded
+    # ``external_pending`` run (real external-writeback path only; NULL otherwise).
+    Column("external_writeback_uri", String),
     Column("created_at", String, nullable=False),
     Column("completed_at", String),
     UniqueConstraint(
