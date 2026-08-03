@@ -23,6 +23,7 @@ class ActionFunctionExecutionRequest:
     function_api_name: str
     function_version: str
     inputs: Mapping[str, object]
+    effect_outputs: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)

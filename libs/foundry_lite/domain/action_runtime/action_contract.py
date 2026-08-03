@@ -17,6 +17,11 @@ from foundry_lite.domain.action_runtime.action_conditions import (
     referenced_condition_parameters,
     validate_action_condition,
 )
+from foundry_lite.domain.action_runtime.action_effects import (
+    ActionEffectV3,
+    action_effect_payload,
+    compile_action_effects,
+)
 from foundry_lite.domain.errors import ValidationFailed
 
 ACTION_PARAMETER_TYPES = frozenset(
@@ -83,7 +88,7 @@ class ActionDefinitionV3:
     function: ActionFunctionRefV3 | None
     submission_criteria: Mapping[str, object] | None
     permissions: Mapping[str, object]
-    effects: tuple[Mapping[str, object], ...]
+    effects: tuple[ActionEffectV3, ...]
     risk_level: str
     agent_execution_policy: str
     agent_tool_description: str | None
@@ -110,6 +115,9 @@ def compile_action_contract(definition: Mapping[str, object]) -> ActionDefinitio
     agent_policy = _enum(
         definition.get("agentExecutionPolicy"), AGENT_EXECUTION_POLICIES, "approval_required", "agentExecutionPolicy"
     )
+    effects = compile_action_effects(definition)
+    source_version = _source_version(definition)
+    _validate_effect_function_contract(effects, function, source_version)
     return ActionDefinitionV3(
         api_name=api_name,
         display_name=_optional_text(definition.get("displayName")) or api_name,
@@ -120,15 +128,27 @@ def compile_action_contract(definition: Mapping[str, object]) -> ActionDefinitio
         function=function,
         submission_criteria=criteria,
         permissions=_mapping_or_empty(definition.get("permissions")),
-        effects=_effects(definition),
+        effects=effects,
         risk_level=risk_level,
         agent_execution_policy=agent_policy,
         agent_tool_description=_optional_text(definition.get("agentToolDescription")),
         log_policy=_mapping_or_empty(definition.get("actionLog")),
         revert_policy=_mapping_or_empty(definition.get("revert")),
         branch_policy=_mapping_or_empty(definition.get("branchPolicy")),
-        source_version=_source_version(definition),
+        source_version=source_version,
     )
+
+
+def _validate_effect_function_contract(
+    effects: tuple[ActionEffectV3, ...],
+    function: ActionFunctionRefV3 | None,
+    source_version: int,
+) -> None:
+    has_before_effect = any(effect.phase == "before_commit" for effect in effects)
+    if source_version >= 3 and has_before_effect and function is None:
+        raise ValidationFailed(
+            "v3 before-commit effect requires a function-backed Action so its response can shape the EditPlan"
+        )
 
 
 def action_contract_payload(contract: ActionDefinitionV3) -> dict[str, object]:
@@ -145,7 +165,7 @@ def action_contract_payload(contract: ActionDefinitionV3) -> dict[str, object]:
         "function": _function_payload(contract.function),
         "submissionCriteria": dict(contract.submission_criteria) if contract.submission_criteria else None,
         "permissions": dict(contract.permissions),
-        "effects": [dict(effect) for effect in contract.effects],
+        "effects": [action_effect_payload(effect) for effect in contract.effects],
         "riskLevel": contract.risk_level,
         "agentExecutionPolicy": contract.agent_execution_policy,
         "agentToolDescription": contract.agent_tool_description,
@@ -290,14 +310,6 @@ def _function_ref(raw: object) -> ActionFunctionRefV3 | None:
         return None
     payload = _mapping(raw, "function")
     return ActionFunctionRefV3(api_name=_required_text(payload, "apiName"), version=_required_text(payload, "version"))
-
-
-def _effects(definition: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    if "effects" in definition:
-        return tuple(_mapping(item, "effect") for item in _sequence(definition.get("effects"), "effects"))
-    combined = list(_sequence(definition.get("writebacks", ()), "writebacks"))
-    combined.extend(_sequence(definition.get("sideEffects", ()), "sideEffects"))
-    return tuple(_mapping(item, "effect") for item in combined)
 
 
 def _parameter_payload(parameter: ActionParameterV3) -> dict[str, object]:

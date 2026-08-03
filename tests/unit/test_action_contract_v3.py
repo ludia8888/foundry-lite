@@ -17,6 +17,7 @@ from foundry_lite.domain.action_runtime.action_contract import (
     action_parameter_json_schema,
     compile_action_contract,
 )
+from foundry_lite.domain.action_runtime.action_effects import action_effect_payload
 from foundry_lite.domain.action_runtime.action_parameters import (
     ActionParameterContext,
     parameter_config_payload,
@@ -198,6 +199,99 @@ def test_activation_validation_accepts_version_pinned_function_contract() -> Non
         {"Order": {"apiName": "Order", "properties": []}},
         {},
     )
+
+
+def test_v3_effects_are_typed_and_deterministic() -> None:
+    definition = _definition([])
+    definition["effects"] = [
+        {
+            "effectId": "notify-ops",
+            "kind": "notification",
+            "phase": "after_commit",
+            "targetRef": "notification-policy:operations",
+            "payload": {"template": "order-updated"},
+        }
+    ]
+
+    first = compile_action_contract(definition)
+    second = compile_action_contract(definition)
+
+    assert tuple(map(action_effect_payload, first.effects)) == tuple(map(action_effect_payload, second.effects))
+    assert action_effect_payload(first.effects[0]) == {
+        "effectId": "notify-ops",
+        "kind": "notification",
+        "phase": "after_commit",
+        "targetRef": "notification-policy:operations",
+        "payload": {"template": "order-updated"},
+        "maxAttempts": 3,
+        "timeoutSeconds": 30,
+    }
+
+
+def test_effect_inline_destination_is_rejected_recursively() -> None:
+    definition = _definition([])
+    definition["effects"] = [
+        {
+            "effectId": "unsafe",
+            "kind": "webhook",
+            "phase": "before_commit",
+            "targetRef": "connector:erp/orders",
+            "payload": {"callback": {"url": "https://attacker.invalid"}},
+        }
+    ]
+
+    with pytest.raises(ValidationFailed, match="inline destination"):
+        compile_action_contract(definition)
+
+
+def test_only_one_before_commit_webhook_is_allowed() -> None:
+    definition = _definition([])
+    definition["effects"] = [
+        {
+            "effectId": "first",
+            "kind": "webhook",
+            "phase": "before_commit",
+            "targetRef": "connector:erp/orders",
+        },
+        {
+            "effectId": "second",
+            "kind": "webhook",
+            "phase": "before_commit",
+            "targetRef": "connector:erp/orders",
+        },
+    ]
+
+    with pytest.raises(ValidationFailed, match="only one before-commit"):
+        compile_action_contract(definition)
+
+
+def test_v3_before_effect_requires_function_backed_edit_planning() -> None:
+    definition = _definition([])
+    definition["effects"] = [
+        {
+            "effectId": "erp-write",
+            "kind": "webhook",
+            "phase": "before_commit",
+            "targetRef": "connector:erp/orders",
+        }
+    ]
+
+    with pytest.raises(ValidationFailed, match="requires a function-backed Action"):
+        compile_action_contract(definition)
+
+
+def test_legacy_writeback_keeps_its_compatible_connector_reference() -> None:
+    contract = compile_action_contract(
+        {
+            "apiName": "LegacyWriteback",
+            "target": "Order",
+            "mutations": [],
+            "writebacks": [{"apiName": "erp", "connector": "mock_erp_simulator"}],
+        }
+    )
+
+    assert contract.source_version == 1
+    assert contract.effects[0].target_ref == "mock_erp_simulator"
 
 
 def _context(submitted: dict[str, object]) -> ActionParameterContext:

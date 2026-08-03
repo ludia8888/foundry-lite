@@ -96,6 +96,34 @@ class ActionRunEventRow(TypedDict):
     created_at: str
 
 
+class ActionEffectReceiptRow(TypedDict):
+    id: str
+    tenant_id: str
+    action_run_id: str
+    effect_id: str
+    phase: str
+    effect_kind: str
+    target_ref: str
+    status: str
+    idempotency_key: str
+    attempt_count: int
+    max_attempts: int
+    worker_id: str | None
+    lease_token: str | None
+    lease_expires_at: str | None
+    fencing_token: int
+    heartbeat_at: str | None
+    request: JsonObject
+    response: JsonObject | None
+    error: JsonObject | None
+    retry_at: str | None
+    external_execution_id: str | None
+    outbox_event_id: str | None
+    created_at: str
+    updated_at: str
+    completed_at: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class ActionAsyncRunRecord:
     run_id: str
@@ -152,3 +180,30 @@ class ActionRunEventRecord:
     attempt_number: int | None = None
     worker_id: str | None = None
     fencing_token: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionEffectReceiptRecord:
+    receipt_id: str
+    tenant_id: str
+    action_run_id: str
+    effect_id: str
+    phase: str
+    effect_kind: str
+    target_ref: str
+    idempotency_key: str
+    max_attempts: int
+    request: JsonObject
+    created_at: str
+    outbox_event_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionEffectClaim:
+    tenant_id: str
+    receipt_id: str
+    worker_id: str
+    lease_token: str
+    lease_expires_at: str
+    claimed_at: str
+    is_reconciliation: bool = False

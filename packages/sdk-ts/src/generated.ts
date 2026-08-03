@@ -1270,6 +1270,25 @@ export type ActionRunStep = Record<string, unknown> & {
   startedAt: string | null;
   completedAt: string | null;
 };
+export type ActionEffectReceipt = Record<string, unknown> & {
+  receiptId: string;
+  effectId: string;
+  phase: "before_commit" | "after_commit";
+  kind: "webhook" | "notification" | "event" | "schedule_build" | "connector_command";
+  status: "pending" | "delivering" | "retry_wait" | "succeeded" | "dead_letter" | "outcome_unknown" | "cancelled";
+  targetRef: string;
+  attemptCount: number;
+  maxAttempts: number;
+  workerId: string | null;
+  fencingToken: number;
+  retryAt: string | null;
+  externalExecutionId: string | null;
+  outboxEventId: string | null;
+  response: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  createdAt: string;
+  completedAt: string | null;
+};
 export type ActionRun = Record<string, unknown> & {
   actionRunId: string;
   actionApiName: string;
@@ -1282,6 +1301,7 @@ export type ActionRun = Record<string, unknown> & {
   orchestration: Record<string, unknown>;
   steps: ActionRunStep[];
   attempts: ActionRunAttempt[];
+  effects: ActionEffectReceipt[];
   cancel: { requestedAt: string | null; reason: string | null };
   result: Record<string, unknown> | null;
   error: Record<string, unknown> | null;

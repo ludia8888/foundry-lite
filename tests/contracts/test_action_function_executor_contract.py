@@ -47,4 +47,5 @@ def _request() -> ActionFunctionExecutionRequest:
         function_api_name="approveOrder",
         function_version="v7",
         inputs={},
+        effect_outputs={"effectId": "erp-write", "response": {"approvalCode": "A-1"}},
     )

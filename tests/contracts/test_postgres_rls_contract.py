@@ -53,7 +53,13 @@ def test_postgres_rls_hides_action_execution_ledger_between_tenants(postgres_fix
     _grant_rls_role(engine, role_name)
     _seed_action_execution_rows(engine)
 
-    tables = (db.action_runs, db.action_run_steps, db.action_step_attempts, db.action_run_events)
+    tables = (
+        db.action_runs,
+        db.action_run_steps,
+        db.action_step_attempts,
+        db.action_run_events,
+        db.action_effect_receipts,
+    )
     for table in tables:
         assert _rls_enabled(engine, table.name)
         assert _rls_forced(engine, table.name)
@@ -225,6 +231,10 @@ def _seed_action_execution_rows(engine: Engine) -> None:
             insert(db.action_run_events),
             [_action_event_row("demo", "tenant-demo"), _action_event_row("other", "tenant-other")],
         )
+        conn.execute(
+            insert(db.action_effect_receipts),
+            [_action_effect_row("demo", "tenant-demo"), _action_effect_row("other", "tenant-other")],
+        )
 
 
 def _action_run_row(suffix: str, tenant_id: str) -> dict[str, object]:
@@ -293,6 +303,26 @@ def _action_event_row(suffix: str, tenant_id: str) -> dict[str, object]:
         "event_type": "action.step.running",
         "payload": {},
         "created_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _action_effect_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_effect_receipts-{suffix}",
+        "tenant_id": tenant_id,
+        "action_run_id": f"action_runs-{suffix}",
+        "effect_id": "notify",
+        "phase": "after_commit",
+        "effect_kind": "event",
+        "target_ref": "topic:orders",
+        "status": "pending",
+        "idempotency_key": f"effect-key-{suffix}",
+        "attempt_count": 0,
+        "max_attempts": 3,
+        "fencing_token": 0,
+        "request": {},
+        "created_at": "2026-08-03T00:00:00Z",
+        "updated_at": "2026-08-03T00:00:00Z",
     }
 
 

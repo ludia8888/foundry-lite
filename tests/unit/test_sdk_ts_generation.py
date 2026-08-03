@@ -618,7 +618,10 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     assert surface["actions"] == {
         "_self": ["list", "get", "schema", "plan", "dryRun"],
         "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
+        "runs": ["start", "list", "get", "events", "cancel"],
     }
+    assert "export type ActionEffectReceipt" in generated
+    assert "effects: ActionEffectReceipt[];" in generated
     assert surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
     assert surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
     assert surface["materializations"] == ["run", "list"]

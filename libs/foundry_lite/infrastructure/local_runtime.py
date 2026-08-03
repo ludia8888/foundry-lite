@@ -47,6 +47,7 @@ from foundry_lite.application.services.ontology_yaml import action_allowed_roles
 from foundry_lite.application.services.runtime_run_cursors import require_operations_cursor_signing_key_for_runtime
 from foundry_lite.domain.ontology.datasources import property_datasource_rows
 from foundry_lite.infrastructure.action_runtime_dependencies import (
+    ConnectorActionEffectExecutor,
     LocalActionRunOrchestrator,
     LogicDagActionFunctionExecutor,
     TemporalActionRunConfig,
@@ -401,6 +402,7 @@ def _create_core_dependencies(
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
+    connector_registry_repository = SqlAlchemyConnectorRegistryRepository(engine)
     media_repository = SqlAlchemyMediaRepository(engine)
     media_derivative_repository = SqlAlchemyMediaDerivativeRepository(engine)
     policy = PolicyService(
@@ -449,6 +451,12 @@ def _create_core_dependencies(
         action=ActionDependencies(
             action_repository=SqlAlchemyActionRepository(engine),
             action_execution_repository=SqlAlchemyActionExecutionRepository(engine),
+            action_effect_executor=ConnectorActionEffectExecutor(
+                engine,
+                connector_registry_repository,
+                secret_provider,
+                stream_adapter,
+            ),
             action_function_executor=action_function_executor,
             action_run_orchestrator=action_run_orchestrator,
         ),
@@ -516,7 +524,7 @@ def _create_core_dependencies(
         ),
         source=SourceDependencies(
             connector_adapter=connector_adapter,
-            connector_registry_repository=SqlAlchemyConnectorRegistryRepository(engine),
+            connector_registry_repository=connector_registry_repository,
             source_registry_repository=SqlAlchemySourceRegistryRepository(engine),
             source_management_repository=SqlAlchemySourceManagementRepository(engine),
             source_database_adapter=SqlAlchemySourceDatabaseAdapter(),

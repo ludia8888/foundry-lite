@@ -7,6 +7,9 @@ from typing import Protocol
 from foundry_lite.application.action_async_execution_types import (
     ActionAsyncRunRecord,
     ActionAsyncRunRow,
+    ActionEffectClaim,
+    ActionEffectReceiptRecord,
+    ActionEffectReceiptRow,
     ActionRunEventRecord,
     ActionRunEventRow,
     ActionRunStepRecord,
@@ -59,6 +62,39 @@ class ActionExecutionRepository(Protocol):
     def attempts_for_run(
         self, *, transaction: TransactionContext, tenant_id: str, run_id: str
     ) -> list[ActionStepAttemptRow]: ...
+
+    def insert_effect_receipt(
+        self, *, transaction: TransactionContext, record: ActionEffectReceiptRecord
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def effect_receipts_for_run(
+        self, *, transaction: TransactionContext, tenant_id: str, run_id: str
+    ) -> list[ActionEffectReceiptRow]: ...
+
+    def pending_effect_receipts(
+        self, *, transaction: TransactionContext, tenant_id: str, limit: int, due_at: str
+    ) -> list[ActionEffectReceiptRow]: ...
+
+    def claim_effect_receipt(
+        self, *, transaction: TransactionContext, claim: ActionEffectClaim
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def complete_effect_receipt(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        receipt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        status: str,
+        response: JsonObject | None,
+        error: JsonObject | None,
+        retry_at: str | None,
+        external_execution_id: str | None,
+        completed_at: str,
+    ) -> ActionEffectReceiptRow | None: ...
 
     def update_dispatch(
         self,

@@ -779,6 +779,14 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `ACT-V2-A2` | immutable EditPlan validates ordered heterogeneous object/link edits before commit | `quality:action-types-v2`; `tests/unit/test_action_edit_plan.py`; `tests/unit/test_action_plan_resolution.py` | Current for create/modify/delete object and create/delete link plan construction, stale-version checks, permission checks, and endpoint visibility. |
 | `ACT-V2-A3` | the public apply path commits a multi-object/link plan atomically and records every edit | `quality:action-types-v2`; `tests/integration/test_action_v2_apply.py`; `tests/unit/test_action_edit_plan_committer.py`; `tests/contracts/test_action_repository_contract.py` | Current for the live `rulesV2` apply path and fake/SQLite/PostgreSQL contracts. Link edits join the unified ledger; a missing link delete fails instead of recording false success. Full Palantir Action Types parity remains partial as recorded in `docs/action-types-parity-matrix.json`. |
 
+## Action Types v3 - Bounded Palantir Execution Slices
+
+| Evidence id | Checkbox meaning | Git / test evidence | Current status |
+| --- | --- | --- | --- |
+| `ACT-V3-A1` | canonical contract, immutable plan, risk and approval drift checks execute from one schema | `quality:action-types-palantir`; `tests/unit/test_action_contract_v3.py`; `tests/unit/test_action_risk.py`; `tests/unit/test_approval_execution_service.py`; `tests/integration/test_action_contract_v3_apply.py` | Partial. Contract/plan/approval is active-covered, but complete Builder/Python SDK/browser/MCP proof is not present. |
+| `ACT-V3-A2` | function-backed Action uses a durable fenced run and commits one `OntologyEditBatch` exactly once | `quality:action-runtime-async`; `quality:action-types-palantir-live`; `tests/integration/test_action_async_function_run.py`; `tests/integration/action_async_runtime_temporal_live.py` | Partial. PostgreSQL+Temporal two-worker takeover/cancellation/dispatch recovery is live-proven; full visual runtime evidence is still pending. |
+| `ACT-V3-A3` | governed before/after effects cannot bypass registered targets, durable receipts, fencing or tenant RLS | `quality:action-side-effects`; `tests/contracts/test_action_effect_executor_contract.py`; `tests/contracts/test_action_execution_repository_contract.py`; `tests/contracts/test_rest_connector_adapter_contract.py`; `tests/contracts/test_postgres_rls_contract.py`; `tests/integration/test_action_async_function_run.py` | Partial. Before-effect ambiguity is never replayed or committed, and after-effect retry/DLQ is durable. Effect response-to-rule values, recipient object ACL, cancellation/UI, and live two-worker effect takeover remain pending. |
+
 ## Open / Not Yet Merged Scope
 
 These items intentionally remain unchecked until a later PR creates code and gate evidence.

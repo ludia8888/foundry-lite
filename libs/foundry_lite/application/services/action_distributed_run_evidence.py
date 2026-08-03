@@ -17,11 +17,15 @@ from foundry_lite.application.services.action_distributed_contracts import (
     RequestContext,
     TransactionContext,
 )
-from foundry_lite.application.services.action_distributed_run_support import utc_now
 
 ACTION_RUN_TERMINAL_STATUSES = frozenset(
     {"succeeded", "failed", "cancelled", "conflict", "outcome_unknown", "compensation_required", "reconciled"}
 )
+
+
+def utc_now() -> str:
+    """Return the current UTC timestamp in the Action evidence wire format."""
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def append_action_attempt_event(

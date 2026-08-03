@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
+from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
+from foundry_lite.application.services.action_effect_authorization import authorize_action_effects
 from foundry_lite.application.services.action_planning_contracts import (
     ActionApplyCommand,
     ActionDefinitionV3,
@@ -52,6 +54,7 @@ from foundry_lite.application.services.action_planning_response_support import (
     seal_action_execution_plan,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.domain.action_runtime.action_effects import action_effect_payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +70,7 @@ class _PreparedPlan:
 class ActionPlanningService(CoreService):
     """Read-only plan and dry-run use cases shared by UI, SDK, and future MCP."""
 
-    required_dependencies = ("engine", "policy")
+    required_dependencies = ("engine", "policy", "connector_registry_repository")
     required_collaborators = (
         "object_records_service",
         "ontology_lookup_service",
@@ -78,6 +81,7 @@ class ActionPlanningService(CoreService):
     ontology_lookup_service: OntologyLookupService
     osdk_application_scope_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
+    connector_registry_repository: ConnectorRegistryRepository
 
     def plan_action(
         self,
@@ -145,6 +149,14 @@ class ActionPlanningService(CoreService):
             raise error
         effective = resolved_action_command(ctx, action_type, target, command)
         contract = compile_action_contract(action_type["definition"])
+        authorize_action_effects(
+            conn,
+            ctx,
+            self.policy,
+            self.osdk_application_scope_service,
+            self.connector_registry_repository,
+            contract,
+        )
         plan = self._resolved_edit_plan(conn, ctx, action_type, effective, contract)
         sensitive = authorize_action_edit_plan(conn, ctx, self.policy, self.ontology_lookup_service, contract, plan)
         risk = action_plan_risk(contract, plan, sensitive)
@@ -233,7 +245,7 @@ class ActionPlanningService(CoreService):
             "parameters": dict(prepared.command.params),
             "editManifest": edit_plan_manifest(prepared.plan),
             "diffs": action_plan_diffs(conn, ctx, self.policy, self.object_records_service, prepared.plan),
-            "effectManifest": [dict(effect) for effect in contract.effects],
+            "effectManifest": [action_effect_payload(effect) for effect in contract.effects],
             "risk": _risk_payload(prepared.risk),
             "authorization": _authorization_payload(ctx),
             "approval": _approval_payload(contract, prepared.risk),

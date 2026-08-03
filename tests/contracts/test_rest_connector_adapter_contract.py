@@ -40,7 +40,7 @@ class _RedirectHandler(Protocol):
 
 
 class _RequestRecordingHandler(Protocol):
-    requests: ClassVar[list[dict[str, str | None]]]
+    requests: ClassVar[list[dict[str, object]]]
 
 
 def _redirect_handler_from_handlers(handlers: tuple[object, ...]) -> _RedirectHandler:
@@ -95,6 +95,50 @@ def test_rest_connector_fetches_page_and_returns_resume_cursor() -> None:
     assert snapshot.schema == {"columns": ["order_id", "amount"]}
     assert snapshot.cursor == {"cursor": "page-2"}
     assert server.requests[0]["authorization"] == "Bearer secret-token"
+
+
+def test_secure_http_json_write_posts_idempotent_payload_to_registered_target() -> None:
+    with MockRestServer() as server:
+        result = rest_connector_module.secure_http_json_write(
+            f"{server.base_url}/action-write",
+            {"Idempotency-Key": "effect-1"},
+            {"actionRunId": "run-1"},
+            allow_private_network=True,
+            connection_id="connection-1",
+        )
+
+    assert result.outcome == "delivered"
+    assert result.response == {"statusCode": 200, "body": {"id": "remote-1"}}
+    assert server.requests[0]["method"] == "POST"
+    assert server.requests[0]["idempotency_key"] == "effect-1"
+    assert server.requests[0]["body"] == {"actionRunId": "run-1"}
+    assert result.network_evidence["connectionId"] == "connection-1"
+
+
+def test_secure_http_json_write_rejects_private_target_without_allowlist() -> None:
+    with pytest.raises(ValidationFailed, match="private or local network"):
+        rest_connector_module.secure_http_json_write(
+            "http://127.0.0.1/action-write",
+            {"Idempotency-Key": "effect-2"},
+            {"actionRunId": "run-2"},
+            allow_private_network=False,
+            connection_id="connection-2",
+        )
+
+
+def test_secure_http_json_write_classifies_rate_limit_as_retryable() -> None:
+    with MockRestServer() as server:
+        with pytest.raises(ConnectorRateLimitedError) as exc_info:
+            rest_connector_module.secure_http_json_write(
+                f"{server.base_url}/rate-limit",
+                {"Idempotency-Key": "effect-3"},
+                {"actionRunId": "run-3"},
+                allow_private_network=True,
+                connection_id="connection-3",
+            )
+
+    assert exc_info.value.failure.is_retryable is True
+    assert exc_info.value.failure.idempotency_key == "effect-3"
 
 
 def test_rest_connector_sends_cursor_when_resuming() -> None:
@@ -1158,7 +1202,7 @@ class _FakeHTTPResponse(AbstractContextManager["_FakeHTTPResponse"]):
 
 
 def _handler_class() -> type[BaseHTTPRequestHandler]:
-    requests: list[dict[str, str | None]] = []
+    requests: list[dict[str, object]] = []
 
     class Handler(BaseHTTPRequestHandler):
         requests: ClassVar[list[dict[str, str | None]]]
@@ -1208,6 +1252,24 @@ def _handler_class() -> type[BaseHTTPRequestHandler]:
                 )
                 return
             self._write_json(_page_payload(split.path, cursor))
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length))
+            self.requests.append(
+                {
+                    "method": "POST",
+                    "path": urlsplit(self.path).path,
+                    "idempotency_key": self.headers.get("Idempotency-Key"),
+                    "body": body,
+                }
+            )
+            if urlsplit(self.path).path == "/rate-limit":
+                self.send_response(429)
+                self.send_header("Retry-After", "2")
+                self.end_headers()
+                return
+            self._write_json({"id": "remote-1"})
 
         def log_message(self, format: str, *args: object) -> None:
             return

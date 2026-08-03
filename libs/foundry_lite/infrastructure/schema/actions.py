@@ -125,6 +125,50 @@ action_run_events = Table(
 Index("ix_action_run_events_tenant_run", action_run_events.c.tenant_id, action_run_events.c.run_id)
 
 
+action_effect_receipts = Table(
+    "action_effect_receipts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("action_run_id", String, nullable=False),
+    Column("effect_id", String, nullable=False),
+    Column("phase", String, nullable=False),
+    Column("effect_kind", String, nullable=False),
+    Column("target_ref", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column("max_attempts", Integer, nullable=False),
+    Column("worker_id", String),
+    Column("lease_token", String),
+    Column("lease_expires_at", String),
+    Column("fencing_token", Integer, nullable=False, server_default=text("0")),
+    Column("heartbeat_at", String),
+    Column("request", JSON, nullable=False),
+    Column("response", JSON),
+    Column("error", JSON),
+    Column("retry_at", String),
+    Column("external_execution_id", String),
+    Column("outbox_event_id", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("completed_at", String),
+    UniqueConstraint("tenant_id", "action_run_id", "effect_id", name="uq_action_effect_receipt"),
+    UniqueConstraint("tenant_id", "idempotency_key", name="uq_action_effect_idempotency"),
+)
+Index(
+    "ix_action_effect_receipts_tenant_status",
+    action_effect_receipts.c.tenant_id,
+    action_effect_receipts.c.status,
+    action_effect_receipts.c.retry_at,
+)
+Index(
+    "ix_action_effect_receipts_tenant_run",
+    action_effect_receipts.c.tenant_id,
+    action_effect_receipts.c.action_run_id,
+)
+
+
 action_writebacks = Table(
     "action_writebacks",
     metadata,

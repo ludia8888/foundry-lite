@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.model_gateway_bridge import GovernedSemanticModelBridge
+from foundry_lite.application.services.action_effect_delivery_service import ActionEffectDeliveryService
 from foundry_lite.application.services.action_services import ActionServices
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
@@ -61,6 +62,7 @@ from foundry_lite.application.services.transform_services import TransformServic
 __all__ = [
     "CoreServices",
     "ActionServices",
+    "ActionEffectDeliveryService",
     "AgentRuntimeService",
     "ActionProposalService",
     "ApprovalExecutionService",
@@ -132,6 +134,7 @@ class CoreServices:
     """
 
     action: ActionServices
+    action_effects: ActionEffectDeliveryService
     agent_runtime: AgentRuntimeService
     action_proposal: ActionProposalService
     approval_execution: ApprovalExecutionService
@@ -210,10 +213,11 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
                            model_gateway: ModelGatewayService,
                            pipeline_dependencies: CoreDependencies) -> CoreServices:
     return CoreServices(
-        action=ActionServices.create(dependencies), agent_runtime=build_service(AgentRuntimeService, dependencies),
-        action_proposal=build_service(ActionProposalService, dependencies),
-        approval_execution=build_service(ApprovalExecutionService, dependencies),
-        backup_restore=shared["backup_restore"],
+        action=ActionServices.create(dependencies),
+        action_effects=build_service(ActionEffectDeliveryService, dependencies),
+        agent_runtime=build_service(AgentRuntimeService, dependencies), backup_restore=shared["backup_restore"],
+        action_proposal=build_service(ActionProposalService, dependencies), insight_review=shared["insight_review"],
+        approval_execution=build_service(ApprovalExecutionService, dependencies), object_store=shared["object_store"],
         builder_runtime=build_service(BuilderRuntimeService, dependencies),
         connector_onboarding=build_service(ConnectorOnboardingService, dependencies),
         source_management=shared["source_management"], source_lifecycle=shared["source_lifecycle"],
@@ -226,14 +230,12 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         erasure=build_service(ErasureService, dependencies), evals=build_service(EvalService, dependencies),
         function_execution=build_service(FunctionExecutionService, dependencies),
         iceberg_maintenance=shared["iceberg_maintenance"],
-        insight_review=shared["insight_review"],
         materialization=build_service(MaterializationService, dependencies),
         media=shared["media"], citation=build_service(CitationService, dependencies),
         logic_runtime=build_service(LogicRuntimeService, dependencies),
         model_gateway=model_gateway, prompt_artifact=build_service(PromptArtifactService, dependencies),
         tool_broker=build_service(ToolBrokerService, dependencies),
         visual_builder=build_service(VisualBuilderService, dependencies),
-        object_store=shared["object_store"],
         ontology=OntologyServices.create(dependencies),
         ontology_search=build_service(OntologySearchService, dependencies),
         osdk_applications=OsdkApplicationServices.create(dependencies),
@@ -284,7 +286,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
 
 def _core_service_items(services: CoreServices) -> list[CoreService]:
     return [
-        *services.action.items(),
+        *_action_service_items(services),
         services.agent_runtime,
         services.action_proposal,
         services.approval_execution,
@@ -324,6 +326,10 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
     ]
 
 
+def _action_service_items(services: CoreServices) -> list[CoreService]:
+    return [*services.action.items(), services.action_effects]
+
+
 def _source_service_items(services: CoreServices) -> list[CoreService]:
     return [
         services.source_management,
@@ -351,6 +357,7 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "action_async_run_service": services.action.async_run,
         "action_batch_apply_service": services.action.batch_apply,
         "action_definition_service": services.action.definition,
+        "action_effect_delivery_service": services.action_effects,
         "action_planning_service": services.action.planning,
         "action_service": services.action.entrypoint,
         "action_validation_service": services.action.validation,

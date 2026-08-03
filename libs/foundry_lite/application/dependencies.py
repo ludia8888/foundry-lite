@@ -9,6 +9,7 @@ from typing import cast
 from foundry_lite.application.dependency_action import (
     ActionDependencies,
     ActionDependencyAccessors,
+    ActionEffectExecutor,
     ActionExecutionRepository,
     ActionFunctionExecutor,
     ActionRepository,
@@ -166,6 +167,7 @@ class CoreDependencies(ActionDependencyAccessors):
 
     action_repository: ActionRepository
     action_execution_repository: ActionExecutionRepository
+    action_effect_executor: ActionEffectExecutor
     action_function_executor: ActionFunctionExecutor
     action_run_orchestrator: ActionRunOrchestrator
     paths: PathDependencies

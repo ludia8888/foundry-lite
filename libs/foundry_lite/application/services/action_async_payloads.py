@@ -7,6 +7,7 @@ import json
 
 from foundry_lite.application.action_async_execution_types import (
     ActionAsyncRunRow,
+    ActionEffectReceiptRow,
     ActionRunEventRow,
     ActionRunStepRow,
     ActionStepAttemptRow,
@@ -18,6 +19,7 @@ def action_run_snapshot(
     row: ActionAsyncRunRow,
     steps: list[ActionRunStepRow],
     attempts: list[ActionStepAttemptRow],
+    effects: list[ActionEffectReceiptRow],
 ) -> dict[str, object]:
     return {
         "actionRunId": row["id"],
@@ -36,6 +38,7 @@ def action_run_snapshot(
         },
         "steps": [_step_payload(step) for step in steps],
         "attempts": [_attempt_payload(attempt) for attempt in attempts],
+        "effects": [_effect_payload(effect) for effect in effects],
         "cancel": {
             "requestedAt": row["cancel_requested_at"],
             "reason": row["cancel_reason"],
@@ -108,5 +111,27 @@ def _attempt_payload(row: ActionStepAttemptRow) -> dict[str, object]:
         "output": row["output_manifest"],
         "error": row["error"],
         "startedAt": row["started_at"],
+        "completedAt": row["completed_at"],
+    }
+
+
+def _effect_payload(row: ActionEffectReceiptRow) -> dict[str, object]:
+    return {
+        "receiptId": row["id"],
+        "effectId": row["effect_id"],
+        "phase": row["phase"],
+        "kind": row["effect_kind"],
+        "targetRef": row["target_ref"],
+        "status": row["status"],
+        "attemptCount": row["attempt_count"],
+        "maxAttempts": row["max_attempts"],
+        "workerId": row["worker_id"],
+        "fencingToken": row["fencing_token"],
+        "retryAt": row["retry_at"],
+        "externalExecutionId": row["external_execution_id"],
+        "outboxEventId": row["outbox_event_id"],
+        "response": row["response"],
+        "error": row["error"],
+        "createdAt": row["created_at"],
         "completedAt": row["completed_at"],
     }

@@ -12,6 +12,7 @@ from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
 def test_osdk_application_record_helpers_validate_scope_vocabulary() -> None:
     assert records.scope_for("object", "Order", "read") == "osdk:object:Order:read"
     assert records.scope_for("action", "ApproveOrder", "execute") == "osdk:action:ApproveOrder:execute"
+    assert records.scope_for("connector", "erp", "execute") == "osdk:connector:erp:execute"
     with pytest.raises(ValidationFailed, match="unsupported OSDK resource scope request"):
         records.scope_for(cast(OsdkResourceType, "dataset"), "Order", "read")
     with pytest.raises(ValidationFailed, match="unsupported OSDK resource scope request"):

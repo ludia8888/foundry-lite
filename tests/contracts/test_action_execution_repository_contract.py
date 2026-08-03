@@ -5,6 +5,8 @@ from threading import Barrier
 
 from foundry_lite.application.action_async_execution_types import (
     ActionAsyncRunRecord,
+    ActionEffectClaim,
+    ActionEffectReceiptRecord,
     ActionRunEventRecord,
     ActionRunStepRecord,
     ActionStepAttemptClaim,
@@ -102,6 +104,66 @@ def test_postgres_action_step_concurrent_claim_has_one_winner(postgres_fixture) 
     assert winners[0]["fencing_token"] == 1
 
 
+def test_action_effect_receipt_contract_fences_takeover_and_terminal_write() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    db.metadata.create_all(engine)
+    repository = SqlAlchemyActionExecutionRepository(engine)
+    with engine.begin() as transaction:
+        repository.insert_run(transaction=transaction, record=_run(), steps=(_step(),))
+        receipt = repository.insert_effect_receipt(transaction=transaction, record=_effect_receipt())
+        duplicate = repository.insert_effect_receipt(transaction=transaction, record=_effect_receipt())
+        assert receipt is not None
+        assert duplicate is None
+        first = repository.claim_effect_receipt(
+            transaction=transaction,
+            claim=ActionEffectClaim("tenant-a", receipt["id"], "worker-1", "lease-1", "01", "00"),
+        )
+        assert first is not None and first["fencing_token"] == 1
+        blocked = repository.claim_effect_receipt(
+            transaction=transaction,
+            claim=ActionEffectClaim("tenant-a", receipt["id"], "worker-2", "lease-2", "02", "00"),
+        )
+        assert blocked is None
+    with engine.begin() as transaction:
+        takeover = repository.claim_effect_receipt(
+            transaction=transaction,
+            claim=ActionEffectClaim("tenant-a", receipt["id"], "worker-2", "lease-2", "03", "02"),
+        )
+        assert takeover is not None and takeover["fencing_token"] == 2
+        stale = repository.complete_effect_receipt(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            receipt_id=receipt["id"],
+            worker_id="worker-1",
+            lease_token="lease-1",
+            fencing_token=1,
+            status="succeeded",
+            response={},
+            error=None,
+            retry_at=None,
+            external_execution_id="remote-stale",
+            completed_at="02",
+        )
+        assert stale is None
+        completed = repository.complete_effect_receipt(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            receipt_id=receipt["id"],
+            worker_id="worker-2",
+            lease_token="lease-2",
+            fencing_token=2,
+            status="succeeded",
+            response={"providerStatus": 202},
+            error=None,
+            retry_at=None,
+            external_execution_id="remote-1",
+            completed_at="02",
+        )
+        assert completed is not None
+        assert completed["status"] == "succeeded"
+        assert completed["external_execution_id"] == "remote-1"
+
+
 def _run(*, tenant_id: str = "tenant-a") -> ActionAsyncRunRecord:
     return ActionAsyncRunRecord(
         run_id="run-1",
@@ -135,3 +197,19 @@ def _claim(
 
 def _event(event_id: str) -> ActionRunEventRecord:
     return ActionRunEventRecord(event_id, "tenant-a", "run-1", "action.run.test", {}, "02")
+
+
+def _effect_receipt() -> ActionEffectReceiptRecord:
+    return ActionEffectReceiptRecord(
+        receipt_id="effect-1",
+        tenant_id="tenant-a",
+        action_run_id="run-1",
+        effect_id="notify-ops",
+        phase="after_commit",
+        effect_kind="notification",
+        target_ref="policy:order-ops",
+        idempotency_key="action-effect:run-1:notify-ops",
+        max_attempts=3,
+        request={"effect": {}},
+        created_at="00",
+    )

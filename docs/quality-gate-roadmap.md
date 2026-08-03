@@ -668,10 +668,14 @@ edit별 object/link/property 권한, AIP proposal의 plan/Action/object-version 
 
 이 증거는 18개 축 전체 current 증거와 구분한다. Temporal durable Action run과 function-backed
 `OntologyEditBatch`는 `quality:action-runtime-async` 및 실제 PostgreSQL+Temporal 복수 worker의
-`quality:action-types-palantir-live`로 active-covered가 되었다. 남은 범위는 governed effect
-receipt/DLQ, 정규 Action Log/revert, branch/interface 실행, Builder 전체 화면, Python OSDK,
-Ontology MCP OAuth/transport 및 해당 화면의 브라우저 proof이며, 이 증거가 추가되기 전에는
-관련 matrix 항목을 `current`로 승격하지 않는다.
+`quality:action-types-palantir-live`로 active-covered가 되었다. `quality:action-side-effects`는
+v3 effect의 inline URI 차단, 등록 connector/OSDK scope, before-effect 영수증 선기록과
+ambiguous 무재호출, after-effect outbox/receipt 원자 생성, retry/DLQ, lease takeover/fencing,
+실제 HTTP POST idempotency/SSRF 차단, PostgreSQL tenant RLS를 검증한다. 이 bounded proof는
+실제 두 worker effect-delivery takeover와 전체 운영 UI까지 증명하지 않는다. 남은 범위는
+effect response-to-rule value, 정규 Action Log/revert, branch/interface 실행, Builder 전체 화면,
+Python OSDK, Ontology MCP OAuth/transport 및 해당 화면의 브라우저 proof이며, 이 증거가
+추가되기 전에는 관련 matrix 항목을 `current`로 승격하지 않는다.
 
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 

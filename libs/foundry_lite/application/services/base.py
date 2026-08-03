@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from foundry_lite.application.dependencies import (
+    ActionEffectExecutor,
     ActionExecutionRepository,
     ActionFunctionExecutor,
     ActionRunOrchestrator,
@@ -86,6 +87,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_async_run_service": "ActionAsyncRunService",
     "action_batch_apply_service": "ActionBatchApplyService",
     "action_definition_service": "ActionDefinitionService",
+    "action_effect_delivery_service": "ActionEffectDeliveryService",
     "action_planning_service": "ActionPlanningService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",
@@ -255,6 +257,7 @@ class CoreService:
     metadata_repository: MetadataRepository
     insight_review_service: object
     action_repository: ActionRepository
+    action_effect_executor: ActionEffectExecutor
     action_execution_repository: ActionExecutionRepository
     action_function_executor: ActionFunctionExecutor
     action_run_orchestrator: ActionRunOrchestrator

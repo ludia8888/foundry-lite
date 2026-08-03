@@ -12,7 +12,7 @@ from foundry_lite.domain.context import RequestContext
 
 _LANGUAGES = frozenset({"typescript", "python"})
 _BUMP_TYPES = frozenset({"patch", "minor", "major"})
-_RESOURCE_TYPES = frozenset({"object", "action", "link", "function"})
+_RESOURCE_TYPES = frozenset({"object", "action", "link", "function", "connector"})
 _OPERATIONS = frozenset({"read", "subscribe", "validate", "execute"})
 _CHANNELS = frozenset({"stable", "beta", "latest"})
 _DEFAULT_DOWNLOAD_TOKEN_TTL_SECONDS = 900

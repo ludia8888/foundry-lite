@@ -110,7 +110,10 @@ class ActionAsyncRunService(CoreService):
             attempts = self.action_execution_repository.attempts_for_run(
                 transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
             )
-        return action_run_snapshot(row, steps, attempts)
+            effects = self.action_execution_repository.effect_receipts_for_run(
+                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
+            )
+        return action_run_snapshot(row, steps, attempts, effects)
 
     def list_runs(self, *, cursor: str | None, limit: int, ctx: RequestContext) -> dict[str, object]:
         self.policy.require(ctx, "action:apply")

@@ -19,17 +19,21 @@ from foundry_lite.application.services.action_distributed_contracts import (
     ActionStepAttemptRow,
     ConflictDetected,
     EditPlan,
-    InvariantViolation,
     MetadataRepository,
     OntologyLookupService,
     RequestContext,
     TransactionContext,
     action_contract_fingerprint,
 )
+from foundry_lite.application.services.action_distributed_effects import (
+    ActionBeforeEffectOutcomeUnknown,
+    ActionEffectDeliveryService,
+    ConnectorRegistryRepository,
+    authorize_action_effects,
+)
 from foundry_lite.application.services.action_distributed_run_evidence import (
     ACTION_RUN_TERMINAL_STATUSES,
     action_error_kind,
-    action_function_output,
     action_has_function,
     action_retry_at,
     append_action_attempt_event,
@@ -37,16 +41,26 @@ from foundry_lite.application.services.action_distributed_run_evidence import (
     is_action_error_retryable,
 )
 from foundry_lite.application.services.action_distributed_run_support import (
+    ActionStepLeaseLost,
     action_attempt_claim,
     action_function_request,
+    action_plan_committer,
+    action_success_output,
     action_worker_context,
     action_worker_lease,
+    append_worker_attempt_event,
+    complete_action_attempt,
+    load_action_run,
+    mark_action_commit_pending,
+    persist_terminal_action_failure,
+    require_action_attempt_owner,
     require_stored_plan_hash,
+    required_action_run,
     stored_action_contract,
     stored_edit_plan,
     utc_now,
 )
-from foundry_lite.application.services.action_edit_plan_committer import ActionEditPlanCommitter, plan_summary
+from foundry_lite.application.services.action_edit_plan_committer import plan_summary
 from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
     require_action_target_read,
@@ -57,19 +71,15 @@ from foundry_lite.application.state_transitions import (
     ACTION_RUN_ASYNC_CANCELLED,
     ACTION_RUN_ASYNC_CONFLICT,
     ACTION_RUN_ASYNC_FAILED,
+    ACTION_RUN_ASYNC_OUTCOME_UNKNOWN,
     ACTION_RUN_ASYNC_RUNNING,
     ACTION_RUN_ASYNC_SUCCEEDED,
-    ACTION_RUN_COMMIT_PENDING,
 )
 from foundry_lite.security.tenant_context import tenant_context
 
 
 class ActionStepRetryableFailure(ActionRunRetryableFailure):
     """Signal Temporal that a safely retryable Action step needs redelivery."""
-
-
-class ActionStepLeaseLost(ActionRunRetryableFailure):
-    """Stop a stale worker before it can write a result."""
 
 
 class ActionDistributedRunService(CoreService):
@@ -79,11 +89,13 @@ class ActionDistributedRunService(CoreService):
         "action_repository",
         "action_execution_repository",
         "action_function_executor",
+        "connector_registry_repository",
         "metadata_repository",
     )
     required_collaborators = (
         "object_index_record_mutation_service",
         "object_records_service",
+        "action_effect_delivery_service",
         "ontology_lookup_service",
         "osdk_application_service",
         "runtime_service",
@@ -91,15 +103,17 @@ class ActionDistributedRunService(CoreService):
     action_repository: ActionRepository
     action_execution_repository: ActionExecutionRepository
     action_function_executor: ActionFunctionExecutor
+    connector_registry_repository: ConnectorRegistryRepository
     metadata_repository: MetadataRepository
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_lookup_service: OntologyLookupService
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
+    action_effect_delivery_service: ActionEffectDeliveryService
 
     def drive(self, request: ActionRunDispatchRequest, *, worker_id: str) -> dict[str, object]:
-        row = self._run(request.tenant_id, request.run_id)
+        row = load_action_run(self.engine, self.action_execution_repository, request.tenant_id, request.run_id)
         if row["status"] in ACTION_RUN_TERMINAL_STATUSES:
             return {"actionRunId": row["id"], "status": row["status"]}
         ctx = action_worker_context(row)
@@ -112,12 +126,13 @@ class ActionDistributedRunService(CoreService):
             heartbeat = ActionAttemptHeartbeat(self.engine, self.action_execution_repository, attempt)
             heartbeat.start()
             try:
-                plan, function_result = self._execute_plan(ctx, row)
+                before_effect = self.action_effect_delivery_service.execute_before(ctx, row, attempt)
+                plan, function_result = self._execute_plan(ctx, row, before_effect)
             finally:
                 heartbeat.stop()
             if heartbeat.is_lost:
                 raise ActionStepLeaseLost("Action step heartbeat lost its fencing lease")
-            return self._commit(ctx, row, attempt, plan, function_result)
+            return self._commit(ctx, row, attempt, plan, function_result, before_effect)
         except ActionStepLeaseLost:
             raise
         except Exception as exc:
@@ -128,7 +143,7 @@ class ActionDistributedRunService(CoreService):
         lease = action_worker_lease(worker_id)
         step_key = "function" if action_has_function(row) else "commit"
         with self.engine.begin() as transaction:
-            current = self._required_run(transaction, ctx, row["id"])
+            current = required_action_run(self.action_execution_repository, transaction, ctx, row["id"])
             if current["status"] == "cancelling":
                 return None
             attempt = self.action_execution_repository.claim_step(
@@ -143,17 +158,22 @@ class ActionDistributedRunService(CoreService):
                 transition=ACTION_RUN_ASYNC_RUNNING,
                 changed_at=lease.heartbeat_at,
             )
-            self._append_attempt_event(transaction, ctx, row, attempt, "action.step.running", {})
+            append_worker_attempt_event(
+                self.action_execution_repository, transaction, ctx, row, attempt, "action.step.running", {}
+            )
             return attempt
 
     def _execute_plan(
-        self, ctx: RequestContext, row: ActionAsyncRunRow
+        self,
+        ctx: RequestContext,
+        row: ActionAsyncRunRow,
+        before_effect: dict[str, object] | None,
     ) -> tuple[EditPlan, ActionFunctionExecutionResult | None]:
         require_stored_plan_hash(row)
         contract = stored_action_contract(row)
         if contract.function is None:
             return stored_edit_plan(row), None
-        result = self.action_function_executor.execute(action_function_request(row, ctx))
+        result = self.action_function_executor.execute(action_function_request(row, ctx, before_effect))
         plan = result.edit_batch.to_edit_plan(operation_prefix=f"{row['id']}:function")
         return plan, result
 
@@ -164,27 +184,38 @@ class ActionDistributedRunService(CoreService):
         attempt: ActionStepAttemptRow,
         plan: EditPlan,
         function_result: ActionFunctionExecutionResult | None,
+        before_effect: dict[str, object] | None,
     ) -> dict[str, object]:
         changed_at = utc_now()
+        repository = self.action_execution_repository
         with self.engine.begin() as transaction:
-            current = self._required_run(transaction, ctx, row["id"])
-            owner = self._require_owner(transaction, ctx, attempt, changed_at)
+            current = required_action_run(repository, transaction, ctx, row["id"])
+            owner = require_action_attempt_owner(repository, transaction, ctx, attempt, changed_at)
             if current["status"] == "cancelling":
                 return self._cancel_claimed(transaction, ctx, current, owner, changed_at)
             contract = self._revalidate(transaction, ctx, current, plan)
-            self._mark_commit_pending(transaction, ctx, current, changed_at)
-            result = self._committer().commit_plan(
-                transaction, ctx, action_run_id=row["id"], plan=plan, transition=ACTION_RUN_ASYNC_SUCCEEDED
+            mark_action_commit_pending(repository, transaction, ctx, current, changed_at)
+            result = action_plan_committer(
+                self.action_repository,
+                self.object_index_record_mutation_service,
+                self.object_records_service,
+                self.ontology_lookup_service,
+                self.runtime_service,
+            ).commit_plan(transaction, ctx, action_run_id=row["id"], plan=plan, transition=ACTION_RUN_ASYNC_SUCCEEDED)
+            committed_plan = dict(plan_summary(result))
+            effect_receipt_ids = self.action_effect_delivery_service.enqueue_after(
+                transaction, ctx, current, committed_plan
             )
-            output: dict[str, object] = {
-                "plan": dict(plan_summary(result)),
-                "function": action_function_output(function_result),
-                "externalExecutionId": function_result.external_execution_id if function_result else None,
-                "definitionFingerprint": action_contract_fingerprint(contract),
-            }
-            completed = self._complete_attempt(transaction, ctx, owner, "succeeded", output, None, None, changed_at)
-            self._append_attempt_event(transaction, ctx, current, completed, "action.step.succeeded", output)
-            self._append_attempt_event(transaction, ctx, current, completed, "action.run.succeeded", output)
+            output = action_success_output(contract, function_result, before_effect, committed_plan, effect_receipt_ids)
+            completed = complete_action_attempt(
+                repository, transaction, ctx, owner, "succeeded", output, None, None, changed_at
+            )
+            append_worker_attempt_event(
+                repository, transaction, ctx, current, completed, "action.step.succeeded", output
+            )
+            append_worker_attempt_event(
+                repository, transaction, ctx, current, completed, "action.run.succeeded", output
+            )
         return {"actionRunId": row["id"], "status": "succeeded", "result": output}
 
     def _revalidate(
@@ -212,21 +243,16 @@ class ActionDistributedRunService(CoreService):
         self.osdk_application_service.require_resource_scope(
             ctx, resource_type="action", resource_api_name=contract.api_name, operation="execute"
         )
+        authorize_action_effects(
+            transaction,
+            ctx,
+            self.policy,
+            self.osdk_application_service,
+            self.connector_registry_repository,
+            contract,
+        )
         authorize_action_edit_plan(transaction, ctx, self.policy, self.ontology_lookup_service, contract, plan)
         return contract
-
-    def _mark_commit_pending(
-        self, transaction: TransactionContext, ctx: RequestContext, row: ActionAsyncRunRow, changed_at: str
-    ) -> None:
-        updated = self.action_execution_repository.transition_run(
-            transaction=transaction,
-            tenant_id=ctx.tenant_id,
-            run_id=row["id"],
-            transition=ACTION_RUN_COMMIT_PENDING,
-            changed_at=changed_at,
-        )
-        if updated is None:
-            raise ConflictDetected("Action run changed before commit")
 
     def _record_failure(
         self, ctx: RequestContext, row: ActionAsyncRunRow, attempt: ActionStepAttemptRow, exc: Exception
@@ -249,17 +275,28 @@ class ActionDistributedRunService(CoreService):
         changed_at: str,
         retry_at: str | None,
     ) -> None:
-        owner = self._require_owner(transaction, ctx, attempt, changed_at)
-        current = self._required_run(transaction, ctx, row["id"])
+        owner = require_action_attempt_owner(self.action_execution_repository, transaction, ctx, attempt, changed_at)
+        current = required_action_run(self.action_execution_repository, transaction, ctx, row["id"])
         if current["status"] == "cancelling":
             self._cancel_claimed(transaction, ctx, current, owner, changed_at)
             return
         error = dict(self.runtime_service._error_payload(exc, ctx, run_id=row["id"]))
-        completed = self._complete_attempt(
-            transaction, ctx, owner, "failed", {}, error, action_error_kind(exc), changed_at, retry_at=retry_at
+        completed = complete_action_attempt(
+            self.action_execution_repository,
+            transaction,
+            ctx,
+            owner,
+            "failed",
+            {},
+            error,
+            action_error_kind(exc),
+            changed_at,
+            retry_at,
         )
         event = "action.step.retry_wait" if retry_at else "action.step.failed"
-        self._append_attempt_event(transaction, ctx, current, completed, event, {"retryAt": retry_at})
+        append_worker_attempt_event(
+            self.action_execution_repository, transaction, ctx, current, completed, event, {"retryAt": retry_at}
+        )
         if retry_at is None:
             self._persist_terminal_failure(transaction, ctx, current, completed, exc, error, changed_at)
 
@@ -273,26 +310,22 @@ class ActionDistributedRunService(CoreService):
         error: dict[str, object],
         changed_at: str,
     ) -> None:
-        transition = ACTION_RUN_ASYNC_CONFLICT if isinstance(exc, ConflictDetected) else ACTION_RUN_ASYNC_FAILED
-        self.action_execution_repository.transition_run(
-            transaction=transaction,
-            tenant_id=ctx.tenant_id,
-            run_id=row["id"],
-            transition=transition,
-            changed_at=changed_at,
-            error=error,
-        )
-        self._append_attempt_event(transaction, ctx, row, attempt, f"action.run.{transition.to_status}", error)
-        self.runtime_service._audit(
+        if isinstance(exc, ConflictDetected):
+            transition = ACTION_RUN_ASYNC_CONFLICT
+        elif isinstance(exc, ActionBeforeEffectOutcomeUnknown):
+            transition = ACTION_RUN_ASYNC_OUTCOME_UNKNOWN
+        else:
+            transition = ACTION_RUN_ASYNC_FAILED
+        persist_terminal_action_failure(
+            self.action_execution_repository,
+            self.runtime_service,
             transaction,
             ctx,
-            event_type=f"action.run.{transition.to_status}",
-            resource_type="action_run",
-            resource_id=row["id"],
-            action="execute",
-            decision="deny",
-            after_ref=error,
-            correlation_id=row["id"],
+            row,
+            attempt,
+            transition,
+            error,
+            changed_at,
         )
 
     def recover_all_cancellations(self, *, worker_id: str, limit: int = 100) -> dict[str, object]:
@@ -311,7 +344,7 @@ class ActionDistributedRunService(CoreService):
         return sum(1 for outcome in outcomes if outcome["status"] == "cancelled")
 
     def _resolve_unclaimed(self, ctx: RequestContext, row: ActionAsyncRunRow, worker_id: str) -> dict[str, object]:
-        current = self._run(ctx.tenant_id, row["id"])
+        current = load_action_run(self.engine, self.action_execution_repository, ctx.tenant_id, row["id"])
         if current["status"] == "cancelling":
             return self._finalize_cancellation(ctx, current, worker_id)
         if current["status"] in ACTION_RUN_TERMINAL_STATUSES:
@@ -321,7 +354,7 @@ class ActionDistributedRunService(CoreService):
     def _finalize_cancellation(self, ctx: RequestContext, row: ActionAsyncRunRow, worker_id: str) -> dict[str, object]:
         changed_at = utc_now()
         with self.engine.begin() as transaction:
-            current = self._required_run(transaction, ctx, row["id"])
+            current = required_action_run(self.action_execution_repository, transaction, ctx, row["id"])
             if current["status"] in ACTION_RUN_TERMINAL_STATUSES:
                 return {"actionRunId": row["id"], "status": current["status"]}
             is_blocked, attempt = self._claim_cancellation(transaction, current, worker_id)
@@ -329,8 +362,16 @@ class ActionDistributedRunService(CoreService):
                 return {"actionRunId": row["id"], "status": "cancelling"}
             completed = None
             if attempt is not None:
-                completed = self._complete_attempt(
-                    transaction, ctx, attempt, "cancelled", {}, None, "cancellation", changed_at
+                completed = complete_action_attempt(
+                    self.action_execution_repository,
+                    transaction,
+                    ctx,
+                    attempt,
+                    "cancelled",
+                    {},
+                    None,
+                    "cancellation",
+                    changed_at,
                 )
             updated = self.action_execution_repository.transition_run(
                 transaction=transaction,
@@ -367,7 +408,17 @@ class ActionDistributedRunService(CoreService):
         attempt: ActionStepAttemptRow,
         changed_at: str,
     ) -> dict[str, object]:
-        completed = self._complete_attempt(transaction, ctx, attempt, "cancelled", {}, None, "cancellation", changed_at)
+        completed = complete_action_attempt(
+            self.action_execution_repository,
+            transaction,
+            ctx,
+            attempt,
+            "cancelled",
+            {},
+            None,
+            "cancellation",
+            changed_at,
+        )
         updated = self.action_execution_repository.transition_run(
             transaction=transaction,
             tenant_id=ctx.tenant_id,
@@ -405,92 +456,4 @@ class ActionDistributedRunService(CoreService):
             decision="allow",
             after_ref={"cancelReason": row["cancel_reason"]},
             correlation_id=row["id"],
-        )
-
-    def _require_owner(
-        self, transaction: TransactionContext, ctx: RequestContext, attempt: ActionStepAttemptRow, owned_at: str
-    ) -> ActionStepAttemptRow:
-        owner = self.action_execution_repository.lock_attempt_owner(
-            transaction=transaction,
-            tenant_id=ctx.tenant_id,
-            attempt_id=attempt["id"],
-            worker_id=attempt["worker_id"],
-            lease_token=attempt["lease_token"],
-            fencing_token=attempt["fencing_token"],
-            owned_at=owned_at,
-        )
-        if owner is None:
-            raise ActionStepLeaseLost("Action step fencing token is stale")
-        return owner
-
-    def _complete_attempt(
-        self,
-        transaction: TransactionContext,
-        ctx: RequestContext,
-        attempt: ActionStepAttemptRow,
-        status: str,
-        output: dict[str, object],
-        error: dict[str, object] | None,
-        error_kind: str | None,
-        changed_at: str,
-        *,
-        retry_at: str | None = None,
-    ) -> ActionStepAttemptRow:
-        completed = self.action_execution_repository.complete_attempt(
-            transaction=transaction,
-            tenant_id=ctx.tenant_id,
-            attempt_id=attempt["id"],
-            worker_id=attempt["worker_id"],
-            lease_token=attempt["lease_token"],
-            fencing_token=attempt["fencing_token"],
-            status=status,
-            output_manifest=output,
-            error=error,
-            error_kind=error_kind,
-            completed_at=changed_at,
-            retry_at=retry_at,
-            external_execution_id=str(output.get("externalExecutionId") or "") or None,
-        )
-        if completed is None:
-            raise ActionStepLeaseLost("Action step terminal write was fenced")
-        return completed
-
-    def _required_run(self, transaction: TransactionContext, ctx: RequestContext, run_id: str) -> ActionAsyncRunRow:
-        row = self.action_execution_repository.run_by_id(
-            transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
-        )
-        if row is None:
-            raise InvariantViolation("Action run disappeared")
-        return row
-
-    def _run(self, tenant_id: str, run_id: str) -> ActionAsyncRunRow:
-        with self.engine.begin() as transaction:
-            row = self.action_execution_repository.run_by_id(
-                transaction=transaction, tenant_id=tenant_id, run_id=run_id
-            )
-        if row is None:
-            raise InvariantViolation("Action run not found")
-        return row
-
-    def _committer(self) -> ActionEditPlanCommitter:
-        return ActionEditPlanCommitter(
-            action_repository=self.action_repository,
-            object_indexer=self.object_index_record_mutation_service,
-            object_lookup=self.object_records_service,
-            ontology_lookup=self.ontology_lookup_service,
-            link_type_lookup=self.ontology_lookup_service,
-            runtime=self.runtime_service,
-        )
-
-    def _append_attempt_event(
-        self,
-        transaction: TransactionContext,
-        ctx: RequestContext,
-        row: ActionAsyncRunRow,
-        attempt: ActionStepAttemptRow,
-        event_type: str,
-        payload: dict[str, object],
-    ) -> None:
-        append_action_attempt_event(
-            self.action_execution_repository, transaction, ctx, row, attempt, event_type, payload
         )

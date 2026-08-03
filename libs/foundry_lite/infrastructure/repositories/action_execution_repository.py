@@ -6,12 +6,16 @@ from typing import Any
 
 from sqlalchemy.engine import Engine
 
+import foundry_lite.infrastructure.repositories.action_effect_receipt_rows as effect_rows
 import foundry_lite.infrastructure.repositories.action_execution_attempt_rows as attempt_rows
 import foundry_lite.infrastructure.repositories.action_execution_event_rows as event_rows
 import foundry_lite.infrastructure.repositories.action_execution_run_rows as run_rows
 from foundry_lite.application.action_async_execution_types import (
     ActionAsyncRunRecord,
     ActionAsyncRunRow,
+    ActionEffectClaim,
+    ActionEffectReceiptRecord,
+    ActionEffectReceiptRow,
     ActionRunEventRecord,
     ActionRunEventRow,
     ActionRunStepRecord,
@@ -55,6 +59,53 @@ class SqlAlchemyActionExecutionRepository:
 
     def attempts_for_run(self, *, transaction: Any, tenant_id: str, run_id: str) -> list[ActionStepAttemptRow]:
         return attempt_rows.attempts_for_run(transaction, tenant_id, run_id)
+
+    def insert_effect_receipt(
+        self, *, transaction: Any, record: ActionEffectReceiptRecord
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.insert_receipt(transaction, record)
+
+    def effect_receipts_for_run(self, *, transaction: Any, tenant_id: str, run_id: str) -> list[ActionEffectReceiptRow]:
+        return effect_rows.receipts_for_run(transaction, tenant_id, run_id)
+
+    def pending_effect_receipts(
+        self, *, transaction: Any, tenant_id: str, limit: int, due_at: str
+    ) -> list[ActionEffectReceiptRow]:
+        return effect_rows.pending_receipts(transaction, tenant_id, limit, due_at)
+
+    def claim_effect_receipt(self, *, transaction: Any, claim: ActionEffectClaim) -> ActionEffectReceiptRow | None:
+        return effect_rows.claim_receipt(transaction, claim)
+
+    def complete_effect_receipt(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        receipt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        status: str,
+        response: dict[str, object] | None,
+        error: dict[str, object] | None,
+        retry_at: str | None,
+        external_execution_id: str | None,
+        completed_at: str,
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.complete_receipt(
+            transaction,
+            tenant_id=tenant_id,
+            receipt_id=receipt_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            fencing_token=fencing_token,
+            status=status,
+            response=response,
+            error=error,
+            retry_at=retry_at,
+            external_execution_id=external_execution_id,
+            completed_at=completed_at,
+        )
 
     def update_dispatch(
         self,

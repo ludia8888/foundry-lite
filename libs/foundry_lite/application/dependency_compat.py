@@ -49,6 +49,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
     ),
     "action": (
         "action_repository",
+        "action_effect_executor",
         "action_execution_repository",
         "action_function_executor",
         "action_run_orchestrator",
