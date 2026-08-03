@@ -556,6 +556,17 @@ def test_action_writeback_retryable_ratchet_is_runtime_gate_step() -> None:
     )
 
 
+def test_action_types_v2_ratchet_is_runtime_full_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    gate = "pnpm --silent quality:action-types-v2"
+    assert gate in script
+    assert '"quality:action-types-v2"' in package_json
+    assert "tests/integration/test_action_v2_apply.py" in package_json
+    assert "tests/contracts/test_action_repository_contract.py" in package_json
+
+
 def test_action_writeback_approval_release_ratchet_is_runtime_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

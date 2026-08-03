@@ -36,6 +36,11 @@ from foundry_lite.application.services.action_permission_guards import (
     segment_mutation_denied_error,
 )
 from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
+from foundry_lite.application.services.action_v2_commit import (
+    ActionV2Committer,
+    CommitLinkTypeResolver,
+    uses_action_rules_v2,
+)
 from foundry_lite.application.services.action_workflow import (
     ActionMutationUnitOfWork,
     ActionObjectIndexer,
@@ -64,6 +69,7 @@ class ActionApplyService(CoreService):
         "action_writeback_service",
         "object_index_record_mutation_service",
         "object_records_service",
+        "ontology_lookup_service",
         "ontology_service",
         "osdk_application_service",
         "runtime_service",
@@ -71,6 +77,7 @@ class ActionApplyService(CoreService):
     action_writeback_service: ActionWritebackService
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
+    ontology_lookup_service: CommitLinkTypeResolver
     ontology_service: ActionOntologyLookup
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
@@ -300,16 +307,32 @@ class ActionApplyService(CoreService):
             request_hash=command.request_fingerprint,
             response={"status_code": 200},
         )
-        response = self._mutation_unit_of_work().commit(
-            conn,
-            ctx,
-            action_type=action_type,
-            action_run_id=action_run_id,
-            record=record,
-            params=command.params,
-            idempotency_key=command.idempotency_key,
-        )
+        if uses_action_rules_v2(action_type):
+            # Row/segment visibility is enforced as each existing object resolves (the
+            # resolution context hides forbidden rows as NotFound), and the whole plan
+            # commits in this transaction so any conflict rolls it all back.
+            response = self._v2_committer().commit(conn, ctx, action_type, action_run_id, command)
+        else:
+            response = self._mutation_unit_of_work().commit(
+                conn,
+                ctx,
+                action_type=action_type,
+                action_run_id=action_run_id,
+                record=record,
+                params=command.params,
+                idempotency_key=command.idempotency_key,
+            )
         return ActionApplyOutcome(response=response)
+
+    def _v2_committer(self) -> ActionV2Committer:
+        return ActionV2Committer(
+            action_repository=self.action_repository,
+            object_indexer=self.object_index_record_mutation_service,
+            object_lookup=self.object_records_service,
+            ontology_lookup=self.ontology_service,
+            link_type_lookup=self.ontology_lookup_service,
+            runtime=self.runtime_service,
+        )
 
     def _existing_action_run(
         self,

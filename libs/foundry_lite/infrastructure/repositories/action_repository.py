@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
-from uuid import uuid4
 
 from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
@@ -17,12 +16,24 @@ from foundry_lite.application.ports.action_repository import (
     ActionRunUsageRow,
     ActionWritebackReconciliation,
     ActionWritebackRecord,
+    ObjectCreateWrite,
+    ObjectDeleteWrite,
     ObjectEditRecord,
+    ObjectEditRow,
+    ObjectLinkDeleteWrite,
+    ObjectLinkWrite,
     ObjectTargetUpdate,
 )
 from foundry_lite.application.ports.transaction_context import ACTION_WRITEBACK_RECONCILED, StatusTransition
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
+from foundry_lite.infrastructure.repositories.object_write_ops import (
+    create_object_link_write,
+    create_object_record_write,
+    snapshot_object_record_version,
+    soft_delete_object_link_write,
+    soft_delete_object_write,
+)
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
@@ -287,8 +298,20 @@ class SqlAlchemyActionRepository:
         )
         updated = result.rowcount == 1
         if updated:
-            _insert_object_record_version_from_current(transaction, record.tenant_id, record.object_record_id)
+            snapshot_object_record_version(transaction, record.tenant_id, record.object_record_id)
         return updated
+
+    def create_object_record(self, *, transaction: Any, record: ObjectCreateWrite) -> bool:
+        return create_object_record_write(transaction, record)
+
+    def soft_delete_object_target(self, *, transaction: Any, record: ObjectDeleteWrite) -> bool:
+        return soft_delete_object_write(transaction, record)
+
+    def create_object_link(self, *, transaction: Any, record: ObjectLinkWrite) -> None:
+        create_object_link_write(transaction, record)
+
+    def soft_delete_object_link(self, *, transaction: Any, record: ObjectLinkDeleteWrite) -> bool:
+        return soft_delete_object_link_write(transaction, record)
 
     def insert_object_edit(self, *, transaction: Any, record: ObjectEditRecord) -> None:
         transaction.execute(
@@ -307,6 +330,44 @@ class SqlAlchemyActionRepository:
                 created_at=record.created_at,
             )
         )
+
+    def object_edits_for_run(self, *, transaction: Any, tenant_id: str, action_run_id: str) -> list[ObjectEditRow]:
+        rows = (
+            transaction.execute(
+                select(db.object_edits)
+                .where(
+                    and_(
+                        db.object_edits.c.tenant_id == tenant_id,
+                        db.object_edits.c.action_run_id == action_run_id,
+                    )
+                )
+                .order_by(db.object_edits.c.created_at.asc(), db.object_edits.c.id.asc())
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(ObjectEditRow, dict(row)) for row in rows]
+
+    def latest_object_edit(
+        self, *, transaction: Any, tenant_id: str, object_type_id: str, object_id: str
+    ) -> ObjectEditRow | None:
+        row = (
+            transaction.execute(
+                select(db.object_edits)
+                .where(
+                    and_(
+                        db.object_edits.c.tenant_id == tenant_id,
+                        db.object_edits.c.object_type_id == object_type_id,
+                        db.object_edits.c.object_id == object_id,
+                    )
+                )
+                .order_by(db.object_edits.c.created_at.desc(), db.object_edits.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return cast(ObjectEditRow, dict(row)) if row else None
 
 
 def _action_run_values(record: ActionRunRecord) -> dict[str, object]:
@@ -369,39 +430,3 @@ def _action_run_insert_or_ignore(transaction: Any, record: ActionRunRecord) -> A
             .returning(db.action_runs.c.id)
         )
     return insert(db.action_runs).values(**values).returning(db.action_runs.c.id)
-
-
-def _insert_object_record_version_from_current(transaction: Any, tenant_id: str, record_id: str) -> None:
-    row = (
-        transaction.execute(
-            select(db.object_records).where(
-                and_(db.object_records.c.tenant_id == tenant_id, db.object_records.c.id == record_id)
-            )
-        )
-        .mappings()
-        .one()
-    )
-    transaction.execute(
-        insert(db.object_record_versions).values(
-            id=f"object_record_version_{uuid4().hex}",
-            tenant_id=row["tenant_id"],
-            object_record_id=row["id"],
-            object_type_id=row["object_type_id"],
-            object_type_api_name=row["object_type_api_name"],
-            object_id=row["object_id"],
-            index_version=row["index_version"],
-            is_active=row["is_active"],
-            properties=row["properties"],
-            base_properties=row["base_properties"],
-            edit_properties=row["edit_properties"],
-            property_versions=row["property_versions"],
-            source_dataset_version_id=row["source_dataset_version_id"],
-            source_hash=row["source_hash"],
-            object_version=row["object_version"],
-            object_change_sequence=row["object_change_sequence"],
-            deleted=row["deleted"],
-            deletion_reason=row["deletion_reason"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
-    )

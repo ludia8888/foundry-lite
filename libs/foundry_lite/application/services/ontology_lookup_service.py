@@ -117,6 +117,14 @@ class OntologyLookupService(CoreService):
             raise NotFound("object type not found", details={"api_name": api_name})
         return row
 
+    def link_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> LinkTypeRow:
+        """Resolve one active link type by api name (satisfies CommitLinkTypeResolver for v2 actions)."""
+        active = self._active_ontology_version(conn, ctx)
+        for row in self._link_types_for_version(conn, ctx, active["id"]):
+            if row["api_name"] == api_name:
+                return row
+        raise NotFound("link type not found", details={"api_name": api_name})
+
     def _active_action_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> ActionTypeRow:
         active = self._active_ontology_version(conn, ctx)
         row = self.ontology_repository.enabled_action_type_for_version(

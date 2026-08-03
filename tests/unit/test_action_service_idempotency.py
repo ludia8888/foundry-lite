@@ -53,6 +53,9 @@ class _Ontology:
             "enabled": True,
         }
 
+    def link_type(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise AssertionError("v1 idempotency path must not resolve link types")
+
 
 class _UnexpectedMutation:
     def _object_record(self, *_args: object, **_kwargs: object) -> None:
@@ -123,6 +126,7 @@ def test_action_apply_service_replays_when_insert_loses_idempotency_race() -> No
             "object_index_record_mutation_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
+            "ontology_lookup_service": _Ontology(),
             "osdk_application_service": _AllowOsdkScope(),
             "runtime_service": _WriteOpenRuntime(),
         }
@@ -158,6 +162,7 @@ def test_protected_runtime_blocks_action_failure_injection_before_run_insert(mon
             "object_index_record_mutation_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
+            "ontology_lookup_service": _Ontology(),
             "osdk_application_service": _AllowOsdkScope(),
             "runtime_service": runtime,
         }

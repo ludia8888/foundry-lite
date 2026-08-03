@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Protocol
+from typing import Protocol, cast
 
-from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyResponse
+from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyResponse, ActionPlanSummary
 from foundry_lite.application.ports import (
     ACTION_RUN_CONFLICT,
     ACTION_RUN_FAILED,
@@ -214,6 +214,12 @@ def action_replay_response(existing: ActionRunRow) -> ActionApplyResponse:
         },
         "idempotentReplay": True,
     }
+    plan = result.get("plan")
+    if isinstance(plan, Mapping):
+        # A v2 (rulesV2) run replays as its multi-object plan summary; the single-object
+        # objectEdit/patch/edits/cacheRefresh fields are v1-only and stay absent.
+        response["plan"] = cast(ActionPlanSummary, dict(plan))
+        return response
     object_edit_id = result.get("objectEditId")
     if isinstance(object_edit_id, str):
         response["objectEditId"] = object_edit_id

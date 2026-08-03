@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Barrier
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports.action_repository import (
@@ -16,7 +16,12 @@ from foundry_lite.application.ports.action_repository import (
     ActionRunUsageRow,
     ActionWritebackReconciliation,
     ActionWritebackRecord,
+    ObjectCreateWrite,
+    ObjectDeleteWrite,
     ObjectEditRecord,
+    ObjectEditRow,
+    ObjectLinkDeleteWrite,
+    ObjectLinkWrite,
     ObjectTargetUpdate,
 )
 from foundry_lite.application.ports.transaction_context import (
@@ -47,6 +52,10 @@ class ActionHarness(Protocol):
 
     def object_rows(self) -> list[dict[str, Any]]: ...
 
+    def object_link_rows(self) -> list[dict[str, Any]]: ...
+
+    def object_record_version_rows(self) -> list[dict[str, Any]]: ...
+
     def object_edit_rows(self) -> list[dict[str, Any]]: ...
 
 
@@ -55,6 +64,7 @@ class FakeActionRepository:
     action_runs: list[ActionRunRow] = field(default_factory=list)
     action_writebacks: list[dict[str, Any]] = field(default_factory=list)
     object_records: list[dict[str, Any]] = field(default_factory=list)
+    object_links: list[dict[str, Any]] = field(default_factory=list)
     object_edits: list[dict[str, Any]] = field(default_factory=list)
 
     def action_run_by_idempotency(
@@ -237,9 +247,102 @@ class FakeActionRepository:
                 return True
         return False
 
+    def create_object_record(self, *, transaction: Any, record: ObjectCreateWrite) -> bool:
+        del transaction
+        identity = (record.tenant_id, record.object_type_id, record.object_id, "active")
+        for row in self.object_records:
+            if (row["tenant_id"], row["object_type_id"], row["object_id"], row["index_version"]) == identity:
+                return False
+        self.object_records.append(_created_object_row(record))
+        return True
+
+    def soft_delete_object_target(self, *, transaction: Any, record: ObjectDeleteWrite) -> bool:
+        del transaction
+        for row in self.object_records:
+            if (
+                row["tenant_id"] == record.tenant_id
+                and row["id"] == record.object_record_id
+                and row["object_version"] == record.expected_object_version
+            ):
+                row.update(
+                    deleted=True,
+                    is_active=False,
+                    deletion_reason=record.deletion_reason,
+                    object_version=record.expected_object_version + 1,
+                    updated_at=record.updated_at,
+                )
+                return True
+        return False
+
+    def create_object_link(self, *, transaction: Any, record: ObjectLinkWrite) -> None:
+        del transaction
+        identity = (record.tenant_id, record.link_type_id, record.from_object_id, record.to_object_id, "active")
+        for row in self.object_links:
+            key = (
+                row["tenant_id"],
+                row["link_type_id"],
+                row["from_object_id"],
+                row["to_object_id"],
+                row["index_version"],
+            )
+            if key == identity:
+                row.update(
+                    is_active=True,
+                    deleted=False,
+                    deletion_reason=None,
+                    link_version=row["link_version"] + 1,
+                    updated_at=record.updated_at,
+                )
+                return
+        self.object_links.append(_object_link_row(record))
+
+    def soft_delete_object_link(self, *, transaction: Any, record: ObjectLinkDeleteWrite) -> bool:
+        del transaction
+        deleted_any = False
+        for row in self.object_links:
+            if (
+                row["tenant_id"] == record.tenant_id
+                and row["link_type_id"] == record.link_type_id
+                and row["from_object_id"] == record.from_object_id
+                and row["to_object_id"] == record.to_object_id
+                and row["is_active"]
+                and not row["deleted"]
+            ):
+                row.update(
+                    is_active=False,
+                    deleted=True,
+                    deletion_reason=record.deletion_reason,
+                    link_version=row["link_version"] + 1,
+                    updated_at=record.updated_at,
+                )
+                deleted_any = True
+        return deleted_any
+
     def insert_object_edit(self, *, transaction: Any, record: ObjectEditRecord) -> None:
         del transaction
         self.object_edits.append(_object_edit_row(record))
+
+    def object_edits_for_run(self, *, transaction: Any, tenant_id: str, action_run_id: str) -> list[ObjectEditRow]:
+        del transaction
+        rows = [
+            row for row in self.object_edits if row["tenant_id"] == tenant_id and row["action_run_id"] == action_run_id
+        ]
+        return [cast(ObjectEditRow, row.copy()) for row in sorted(rows, key=lambda row: (row["created_at"], row["id"]))]
+
+    def latest_object_edit(
+        self, *, transaction: Any, tenant_id: str, object_type_id: str, object_id: str
+    ) -> ObjectEditRow | None:
+        del transaction
+        rows = [
+            row
+            for row in self.object_edits
+            if row["tenant_id"] == tenant_id
+            and row["object_type_id"] == object_type_id
+            and row["object_id"] == object_id
+        ]
+        if not rows:
+            return None
+        return cast(ObjectEditRow, max(rows, key=lambda row: (row["created_at"], row["id"])).copy())
 
 
 @dataclass
@@ -270,6 +373,15 @@ class FakeActionHarness:
         assert isinstance(repository, FakeActionRepository)
         return [dict(row) for row in repository.object_records]
 
+    def object_link_rows(self) -> list[dict[str, Any]]:
+        repository = self.repository
+        assert isinstance(repository, FakeActionRepository)
+        return [dict(row) for row in repository.object_links]
+
+    def object_record_version_rows(self) -> list[dict[str, Any]]:
+        # The fake models current-state rows only; version history is asserted against real engines.
+        return []
+
     def object_edit_rows(self) -> list[dict[str, Any]]:
         repository = self.repository
         assert isinstance(repository, FakeActionRepository)
@@ -298,6 +410,12 @@ class SqlAlchemyActionHarness:
 
     def object_rows(self) -> list[dict[str, Any]]:
         return self._rows(db.object_records)
+
+    def object_link_rows(self) -> list[dict[str, Any]]:
+        return self._rows(db.object_links)
+
+    def object_record_version_rows(self) -> list[dict[str, Any]]:
+        return self._rows(db.object_record_versions)
 
     def object_edit_rows(self) -> list[dict[str, Any]]:
         return self._rows(db.object_edits)
@@ -462,6 +580,110 @@ def _object_target_update(*, expected_object_version: int = 3) -> ObjectTargetUp
         properties={"status": "APPROVED"},
         next_object_version=expected_object_version + 1,
         updated_at="2026-06-10T00:00:03Z",
+    )
+
+
+def _object_create_write(
+    *,
+    object_record_id: str = "obj_ship_1",
+    object_id: str = "S-1",
+    properties: dict[str, Any] | None = None,
+) -> ObjectCreateWrite:
+    return ObjectCreateWrite(
+        object_record_id=object_record_id,
+        tenant_id="tenant-demo",
+        object_type_id="ot_shipment",
+        object_type_api_name="Shipment",
+        object_id=object_id,
+        properties=properties or {"carrier": "UPS"},
+        created_at="2026-06-10T00:00:05Z",
+    )
+
+
+def _created_object_row(record: ObjectCreateWrite) -> dict[str, Any]:
+    properties = dict(record.properties)
+    return {
+        "id": record.object_record_id,
+        "tenant_id": record.tenant_id,
+        "object_type_id": record.object_type_id,
+        "object_type_api_name": record.object_type_api_name,
+        "object_id": record.object_id,
+        "index_version": "active",
+        "is_active": True,
+        "properties": properties,
+        "base_properties": {},
+        "edit_properties": dict(properties),
+        "property_versions": {name: 1 for name in properties},
+        "source_dataset_version_id": None,
+        "source_hash": None,
+        "object_version": 1,
+        "object_change_sequence": None,
+        "deleted": False,
+        "deletion_reason": None,
+        "created_at": record.created_at,
+        "updated_at": record.created_at,
+    }
+
+
+def _object_delete_write(
+    *, object_record_id: str = "obj_order_1", expected_object_version: int = 3
+) -> ObjectDeleteWrite:
+    return ObjectDeleteWrite(
+        object_record_id=object_record_id,
+        tenant_id="tenant-demo",
+        expected_object_version=expected_object_version,
+        deletion_reason="action:FulfillOrder",
+        updated_at="2026-06-10T00:00:06Z",
+    )
+
+
+def _object_link_write(*, link_record_id: str = "lnk_1") -> ObjectLinkWrite:
+    return ObjectLinkWrite(
+        link_record_id=link_record_id,
+        tenant_id="tenant-demo",
+        link_type_id="lt_order_shipment",
+        link_type_api_name="OrderShipment",
+        from_object_type_id="ot_order",
+        from_api_name="Order",
+        from_object_id="O-1",
+        to_object_type_id="ot_shipment",
+        to_api_name="Shipment",
+        to_object_id="S-1",
+        updated_at="2026-06-10T00:00:07Z",
+    )
+
+
+def _object_link_row(record: ObjectLinkWrite) -> dict[str, Any]:
+    return {
+        "id": record.link_record_id,
+        "tenant_id": record.tenant_id,
+        "link_type_id": record.link_type_id,
+        "link_type_api_name": record.link_type_api_name,
+        "index_version": "active",
+        "is_active": True,
+        "from_object_type_id": record.from_object_type_id,
+        "from_api_name": record.from_api_name,
+        "from_object_id": record.from_object_id,
+        "to_object_type_id": record.to_object_type_id,
+        "to_api_name": record.to_api_name,
+        "to_object_id": record.to_object_id,
+        "properties": {},
+        "source_dataset_version_id": None,
+        "link_version": 1,
+        "deleted": False,
+        "deletion_reason": None,
+        "updated_at": record.updated_at,
+    }
+
+
+def _object_link_delete_write() -> ObjectLinkDeleteWrite:
+    return ObjectLinkDeleteWrite(
+        tenant_id="tenant-demo",
+        link_type_id="lt_order_shipment",
+        from_object_id="O-1",
+        to_object_id="S-1",
+        deletion_reason="action:Unlink",
+        updated_at="2026-06-10T00:00:08Z",
     )
 
 
@@ -1107,3 +1329,162 @@ def test_action_repository_contract_updates_object_target_and_records_edit(harne
     assert object_rows[0]["object_version"] == 4
     assert object_rows[0]["properties"] == {"status": "APPROVED"}
     assert edit_rows[0]["patch"] == {"status": "APPROVED"}
+
+
+def test_action_repository_contract_queries_run_edits_and_latest_object_edit(harness: ActionHarness) -> None:
+    first = _object_edit_record("edit_1")
+    second = replace(
+        first,
+        edit_id="edit_2",
+        action_run_id="arun_2",
+        edit_type="create_link",
+        patch={"linkType": "OrderCustomer", "toObjectId": "C-1"},
+        idempotency_key="idem-2",
+        created_at="2026-06-10T00:00:05Z",
+    )
+    other_tenant = replace(first, edit_id="edit_other", tenant_id="tenant-other")
+
+    with harness.transaction() as transaction:
+        harness.repository.insert_object_edit(transaction=transaction, record=second)
+        harness.repository.insert_object_edit(transaction=transaction, record=first)
+        harness.repository.insert_object_edit(transaction=transaction, record=other_tenant)
+        first_run = harness.repository.object_edits_for_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+        )
+        second_run = harness.repository.object_edits_for_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_2",
+        )
+        latest = harness.repository.latest_object_edit(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            object_id="O-1",
+        )
+
+    assert [row["id"] for row in first_run] == ["edit_1"]
+    assert [row["id"] for row in second_run] == ["edit_2"]
+    assert latest is not None
+    assert latest["id"] == "edit_2"
+
+
+def test_action_repository_contract_creates_object_and_rejects_duplicate_identity(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        created = harness.repository.create_object_record(transaction=transaction, record=_object_create_write())
+        duplicate = harness.repository.create_object_record(
+            transaction=transaction,
+            record=_object_create_write(object_record_id="obj_ship_2"),
+        )
+
+    rows = [row for row in harness.object_rows() if row["object_id"] == "S-1"]
+    assert created is True
+    assert duplicate is False
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "obj_ship_1"
+    assert row["is_active"] and not row["deleted"]
+    assert row["object_version"] == 1
+    assert row["properties"] == {"carrier": "UPS"}
+    assert row["base_properties"] == {}
+    assert row["edit_properties"] == {"carrier": "UPS"}
+    assert row["property_versions"] == {"carrier": 1}
+
+
+def test_action_repository_contract_soft_deletes_object_under_cas(harness: ActionHarness) -> None:
+    harness.add_object_record()
+
+    with harness.transaction() as transaction:
+        deleted = harness.repository.soft_delete_object_target(transaction=transaction, record=_object_delete_write())
+        stale = harness.repository.soft_delete_object_target(
+            transaction=transaction,
+            record=_object_delete_write(expected_object_version=3),
+        )
+
+    row = next(row for row in harness.object_rows() if row["id"] == "obj_order_1")
+    assert deleted is True
+    assert stale is False
+    assert row["deleted"] and not row["is_active"]
+    assert row["object_version"] == 4
+    assert row["deletion_reason"] == "action:FulfillOrder"
+
+
+def test_action_repository_contract_creates_and_reactivates_link(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.create_object_link(transaction=transaction, record=_object_link_write())
+        harness.repository.soft_delete_object_link(transaction=transaction, record=_object_link_delete_write())
+        harness.repository.create_object_link(
+            transaction=transaction,
+            record=_object_link_write(link_record_id="lnk_2"),
+        )
+
+    rows = [
+        row for row in harness.object_link_rows() if row["from_object_id"] == "O-1" and row["to_object_id"] == "S-1"
+    ]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == "lnk_1"
+    assert row["is_active"] and not row["deleted"]
+    assert row["link_version"] == 3
+
+
+def test_action_repository_contract_soft_deletes_link_once(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.create_object_link(transaction=transaction, record=_object_link_write())
+        deleted = harness.repository.soft_delete_object_link(
+            transaction=transaction,
+            record=_object_link_delete_write(),
+        )
+        again = harness.repository.soft_delete_object_link(
+            transaction=transaction,
+            record=_object_link_delete_write(),
+        )
+
+    row = next(row for row in harness.object_link_rows() if row["id"] == "lnk_1")
+    assert deleted is True
+    assert again is False
+    assert row["deleted"] and not row["is_active"]
+    assert row["link_version"] == 2
+
+
+def test_object_create_and_delete_append_version_snapshots(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyActionRepository(engine)
+
+    with engine.begin() as transaction:
+        repository.create_object_record(transaction=transaction, record=_object_create_write())
+    with engine.begin() as transaction:
+        current = (
+            transaction.execute(select(db.object_records).where(db.object_records.c.id == "obj_ship_1"))
+            .mappings()
+            .one()
+        )
+        repository.soft_delete_object_target(
+            transaction=transaction,
+            record=ObjectDeleteWrite(
+                object_record_id="obj_ship_1",
+                tenant_id="tenant-demo",
+                expected_object_version=current["object_version"],
+                deletion_reason="action:cleanup",
+                updated_at="2026-06-10T00:00:09Z",
+            ),
+        )
+    with engine.begin() as transaction:
+        versions = (
+            transaction.execute(
+                select(db.object_record_versions)
+                .where(db.object_record_versions.c.object_record_id == "obj_ship_1")
+                .order_by(db.object_record_versions.c.object_change_sequence)
+            )
+            .mappings()
+            .all()
+        )
+
+    assert len(versions) == 2
+    assert not versions[0]["deleted"]
+    assert versions[0]["object_version"] == 1
+    assert versions[-1]["deleted"]
+    assert versions[-1]["object_version"] == 2

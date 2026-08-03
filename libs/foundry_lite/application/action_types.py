@@ -51,6 +51,23 @@ class ActionCacheRefreshHint(TypedDict):
     actionRunKeys: list[str]
 
 
+class ActionPlanEdit(TypedDict):
+    objectType: str
+    objectId: str
+    operation: str
+
+
+class ActionPlanSummary(TypedDict):
+    """The multi-object/link result of an Action IR v2 (rulesV2) submission."""
+
+    editCount: int
+    createdObjectIds: list[str]
+    deletedObjectIds: list[str]
+    linksCreated: int
+    linksDeleted: int
+    edits: list[ActionPlanEdit]
+
+
 class ActionApplyResponse(TypedDict):
     actionRunId: str
     status: str
@@ -60,6 +77,7 @@ class ActionApplyResponse(TypedDict):
     patch: NotRequired[Mapping[str, object]]
     validation: NotRequired[ActionValidationResponse]
     edits: NotRequired[ActionEditSummary]
+    plan: NotRequired[ActionPlanSummary]
     cacheRefresh: NotRequired[ActionCacheRefreshHint]
     idempotentReplay: NotRequired[bool]
 
