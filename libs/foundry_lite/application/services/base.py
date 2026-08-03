@@ -6,7 +6,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
-from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.dependencies import (
+    ActionExecutionRepository,
+    ActionFunctionExecutor,
+    ActionRunOrchestrator,
+    CoreDependencies,
+)
 from foundry_lite.application.pipeline_runtime_dependencies import (
     GovernedSemanticModelPort,
     MediaProcessorRegistry,
@@ -78,6 +83,7 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_apply_service": "ActionApplyService",
+    "action_async_run_service": "ActionAsyncRunService",
     "action_batch_apply_service": "ActionBatchApplyService",
     "action_definition_service": "ActionDefinitionService",
     "action_planning_service": "ActionPlanningService",
@@ -249,6 +255,9 @@ class CoreService:
     metadata_repository: MetadataRepository
     insight_review_service: object
     action_repository: ActionRepository
+    action_execution_repository: ActionExecutionRepository
+    action_function_executor: ActionFunctionExecutor
+    action_run_orchestrator: ActionRunOrchestrator
     ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository

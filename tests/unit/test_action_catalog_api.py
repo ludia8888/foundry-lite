@@ -108,3 +108,97 @@ def test_action_catalog_routes_preserve_cursor_and_return_contract(monkeypatch) 
         ("dry_run", ("ExpediteOrder", "O-1")),
     ]
     assert listed.headers["X-Request-ID"]
+
+
+def test_action_run_routes_preserve_wait_cursor_idempotency_and_status_codes(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeActions:
+        def start_run(self, action_api_name, **kwargs):
+            calls.append(("start", (action_api_name, kwargs["idempotency_key"], kwargs["wait_seconds"])))
+            status = "succeeded" if kwargs["wait_seconds"] else "queued"
+            return {"actionRunId": "run-1", "status": status}
+
+        def list_runs(self, **kwargs):
+            calls.append(("list_runs", (kwargs["cursor"], kwargs["limit"])))
+            return {"items": [{"actionRunId": "run-1", "status": "queued"}], "nextCursor": "next-run"}
+
+        def get_run(self, run_id, **_kwargs):
+            calls.append(("get_run", run_id))
+            return {"actionRunId": run_id, "status": "running"}
+
+        def cancel(self, run_id, **kwargs):
+            calls.append(("cancel", (run_id, kwargs["idempotency_key"], kwargs["reason"])))
+            return {"actionRunId": run_id, "status": "cancelling"}
+
+    class FakeFoundry:
+        actions = FakeActions()
+
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
+    client = TestClient(app)
+    payload = {
+        "target": {"objectType": "Order", "objectId": "O-1"},
+        "expectedObjectVersion": 4,
+        "params": {},
+    }
+
+    queued = client.post("/api/actions/ExpediteOrder/runs", json=payload, headers={"Idempotency-Key": "run-key-1"})
+    terminal = client.post(
+        "/api/actions/ExpediteOrder/runs?waitSeconds=3",
+        json=payload,
+        headers={"Idempotency-Key": "run-key-2"},
+    )
+    listed = client.get("/api/actions/runs?cursor=prior-run&limit=20")
+    fetched = client.get("/api/actions/runs/run-1")
+    cancelled = client.post(
+        "/api/actions/runs/run-1/cancel",
+        json={"reason": "operator request"},
+        headers={"Idempotency-Key": "cancel-key-1"},
+    )
+
+    assert queued.status_code == 202
+    assert terminal.status_code == 200
+    assert listed.json()["nextCursor"] == "next-run"
+    assert fetched.json()["status"] == "running"
+    assert cancelled.status_code == 202
+    assert cancelled.json()["status"] == "cancelling"
+    assert calls == [
+        ("start", ("ExpediteOrder", "run-key-1", 0)),
+        ("start", ("ExpediteOrder", "run-key-2", 3)),
+        ("list_runs", ("prior-run", 20)),
+        ("get_run", "run-1"),
+        ("cancel", ("run-1", "cancel-key-1", "operator request")),
+    ]
+
+
+def test_action_run_sse_resumes_after_last_event_id(monkeypatch) -> None:
+    calls: list[tuple[str, int]] = []
+
+    class FakeActions:
+        def events(self, run_id, **kwargs):
+            calls.append((run_id, kwargs["after_sequence"]))
+            if kwargs["after_sequence"] == 5:
+                return {
+                    "actionRunId": run_id,
+                    "events": [
+                        {
+                            "id": 6,
+                            "event": "action.run.succeeded",
+                            "data": {"status": "succeeded"},
+                        }
+                    ],
+                }
+            return {"actionRunId": run_id, "events": []}
+
+        def get_run(self, run_id, **_kwargs):
+            return {"actionRunId": run_id, "status": "succeeded"}
+
+    class FakeFoundry:
+        actions = FakeActions()
+
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
+    response = TestClient(app).get("/api/actions/runs/run-1/events", headers={"Last-Event-ID": "5"})
+
+    assert response.status_code == 200
+    assert 'id: 6\nevent: action.run.succeeded\ndata: {"status":"succeeded"}' in response.text
+    assert calls == [("run-1", 5), ("run-1", 6)]

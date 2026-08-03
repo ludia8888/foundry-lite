@@ -3225,6 +3225,68 @@
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
       "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.start",
+      "route": "POST /api/actions/{action_type}/runs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.start",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The Idempotency-Key scoped API persists the immutable plan and queued run before Temporal dispatch; the SDK returns orchestration, step, attempt, and fencing evidence without exposing lease tokens.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.list",
+      "route": "GET /api/actions/runs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Cursor history returns tenant-scoped durable Action run summaries for runtime monitoring.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.get",
+      "route": "GET /api/actions/runs/{run_id}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The run snapshot exposes orchestration status, node step, retries, worker identity, fencing token, cancellation, result, and terminal error evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.events",
+      "route": "GET /api/actions/runs/{run_id}/events",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.events",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Durable ordered events support Last-Event-ID reconnection while transport heartbeats remain ephemeral.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.cancel",
+      "route": "POST /api/actions/runs/{run_id}/cancel",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.cancel",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The Idempotency-Key scoped cancellation is recorded in PostgreSQL before Temporal cancellation and late workers are fenced from committing.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
     }
   ],
   "sdkHelpers": [

@@ -22,7 +22,10 @@ def validate_yaml_action_definitions(
     link_defs: Mapping[str, YamlObject],
 ) -> None:
     """Validate references, editable properties, simple value types, and sensitive risk."""
-    functions = {required_str(item, "apiName") for item in mapping_sequence(definition, "functionTypes")}
+    functions = {
+        required_str(item, "apiName"): str(item.get("version") or "v1")
+        for item in mapping_sequence(definition, "functionTypes")
+    }
     interfaces = {required_str(item, "apiName") for item in mapping_sequence(definition, "interfaceTypes")}
     for action in mapping_sequence(definition, "actionTypes"):
         persisted = action_type_definition(action)
@@ -48,12 +51,20 @@ def _require_target(
         )
 
 
-def _require_function(contract: ActionDefinitionV3, functions: set[str]) -> None:
-    if contract.function is None or contract.function.api_name in functions:
+def _require_function(contract: ActionDefinitionV3, functions: Mapping[str, str]) -> None:
+    if contract.function is None:
+        return
+    actual_version = functions.get(contract.function.api_name)
+    if actual_version == contract.function.version:
         return
     raise ValidationFailed(
-        "action function reference was not found",
-        details={"actionType": contract.api_name, "function": contract.function.api_name},
+        "action function reference or pinned version was not found",
+        details={
+            "actionType": contract.api_name,
+            "function": contract.function.api_name,
+            "expectedVersion": contract.function.version,
+            "actualVersion": actual_version,
+        },
     )
 
 
@@ -62,7 +73,7 @@ def _validate_rule(
     rule: Mapping[str, object],
     object_defs: Mapping[str, YamlObject],
     link_defs: Mapping[str, YamlObject],
-    functions: set[str],
+    functions: Mapping[str, str],
 ) -> None:
     kind = str(rule.get("kind") or "")
     if kind == "functionEdit":

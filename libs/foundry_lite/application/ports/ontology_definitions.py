@@ -135,6 +135,7 @@ class FunctionTypeDefinition(TypedDict):
 
     apiName: str
     displayName: str
+    version: str
     runtime: str
     inputs: Sequence[FunctionInputDefinition]
     output: FunctionOutputDefinition

@@ -20,7 +20,7 @@ SUPPORTED_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_LOGIC_DAG})
 
 #: Function inputs/outputs use the object property type vocabulary (kept in
 #: sync with INTERFACE_PROPERTY_DATA_TYPES / OBJECT_PROPERTY_DATA_TYPES).
-FUNCTION_DATA_TYPES = frozenset({"boolean", "float", "integer", "media_reference", "string"})
+FUNCTION_DATA_TYPES = frozenset({"boolean", "float", "integer", "media_reference", "ontology_edit_batch", "string"})
 
 
 def normalized_function_definition(item: Mapping[str, object]) -> dict[str, object]:
@@ -34,6 +34,7 @@ def normalized_function_definition(item: Mapping[str, object]) -> dict[str, obje
     normalized: dict[str, object] = {
         "apiName": api_name,
         "displayName": _optional_str(item, "displayName", api_name),
+        "version": _optional_str(item, "version", "v1"),
         "runtime": _function_runtime(item, api_name),
         "inputs": _normalized_inputs(item, api_name),
         "output": _normalized_output(item, api_name),

@@ -465,6 +465,22 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    schema(actionApiName: string): Promise<Record<string, unknown>>;",
             "    plan(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
             "    dryRun(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
+            "    runs: {",
+            (
+                "      start(actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }): Promise<ActionRun>;"
+            ),
+            "      list(filters?: { cursor?: string; limit?: number }): Promise<ActionRunListResult>;",
+            "      get(runId: string): Promise<ActionRun>;",
+            (
+                "      events(runId: string, options?: StreamFoundryLiteOperationEventsOptions<ActionRunEvent> & "
+                "{ lastEventId?: string | number }): AsyncGenerator<ActionRunEvent, void, unknown>;"
+            ),
+            (
+                "      cancel(runId: string, payload: ActionRunCancelRequest | undefined, "
+                "options: { idempotencyKey: string }): Promise<ActionRun>;"
+            ),
+            "    };",
         ]
     )
     for action_def in surface.actions:
@@ -3272,6 +3288,61 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             ),
             '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
             "        }),",
+            "      runs: {",
+            (
+                "        start: (actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }) =>"
+            ),
+            (
+                "          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/runs` + "
+                "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+            ),
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.start"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          }),",
+            "        list: (filters: { cursor?: string; limit?: number } = {}) => {",
+            "          const params = new URLSearchParams();",
+            "          if (filters.cursor) params.set('cursor', filters.cursor);",
+            "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+            "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+            "          return request<ActionRunListResult>(`/api/actions/runs${suffix}`);",
+            "        },",
+            "        get: (runId: string) => request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}`),",
+            (
+                "        events: (runId: string, options: StreamFoundryLiteOperationEventsOptions<ActionRunEvent> & "
+                "{ lastEventId?: string | number } = {}) => {"
+            ),
+            "          const { lastEventId, ...streamOptions } = options;",
+            "          return streamFoundryLiteOperationEvents<ActionRunEvent>(",
+            "            `/api/actions/runs/${encodeURIComponent(runId)}/events`,",
+            "            {",
+            "              ...clientOptions,",
+            "              ...streamOptions,",
+            "              headers: {",
+            "                ...(clientOptions.headers ?? {}),",
+            "                ...(streamOptions.headers ?? {}),",
+            "                ...(lastEventId === undefined ? {} : { 'Last-Event-ID': String(lastEventId) }),",
+            "              },",
+            "            },",
+            "          );",
+            "        },",
+            (
+                "        cancel: (runId: string, payload: ActionRunCancelRequest = {}, "
+                "options: { idempotencyKey: string }) =>"
+            ),
+            "          request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}/cancel`, {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.cancel"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          }),",
+            "      },",
         ]
     )
     lines.extend(_ts_action_client_lines(surface.actions))

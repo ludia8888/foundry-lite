@@ -47,6 +47,21 @@ def test_postgres_rls_hides_dataset_and_object_rows_between_tenants(postgres_fix
     _assert_cross_tenant_insert_is_rejected(engine, role_name)
 
 
+def test_postgres_rls_hides_action_execution_ledger_between_tenants(postgres_fixture) -> None:
+    engine = postgres_fixture.engine
+    role_name = f"foundry_lite_action_rls_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    _seed_action_execution_rows(engine)
+
+    tables = (db.action_runs, db.action_run_steps, db.action_step_attempts, db.action_run_events)
+    for table in tables:
+        assert _rls_enabled(engine, table.name)
+        assert _rls_forced(engine, table.name)
+        assert _visible_values(engine, role_name, "tenant-demo", table.c.id) == [f"{table.name}-demo"]
+        assert _visible_values(engine, role_name, "tenant-other", table.c.id) == [f"{table.name}-other"]
+        assert _visible_without_tenant_context(engine, role_name, table.c.id) == []
+
+
 def test_rls_tenant_context_reset_between_pooled_connections(postgres_fixture) -> None:
     engine = postgres_fixture.engine
     pooled_engine = create_engine(engine.url, future=True, pool_size=1, max_overflow=0)
@@ -190,6 +205,95 @@ def _seed_cross_tenant_rows(engine: Engine) -> None:
             insert(db.object_records),
             [_object_row("object-demo", "tenant-demo"), _object_row("object-other", "tenant-other")],
         )
+
+
+def _seed_action_execution_rows(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            insert(db.action_runs),
+            [_action_run_row("demo", "tenant-demo"), _action_run_row("other", "tenant-other")],
+        )
+        conn.execute(
+            insert(db.action_run_steps),
+            [_action_step_row("demo", "tenant-demo"), _action_step_row("other", "tenant-other")],
+        )
+        conn.execute(
+            insert(db.action_step_attempts),
+            [_action_attempt_row("demo", "tenant-demo"), _action_attempt_row("other", "tenant-other")],
+        )
+        conn.execute(
+            insert(db.action_run_events),
+            [_action_event_row("demo", "tenant-demo"), _action_event_row("other", "tenant-other")],
+        )
+
+
+def _action_run_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_runs-{suffix}",
+        "tenant_id": tenant_id,
+        "action_type_id": f"action-{suffix}",
+        "action_type_api_name": "ApproveOrder",
+        "actor_user_id": f"user-{suffix}",
+        "target_object_type_id": f"order-type-{suffix}",
+        "target_object_type_api_name": "Order",
+        "target_object_id": f"order-{suffix}",
+        "expected_object_version": 1,
+        "parameters": {},
+        "status": "running",
+        "idempotency_key": f"action-key-{suffix}",
+        "request_fingerprint": f"request-{suffix}",
+        "execution_mode": "async",
+        "dispatch_status": "dispatched",
+        "dispatch_attempt_count": 1,
+        "event_sequence": 1,
+        "created_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _action_step_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_run_steps-{suffix}",
+        "tenant_id": tenant_id,
+        "run_id": f"action_runs-{suffix}",
+        "step_key": "function",
+        "step_kind": "function",
+        "status": "running",
+        "attempt_count": 1,
+        "input_manifest": {},
+        "output_manifest": {},
+        "created_at": "2026-08-03T00:00:00Z",
+        "updated_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _action_attempt_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_step_attempts-{suffix}",
+        "tenant_id": tenant_id,
+        "step_id": f"action_run_steps-{suffix}",
+        "attempt_number": 1,
+        "status": "running",
+        "worker_id": f"worker-{suffix}",
+        "lease_token": f"lease-{suffix}",
+        "lease_expires_at": "2026-08-03T00:05:00Z",
+        "fencing_token": 1,
+        "heartbeat_at": "2026-08-03T00:00:00Z",
+        "input_manifest": {},
+        "output_manifest": {},
+        "started_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _action_event_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_run_events-{suffix}",
+        "tenant_id": tenant_id,
+        "run_id": f"action_runs-{suffix}",
+        "sequence": 1,
+        "event_type": "action.step.running",
+        "payload": {},
+        "created_at": "2026-08-03T00:00:00Z",
+    }
 
 
 def _dataset_row(dataset_id: str, tenant_id: str) -> dict[str, object]:

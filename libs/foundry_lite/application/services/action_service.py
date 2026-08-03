@@ -17,6 +17,7 @@ from foundry_lite.application.action_types import (
     ActionWritebackRecoveryResult,
 )
 from foundry_lite.application.services.action_apply_service import ActionApplyService
+from foundry_lite.application.services.action_async_run_service import ActionAsyncRunService
 from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
 from foundry_lite.application.services.action_definition_service import ActionDefinitionService
 from foundry_lite.application.services.action_planning_service import ActionPlanningService
@@ -34,6 +35,7 @@ class ActionService(CoreService):
     required_dependencies = ()
     required_collaborators = (
         "action_apply_service",
+        "action_async_run_service",
         "action_batch_apply_service",
         "action_definition_service",
         "action_planning_service",
@@ -41,6 +43,7 @@ class ActionService(CoreService):
         "action_writeback_service",
     )
     action_apply_service: ActionApplyService
+    action_async_run_service: ActionAsyncRunService
     action_batch_apply_service: ActionBatchApplyService
     action_definition_service: ActionDefinitionService
     action_planning_service: ActionPlanningService
@@ -114,6 +117,61 @@ class ActionService(CoreService):
             simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required=simulate_writeback_compensation_required,
             external_writeback_uri=external_writeback_uri,
+        )
+
+    def start_action_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        wait_seconds: int,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.start(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=ctx or RequestContext(),
+        )
+
+    def get_action_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.action_async_run_service.get(run_id, ctx=ctx or RequestContext())
+
+    def list_action_runs(
+        self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_async_run_service.list_runs(cursor=cursor, limit=limit, ctx=ctx or RequestContext())
+
+    def action_run_events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.events(
+            run_id, after_sequence=after_sequence, limit=limit, ctx=ctx or RequestContext()
+        )
+
+    def cancel_action_run(
+        self,
+        run_id: str,
+        *,
+        idempotency_key: str,
+        reason: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.cancel(
+            run_id, idempotency_key=idempotency_key, reason=reason, ctx=ctx or RequestContext()
         )
 
     def apply_action_batch(

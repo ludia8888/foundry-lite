@@ -4586,6 +4586,71 @@ await expectSdkCall("actions.dryRun", () => client.actions.dryRun("Expedite Orde
   body: genericActionPlan,
 });
 await expectSdkCall(
+  "actions.runs.start",
+  () =>
+    client.actions.runs.start("Expedite Order", genericActionPlan, {
+      idempotencyKey: "idem-action-run",
+      waitSeconds: 12,
+    }),
+  {
+    path: "/api/actions/Expedite%20Order/runs?waitSeconds=12",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-action-run" },
+    body: genericActionPlan,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.start",
+  () => client.actions.runs.start("Expedite Order", genericActionPlan),
+  "actions.runs.start",
+);
+await expectSdkCall("actions.runs.list", () => client.actions.runs.list({ cursor: "cursor/action", limit: 25 }), {
+  path: "/api/actions/runs?cursor=cursor%2Faction&limit=25",
+});
+await expectSdkCall("actions.runs.get", () => client.actions.runs.get("run/action-1"), {
+  path: "/api/actions/runs/run%2Faction-1",
+});
+responseQueue.push(
+  streamResponse([
+    'id: 8\nevent: action.run.running\ndata: {"runId":"run/action-1"}\n\n',
+  ]),
+);
+const actionRunEvents = [];
+for await (const event of client.actions.runs.events("run/action-1", { lastEventId: 7 })) {
+  actionRunEvents.push(event);
+}
+assert.equal(actionRunEvents[0].id, "8");
+assert.equal(actionRunEvents[0].eventType, "action.run.running");
+const actionEventCall = calls.at(-1);
+assert.equal(
+  actionEventCall.url,
+  `${BASE_URL}/api/actions/runs/run%2Faction-1/events`,
+  "actions.runs.events",
+);
+assertBaseHeaders(actionEventCall.init.headers, "actions.runs.events");
+assert.equal(actionEventCall.init.headers["Last-Event-ID"], "7", "actions.runs.events");
+coveredSurfaceIds.add("actions.runs.events");
+await expectSdkCall(
+  "actions.runs.cancel",
+  () =>
+    client.actions.runs.cancel(
+      "run/action-1",
+      { reason: "operator stop" },
+      { idempotencyKey: "idem-action-cancel" },
+    ),
+  {
+    path: "/api/actions/runs/run%2Faction-1/cancel",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-action-cancel" },
+    body: { reason: "operator stop" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.cancel",
+  () => client.actions.runs.cancel("run/action-1", {}),
+  "actions.runs.cancel",
+);
+await expectSdkCall(
   "actions.generated.validate",
   () =>
     client.actions.ApproveOrder.validate({

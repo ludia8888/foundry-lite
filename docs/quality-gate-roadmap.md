@@ -666,10 +666,12 @@ edit별 object/link/property 권한, AIP proposal의 plan/Action/object-version 
 재검증, catalog/schema/plan/dry-run API와 생성 SDK를 포함한다. 직접 `apply`도 같은 resolved-plan
 권한 검사를 다시 수행하므로 plan endpoint를 건너뛰어 권한을 우회할 수 없다.
 
-이것은 아직 18개 축 전체 current 증거가 아니다. Temporal durable Action run, function-backed
-`OntologyEditBatch`, governed effect receipt/DLQ, 정규 Action Log/revert, branch/interface 실행,
-Builder 전체 화면, Python OSDK, Ontology MCP OAuth/transport, PostgreSQL+Temporal 복수 worker와
-브라우저 live proof가 추가되기 전에는 해당 matrix 항목을 `current`로 승격하지 않는다.
+이 증거는 18개 축 전체 current 증거와 구분한다. Temporal durable Action run과 function-backed
+`OntologyEditBatch`는 `quality:action-runtime-async` 및 실제 PostgreSQL+Temporal 복수 worker의
+`quality:action-types-palantir-live`로 active-covered가 되었다. 남은 범위는 governed effect
+receipt/DLQ, 정규 Action Log/revert, branch/interface 실행, Builder 전체 화면, Python OSDK,
+Ontology MCP OAuth/transport 및 해당 화면의 브라우저 proof이며, 이 증거가 추가되기 전에는
+관련 matrix 항목을 `current`로 승격하지 않는다.
 
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
@@ -2302,7 +2304,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 269개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 274개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from foundry_lite.application.services.action_definition_validation import validate_yaml_action_definitions
 from foundry_lite.domain.action_runtime.action_conditions import (
     StaticActionConditionContext,
     evaluate_action_condition,
@@ -177,6 +178,26 @@ def test_legacy_v2_target_is_inferred_but_v3_requires_explicit_target() -> None:
 
     with pytest.raises(ValidationFailed, match="target is required"):
         compile_action_contract({"contractVersion": 3, "apiName": "Broken", "rules": []})
+
+
+def test_activation_validation_accepts_version_pinned_function_contract() -> None:
+    definition = {
+        "functionTypes": [{"apiName": "calculateEdits", "version": "2.1.0"}],
+        "actionTypes": [
+            {
+                "apiName": "UpdateOrderFromFunction",
+                "contractVersion": 3,
+                "target": "Order",
+                "function": {"apiName": "calculateEdits", "version": "2.1.0"},
+            }
+        ],
+    }
+
+    validate_yaml_action_definitions(
+        definition,
+        {"Order": {"apiName": "Order", "properties": []}},
+        {},
+    )
 
 
 def _context(submitted: dict[str, object]) -> ActionParameterContext:

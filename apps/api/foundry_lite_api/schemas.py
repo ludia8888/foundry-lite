@@ -140,6 +140,10 @@ class ActionApplyRequest(BaseModel):
     params: JsonObject
 
 
+class ActionRunCancelRequest(BaseModel):
+    reason: str | None = None
+
+
 class ActionBatchTargetItemRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

@@ -71,15 +71,47 @@ class FunctionExecutionService(CoreService):
         ctx = ctx or RequestContext()
         with self.engine.begin() as conn:
             row = self.ontology_lookup_service._active_function_type(conn, ctx, function_api_name)
+        return self._execute_row(ctx, row, inputs)
+
+    def execute_pinned_function(
+        self,
+        function_api_name: str,
+        *,
+        function_version: str,
+        ontology_version_id: str,
+        inputs: Mapping[str, object],
+        ctx: RequestContext,
+        execution_id: str | None = None,
+    ) -> FunctionExecutionResult:
+        """Execute the exact function definition frozen into an Action run."""
+        with self.engine.begin() as conn:
+            row = self.ontology_lookup_service._function_type_for_version(
+                conn, ctx, ontology_version_id, function_api_name
+            )
+        actual_version = str(row["definition"].get("version") or "v1")
+        if actual_version != function_version:
+            raise ValidationFailed(
+                "pinned function version no longer matches the deployment",
+                details={"expectedVersion": function_version, "actualVersion": actual_version},
+            )
+        return self._execute_row(ctx, row, inputs, execution_id=execution_id)
+
+    def _execute_row(
+        self,
+        ctx: RequestContext,
+        row: FunctionTypeRow,
+        inputs: Mapping[str, object],
+        execution_id: str | None = None,
+    ) -> FunctionExecutionResult:
         self._require_function_roles(ctx, row)
         self.osdk_application_service.require_resource_scope(
             ctx,
             resource_type="function",
-            resource_api_name=function_api_name,
+            resource_api_name=row["api_name"],
             operation="execute",
         )
         validate_function_inputs(row["definition"], inputs)
-        request = _builder_request(ctx, row, inputs)
+        request = _builder_request(ctx, row, inputs, logic_run_id=execution_id)
         return _execution_result(row, request, self.builder_runtime_service.run(ctx, request))
 
     def _require_function_roles(self, ctx: RequestContext, row: FunctionTypeRow) -> None:
@@ -109,10 +141,11 @@ def _builder_request(
     ctx: RequestContext,
     row: FunctionTypeRow,
     inputs: Mapping[str, object],
+    logic_run_id: str | None = None,
 ) -> BuilderRuntimeRequest:
     definition = row["definition"]
     return BuilderRuntimeRequest(
-        logic_run_id=_new_id("fnrun"),
+        logic_run_id=logic_run_id or _new_id("fnrun"),
         draft=function_draft_request(ctx, definition),
         input_json=dict(inputs),
         user_message=f"Execute ontology function {row['api_name']}",

@@ -37,6 +37,7 @@ from foundry_lite.application.osdk import (
     OsdkObjectType,
     osdk_resource,
 )
+from foundry_lite.application.ports.action_function_executor import ActionFunctionExecutionRequest
 from foundry_lite.application.ports.model_registry_repository import (
     ModelAliasRecord,
     ModelCatalogSeed,
@@ -183,6 +184,7 @@ class FoundryLite:
         )
 
     def _bind_local_workflow_drivers(self, dependencies: CoreDependencies, services: CoreServices) -> None:
+        self._bind_local_action_drivers(dependencies, services)
         register_pipeline_driver = getattr(
             dependencies.pipeline_dag_orchestrator,
             "register_driver",
@@ -203,6 +205,38 @@ class FoundryLite:
             CONNECTOR_SYNC_WORKFLOW_NAME,
             lambda request: self._run_local_connector_sync_driver(services, request),
         )
+
+    def _bind_local_action_drivers(self, dependencies: CoreDependencies, services: CoreServices) -> None:
+        register_run_driver = getattr(dependencies.action_run_orchestrator, "register_driver", None)
+        if callable(register_run_driver):
+            register_run_driver(
+                lambda request: services.action.distributed.drive(request, worker_id="local-action-worker")
+            )
+        register_function_driver = getattr(dependencies.action_function_executor, "register_driver", None)
+        if callable(register_function_driver):
+            register_function_driver(lambda request: self._run_local_action_function(services, request))
+
+    def _run_local_action_function(
+        self, services: CoreServices, request: ActionFunctionExecutionRequest
+    ) -> dict[str, object]:
+        ctx = RequestContext(
+            tenant_id=request.tenant_id,
+            actor_user_id=request.actor_user_id,
+            request_id=request.request_id,
+            roles=request.roles,
+            application_id=request.application_id,
+            client_id=request.client_id,
+            token_scopes=request.token_scopes,
+        )
+        result = services.function_execution.execute_pinned_function(
+            request.function_api_name,
+            function_version=request.function_version,
+            ontology_version_id=request.ontology_version_id,
+            inputs=request.inputs,
+            ctx=ctx,
+            execution_id=f"{request.run_id}:function",
+        )
+        return dict(result)
 
     def _run_local_connector_sync_driver(
         self,

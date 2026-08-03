@@ -281,6 +281,8 @@ run_runtime_full_gate() {
 
   run_runtime_step "Action Types v2 IR and atomic edit-plan ratchet" pnpm --silent quality:action-types-v2
 
+  run_runtime_step "Action Types two-worker Temporal fault ratchet" pnpm --silent quality:action-types-palantir-live
+
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
 
   run_runtime_step "Action writeback retryable ratchet" pnpm --silent quality:action-writeback-retryable

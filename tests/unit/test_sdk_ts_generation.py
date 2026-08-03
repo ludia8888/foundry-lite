@@ -502,6 +502,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["objectSets"] == ["list", "create", "get"]
     assert ts_surface["actions"] == {
         "_self": ["list", "get", "schema", "plan", "dryRun"],
+        "runs": ["start", "list", "get", "events", "cancel"],
         "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
     }
     assert ts_surface["materializations"] == ["run", "list"]

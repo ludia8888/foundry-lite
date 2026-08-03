@@ -109,6 +109,57 @@ class ActionGateway:
             external_writeback_uri=external_writeback_uri,
         )
 
+    def start_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        wait_seconds: int = 0,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._action.start_action_run(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=ctx,
+        )
+
+    def get_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._action.get_action_run(run_id, ctx=ctx)
+
+    def list_runs(
+        self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self._action.list_action_runs(cursor=cursor, limit=limit, ctx=ctx)
+
+    def events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._action.action_run_events(run_id, after_sequence=after_sequence, limit=limit, ctx=ctx)
+
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        idempotency_key: str,
+        reason: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._action.cancel_action_run(run_id, idempotency_key=idempotency_key, reason=reason, ctx=ctx)
+
     def apply_batch(
         self,
         action_api_name: str,

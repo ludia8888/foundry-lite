@@ -314,7 +314,11 @@ def _methods_payload(
 
 def render_client_surface_json(surface: SdkClientSurface) -> str:
     payload: dict[str, object] = {
-        "actions": {"_self": ["list", "get", "schema", "plan", "dryRun"], **_methods_payload(surface.actions)},
+        "actions": {
+            "_self": ["list", "get", "schema", "plan", "dryRun"],
+            "runs": ["start", "list", "get", "events", "cancel"],
+            **_methods_payload(surface.actions),
+        },
         "auth": _methods_payload(surface.auth),
         "connectors": _methods_payload(surface.connectors),
         "resources": _methods_payload(surface.resources),

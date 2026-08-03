@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from foundry_lite.application.dependency_action import (
+    ActionDependencies,
+    ActionDependencyAccessors,
+    ActionExecutionRepository,
+    ActionFunctionExecutor,
+    ActionRepository,
+    ActionRunOrchestrator,
+)
 from foundry_lite.application.dependency_aip import AipDependencies
 from foundry_lite.application.dependency_compat import (
     BundleFactory,
@@ -30,7 +38,6 @@ from foundry_lite.application.dependency_media import (
     MediaStorageAdapter,
 )
 from foundry_lite.application.ports import (
-    ActionRepository,
     AiEvalRepository,
     AiRunRepository,
     ComputeAdapter,
@@ -108,11 +115,6 @@ class SecurityDependencies:
 
 
 @dataclass(frozen=True)
-class ActionDependencies:
-    action_repository: ActionRepository
-
-
-@dataclass(frozen=True)
 class DataDependencies:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
@@ -159,9 +161,13 @@ class SourceDependencies:
 
 
 @dataclass(frozen=True, init=False)
-class CoreDependencies:
+class CoreDependencies(ActionDependencyAccessors):
     """Dependencies that compose the core facade without hard-coding local infrastructure."""
 
+    action_repository: ActionRepository
+    action_execution_repository: ActionExecutionRepository
+    action_function_executor: ActionFunctionExecutor
+    action_run_orchestrator: ActionRunOrchestrator
     paths: PathDependencies
     security: SecurityDependencies
     action: ActionDependencies
@@ -255,10 +261,6 @@ class CoreDependencies:
     @property
     def secret_vault(self) -> SecretVault:
         return self.security.secret_vault
-
-    @property
-    def action_repository(self) -> ActionRepository:
-        return self.action.action_repository
 
     @property
     def ontology_repository(self) -> OntologyRepository:

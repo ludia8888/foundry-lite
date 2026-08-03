@@ -1,0 +1,154 @@
+"""Typed commands and rows for durable, fenced Action execution."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TypedDict
+
+JsonObject = dict[str, object]
+
+
+class ActionAsyncRunRow(TypedDict):
+    id: str
+    tenant_id: str
+    action_type_id: str
+    action_type_api_name: str
+    actor_user_id: str
+    target_object_type_id: str
+    target_object_type_api_name: str
+    target_object_id: str
+    expected_object_version: int
+    parameters: JsonObject
+    status: str
+    idempotency_key: str
+    request_fingerprint: str
+    result: JsonObject | None
+    error: JsonObject | None
+    external_writeback_uri: str | None
+    definition_version: str | None
+    plan_hash: str | None
+    execution_plan: JsonObject | None
+    execution_mode: str
+    workflow_run_id: str | None
+    dispatch_status: str
+    dispatch_attempt_count: int
+    dispatch_error: JsonObject | None
+    event_sequence: int
+    cancel_requested_at: str | None
+    cancel_reason: str | None
+    cancel_idempotency_key: str | None
+    cancel_request_fingerprint: str | None
+    started_at: str | None
+    updated_at: str | None
+    created_at: str
+    completed_at: str | None
+
+
+class ActionRunStepRow(TypedDict):
+    id: str
+    tenant_id: str
+    run_id: str
+    step_key: str
+    step_kind: str
+    status: str
+    attempt_count: int
+    input_manifest: JsonObject
+    output_manifest: JsonObject
+    error: JsonObject | None
+    started_at: str | None
+    completed_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class ActionStepAttemptRow(TypedDict):
+    id: str
+    tenant_id: str
+    step_id: str
+    attempt_number: int
+    status: str
+    worker_id: str
+    lease_token: str
+    lease_expires_at: str
+    fencing_token: int
+    heartbeat_at: str
+    retry_at: str | None
+    error_kind: str | None
+    external_execution_id: str | None
+    input_manifest: JsonObject
+    output_manifest: JsonObject
+    error: JsonObject | None
+    started_at: str
+    completed_at: str | None
+
+
+class ActionRunEventRow(TypedDict):
+    id: str
+    tenant_id: str
+    run_id: str
+    sequence: int
+    event_type: str
+    step_key: str | None
+    attempt_number: int | None
+    worker_id: str | None
+    fencing_token: int | None
+    payload: JsonObject
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionAsyncRunRecord:
+    run_id: str
+    tenant_id: str
+    action_type_id: str
+    action_api_name: str
+    actor_user_id: str
+    target_object_type_id: str
+    target_object_type: str
+    target_object_id: str
+    expected_object_version: int
+    parameters: JsonObject
+    idempotency_key: str
+    request_fingerprint: str
+    definition_version: str
+    plan_hash: str
+    execution_plan: JsonObject
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionRunStepRecord:
+    step_id: str
+    tenant_id: str
+    run_id: str
+    step_key: str
+    step_kind: str
+    input_manifest: JsonObject
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionStepAttemptClaim:
+    tenant_id: str
+    run_id: str
+    step_key: str
+    worker_id: str
+    lease_token: str
+    lease_expires_at: str
+    claimed_at: str
+    input_manifest: JsonObject
+    is_cancellation: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ActionRunEventRecord:
+    event_id: str
+    tenant_id: str
+    run_id: str
+    event_type: str
+    payload: JsonObject
+    created_at: str
+    step_key: str | None = None
+    attempt_number: int | None = None
+    worker_id: str | None = None
+    fencing_token: int | None = None
