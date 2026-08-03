@@ -35,8 +35,9 @@ __all__ = ["ActionV2Committer", "CommitLinkTypeResolver", "uses_action_rules_v2"
 
 
 def uses_action_rules_v2(action_type: ActionTypeRow) -> bool:
-    """A definition declaring rulesV2 routes to the multi-object v2 committer; else v1."""
-    return bool(action_type["definition"].get("rulesV2"))
+    """Route canonical edit rules and legacy ``rulesV2`` through one committer."""
+    definition = action_type["definition"]
+    return bool(definition.get("rulesV2") or definition.get("rules"))
 
 
 @dataclass(frozen=True)

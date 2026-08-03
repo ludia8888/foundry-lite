@@ -4559,6 +4559,15 @@ await expectSdkCall("materializations.run", () => client.materializations.run("D
 await expectSdkCall("materializations.list", () => client.materializations.list(), {
   path: "/api/materializations",
 });
+await expectSdkCall("actions.list", () => client.actions.list({ cursor: "next/action", limit: 25 }), {
+  path: "/api/actions?cursor=next%2Faction&limit=25",
+});
+await expectSdkCall("actions.get", () => client.actions.get("Expedite Order"), {
+  path: "/api/actions/Expedite%20Order",
+});
+await expectSdkCall("actions.schema", () => client.actions.schema("Expedite Order"), {
+  path: "/api/actions/Expedite%20Order/schema",
+});
 await expectSdkCall(
   "actions.generated.validate",
   () =>

@@ -2071,7 +2071,22 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "      },",
     ]
     lines.extend(_web_object_client_lines(surface.objects))
-    lines.extend(["    },", "    actions: {"])
+    lines.extend(
+        [
+            "    },",
+            "    actions: {",
+            "      list: (listOptions = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (listOptions.cursor) query.set('cursor', listOptions.cursor);",
+            "        if (listOptions.limit !== undefined) query.set('limit', String(listOptions.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request(`/api/actions${suffix}`);",
+            "      },",
+            "      get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`),",
+            "      schema: (actionApiName) =>",
+            "        request(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+        ]
+    )
     lines.extend(_web_action_client_lines(surface.actions))
     lines.extend(["    },", "    interfaces: {"])
     lines.extend(_web_interface_client_lines(surface))

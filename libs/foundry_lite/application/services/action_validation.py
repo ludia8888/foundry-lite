@@ -14,6 +14,7 @@ from foundry_lite.application.action_types import (
 )
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow
 from foundry_lite.application.safe_expression import validate_action_request
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound
 
 
@@ -22,9 +23,10 @@ def action_validation_response(
     record: ObjectRecordRow | None,
     expected_object_version: int,
     params: Mapping[str, object],
+    ctx: RequestContext | None = None,
 ) -> ActionValidationResponse:
     target = _target_validation(action_type, record, expected_object_version)
-    request_error = _request_validation_error(action_type, record, expected_object_version, params)
+    request_error = _request_validation_error(action_type, record, expected_object_version, params, ctx)
     parameter_results = _parameter_results(action_type, params, request_error)
     submission_criteria = _submission_criteria(request_error)
     is_valid = target["result"] == "VALID" and _parameters_valid(parameter_results) and not submission_criteria
@@ -117,10 +119,11 @@ def _request_validation_error(
     record: ObjectRecordRow | None,
     expected_object_version: int,
     params: Mapping[str, object],
+    ctx: RequestContext | None,
 ) -> Exception | None:
     if record is None or record["object_version"] != expected_object_version:
         return None
-    return validate_action_request(action_type, record, params)
+    return validate_action_request(action_type, record, params, ctx)
 
 
 def _parameter_results(

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Query, Request
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
     ActionBatchApplyResponse,
+    ActionCatalogItem,
+    ActionCatalogPage,
     ActionValidationResponse,
 )
 from foundry_lite.domain.errors import FoundryLiteError
@@ -16,6 +18,34 @@ from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import ActionApplyBatchRequest, ActionApplyRequest
 
 router = APIRouter()
+
+
+@router.get("/api/actions")
+def list_actions(
+    request: Request,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> ActionCatalogPage:
+    try:
+        return runtime.foundry.actions.list(cursor=cursor, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/{action_type}/schema")
+def action_schema(request: Request, action_type: str) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.schema(action_type, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/{action_type}")
+def get_action(request: Request, action_type: str) -> ActionCatalogItem:
+    try:
+        return runtime.foundry.actions.get(action_type, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.post("/api/actions/{action_type}/apply")

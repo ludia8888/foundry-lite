@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
     ActionBatchApplyResponse,
+    ActionCatalogItem,
+    ActionCatalogPage,
     ActionValidationResponse,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
@@ -15,6 +17,7 @@ from foundry_lite.application.action_types import (
 )
 from foundry_lite.application.services.action_apply_service import ActionApplyService
 from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
+from foundry_lite.application.services.action_definition_service import ActionDefinitionService
 from foundry_lite.application.services.action_validation_service import ActionValidationService
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
@@ -30,13 +33,30 @@ class ActionService(CoreService):
     required_collaborators = (
         "action_apply_service",
         "action_batch_apply_service",
+        "action_definition_service",
         "action_validation_service",
         "action_writeback_service",
     )
     action_apply_service: ActionApplyService
     action_batch_apply_service: ActionBatchApplyService
+    action_definition_service: ActionDefinitionService
     action_validation_service: ActionValidationService
     action_writeback_service: ActionWritebackService
+
+    def list_actions(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionCatalogPage:
+        return self.action_definition_service.list_actions(cursor=cursor, limit=limit, ctx=ctx)
+
+    def get_action(self, action_api_name: str, *, ctx: RequestContext | None = None) -> ActionCatalogItem:
+        return self.action_definition_service.get_action(action_api_name, ctx=ctx)
+
+    def action_schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.action_definition_service.action_schema(action_api_name, ctx=ctx)
 
     def apply_action(
         self,

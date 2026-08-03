@@ -28,6 +28,8 @@ from foundry_lite.application.services.action_helpers import (
     audit_idempotency_conflict,
     require_action_target_api_name,
     require_action_write_open,
+    resolved_action_command,
+    stable_parameter_id_generator,
 )
 from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
@@ -273,9 +275,7 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
         record: ObjectRecordRow | None,
     ) -> ActionApplyOutcome:
-        deferred_error = self._action_request_error(
-            ctx, action_type, record, command.expected_object_version, command.params
-        )
+        deferred_error = self._action_request_error(ctx, action_type, record, command)
         if deferred_error is not None:
             self._fail_action_run(conn, ctx, action_run_id, deferred_error)
             return ActionApplyOutcome(deferred_error=deferred_error)
@@ -286,7 +286,8 @@ class ActionApplyService(CoreService):
             return ActionApplyOutcome(deferred_error=error)
         if record is None:
             raise InvariantViolation("action target record disappeared before commit")
-        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, command, record)
+        effective_command = self._resolved_command(ctx, action_type, record, command)
+        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, effective_command, record)
 
     def _writeback_and_commit(
         self,
@@ -408,8 +409,7 @@ class ActionApplyService(CoreService):
         ctx: RequestContext,
         action_type: ActionTypeRow,
         record: ObjectRecordRow | None,
-        expected_object_version: int,
-        params: Mapping[str, object],
+        command: ActionApplyCommand,
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
@@ -418,15 +418,30 @@ class ActionApplyService(CoreService):
         # never leaks precondition/parameter detail).
         if (segment_error := segment_mutation_denied_error(self.policy, ctx, action_type)) is not None:
             return segment_error
-        if record["object_version"] != expected_object_version:
+        if record["object_version"] != command.expected_object_version:
             return ConflictDetected(
                 "object version conflict",
                 details={
                     "currentObjectVersion": record["object_version"],
-                    "expectedObjectVersion": expected_object_version,
+                    "expectedObjectVersion": command.expected_object_version,
                 },
             )
-        return validate_action_request(action_type, record, params)
+        return validate_action_request(
+            action_type,
+            record,
+            command.params,
+            ctx,
+            generate_id=stable_parameter_id_generator(command.idempotency_key),
+        )
+
+    def _resolved_command(
+        self,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow,
+        command: ActionApplyCommand,
+    ) -> ActionApplyCommand:
+        return resolved_action_command(ctx, action_type, record, command)
 
     def _fail_action_run(
         self,

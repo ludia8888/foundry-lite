@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import yaml
 
@@ -237,16 +238,15 @@ def property_derivation(prop: YamlObject) -> PropertyDerivation | None:
 
 
 def action_parameter_schema(parameters: Sequence[YamlObject]) -> ActionParameterSchema:
-    """Build the JSON-schema subset used for action request validation."""
-    return {
-        "type": "object",
-        "required": [
-            required_str(parameter, "apiName") for parameter in parameters if parameter.get("required") is True
-        ],
-        "properties": {
-            required_str(parameter, "apiName"): {"type": required_str(parameter, "type")} for parameter in parameters
-        },
+    """Build the compatibility parameter schema stored beside the definition."""
+    from foundry_lite.domain.action_runtime.action_contract import action_parameter_json_schema, compile_action_contract
+
+    definition = {
+        "apiName": "__schema__",
+        "target": "__target__",
+        "parameters": [dict(parameter) for parameter in parameters],
     }
+    return cast(ActionParameterSchema, action_parameter_json_schema(compile_action_contract(definition)))
 
 
 def action_type_definition(item: YamlObject) -> ActionTypeDefinition:
@@ -287,6 +287,10 @@ def _copy_optional_action_fields(definition: ActionTypeDefinition, item: YamlObj
     display_name = optional_str(item, "displayName")
     if display_name is not None:
         definition["displayName"] = display_name
+    description = optional_str(item, "description")
+    if description is not None:
+        definition["description"] = description
+    _copy_action_contract_fields(definition, item)
     parameters = tuple(action_parameter(parameter) for parameter in mapping_sequence(item, "parameters"))
     if parameters:
         definition["parameters"] = parameters
@@ -328,19 +332,33 @@ def action_allowed_roles(definition: Mapping[str, object]) -> tuple[str, ...] | 
 
 
 def _copy_sequence_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:
+    _copy_legacy_action_sequences(definition, item)
+    _copy_action_rule_sequences(definition, item)
+    _copy_effect_fields(definition, item)
+
+
+def _copy_legacy_action_sequences(definition: ActionTypeDefinition, item: YamlObject) -> None:
     preconditions = tuple(yaml_object(row, "preconditions[]") for row in mapping_sequence(item, "preconditions"))
     if preconditions:
         definition["preconditions"] = preconditions
     mutations = tuple(action_mutation(mutation) for mutation in mapping_sequence(item, "mutations"))
     if mutations or "mutations" in item:
         definition["mutations"] = mutations
+
+
+def _copy_action_rule_sequences(definition: ActionTypeDefinition, item: YamlObject) -> None:
     rules_v2 = tuple(yaml_object(row, "rulesV2[]") for row in mapping_sequence(item, "rulesV2"))
     if rules_v2 or "rulesV2" in item:
         definition["rulesV2"] = rules_v2
-    _copy_effect_fields(definition, item)
+    rules = tuple(yaml_object(row, "rules[]") for row in mapping_sequence(item, "rules"))
+    if rules or "rules" in item:
+        definition["rules"] = rules
 
 
 def _copy_effect_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:
+    effects = tuple(yaml_object(row, "effects[]") for row in mapping_sequence(item, "effects"))
+    if effects or "effects" in item:
+        definition["effects"] = effects
     writebacks = tuple(yaml_object(row, "writebacks[]") for row in mapping_sequence(item, "writebacks"))
     if writebacks:
         definition["writebacks"] = writebacks
@@ -357,7 +375,44 @@ def action_parameter(parameter: YamlObject) -> ActionParameterDefinition:
     }
     if "required" in parameter:
         result["required"] = optional_bool(parameter, "required", False)
+    description = optional_str(parameter, "description")
+    if description is not None:
+        result["description"] = description
+    _copy_action_parameter_config(result, parameter)
     return result
+
+
+def _copy_action_contract_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:
+    version = item.get("contractVersion")
+    if version is not None:
+        if not isinstance(version, int):
+            raise ValidationFailed("contractVersion must be an integer")
+        definition["contractVersion"] = version
+    for key in ("targetKind", "riskLevel", "agentExecutionPolicy", "agentToolDescription"):
+        text_value = optional_str(item, key)
+        if text_value is not None:
+            definition[key] = text_value
+    for key in ("submissionCriteria", "function", "actionLog", "revert", "branchPolicy"):
+        mapping_value = optional_mapping(item, key)
+        if mapping_value is not None:
+            definition[key] = mapping_value  # type: ignore[literal-required]
+
+
+def _copy_action_parameter_config(result: ActionParameterDefinition, parameter: YamlObject) -> None:
+    for key in ("default", "constraints"):
+        mapping_value = optional_mapping(parameter, key)
+        if mapping_value is not None:
+            result[key] = mapping_value
+    overrides = tuple(yaml_object(row, "overrides[]") for row in mapping_sequence(parameter, "overrides"))
+    if overrides:
+        result["overrides"] = overrides
+    for key in ("objectType", "interfaceType", "itemType"):
+        text_value = optional_str(parameter, key)
+        if text_value is not None:
+            result[key] = text_value  # type: ignore[literal-required]
+    fields = tuple(yaml_object(row, "fields[]") for row in mapping_sequence(parameter, "fields"))
+    if fields:
+        result["fields"] = fields
 
 
 def action_mutation(mutation: YamlObject) -> ActionMutationDefinition:

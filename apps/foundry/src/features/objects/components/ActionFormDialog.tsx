@@ -358,7 +358,7 @@ function ActionFormContent({
           </p>
         ) : null}
       </div>
-      {form.parameterFields.map((field) => (
+      {form.parameterFields.filter((field) => field.isVisible).map((field) => (
         <div key={field.name} className="space-y-1">
           <Label className="text-xs">
             {field.label}

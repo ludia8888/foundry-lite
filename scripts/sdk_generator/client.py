@@ -456,7 +456,15 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 "    };",
             ]
         )
-    lines.extend(["  };", "  actions: {"])
+    lines.extend(
+        [
+            "  };",
+            "  actions: {",
+            "    list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
+            "    get(actionApiName: string): Promise<ActionCatalogItem>;",
+            "    schema(actionApiName: string): Promise<Record<string, unknown>>;",
+        ]
+    )
     for action_def in surface.actions:
         validate_payload_type = action_def.payload_type.replace("ApplyRequest", "ValidateRequest")
         batch_payload_type = action_def.payload_type.replace("ApplyRequest", "ApplyBatchRequest")
@@ -3234,7 +3242,23 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "      },",
     ]
     lines.extend(_ts_object_client_lines(surface.objects))
-    lines.extend(["    },", "    actions: {"])
+    lines.extend(
+        [
+            "    },",
+            "    actions: {",
+            "      list: (options: { cursor?: string; limit?: number } = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (options.cursor) query.set('cursor', options.cursor);",
+            "        if (options.limit !== undefined) query.set('limit', String(options.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request<ActionCatalogPage>(`/api/actions${suffix}`);",
+            "      },",
+            "      get: (actionApiName: string) =>",
+            "        request<ActionCatalogItem>(`/api/actions/${encodeURIComponent(actionApiName)}`),",
+            "      schema: (actionApiName: string) =>",
+            "        request<Record<string, unknown>>(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+        ]
+    )
     lines.extend(_ts_action_client_lines(surface.actions))
     lines.extend(["    },", "    interfaces: {"])
     lines.extend(_ts_interface_client_lines(surface))

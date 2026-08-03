@@ -1650,7 +1650,14 @@ export type FoundryLiteActionFormSelection = {
   requireIdempotencyKey?: boolean;
 };
 
-export type FoundryLiteActionParameterInputKind = "text" | "number" | "checkbox" | "json";
+export type FoundryLiteActionParameterInputKind =
+  | "text"
+  | "number"
+  | "checkbox"
+  | "json"
+  | "date"
+  | "datetime"
+  | "select";
 
 export type FoundryLiteActionParameterField = {
   name: string;
@@ -1659,6 +1666,11 @@ export type FoundryLiteActionParameterField = {
   dataType: string;
   inputKind: FoundryLiteActionParameterInputKind;
   isRequired: boolean;
+  isVisible: boolean;
+  isEditable: boolean;
+  hasServerDefault: boolean;
+  matchedOverride: number | null;
+  options: unknown[];
   value: unknown;
   hasValue: boolean;
 };
@@ -6894,21 +6906,132 @@ function foundryLiteActionParameterFields(
 ): FoundryLiteActionParameterField[] {
   const properties = foundryLiteActionSchemaProperties(schema);
   const requiredNames = foundryLiteActionSchemaRequiredNames(schema);
+  const resolvedValues: Record<string, unknown> = { ...params };
   return Object.entries(properties).map(([name, fieldSchema]) => {
     const fieldRecord = isFoundryLiteRecord(fieldSchema) ? fieldSchema : {};
-    const dataType = foundryLiteActionParameterDataType(fieldRecord);
-    const value = params[name];
+    const parameterConfig = isFoundryLiteRecord(fieldRecord["x-foundry-parameter-config"])
+      ? fieldRecord["x-foundry-parameter-config"]
+      : {};
+    const effectiveConfig = foundryLiteEffectiveParameterConfig(
+      parameterConfig,
+      requiredNames.has(name),
+      resolvedValues,
+    );
+    const dataType = foundryLiteActionParameterDataType(fieldRecord, parameterConfig);
+    const submittedValue = params[name];
+    const defaultValue = foundryLiteActionParameterDefaultValue(effectiveConfig.defaultValue, resolvedValues);
+    const value = submittedValue ?? defaultValue;
+    if (value !== undefined) resolvedValues[name] = value;
     return {
       name,
       label: foundryLiteActionParameterLabel(name, fieldRecord),
       description: foundryLiteActionParameterDescription(fieldRecord),
       dataType,
-      inputKind: foundryLiteActionParameterInputKind(dataType),
-      isRequired: requiredNames.has(name),
+      inputKind: foundryLiteActionParameterInputKind(dataType, fieldRecord),
+      isRequired: effectiveConfig.isRequired,
+      isVisible: effectiveConfig.isVisible,
+      isEditable: effectiveConfig.isEditable,
+      hasServerDefault: effectiveConfig.defaultValue !== null,
+      matchedOverride: effectiveConfig.matchedOverride,
+      options: Array.isArray(fieldRecord.enum) ? fieldRecord.enum : [],
       value,
-      hasValue: foundryLiteActionParameterHasValue(value),
+      hasValue:
+        foundryLiteActionParameterHasValue(value) || effectiveConfig.defaultValue !== null,
     };
   });
+}
+
+type FoundryLiteEffectiveParameterConfig = {
+  isRequired: boolean;
+  isVisible: boolean;
+  isEditable: boolean;
+  defaultValue: Record<string, unknown> | null;
+  matchedOverride: number | null;
+};
+
+function foundryLiteEffectiveParameterConfig(
+  config: Record<string, unknown>,
+  schemaRequired: boolean,
+  values: Record<string, unknown>,
+): FoundryLiteEffectiveParameterConfig {
+  const result: FoundryLiteEffectiveParameterConfig = {
+    isRequired: typeof config.required === "boolean" ? config.required : schemaRequired,
+    isVisible: true,
+    isEditable: true,
+    defaultValue: isFoundryLiteRecord(config.default) ? config.default : null,
+    matchedOverride: null,
+  };
+  const overrides = Array.isArray(config.overrides) ? config.overrides : [];
+  overrides.some((raw, index) => {
+    const override = isFoundryLiteRecord(raw) ? raw : {};
+    if (!foundryLiteActionConditionMatches(override.when, values)) return false;
+    const next = isFoundryLiteRecord(override.config) ? override.config : {};
+    if (typeof next.required === "boolean") result.isRequired = next.required;
+    if (typeof next.visible === "boolean") result.isVisible = next.visible;
+    if (typeof next.editable === "boolean") result.isEditable = next.editable;
+    if (isFoundryLiteRecord(next.default)) result.defaultValue = next.default;
+    result.matchedOverride = index;
+    return true;
+  });
+  return result;
+}
+
+function foundryLiteActionConditionMatches(
+  raw: unknown,
+  values: Record<string, unknown>,
+): boolean {
+  const condition = isFoundryLiteRecord(raw) ? raw : {};
+  if (Array.isArray(condition.all)) {
+    return condition.all.every((child) => foundryLiteActionConditionMatches(child, values));
+  }
+  if (Array.isArray(condition.any)) {
+    return condition.any.some((child) => foundryLiteActionConditionMatches(child, values));
+  }
+  if (condition.not !== undefined) return !foundryLiteActionConditionMatches(condition.not, values);
+  const left = foundryLiteActionConditionValue(condition.left, values);
+  const right = foundryLiteActionConditionValue(condition.right, values);
+  if (left === undefined || (condition.op !== "exists" && right === undefined)) return false;
+  if (condition.op === "eq") return Object.is(left, right);
+  if (condition.op === "neq") return !Object.is(left, right);
+  if (condition.op === "exists") return left !== null;
+  if (condition.op === "in" && Array.isArray(right)) return right.includes(left);
+  if (condition.op === "notIn" && Array.isArray(right)) return !right.includes(left);
+  if (condition.op === "contains" && Array.isArray(left)) return left.includes(right);
+  if (condition.op === "contains" && typeof left === "string") return left.includes(String(right));
+  if (condition.op === "startsWith" && typeof left === "string") return left.startsWith(String(right));
+  return foundryLiteOrderedActionCondition(condition.op, left, right);
+}
+
+function foundryLiteActionConditionValue(
+  raw: unknown,
+  values: Record<string, unknown>,
+): unknown {
+  const value = isFoundryLiteRecord(raw) ? raw : {};
+  if (value.kind === "literal") return value.value;
+  if (value.kind === "parameter" && typeof value.parameter === "string") {
+    return values[value.parameter];
+  }
+  return undefined;
+}
+
+function foundryLiteOrderedActionCondition(op: unknown, left: unknown, right: unknown): boolean {
+  if (typeof left !== "number" || typeof right !== "number") return false;
+  if (op === "lt") return left < right;
+  if (op === "lte") return left <= right;
+  if (op === "gt") return left > right;
+  if (op === "gte") return left >= right;
+  return false;
+}
+
+function foundryLiteActionParameterDefaultValue(
+  defaultValue: Record<string, unknown> | null,
+  values: Record<string, unknown>,
+): unknown {
+  if (defaultValue?.kind === "literal") return defaultValue.value;
+  if (defaultValue?.kind === "parameter" && typeof defaultValue.parameter === "string") {
+    return values[defaultValue.parameter];
+  }
+  return undefined;
 }
 
 function foundryLiteActionSchemaProperties(
@@ -6925,7 +7048,11 @@ function foundryLiteActionSchemaRequiredNames(schema: Record<string, unknown>): 
   return new Set(required.filter((name): name is string => typeof name === "string"));
 }
 
-function foundryLiteActionParameterDataType(schema: Record<string, unknown>): string {
+function foundryLiteActionParameterDataType(
+  schema: Record<string, unknown>,
+  parameterConfig: Record<string, unknown>,
+): string {
+  if (typeof parameterConfig.type === "string") return parameterConfig.type;
   const type = schema.type;
   if (typeof type === "string") return type;
   if (Array.isArray(type)) return type.filter((item) => typeof item === "string").join("|");
@@ -6935,8 +7062,12 @@ function foundryLiteActionParameterDataType(schema: Record<string, unknown>): st
 
 function foundryLiteActionParameterInputKind(
   dataType: string,
+  schema: Record<string, unknown>,
 ): FoundryLiteActionParameterInputKind {
-  if (dataType.includes("number") || dataType.includes("integer")) return "number";
+  if (Array.isArray(schema.enum)) return "select";
+  if (dataType === "date") return "date";
+  if (dataType === "timestamp") return "datetime";
+  if (["float", "integer", "long"].includes(dataType)) return "number";
   if (dataType.includes("boolean")) return "checkbox";
   if (dataType.includes("object") || dataType.includes("array") || dataType === "unknown") return "json";
   return "text";

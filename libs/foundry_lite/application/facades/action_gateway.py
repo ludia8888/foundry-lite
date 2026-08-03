@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
     ActionBatchApplyResponse,
+    ActionCatalogItem,
+    ActionCatalogPage,
     ActionValidationResponse,
 )
 from foundry_lite.application.services.action_service import ActionService
@@ -20,6 +22,21 @@ class ActionGateway:
 
     def __init__(self, action: ActionService) -> None:
         self._action = action
+
+    def list(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionCatalogPage:
+        return self._action.list_actions(cursor=cursor, limit=limit, ctx=ctx)
+
+    def get(self, action_api_name: str, *, ctx: RequestContext | None = None) -> ActionCatalogItem:
+        return self._action.get_action(action_api_name, ctx=ctx)
+
+    def schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._action.action_schema(action_api_name, ctx=ctx)
 
     def apply(
         self,

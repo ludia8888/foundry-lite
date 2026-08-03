@@ -18,7 +18,6 @@ recovery sweep. The shared received-state helpers (replay, validation, mutation 
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -84,9 +83,16 @@ class ApplyServiceCallbacks(Protocol):
         ctx: RequestContext,
         action_type: ActionTypeRow,
         record: ObjectRecordRow | None,
-        expected_object_version: int,
-        params: Mapping[str, object],
+        command: ActionApplyCommand,
     ) -> Exception | None: ...
+
+    def _resolved_command(
+        self,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow,
+        command: ActionApplyCommand,
+    ) -> ActionApplyCommand: ...
 
     def _fail_action_run(
         self, conn: TransactionContext, ctx: RequestContext, action_run_id: str, error: Exception
@@ -121,6 +127,7 @@ class _ExternalPendingPrep:
 
     outcome: ActionApplyOutcome | None = None
     action_type: ActionTypeRow | None = None
+    command: ActionApplyCommand | None = None
 
 
 @dataclass(frozen=True)
@@ -140,8 +147,9 @@ class ExternalActionApply:
         if prep.outcome is not None:
             return prep.outcome
         assert prep.action_type is not None  # nosec B101 - set whenever outcome is None
-        receipt = runner.write(command)
-        return self._resolve(ctx, command, action_run_id, prep.action_type, runner, receipt)
+        assert prep.command is not None  # nosec B101 - set whenever outcome is None
+        receipt = runner.write(prep.command)
+        return self._resolve(ctx, prep.command, action_run_id, prep.action_type, runner, receipt)
 
     def _prepare(
         self,
@@ -161,9 +169,7 @@ class ExternalActionApply:
                 if replay is not None:
                     return _ExternalPendingPrep(outcome=replay)
                 record = service._visible_target_record(conn, ctx, action_type, command)
-                deferred_error = service._action_request_error(
-                    ctx, action_type, record, command.expected_object_version, command.params
-                )
+                deferred_error = service._action_request_error(ctx, action_type, record, command)
                 if deferred_error is not None:
                     service._fail_action_run(conn, ctx, action_run_id, deferred_error)
                     return _ExternalPendingPrep(outcome=ActionApplyOutcome(deferred_error=deferred_error))
@@ -174,8 +180,9 @@ class ExternalActionApply:
                     return _ExternalPendingPrep(outcome=ActionApplyOutcome(deferred_error=simulated))
                 if record is None:
                     raise InvariantViolation("action target record disappeared before commit")
-                self._mark_pending(conn, ctx, action_run_id, command)
-                return _ExternalPendingPrep(action_type=action_type)
+                effective_command = service._resolved_command(ctx, action_type, record, command)
+                self._mark_pending(conn, ctx, action_run_id, effective_command)
+                return _ExternalPendingPrep(action_type=action_type, command=effective_command)
         except ConflictDetected as exc:
             if action_type_for_failure is None:
                 raise

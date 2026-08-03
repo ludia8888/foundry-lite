@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_definitions import ActionMutationDefinition, ActionTypeDefinition
+from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
 from foundry_lite.domain.action_runtime.action_ir import (
     ActionDefinitionV2,
     ActionRule,
@@ -42,9 +43,19 @@ V1_TARGET_PARAMETER = "__target__"
 
 def compile_action_definition(definition: ActionTypeDefinition) -> ActionDefinitionV2:
     """Compile a persisted action definition into validated Action IR v2."""
-    api_name = str(definition.get("apiName") or "")
-    rules_v2 = definition.get("rulesV2")
-    rules = _parse_v2_rules(rules_v2) if isinstance(rules_v2, Sequence) else _normalize_v1(definition)
+    contract = compile_action_contract(definition)
+    api_name = contract.api_name
+    rules: tuple[ActionRule, ...]
+    if contract.function is not None:
+        rules = (
+            FunctionEditRule(
+                rule_id="function:edit",
+                function_api_name=contract.function.api_name,
+                function_version=contract.function.version,
+            ),
+        )
+    else:
+        rules = _parse_v2_rules(contract.rules) if contract.rules else _normalize_v1(definition)
     compiled = ActionDefinitionV2(api_name=api_name, rules=rules)
     validate_action_definition(compiled)
     return compiled

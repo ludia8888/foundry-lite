@@ -3129,6 +3129,42 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "actions.list",
+      "route": "GET /api/actions",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The active Action catalog is cursor-paged and filtered by principal permission plus OSDK application resource scope before canonical v3 contracts are returned.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.get",
+      "route": "GET /api/actions/{action_type}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Action detail returns the immutable ontology version, canonical contract fingerprint, target, risk, agent policy, and deterministic parameter schema after scope checks.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.schema",
+      "route": "GET /api/actions/{action_type}/schema",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.schema",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The dynamic form, SDK, and future MCP tool consume the same fingerprinted JSON Schema generated from the canonical v3 contract.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "actions.generated.validate",
       "route": "POST /api/actions/{action_type}/validate",
       "productArea": "action-workspace",

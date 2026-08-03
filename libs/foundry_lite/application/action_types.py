@@ -6,6 +6,28 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NotRequired, TypedDict
 
+from foundry_lite.application.ports.ontology_definitions import OntologyJsonObject
+
+
+class ActionCatalogItem(TypedDict):
+    apiName: str
+    displayName: str
+    description: str | None
+    target: OntologyJsonObject
+    ontologyVersionId: str
+    contractVersion: int
+    contractFingerprint: str
+    parameterSchema: OntologyJsonObject
+    contract: OntologyJsonObject
+    riskLevel: str
+    agentExecutionPolicy: str
+    enabled: bool
+
+
+class ActionCatalogPage(TypedDict):
+    items: list[ActionCatalogItem]
+    nextCursor: str | None
+
 
 class ActionValidationIssue(TypedDict):
     code: str

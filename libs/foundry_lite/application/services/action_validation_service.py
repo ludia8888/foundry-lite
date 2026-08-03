@@ -75,7 +75,7 @@ class ActionValidationService(CoreService):
             record = visible_record(record, target_type, ctx.roles)
             if record is not None and (error := action_target_record_error(action_type, record)) is not None:
                 raise error
-            return action_validation_response(action_type, record, expected_object_version, params)
+            return action_validation_response(action_type, record, expected_object_version, params, ctx)
 
     def _require_action_scope(self, ctx: RequestContext, action_api_name: str) -> None:
         self.osdk_application_service.require_resource_scope(

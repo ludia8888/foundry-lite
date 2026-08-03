@@ -264,7 +264,7 @@ export function ActionFormPanel({
       </div>
 
       {form.parameterFields.length > 0 ? (
-        form.parameterFields.map((field) => (
+        form.parameterFields.filter((field) => field.isVisible).map((field) => (
           <div key={field.name} className="space-y-1">
             <Label className="flex items-center gap-1 text-xs">
               {field.label}

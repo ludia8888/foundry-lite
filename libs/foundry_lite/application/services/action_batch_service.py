@@ -287,7 +287,7 @@ class ActionBatchApplyService(CoreService):
             record = visible_record(record, target_type, ctx.roles)
             if record is not None and (invariant := action_target_record_error(action_type, record)) is not None:
                 raise invariant
-            error = target_request_error(action_type, record, target.expected_object_version, command.params)
+            error = target_request_error(action_type, record, target.expected_object_version, command.params, ctx)
             if error is not None:
                 failures.append(target_failure(target.object_id, error))
             elif record is not None:
