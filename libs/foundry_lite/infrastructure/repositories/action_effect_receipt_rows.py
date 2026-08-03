@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, or_, select
+from sqlalchemy import and_, func, insert, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -80,6 +80,16 @@ def pending_receipts(transaction: Any, tenant_id: str, limit: int, due_at: str) 
         .all()
     )
     return [cast(ActionEffectReceiptRow, dict(row)) for row in rows]
+
+
+def status_counts(transaction: Any, tenant_id: str) -> dict[str, int]:
+    """Aggregate durable effect backlog and terminal dispositions for monitoring."""
+    rows = transaction.execute(
+        select(db.action_effect_receipts.c.status, func.count())
+        .where(db.action_effect_receipts.c.tenant_id == tenant_id)
+        .group_by(db.action_effect_receipts.c.status)
+    ).all()
+    return {str(status): int(count) for status, count in rows}
 
 
 def claim_receipt(transaction: Any, claim: ActionEffectClaim) -> ActionEffectReceiptRow | None:

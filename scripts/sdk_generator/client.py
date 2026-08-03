@@ -465,6 +465,7 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    schema(actionApiName: string): Promise<Record<string, unknown>>;",
             "    plan(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
             "    dryRun(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
+            "    logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
             "    runs: {",
             (
                 "      start(actionApiName: string, payload: ActionPlanRequest, "
@@ -480,6 +481,8 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 "      cancel(runId: string, payload: ActionRunCancelRequest | undefined, "
                 "options: { idempotencyKey: string }): Promise<ActionRun>;"
             ),
+            "      revertEligibility(runId: string): Promise<ActionRevertEligibility>;",
+            ("      revert(runId: string, options: { idempotencyKey: string }): Promise<ActionRevertResult>;"),
             "    };",
         ]
     )
@@ -3288,6 +3291,13 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             ),
             '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
             "        }),",
+            "      logs: (options: { cursor?: string; limit?: number } = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (options.cursor) query.set('cursor', options.cursor);",
+            "        if (options.limit !== undefined) query.set('limit', String(options.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
+            "      },",
             "      runs: {",
             (
                 "        start: (actionApiName: string, payload: ActionPlanRequest, "
@@ -3341,6 +3351,18 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.cancel"),',
             "            },",
             "            body: JSON.stringify(payload),",
+            "          }),",
+            "        revertEligibility: (runId: string) =>",
+            (
+                "          request<ActionRevertEligibility>("
+                "`/api/actions/runs/${encodeURIComponent(runId)}/revert-eligibility`),"
+            ),
+            "        revert: (runId: string, options: { idempotencyKey: string }) =>",
+            "          request<ActionRevertResult>(`/api/actions/runs/${encodeURIComponent(runId)}/revert`, {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.revert"),',
+            "            },",
             "          }),",
             "      },",
         ]

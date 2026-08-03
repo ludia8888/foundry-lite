@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from foundry_lite.infrastructure.schema.actions import (
     action_effect_receipts,
+    action_log_entries,
+    action_log_objects,
     action_run_events,
     action_run_steps,
     action_runs,
@@ -253,6 +255,8 @@ __all__ = [
     "source_syncs",
     "action_runs",
     "action_effect_receipts",
+    "action_log_entries",
+    "action_log_objects",
     "action_run_steps",
     "action_step_attempts",
     "action_run_events",

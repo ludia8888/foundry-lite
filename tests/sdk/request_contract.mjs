@@ -4585,6 +4585,9 @@ await expectSdkCall("actions.dryRun", () => client.actions.dryRun("Expedite Orde
   headers: { "Content-Type": "application/json" },
   body: genericActionPlan,
 });
+await expectSdkCall("actions.logs", () => client.actions.logs({ cursor: "cursor/log", limit: 10 }), {
+  path: "/api/actions/logs?cursor=cursor%2Flog&limit=10",
+});
 await expectSdkCall(
   "actions.runs.start",
   () =>
@@ -4649,6 +4652,25 @@ assertMissingIdempotencyFailFast(
   "actions.runs.cancel",
   () => client.actions.runs.cancel("run/action-1", {}),
   "actions.runs.cancel",
+);
+await expectSdkCall(
+  "actions.runs.revertEligibility",
+  () => client.actions.runs.revertEligibility("run/action-1"),
+  { path: "/api/actions/runs/run%2Faction-1/revert-eligibility" },
+);
+await expectSdkCall(
+  "actions.runs.revert",
+  () => client.actions.runs.revert("run/action-1", { idempotencyKey: "idem-action-revert" }),
+  {
+    path: "/api/actions/runs/run%2Faction-1/revert",
+    method: "POST",
+    headers: { "Idempotency-Key": "idem-action-revert" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.revert",
+  () => client.actions.runs.revert("run/action-1"),
+  "actions.runs.revert",
 );
 await expectSdkCall(
   "actions.generated.validate",

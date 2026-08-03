@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Column, Index, Integer, String, Table, UniqueConstraint, text
+from sqlalchemy import JSON, Boolean, Column, Index, Integer, String, Table, UniqueConstraint, text
 
 from foundry_lite.infrastructure.schema.base import metadata
 
@@ -167,6 +167,52 @@ Index(
     action_effect_receipts.c.tenant_id,
     action_effect_receipts.c.action_run_id,
 )
+
+
+action_log_entries = Table(
+    "action_log_entries",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("action_run_id", String, nullable=False),
+    Column("log_object_type_api_name", String, nullable=False),
+    Column("log_object_id", String, nullable=False),
+    Column("action_type_id", String, nullable=False),
+    Column("action_type_api_name", String, nullable=False),
+    Column("definition_version", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("parameters", JSON, nullable=False),
+    Column("result", JSON, nullable=False),
+    Column("branch_id", String),
+    Column("plan_hash", String),
+    Column("approval_id", String),
+    Column("revert_allowed", Boolean, nullable=False),
+    Column("revert_status", String, nullable=False, server_default="eligible"),
+    Column("reverted_by_run_id", String),
+    Column("created_at", String, nullable=False),
+    Column("completed_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "action_run_id", name="uq_action_log_run"),
+    UniqueConstraint("tenant_id", "log_object_type_api_name", "log_object_id", name="uq_action_log_object"),
+)
+Index("ix_action_log_entries_tenant_created", action_log_entries.c.tenant_id, action_log_entries.c.created_at)
+
+
+action_log_objects = Table(
+    "action_log_objects",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("action_log_entry_id", String, nullable=False),
+    Column("object_edit_id", String, nullable=False),
+    Column("object_type_id", String, nullable=False),
+    Column("object_type_api_name", String, nullable=False),
+    Column("object_id", String, nullable=False),
+    Column("edit_type", String, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    UniqueConstraint("tenant_id", "action_log_entry_id", "object_edit_id", name="uq_action_log_edit"),
+)
+Index("ix_action_log_objects_tenant_log", action_log_objects.c.tenant_id, action_log_objects.c.action_log_entry_id)
 
 
 action_writebacks = Table(

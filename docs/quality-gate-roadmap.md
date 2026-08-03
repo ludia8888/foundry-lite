@@ -671,10 +671,14 @@ edit별 object/link/property 권한, AIP proposal의 plan/Action/object-version 
 `quality:action-types-palantir-live`로 active-covered가 되었다. `quality:action-side-effects`는
 v3 effect의 inline URI 차단, 등록 connector/OSDK scope, before-effect 영수증 선기록과
 ambiguous 무재호출, after-effect outbox/receipt 원자 생성, retry/DLQ, lease takeover/fencing,
-실제 HTTP POST idempotency/SSRF 차단, PostgreSQL tenant RLS를 검증한다. 이 bounded proof는
-실제 두 worker effect-delivery takeover와 전체 운영 UI까지 증명하지 않는다. 남은 범위는
-effect response-to-rule value, 정규 Action Log/revert, branch/interface 실행, Builder 전체 화면,
-Python OSDK, Ontology MCP OAuth/transport 및 해당 화면의 브라우저 proof이며, 이 증거가
+실제 HTTP POST idempotency/SSRF 차단, PostgreSQL tenant RLS를 검증한다. `quality:action-log-revert`는
+성공한 제출당 정규 로그 하나, 모든 object/link edit 연결, 원 실행자·최신 편집·object version·link
+상태 재검증, object/link 전체 원자 복구, revert 자체의 새 run/log/audit/outbox, 외부효과 보존,
+SQLite/PostgreSQL repository 계약, RLS, API와 생성 TS/browser SDK를 검증한다. 이 bounded proof는
+Ontology object query/aggregation과 timeline UI, 실제 동시 revert 경합, 전체 브라우저 여정을
+아직 증명하지 않는다. 남은 범위는 실제 두 worker effect-delivery takeover, effect response-to-rule
+value, branch/interface 실행, Builder 전체 화면, Python OSDK, Ontology MCP OAuth/transport 및 해당
+화면의 브라우저 proof이며, 이 증거가
 추가되기 전에는 관련 matrix 항목을 `current`로 승격하지 않는다.
 
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
@@ -2308,7 +2312,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 274개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 277개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

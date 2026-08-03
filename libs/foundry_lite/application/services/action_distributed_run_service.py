@@ -60,7 +60,7 @@ from foundry_lite.application.services.action_distributed_run_support import (
     stored_edit_plan,
     utc_now,
 )
-from foundry_lite.application.services.action_edit_plan_committer import plan_summary
+from foundry_lite.application.services.action_edit_plan_results import ActionEditPlanResult, plan_summary
 from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
     require_action_target_read,
@@ -195,13 +195,7 @@ class ActionDistributedRunService(CoreService):
                 return self._cancel_claimed(transaction, ctx, current, owner, changed_at)
             contract = self._revalidate(transaction, ctx, current, plan)
             mark_action_commit_pending(repository, transaction, ctx, current, changed_at)
-            result = action_plan_committer(
-                self.action_repository,
-                self.object_index_record_mutation_service,
-                self.object_records_service,
-                self.ontology_lookup_service,
-                self.runtime_service,
-            ).commit_plan(transaction, ctx, action_run_id=row["id"], plan=plan, transition=ACTION_RUN_ASYNC_SUCCEEDED)
+            result = self._commit_edit_plan(transaction, ctx, row, plan, contract)
             committed_plan = dict(plan_summary(result))
             effect_receipt_ids = self.action_effect_delivery_service.enqueue_after(
                 transaction, ctx, current, committed_plan
@@ -217,6 +211,30 @@ class ActionDistributedRunService(CoreService):
                 repository, transaction, ctx, current, completed, "action.run.succeeded", output
             )
         return {"actionRunId": row["id"], "status": "succeeded", "result": output}
+
+    def _commit_edit_plan(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        row: ActionAsyncRunRow,
+        plan: EditPlan,
+        contract: ActionDefinitionV3,
+    ) -> ActionEditPlanResult:
+        committer = action_plan_committer(
+            self.action_repository,
+            self.object_index_record_mutation_service,
+            self.object_records_service,
+            self.ontology_lookup_service,
+            self.runtime_service,
+        )
+        return committer.commit_plan(
+            transaction,
+            ctx,
+            action_run_id=row["id"],
+            plan=plan,
+            contract=contract,
+            transition=ACTION_RUN_ASYNC_SUCCEEDED,
+        )
 
     def _revalidate(
         self, transaction: TransactionContext, ctx: RequestContext, row: ActionAsyncRunRow, plan: EditPlan

@@ -73,6 +73,9 @@ class SqlAlchemyActionExecutionRepository:
     ) -> list[ActionEffectReceiptRow]:
         return effect_rows.pending_receipts(transaction, tenant_id, limit, due_at)
 
+    def effect_status_counts(self, *, transaction: Any, tenant_id: str) -> dict[str, int]:
+        return effect_rows.status_counts(transaction, tenant_id)
+
     def claim_effect_receipt(self, *, transaction: Any, claim: ActionEffectClaim) -> ActionEffectReceiptRow | None:
         return effect_rows.claim_receipt(transaction, claim)
 

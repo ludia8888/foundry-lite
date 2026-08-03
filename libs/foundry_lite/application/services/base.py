@@ -88,6 +88,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_batch_apply_service": "ActionBatchApplyService",
     "action_definition_service": "ActionDefinitionService",
     "action_effect_delivery_service": "ActionEffectDeliveryService",
+    "action_log_revert_service": "ActionLogRevertService",
     "action_planning_service": "ActionPlanningService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",

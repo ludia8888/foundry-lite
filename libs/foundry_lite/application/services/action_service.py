@@ -20,6 +20,7 @@ from foundry_lite.application.services.action_apply_service import ActionApplySe
 from foundry_lite.application.services.action_async_run_service import ActionAsyncRunService
 from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
 from foundry_lite.application.services.action_definition_service import ActionDefinitionService
+from foundry_lite.application.services.action_log_revert_service import ActionLogRevertService
 from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_validation_service import ActionValidationService
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
@@ -39,6 +40,7 @@ class ActionService(CoreService):
         "action_batch_apply_service",
         "action_definition_service",
         "action_planning_service",
+        "action_log_revert_service",
         "action_validation_service",
         "action_writeback_service",
     )
@@ -47,6 +49,7 @@ class ActionService(CoreService):
     action_batch_apply_service: ActionBatchApplyService
     action_definition_service: ActionDefinitionService
     action_planning_service: ActionPlanningService
+    action_log_revert_service: ActionLogRevertService
     action_validation_service: ActionValidationService
     action_writeback_service: ActionWritebackService
 
@@ -172,6 +175,21 @@ class ActionService(CoreService):
     ) -> dict[str, object]:
         return self.action_async_run_service.cancel(
             run_id, idempotency_key=idempotency_key, reason=reason, ctx=ctx or RequestContext()
+        )
+
+    def list_action_logs(
+        self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_log_revert_service.list_logs(cursor=cursor, limit=limit, ctx=ctx or RequestContext())
+
+    def action_revert_eligibility(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return dict(self.action_log_revert_service.revert_eligibility(run_id, ctx=ctx or RequestContext()))
+
+    def revert_action_run(
+        self, run_id: str, *, idempotency_key: str, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_log_revert_service.revert(
+            run_id, idempotency_key=idempotency_key, ctx=ctx or RequestContext()
         )
 
     def apply_action_batch(

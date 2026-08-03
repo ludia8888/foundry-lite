@@ -89,6 +89,38 @@ def cancel_action_run(
         raise _handle_error(exc, request) from exc
 
 
+@router.get("/api/actions/logs")
+def list_action_logs(
+    request: Request,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.logs(cursor=cursor, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/runs/{run_id}/revert-eligibility")
+def action_revert_eligibility(request: Request, run_id: str) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.revert_eligibility(run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/runs/{run_id}/revert")
+def revert_action_run(
+    request: Request,
+    run_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.revert(run_id, idempotency_key=idempotency_key, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @router.get("/api/actions/{action_type}/schema")
 def action_schema(request: Request, action_type: str) -> dict[str, object]:
     try:

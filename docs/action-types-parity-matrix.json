@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "title": "Foundry-lite Action Types v2 parity matrix",
+  "title": "Foundry-lite Action Types v3 parity matrix",
   "scope": "Promote the single-object setProperty action executor into a general Ontology transaction + agent-native action platform (typed IR, multi-object/link atomic edit plan, function-backed edits, typed parameters/forms/criteria, governed side effects, action log, revert, branch/scenario, interface actions, SDK/API/UI/MCP distribution).",
   "statusValues": [
     "missing",
@@ -287,7 +287,7 @@
         "tests/integration/action_async_runtime_temporal_live.py"
       ],
       "liveProof": "tests/integration/action_async_runtime_temporal_live.py",
-      "remainingGap": "Durable queued/running/cancelling/commit_pending/terminal runs, steps, attempts, events, cancellation, lease takeover and fenced exact-one commit are live-proven. Log/revert/effect monitoring and full browser evidence remain incomplete.",
+      "remainingGap": "Durable queued/running/cancelling/commit_pending/terminal runs, steps, attempts, events, cancellation, lease takeover and fenced exact-one commit are live-proven. Log pages now include bounded p95 duration, failure rate and effect-backlog monitoring; full monitoring UI/browser evidence remains incomplete.",
       "officialReference": [
         "palantir-action-log"
       ]
@@ -295,13 +295,13 @@
     {
       "capabilityId": "action-log",
       "palantirBehavior": "Each submission creates exactly one action log object foreign-key-linked to all edited objects, recording action RID/type/version, timestamp, user, edited object PKs, optional summary/parameter values; queryable via the Ontology, links, aggregations, and a timeline widget.",
-      "foundryLiteBaseline": "action_runs + object_edits capture every v2 object and many-to-many link edit per run; repository reads return one run's ordered edit set and the latest edit touching an object. There is still no single action-log object projection linked to every edited object nor an Ontology-queryable timeline.",
+      "foundryLiteBaseline": "action_log_entries now creates one normalized [LOG] projection per successful v2/v3 submission and action_log_objects links every ordered object/link edit, including definition, actor, parameters, result, plan, approval, branch and effect-receipt count.",
       "targetBehavior": "A durable action log (one record per submission) linked to every edited object/link, capturing full provenance, redacted parameters, side-effect receipts, and branch context, exposed as an Ontology-queryable read model.",
       "status": "partial",
       "sourcePaths": [
-        "libs/foundry_lite/application/services/action_edit_plan_committer.py:89",
-        "libs/foundry_lite/application/ports/action_repository.py:129",
-        "libs/foundry_lite/infrastructure/repositories/action_repository.py:334"
+        "libs/foundry_lite/application/services/action_log_writer.py",
+        "libs/foundry_lite/application/services/action_log_revert_service.py",
+        "libs/foundry_lite/infrastructure/repositories/action_log_rows.py"
       ],
       "testPaths": [
         "tests/integration/test_action_v2_apply.py",
@@ -309,7 +309,7 @@
         "tests/unit/test_action_edit_plan_committer.py"
       ],
       "liveProof": "tests/integration/test_action_v2_apply.py",
-      "remainingGap": "The current durable ledger now includes create/modify/delete object edits and create/delete link edits with tenant-scoped run/latest queries. Still absent: one Ontology-queryable action-log object per submission, object-set linkage/aggregations, timeline UI, side-effect receipts, and branch context. Slice 7.",
+      "remainingGap": "The normalized DB/API/TS/browser-SDK log read model, redacted parameters, side-effect receipt counts, branch/plan/approval context and runtime monitoring are active-covered. It is not yet served through generic Ontology object-set query/aggregation, and timeline UI/browser evidence is absent.",
       "officialReference": [
         "palantir-action-log"
       ]
@@ -317,15 +317,22 @@
     {
       "capabilityId": "action-revert",
       "palantirBehavior": "Revert is allowed only if the edit is still the latest version, no later edit touched the object, the edit is reversible, and the caller has revert rights; it undoes object edits only, never side effects.",
-      "foundryLiteBaseline": "object_records_version history exists; no revert specification or service.",
+      "foundryLiteBaseline": "Successful edits persist operation-specific inverse evidence; ActionLogRevertService checks the original actor, definition policy, latest edit, object version/deleted state and link state before applying all inverse object/link edits atomically.",
       "targetBehavior": "A revert eligibility specification and service that restores object/link edits when still-latest and unconflicted, records a new action log, and never claims to undo already-emitted side effects (issuing a compensating action instead when needed).",
-      "status": "missing",
+      "status": "partial",
       "sourcePaths": [
-        "libs/foundry_lite/infrastructure/repositories/action_repository.py:269"
+        "libs/foundry_lite/application/services/action_log_revert_service.py",
+        "libs/foundry_lite/application/services/action_revert_mutations.py",
+        "libs/foundry_lite/application/services/action_revert_evidence.py"
       ],
-      "testPaths": [],
+      "testPaths": [
+        "tests/integration/test_action_v2_apply.py",
+        "tests/contracts/test_action_repository_contract.py",
+        "tests/contracts/test_postgres_rls_contract.py",
+        "tests/unit/test_action_catalog_api.py"
+      ],
       "liveProof": null,
-      "remainingGap": "Entire revert model absent. Slice 7.",
+      "remainingGap": "Original-actor-only eligibility, latest-edit and object/link state checks, atomic inverse edits, idempotent CAS winner, new run/log/audit/outbox, and explicit external-effect preservation are proven on SQLite and PostgreSQL. Live concurrent revert/cancel race, Python SDK, UI and browser journey proof remain incomplete.",
       "officialReference": [
         "palantir-action-reverts"
       ]
@@ -380,7 +387,7 @@
         "tests/sdk/request_contract.mjs"
       ],
       "liveProof": null,
-      "remainingGap": "Catalog/get/schema/plan/dry-run plus durable run start/list/get/events/cancel and typed TS/browser SDK surfaces exist, including effect receipts without lease-token exposure. Logs/revert/branch APIs, complete generated Python SDK, runtime/history UI and browser proof remain incomplete.",
+      "remainingGap": "Catalog/get/schema/plan/dry-run, durable run start/list/get/events/cancel, logs, revert-eligibility and revert now have typed TS/browser SDK surfaces, including effect receipts without lease-token exposure. Branch execution API, complete generated Python SDK, runtime/history UI and browser proof remain incomplete.",
       "officialReference": [
         "palantir-action-overview"
       ]

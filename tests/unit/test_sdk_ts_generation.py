@@ -501,8 +501,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
     assert ts_surface["actions"] == {
-        "_self": ["list", "get", "schema", "plan", "dryRun"],
-        "runs": ["start", "list", "get", "events", "cancel"],
+        "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
+        "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
         "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
     }
     assert ts_surface["materializations"] == ["run", "list"]
@@ -616,9 +616,9 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
     assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
     assert surface["actions"] == {
-        "_self": ["list", "get", "schema", "plan", "dryRun"],
+        "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
         "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
-        "runs": ["start", "list", "get", "events", "cancel"],
+        "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
     }
     assert "export type ActionEffectReceipt" in generated
     assert "effects: ActionEffectReceipt[];" in generated
@@ -665,10 +665,16 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "export type ApproveOrderApplyBatchRequest = {",
         "export type ActionBatchApplyResponse = {",
         "export type ActionCatalogItem = {",
+        "export type ActionLogListResult = {",
+        "logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
+        "revertEligibility(runId: string): Promise<ActionRevertEligibility>;",
+        "revert(runId: string, options: { idempotencyKey: string }): Promise<ActionRevertResult>;",
         "list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
         "get(actionApiName: string): Promise<ActionCatalogItem>;",
         "schema(actionApiName: string): Promise<Record<string, unknown>>;",
         "return request<ActionCatalogPage>(`/api/actions${suffix}`);",
+        "return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
+        'requireIdempotencyKey(options?.idempotencyKey, "actions.runs.revert")',
         "query(interfaceType: string, payload?: InterfaceQueryRequest)",
         "query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
         "execute(functionType: string, payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
@@ -712,6 +718,9 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",
         "return request(`/api/actions${suffix}`);",
         "get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`)",
+        "return request(`/api/actions/logs${suffix}`);",
+        "revertEligibility: (runId) =>",
+        'requireIdempotencyKey(revertOptions?.idempotencyKey, "actions.runs.revert")',
         'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
         "`/api/interfaces/${encodeURIComponent(interfaceType)}/query`",
         "query: (payload = {}) => request(`/api/interfaces/Asset/query`, {",

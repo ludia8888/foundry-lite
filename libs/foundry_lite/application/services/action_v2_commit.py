@@ -15,10 +15,9 @@ from foundry_lite.application.action_types import ActionApplyCommand, ActionAppl
 from foundry_lite.application.ports import ActionRepository, ActionTypeRow, TransactionContext
 from foundry_lite.application.services.action_edit_plan_committer import (
     ActionEditPlanCommitter,
-    ActionEditPlanResult,
     CommitLinkTypeResolver,
-    plan_summary,
 )
+from foundry_lite.application.services.action_edit_plan_results import ActionEditPlanResult, plan_summary
 from foundry_lite.application.services.action_ir_compiler import compile_action_definition
 from foundry_lite.application.services.action_plan_resolution import LivePlanResolutionContext
 from foundry_lite.application.services.action_protocols import (
@@ -27,6 +26,7 @@ from foundry_lite.application.services.action_protocols import (
     ActionOntologyLookup,
     ActionRuntimeBoundary,
 )
+from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
 from foundry_lite.domain.action_runtime.edit_plan import EditPlan, validate_edit_plan
 from foundry_lite.domain.action_runtime.edit_plan_builder import build_edit_plan
 from foundry_lite.domain.context import RequestContext
@@ -61,7 +61,13 @@ class ActionV2Committer:
         plan: EditPlan | None = None,
     ) -> ActionApplyResponse:
         resolved_plan = plan or self._resolve_plan(conn, ctx, action_type, command)
-        result = self._committer().commit_plan(conn, ctx, action_run_id=action_run_id, plan=resolved_plan)
+        result = self._committer().commit_plan(
+            conn,
+            ctx,
+            action_run_id=action_run_id,
+            plan=resolved_plan,
+            contract=compile_action_contract(action_type["definition"]),
+        )
         return _apply_response(action_run_id, command, result)
 
     def _resolve_plan(

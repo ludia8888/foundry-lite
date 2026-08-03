@@ -59,6 +59,8 @@ def test_postgres_rls_hides_action_execution_ledger_between_tenants(postgres_fix
         db.action_step_attempts,
         db.action_run_events,
         db.action_effect_receipts,
+        db.action_log_entries,
+        db.action_log_objects,
     )
     for table in tables:
         assert _rls_enabled(engine, table.name)
@@ -235,6 +237,14 @@ def _seed_action_execution_rows(engine: Engine) -> None:
             insert(db.action_effect_receipts),
             [_action_effect_row("demo", "tenant-demo"), _action_effect_row("other", "tenant-other")],
         )
+        conn.execute(
+            insert(db.action_log_entries),
+            [_action_log_row("demo", "tenant-demo"), _action_log_row("other", "tenant-other")],
+        )
+        conn.execute(
+            insert(db.action_log_objects),
+            [_action_log_object_row("demo", "tenant-demo"), _action_log_object_row("other", "tenant-other")],
+        )
 
 
 def _action_run_row(suffix: str, tenant_id: str) -> dict[str, object]:
@@ -323,6 +333,41 @@ def _action_effect_row(suffix: str, tenant_id: str) -> dict[str, object]:
         "request": {},
         "created_at": "2026-08-03T00:00:00Z",
         "updated_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _action_log_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_log_entries-{suffix}",
+        "tenant_id": tenant_id,
+        "action_run_id": f"action_runs-{suffix}",
+        "log_object_type_api_name": "[LOG] ApproveOrder",
+        "log_object_id": f"action_runs-{suffix}",
+        "action_type_id": f"action-{suffix}",
+        "action_type_api_name": "ApproveOrder",
+        "definition_version": f"definition-{suffix}",
+        "actor_user_id": f"user-{suffix}",
+        "status": "succeeded",
+        "parameters": {},
+        "result": {},
+        "revert_allowed": True,
+        "revert_status": "eligible",
+        "created_at": "2026-08-03T00:00:00Z",
+        "completed_at": "2026-08-03T00:00:01Z",
+    }
+
+
+def _action_log_object_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_log_objects-{suffix}",
+        "tenant_id": tenant_id,
+        "action_log_entry_id": f"action_log_entries-{suffix}",
+        "object_edit_id": f"object-edit-{suffix}",
+        "object_type_id": f"order-type-{suffix}",
+        "object_type_api_name": "Order",
+        "object_id": f"order-{suffix}",
+        "edit_type": "set_property",
+        "ordinal": 0,
     }
 
 

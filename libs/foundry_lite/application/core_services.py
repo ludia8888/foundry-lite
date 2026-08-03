@@ -358,6 +358,7 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "action_batch_apply_service": services.action.batch_apply,
         "action_definition_service": services.action.definition,
         "action_effect_delivery_service": services.action_effects,
+        "action_log_revert_service": services.action.log_revert,
         "action_planning_service": services.action.planning,
         "action_service": services.action.entrypoint,
         "action_validation_service": services.action.validation,

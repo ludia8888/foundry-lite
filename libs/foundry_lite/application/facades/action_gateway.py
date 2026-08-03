@@ -160,6 +160,17 @@ class ActionGateway:
     ) -> dict[str, object]:
         return self._action.cancel_action_run(run_id, idempotency_key=idempotency_key, reason=reason, ctx=ctx)
 
+    def logs(
+        self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self._action.list_action_logs(cursor=cursor, limit=limit, ctx=ctx)
+
+    def revert_eligibility(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._action.action_revert_eligibility(run_id, ctx=ctx)
+
+    def revert(self, run_id: str, *, idempotency_key: str, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._action.revert_action_run(run_id, idempotency_key=idempotency_key, ctx=ctx)
+
     def apply_batch(
         self,
         action_api_name: str,

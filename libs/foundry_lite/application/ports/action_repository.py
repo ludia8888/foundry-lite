@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from typing import NotRequired, Protocol, TypedDict
 
+from foundry_lite.application.action_log_types import (
+    ActionLogEntryRecord,
+    ActionLogEntryRow,
+    ActionLogObjectRecord,
+    ActionLogObjectRow,
+    ObjectRestoreWrite,
+)
+from foundry_lite.application.ports.object_read_repository import ObjectLinkRow, ObjectRecordRow
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 ActionParameters = Mapping[str, object]
@@ -50,6 +58,9 @@ class ActionRunRow(TypedDict):
     external_writeback_uri: str | None
     created_at: str
     completed_at: str | None
+    definition_version: NotRequired[str | None]
+    plan_hash: NotRequired[str | None]
+    execution_plan: NotRequired[ActionResultPayload | None]
 
 
 @dataclass(frozen=True)
@@ -124,6 +135,7 @@ class ObjectEditRecord:
     actor_user_id: str
     idempotency_key: str
     created_at: str
+    revert_payload: ActionResultPayload | None = None
 
 
 class ObjectEditRow(TypedDict):
@@ -141,6 +153,7 @@ class ObjectEditRow(TypedDict):
     actor_user_id: str
     idempotency_key: str
     created_at: str
+    revert_payload: ActionResultPayload | None
 
 
 @dataclass(frozen=True)
@@ -351,4 +364,77 @@ class ActionRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, object_type_id: str, object_id: str
     ) -> ObjectEditRow | None:
         """Return the most recent edit touching one object, to detect a superseding edit before revert."""
+        ...
+
+    def insert_action_log(
+        self,
+        *,
+        transaction: TransactionContext,
+        entry: ActionLogEntryRecord,
+        objects: Sequence[ActionLogObjectRecord],
+    ) -> ActionLogEntryRow | None:
+        """Insert one normalized Action log and all edited-object links idempotently."""
+        ...
+
+    def action_log_by_run_id(
+        self, *, transaction: TransactionContext, tenant_id: str, action_run_id: str
+    ) -> ActionLogEntryRow | None:
+        """Return the normalized Action log for one run."""
+        ...
+
+    def action_log_objects(
+        self, *, transaction: TransactionContext, tenant_id: str, action_log_entry_id: str
+    ) -> list[ActionLogObjectRow]:
+        """Return all object/link edits connected to one Action log."""
+        ...
+
+    def list_action_logs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        before_created_at: str | None,
+        before_log_id: str | None,
+        limit: int,
+    ) -> list[ActionLogEntryRow]:
+        """Return a stable newest-first cursor page of Action logs."""
+        ...
+
+    def action_runs_for_monitoring(
+        self, *, transaction: TransactionContext, tenant_id: str, limit: int
+    ) -> list[ActionRunRow]:
+        """Return a bounded newest-first run window for runtime health metrics."""
+        ...
+
+    def mark_action_log_reverted(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        action_run_id: str,
+        reverted_by_run_id: str,
+    ) -> bool:
+        """CAS one eligible log into reverted state."""
+        ...
+
+    def object_target_for_revert(
+        self, *, transaction: TransactionContext, tenant_id: str, object_type_id: str, object_id: str
+    ) -> ObjectRecordRow | None:
+        """Load an object including soft-deleted rows for revert validation."""
+        ...
+
+    def object_link_for_revert(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        link_type_id: str,
+        from_object_id: str,
+        to_object_id: str,
+    ) -> ObjectLinkRow | None:
+        """Load the current link state for revert validation."""
+        ...
+
+    def restore_object_target(self, *, transaction: TransactionContext, record: ObjectRestoreWrite) -> bool:
+        """CAS a soft-deleted object back to active state."""
         ...

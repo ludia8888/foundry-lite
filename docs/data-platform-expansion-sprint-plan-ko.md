@@ -1937,7 +1937,7 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [x] SDK regeneration CI 유지
 - [~] frontend API compatibility test: `quality:frontend-backend-surface`,
   `quality:sdk-request-contract`, `quality:frontend-foundation`이 route/helper -> named SDK ->
-  proofClass -> proof test -> operator evidence matrix, 274개 browser SDK route surface
+  proofClass -> proof test -> operator evidence matrix, 277개 browser SDK route surface
   method/path/query/header/body, typed error metadata, 28개 SDK helper runtime behavior,
   Web Operations named-SDK-only 계약을 검증한다. Full browser compatibility matrix는 future다.
 
@@ -2275,7 +2275,7 @@ named SDK -> proofClass -> proof test -> operator evidence로 고정한다. `qua
 FastAPI route가 분류되지 않았거나, frontend-consumable route에 generated SDK method나
 request-contract proof가 없거나, SDK helper에 `sdkHelpers` row/export/operator-evidence/helper
 proof가 없거나, Web Operations가 다시 raw `/api/...` path를 직접 조립하면 실패한다.
-`quality:sdk-request-contract`는 실제 browser SDK를 import해 274개 frontend route surface의
+`quality:sdk-request-contract`는 실제 browser SDK를 import해 277개 frontend route surface의
 method/path/query/header/body, request-id/context header, idempotency header, typed error metadata를
 fake fetch로 검증하고, 28개 `SDK_CLIENT_SURFACE.helpers`의 런타임 동작도 함께 증명한다. 즉 S62-S64 화면을
 올리기 전, 현재 사용 가능한 backend surface는 named SDK-only와 request-contract로 잠긴다.

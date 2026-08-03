@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
+from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
 from tests.conftest import DEMO_ROOT
 
@@ -27,6 +27,8 @@ _FULFILL_ORDER_ACTION = """
         required: true
     permissions:
       allowedRoles: [ops_manager]
+    revert:
+      enabled: true
     rulesV2:
       - kind: modifyObject
         ruleId: close-order
@@ -191,3 +193,88 @@ def test_v2_action_denies_apply_without_the_action_role(foundry: FoundryLite, tm
             idempotency_key="fulfill-stale",
             ctx=admin_ctx,
         )
+
+
+def test_v2_action_writes_one_queryable_log_and_reverts_all_internal_edits(
+    foundry: FoundryLite, tmp_path: Path
+) -> None:
+    ctx = _prepare_v2_demo(foundry, tmp_path)
+    before = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    response = foundry.actions.apply(
+        "FulfillOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=before["objectVersion"],
+        params={"carrier": "UPS"},
+        idempotency_key="fulfill-revert",
+        ctx=ctx,
+    )
+    run_id = str(response["actionRunId"])
+    created_id = str(response["plan"]["createdObjectIds"][0])
+
+    logs = foundry.actions.logs(ctx=ctx)
+    assert logs["monitoring"]["window"]["observedRuns"] == 1
+    assert logs["monitoring"]["durationMs"]["terminalSample"] == 1
+    assert logs["monitoring"]["failure"] == {"count": 0, "rate": 0.0}
+    assert logs["monitoring"]["effects"]["deliveryBacklog"] == 0
+    matching = [item for item in logs["items"] if item["actionRunId"] == run_id]
+    assert len(matching) == 1
+    assert matching[0]["logObject"] == {"objectType": "[LOG] FulfillOrder", "objectId": run_id}
+    assert len(matching[0]["editedObjects"]) == 3
+    assert matching[0]["revert"] == {"isAllowed": True, "status": "eligible", "revertedByRunId": None}
+
+    eligibility = foundry.actions.revert_eligibility(run_id, ctx=ctx)
+    assert eligibility == {
+        "actionRunId": run_id,
+        "isEligible": True,
+        "reason": None,
+        "editCount": 3,
+        "hasPreservedExternalEffects": False,
+        "logEntryId": f"action_log_{run_id}",
+    }
+    reverted = foundry.actions.revert(run_id, idempotency_key="revert-once", ctx=ctx)
+    replay = foundry.actions.revert(run_id, idempotency_key="revert-once", ctx=ctx)
+    assert reverted == replay
+    assert reverted["status"] == "succeeded"
+    assert reverted["revertOfActionRunId"] == run_id
+    assert reverted["hasPreservedExternalEffects"] is False
+
+    restored = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert restored["properties"]["status"] == before["properties"]["status"]
+    assert "operatorNote" not in restored["properties"]
+    with pytest.raises(NotFound, match="object not found"):
+        foundry.objects.get("Order", created_id, ctx=ctx)
+    updated_logs = foundry.actions.logs(ctx=ctx)["items"]
+    original = next(item for item in updated_logs if item["actionRunId"] == run_id)
+    revert_log = next(item for item in updated_logs if item["actionRunId"] == reverted["actionRunId"])
+    assert original["revert"]["status"] == "reverted"
+    assert original["revert"]["revertedByRunId"] == reverted["actionRunId"]
+    assert revert_log["revert"]["isAllowed"] is False
+
+
+def test_v2_action_revert_is_blocked_after_a_later_object_edit(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = _prepare_v2_demo(foundry, tmp_path)
+    before = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    original = foundry.actions.apply(
+        "FulfillOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=before["objectVersion"],
+        params={"carrier": "UPS"},
+        idempotency_key="fulfill-before-later-edit",
+        ctx=ctx,
+    )
+    current = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    foundry.actions.apply(
+        "FulfillOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=current["objectVersion"],
+        params={"carrier": "DHL"},
+        idempotency_key="later-fulfillment",
+        ctx=ctx,
+    )
+
+    eligibility = foundry.actions.revert_eligibility(str(original["actionRunId"]), ctx=ctx)
+    assert eligibility["isEligible"] is False
+    assert eligibility["reason"] == "later_edit_touched_affected_object"

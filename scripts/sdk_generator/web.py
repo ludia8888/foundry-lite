@@ -2099,6 +2099,13 @@ def render_web_javascript(ontology: OntologyDef) -> str:
                 "body: JSON.stringify(payload) },"
             ),
             "      ),",
+            "      logs: (listOptions = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (listOptions.cursor) query.set('cursor', listOptions.cursor);",
+            "        if (listOptions.limit !== undefined) query.set('limit', String(listOptions.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request(`/api/actions/logs${suffix}`);",
+            "      },",
             "      runs: {",
             "        start: (actionApiName, payload, runOptions) => request(",
             (
@@ -2149,6 +2156,20 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             ),
             "            },",
             "            body: JSON.stringify(payload),",
+            "          },",
+            "        ),",
+            "        revertEligibility: (runId) =>",
+            "          request(`/api/actions/runs/${encodeURIComponent(runId)}/revert-eligibility`),",
+            "        revert: (runId, revertOptions) => request(",
+            "          `/api/actions/runs/${encodeURIComponent(runId)}/revert`,",
+            "          {",
+            '            method: "POST",',
+            "            headers: {",
+            (
+                '              "Idempotency-Key": requireIdempotencyKey('
+                'revertOptions?.idempotencyKey, "actions.runs.revert"),'
+            ),
+            "            },",
             "          },",
             "        ),",
             "      },",

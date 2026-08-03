@@ -3287,6 +3287,43 @@
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
       "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.logs",
+      "route": "GET /api/actions/logs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.logs",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Cursor history exposes one normalized log per successful submission, every edited object/link, redacted parameters, revert state, effect receipt count, and bounded p95/failure/backlog monitoring.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.revertEligibility",
+      "route": "GET /api/actions/runs/{run_id}/revert-eligibility",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.revertEligibility",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Eligibility explains actor, definition policy, latest-edit, object version/state, link state, and preserved external-effect evidence without mutating Ontology state.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.revert",
+      "route": "POST /api/actions/runs/{run_id}/revert",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.revert",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The Idempotency-Key scoped revert CAS restores all still-latest internal object/link edits atomically, writes a new non-revertible run/log/audit/outbox, and never claims to undo external effects.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
     }
   ],
   "sdkHelpers": [

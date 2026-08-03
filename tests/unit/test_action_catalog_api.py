@@ -131,6 +131,18 @@ def test_action_run_routes_preserve_wait_cursor_idempotency_and_status_codes(mon
             calls.append(("cancel", (run_id, kwargs["idempotency_key"], kwargs["reason"])))
             return {"actionRunId": run_id, "status": "cancelling"}
 
+        def logs(self, **kwargs):
+            calls.append(("logs", (kwargs["cursor"], kwargs["limit"])))
+            return {"items": [{"actionRunId": "run-1"}], "nextCursor": "next-log", "monitoring": {}}
+
+        def revert_eligibility(self, run_id, **_kwargs):
+            calls.append(("revert_eligibility", run_id))
+            return {"actionRunId": run_id, "isEligible": True}
+
+        def revert(self, run_id, **kwargs):
+            calls.append(("revert", (run_id, kwargs["idempotency_key"])))
+            return {"actionRunId": "run-revert", "revertOfActionRunId": run_id, "status": "succeeded"}
+
     class FakeFoundry:
         actions = FakeActions()
 
@@ -155,6 +167,12 @@ def test_action_run_routes_preserve_wait_cursor_idempotency_and_status_codes(mon
         json={"reason": "operator request"},
         headers={"Idempotency-Key": "cancel-key-1"},
     )
+    logs = client.get("/api/actions/logs?cursor=prior-log&limit=10")
+    eligibility = client.get("/api/actions/runs/run-1/revert-eligibility")
+    reverted = client.post(
+        "/api/actions/runs/run-1/revert",
+        headers={"Idempotency-Key": "revert-key-1"},
+    )
 
     assert queued.status_code == 202
     assert terminal.status_code == 200
@@ -162,12 +180,18 @@ def test_action_run_routes_preserve_wait_cursor_idempotency_and_status_codes(mon
     assert fetched.json()["status"] == "running"
     assert cancelled.status_code == 202
     assert cancelled.json()["status"] == "cancelling"
+    assert logs.json()["nextCursor"] == "next-log"
+    assert eligibility.json()["isEligible"] is True
+    assert reverted.json()["revertOfActionRunId"] == "run-1"
     assert calls == [
         ("start", ("ExpediteOrder", "run-key-1", 0)),
         ("start", ("ExpediteOrder", "run-key-2", 3)),
         ("list_runs", ("prior-run", 20)),
         ("get_run", "run-1"),
         ("cancel", ("run-1", "cancel-key-1", "operator request")),
+        ("logs", ("prior-log", 10)),
+        ("revert_eligibility", "run-1"),
+        ("revert", ("run-1", "revert-key-1")),
     ]
 
 

@@ -10,6 +10,13 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
+from foundry_lite.application.action_log_types import (
+    ActionLogEntryRecord,
+    ActionLogEntryRow,
+    ActionLogObjectRecord,
+    ActionLogObjectRow,
+    ObjectRestoreWrite,
+)
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
     ActionRunRow,
@@ -24,12 +31,24 @@ from foundry_lite.application.ports.action_repository import (
     ObjectLinkWrite,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.object_read_repository import ObjectLinkRow, ObjectRecordRow
 from foundry_lite.application.ports.transaction_context import ACTION_WRITEBACK_RECONCILED, StatusTransition
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.action_log_rows import (
+    action_log_by_run,
+    action_log_object_rows,
+    action_runs_for_monitoring_rows,
+    insert_action_log_rows,
+    list_action_log_rows,
+    mark_log_reverted,
+    object_link_for_revert_row,
+    object_target_for_revert_row,
+)
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
 from foundry_lite.infrastructure.repositories.object_write_ops import (
     create_object_link_write,
     create_object_record_write,
+    restore_object_write,
     snapshot_object_record_version,
     soft_delete_object_link_write,
     soft_delete_object_write,
@@ -325,6 +344,7 @@ class SqlAlchemyActionRepository:
                 edit_type=record.edit_type,
                 patch=dict(record.patch),
                 previous_values=dict(record.previous_values),
+                revert_payload=dict(record.revert_payload) if record.revert_payload is not None else None,
                 actor_user_id=record.actor_user_id,
                 idempotency_key=record.idempotency_key,
                 created_at=record.created_at,
@@ -368,6 +388,57 @@ class SqlAlchemyActionRepository:
             .first()
         )
         return cast(ObjectEditRow, dict(row)) if row else None
+
+    def insert_action_log(
+        self, *, transaction: Any, entry: ActionLogEntryRecord, objects: Sequence[ActionLogObjectRecord]
+    ) -> ActionLogEntryRow | None:
+        return insert_action_log_rows(transaction, entry, objects)
+
+    def action_log_by_run_id(self, *, transaction: Any, tenant_id: str, action_run_id: str) -> ActionLogEntryRow | None:
+        return action_log_by_run(transaction, tenant_id, action_run_id)
+
+    def action_log_objects(
+        self, *, transaction: Any, tenant_id: str, action_log_entry_id: str
+    ) -> list[ActionLogObjectRow]:
+        return action_log_object_rows(transaction, tenant_id, action_log_entry_id)
+
+    def list_action_logs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        before_created_at: str | None,
+        before_log_id: str | None,
+        limit: int,
+    ) -> list[ActionLogEntryRow]:
+        return list_action_log_rows(transaction, tenant_id, before_created_at, before_log_id, limit)
+
+    def action_runs_for_monitoring(self, *, transaction: Any, tenant_id: str, limit: int) -> list[ActionRunRow]:
+        return action_runs_for_monitoring_rows(transaction, tenant_id, limit)
+
+    def mark_action_log_reverted(
+        self, *, transaction: Any, tenant_id: str, action_run_id: str, reverted_by_run_id: str
+    ) -> bool:
+        return mark_log_reverted(transaction, tenant_id, action_run_id, reverted_by_run_id)
+
+    def object_target_for_revert(
+        self, *, transaction: Any, tenant_id: str, object_type_id: str, object_id: str
+    ) -> ObjectRecordRow | None:
+        return object_target_for_revert_row(transaction, tenant_id, object_type_id, object_id)
+
+    def object_link_for_revert(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        link_type_id: str,
+        from_object_id: str,
+        to_object_id: str,
+    ) -> ObjectLinkRow | None:
+        return object_link_for_revert_row(transaction, tenant_id, link_type_id, from_object_id, to_object_id)
+
+    def restore_object_target(self, *, transaction: Any, record: ObjectRestoreWrite) -> bool:
+        return restore_object_write(transaction, record)
 
 
 def _action_run_values(record: ActionRunRecord) -> dict[str, object]:

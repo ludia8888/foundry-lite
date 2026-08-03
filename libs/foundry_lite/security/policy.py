@@ -72,6 +72,8 @@ class PolicyService:
         "link:edit": {"admin", "data_engineer", "ops_manager"},
         "function:execute": {"admin", "data_engineer", "ops_manager"},
         "action:effect:execute": {"admin", "ops_manager"},
+        "action:log:read": {"admin", "data_engineer", "ops_manager"},
+        "action:revert": {"admin", "ops_manager"},
         # explain exposes base/edit property layers plus operational lineage and
         # source-run metadata, so it is gated above plain read (viewers are excluded).
         "object:explain": {"admin", "data_engineer", "ops_manager", "finance"},
