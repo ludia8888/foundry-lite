@@ -182,6 +182,10 @@ class ActionTypeDefinition(TypedDict, total=False):
     permissions: OntologyJsonObject
     preconditions: Sequence[OntologyJsonObject]
     mutations: Sequence[ActionMutationDefinition]
+    # Native Action IR v2 rules (createObject/modifyObject(s)/createOrModifyObject/
+    # deleteObject(s)/createLink/deleteLink/functionEdit). Presence of this key selects
+    # the multi-object v2 commit path; its absence keeps the legacy setProperty path.
+    rulesV2: Sequence[OntologyJsonObject]
     writebacks: Sequence[OntologyJsonObject]
     sideEffects: Sequence[OntologyJsonObject]
 

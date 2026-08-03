@@ -633,6 +633,29 @@ query를 반복 측정해 p95 1초 미만을 강제한다. 따라서 report는
 due scan의 DB query 성능 증거이며, 항상 실행되는 production worker 배포·장애 복구까지
 증명하는 것으로 과장하지 않는다.
 
+### Tier G14E — Action Types v2 parity evidence (✅ bounded current slices 2026-08-03)
+
+`quality:action-types-v2`는 `docs/action-types-parity-matrix.json`에서 current로 표시한 세
+capability가 단순 타입·문서가 아니라 실제 실행 경로에 연결되는지 검증한다. 비개발자식으로
+말하면, 새 Action 문법을 읽을 수 있다는 사실만으로 “업무 변경이 된다”고 주장하지 않고,
+컴파일된 계획이 실제 DB 원장까지 원자적으로 반영되는지를 한 번에 확인하는 게이트다.
+
+검사 범위:
+
+- eval-free value expression, Action IR v2 ordering, v1 `setProperty` normalization
+- immutable EditPlan construction/validation, OCC와 link endpoint visibility
+- public `foundry.actions.apply(...)`의 native `rulesV2` 실행과 idempotent replay
+- heterogeneous object create/modify/delete와 many-to-many link create/delete의 원자적 commit
+- object/link edit의 unified `object_edits` ledger, tenant/run ordering, latest-edit lookup
+- fake, SQLite, PostgreSQL `ActionRepository` contract parity
+- 존재하지 않는 link delete가 성공 로그를 남기지 않는 fail-closed behavior
+
+이 gate는 `runtime-full`/release ratchet에 연결되고 PR coverage lane의 전체 pytest에서도 다시
+실행된다. 현재 `action-ir-v2`, `edit-plan-engine`, `multi-object-link-atomic-commit`만 current다.
+function-backed action, full parameter/form/criteria, side effect, Ontology-queryable action log,
+revert, branch/interface action, complete SDK/UI/MCP는 이 gate가 증명하지 않으며 matrix에
+partial/foundation/missing으로 남긴다.
+
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
 `scripts/quality/check_schema_revision_guard.py`는

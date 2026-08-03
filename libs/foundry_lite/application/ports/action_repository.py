@@ -126,6 +126,86 @@ class ObjectEditRecord:
     created_at: str
 
 
+class ObjectEditRow(TypedDict):
+    """One persisted object/link edit row from the unified action edit log."""
+
+    id: str
+    tenant_id: str
+    action_run_id: str
+    object_type_id: str
+    object_type_api_name: str
+    object_id: str
+    edit_type: str
+    patch: ObjectPatch
+    previous_values: ObjectProperties
+    actor_user_id: str
+    idempotency_key: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ObjectCreateWrite:
+    """Insert a brand-new object record originating from an action edit.
+
+    An action-created object has no dataset source: its properties are entirely
+    edit-owned, so ``base_properties`` starts empty and every property is version
+    1. Keyed by business identity (tenant/type/object id) under ``index_version``.
+    """
+
+    object_record_id: str
+    tenant_id: str
+    object_type_id: str
+    object_type_api_name: str
+    object_id: str
+    properties: ObjectProperties
+    created_at: str
+
+
+@dataclass(frozen=True)
+class ObjectDeleteWrite:
+    """Soft-delete an existing object under optimistic concurrency.
+
+    Keyed on the surrogate ``object_record_id`` and expected version, mirroring
+    ``ObjectTargetUpdate``: the committer resolves the target row (which carries
+    its surrogate id) inside the commit transaction, then CASes the deletion.
+    """
+
+    object_record_id: str
+    tenant_id: str
+    expected_object_version: int
+    deletion_reason: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ObjectLinkWrite:
+    """Create (or reactivate a soft-deleted) many-to-many link between two objects."""
+
+    link_record_id: str
+    tenant_id: str
+    link_type_id: str
+    link_type_api_name: str
+    from_object_type_id: str
+    from_api_name: str
+    from_object_id: str
+    to_object_type_id: str
+    to_api_name: str
+    to_object_id: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ObjectLinkDeleteWrite:
+    """Soft-delete a many-to-many link between two objects."""
+
+    tenant_id: str
+    link_type_id: str
+    from_object_id: str
+    to_object_id: str
+    deletion_reason: str
+    updated_at: str
+
+
 class ActionRepository(Protocol):
     """DB boundary for action runs, writebacks, and object edit persistence."""
 
@@ -241,6 +321,34 @@ class ActionRepository(Protocol):
         """Apply an optimistic object update and report whether the expected version matched."""
         ...
 
+    def create_object_record(self, *, transaction: TransactionContext, record: ObjectCreateWrite) -> bool:
+        """Insert an action-created object; return False if its identity already exists."""
+        ...
+
+    def soft_delete_object_target(self, *, transaction: TransactionContext, record: ObjectDeleteWrite) -> bool:
+        """Soft-delete an object under optimistic concurrency; report whether the expected version matched."""
+        ...
+
+    def create_object_link(self, *, transaction: TransactionContext, record: ObjectLinkWrite) -> None:
+        """Create or reactivate a many-to-many link between two objects (idempotent on link identity)."""
+        ...
+
+    def soft_delete_object_link(self, *, transaction: TransactionContext, record: ObjectLinkDeleteWrite) -> bool:
+        """Soft-delete a link; report whether an active link existed to delete."""
+        ...
+
     def insert_object_edit(self, *, transaction: TransactionContext, record: ObjectEditRecord) -> None:
         """Persist an object edit created by an action run."""
+        ...
+
+    def object_edits_for_run(
+        self, *, transaction: TransactionContext, tenant_id: str, action_run_id: str
+    ) -> list[ObjectEditRow]:
+        """Return one action run's edits in application order (for the action log and revert)."""
+        ...
+
+    def latest_object_edit(
+        self, *, transaction: TransactionContext, tenant_id: str, object_type_id: str, object_id: str
+    ) -> ObjectEditRow | None:
+        """Return the most recent edit touching one object, to detect a superseding edit before revert."""
         ...

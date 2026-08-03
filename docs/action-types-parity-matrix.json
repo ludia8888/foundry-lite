@@ -1,0 +1,382 @@
+{
+  "schemaVersion": 1,
+  "title": "Foundry-lite Action Types v2 parity matrix",
+  "scope": "Promote the single-object setProperty action executor into a general Ontology transaction + agent-native action platform (typed IR, multi-object/link atomic edit plan, function-backed edits, typed parameters/forms/criteria, governed side effects, action log, revert, branch/scenario, interface actions, SDK/API/UI/MCP distribution).",
+  "statusValues": [
+    "missing",
+    "foundation",
+    "partial",
+    "current"
+  ],
+  "statusDefinitions": {
+    "missing": "No executable implementation.",
+    "foundation": "Base model or port exists, but no end-to-end runtime behavior.",
+    "partial": "Some implementation exists but a required proof, surface, or live/E2E evidence is absent.",
+    "current": "Implementation + repository/contract tests + live/E2E + SDK evidence all present."
+  },
+  "reusedStrengths": [
+    "ActionMutationUnitOfWork.commit (action_mutations.py:42) is a per-object commit primitive already looped over many objects by ActionBatchService inside one transaction.",
+    "Idempotency: insert_action_run_or_get_existing ON CONFLICT + _replay_or_none + request_fingerprint (generic).",
+    "CAS: update_object_target WHERE object_version==expected + object_records_version append; status_cas.cas_status_transition WHERE status IN from_statuses.",
+    "Transactional outbox + masked audit + run_relation via runtime_service evidence boundary.",
+    "safe_expression.py: eval-free precondition grammar with a robust hand-written tokenizer.",
+    "External-writeback three-phase before-commit saga (external_pending WAL, AMBIGUOUS-never-failure, reconcile) — the substrate for gating side effects.",
+    "OSDK resource-scope authorization (domain/platform/scopes.py + require_resource_scope) enforced across function/action/object services.",
+    "SDK codegen (scripts/sdk_generator/*) with a byte-exact --check drift gate wired into the static lane, plus check_frontend_backend_surface.py.",
+    "Real runtime hooks to connect to: FunctionExecutionService, interface conformance validation, ontology branch snapshot/proposal-merge."
+  ],
+  "officialSources": {
+    "palantir-action-overview": "https://www.palantir.com/docs/foundry/action-types/overview",
+    "palantir-action-rules": "https://www.palantir.com/docs/foundry/action-types/rules",
+    "palantir-action-parameter-overview": "https://www.palantir.com/docs/foundry/action-types/parameter-overview",
+    "palantir-action-parameters-default-value": "https://www.palantir.com/docs/foundry/action-types/parameters-default-value",
+    "palantir-action-parameters-override": "https://www.palantir.com/docs/foundry/action-types/parameters-override",
+    "palantir-action-submission-criteria": "https://www.palantir.com/docs/foundry/action-types/submission-criteria",
+    "palantir-function-actions": "https://www.palantir.com/docs/foundry/action-types/function-actions-overview",
+    "palantir-edits-overview": "https://www.palantir.com/docs/foundry/functions/edits-overview",
+    "palantir-action-webhooks": "https://www.palantir.com/docs/foundry/action-types/webhooks",
+    "palantir-action-notifications": "https://www.palantir.com/docs/foundry/action-types/notifications",
+    "palantir-action-permissions": "https://www.palantir.com/docs/foundry/action-types/permissions",
+    "palantir-action-interfaces": "https://www.palantir.com/docs/foundry/action-types/actions-on-interfaces",
+    "palantir-action-log": "https://www.palantir.com/docs/foundry/action-types/action-log",
+    "palantir-action-reverts": "https://www.palantir.com/docs/foundry/action-types/action-reverts",
+    "palantir-action-branching": "https://www.palantir.com/docs/foundry/action-types/branching-action-types",
+    "palantir-mcp-overview": "https://www.palantir.com/docs/foundry/palantir-mcp/overview",
+    "palantir-ontology-mcp-auth": "https://www.palantir.com/docs/foundry/ontology-mcp/authentication-and-authorization"
+  },
+  "capabilities": [
+    {
+      "capabilityId": "action-ir-v2",
+      "palantirBehavior": "An action type is a typed set of rules (createObject, modifyObject(s), createOrModifyObject, deleteObject(s), createLink, deleteLink, function edit, interface variants) each with a stable identity and evaluation order; rule value sources are parameter, object-reference property, static, and contextual (current user / current timestamp).",
+      "foundryLiteBaseline": "action_types.definition JSON carries mutations[] limited to {type:'setProperty', property, value|valueFrom}; ACTION_MUTATION_TYPES=frozenset({'setProperty'}); valueFrom resolves only params.<key>.",
+      "targetBehavior": "A typed Action IR v2 with all rule kinds, stable ruleId + explicit order, and a validated value-expression AST covering every value source (no eval, no string interpolation). v1 setProperty definitions normalize to a v2 modifyObject rule at compile time (dual-read).",
+      "status": "current",
+      "sourcePaths": [
+        "libs/foundry_lite/domain/action_runtime/value_expression.py:129",
+        "libs/foundry_lite/domain/action_runtime/action_ir.py:205",
+        "libs/foundry_lite/application/services/action_ir_compiler.py:43",
+        "libs/foundry_lite/application/services/action_apply_service.py:305"
+      ],
+      "testPaths": [
+        "tests/unit/test_action_value_expression.py",
+        "tests/unit/test_action_ir_ordering.py",
+        "tests/unit/test_action_ir_compiler.py",
+        "tests/integration/test_action_v2_apply.py"
+      ],
+      "liveProof": "tests/integration/test_action_v2_apply.py",
+      "remainingGap": "The typed IR (all rule kinds + eval-free value-expression AST), ordering/exclusivity validation, and the v1->v2 normalizing compiler are complete and now consumed by the live apply path (commit ac0e2a05): a rulesV2 action authored in ontology YAML compiles and runs through foundry.actions.apply, proven by the FulfillOrder E2E. FunctionEditRule is parsed into the IR but its execution is deferred to function-backed-actions; prior-rule output as a value position (vs a link endpoint) and webhook/function value sources are deferred.",
+      "officialReference": [
+        "palantir-action-rules",
+        "palantir-action-overview"
+      ]
+    },
+    {
+      "capabilityId": "edit-plan-engine",
+      "palantirBehavior": "Rules compile into a deterministic per-object edit; multiple rules touching the same property resolve by order; invalid orderings (delete-before-add, modify-before-add, double-create) fail at compile time; all edits commit atomically on submission.",
+      "foundryLiteBaseline": "The 'plan' is an implicit list of setProperty patches; ActionMutationUnitOfWork commits one object; ActionBatchService loops it over same-type targets sharing one patch. No structured EditPlan object.",
+      "targetBehavior": "An immutable EditPlan (objectsToCreate/Modify/Delete, linksToCreate/Delete, readSetVersions, expectedWriteVersions, stableOperationKeys, originatingRuleIds, provenance, permission evidence, redacted parameter snapshot, sideEffectPlan) built, validated, then committed as a separate stage.",
+      "status": "current",
+      "sourcePaths": [
+        "libs/foundry_lite/domain/action_runtime/edit_plan.py:152",
+        "libs/foundry_lite/domain/action_runtime/edit_plan_builder.py:84",
+        "libs/foundry_lite/application/services/action_plan_resolution.py:29",
+        "libs/foundry_lite/application/services/action_v2_commit.py:44"
+      ],
+      "testPaths": [
+        "tests/unit/test_action_edit_plan.py",
+        "tests/unit/test_action_edit_plan_committer.py",
+        "tests/integration/test_action_v2_apply.py"
+      ],
+      "liveProof": "tests/integration/test_action_v2_apply.py",
+      "remainingGap": "The immutable EditPlan, whole-plan validator, ordered IR->plan builder, ActionEditPlanCommitter, and the live LivePlanResolutionContext adapter run end to end on the real apply path (commit ac0e2a05). Deferred: function-rule planning (raises today), prior-rule output as a property value, and objectSet resolution is minimal (list-of-ids).",
+      "officialReference": [
+        "palantir-action-rules",
+        "palantir-edits-overview"
+      ]
+    },
+    {
+      "capabilityId": "multi-object-link-atomic-commit",
+      "palantirBehavior": "One action can create/modify/delete objects of multiple types and create/delete many-to-many links, committing all Ontology edits all-or-nothing; foreign-key (one-to-many) links are set by modifying the object's foreign-key property, not a link rule.",
+      "foundryLiteBaseline": "ActionRepository exposes only update_object_target (CAS) + insert_object_edit (edit_type='set_property'); no object create/delete and no action-facing link create/delete. Single target_object_type is hard-coded.",
+      "targetBehavior": "A transactional committer that applies a heterogeneous EditPlan across object types and M:M links in one Postgres transaction with per-edit CAS, stable create IDs, link uniqueness/cardinality checks, dangling-link prevention, tenant guard, audit+outbox+idempotency, and stale-plan rejection.",
+      "status": "current",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/action_edit_plan_committer.py:89",
+        "libs/foundry_lite/application/services/action_v2_commit.py:44",
+        "libs/foundry_lite/application/services/action_apply_service.py:305",
+        "libs/foundry_lite/infrastructure/repositories/object_write_ops.py:111"
+      ],
+      "testPaths": [
+        "tests/integration/test_action_v2_apply.py",
+        "tests/unit/test_action_edit_plan_committer.py",
+        "tests/unit/test_action_plan_resolution.py",
+        "tests/contracts/test_action_repository_contract.py"
+      ],
+      "liveProof": "tests/integration/test_action_v2_apply.py",
+      "remainingGap": "Live-proven and hardened: the FulfillOrder rulesV2 action modifies its target Order, creates a second Order, and links them in one transaction with read-your-writes, one action run + per-object edit rows, idempotent replay, action-role permission denial, and stale-version conflict rollback (commits ac0e2a05 + review fixes). An adversarial review then closed an OCC lost-update window (the target CAS now binds to the client-validated expectedObjectVersion) and a link-endpoint visibility hole (endpoints resolve through the same row/segment visibility check as modify/delete), with regression tests in test_action_plan_resolution.py; repository primitives are SQLite+PG contract-tested. Deferred deltas: per-object-type SEGMENT-mask edit-through enforcement (row visibility + action-level Apply are enforced), and external side effects on the v2 path (writeback/function rules).",
+      "officialReference": [
+        "palantir-action-rules",
+        "palantir-edits-overview"
+      ]
+    },
+    {
+      "capabilityId": "function-backed-actions",
+      "palantirBehavior": "A function rule (mutually exclusive with all other rules) delegates all edits to an ontology edit function that returns a typed edit batch; the action engine applies it; the function itself never writes; function version is pinned.",
+      "foundryLiteBaseline": "FunctionExecutionService runs a persisted Logic DAG, read/compute-only, gated on role + OSDK function:execute scope + input validation. It does not produce or apply an ontology edit batch.",
+      "targetBehavior": "A function rule whose result is a typed OntologyEditBatch re-validated (schema, existence, permissions, tenant, constraints, version, limits, sensitive-field policy) and applied only by the edit-plan committer, with function apiName/version pinned and deterministic operation keys.",
+      "status": "foundation",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/function_execution_service.py:76",
+        "apps/api/foundry_lite_api/routers/functions.py:17"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No OntologyEditBatch type, no function->edit-batch adapter, no re-validation of function output, no version pinning to an action. Slice 4.",
+      "officialReference": [
+        "palantir-function-actions",
+        "palantir-edits-overview"
+      ]
+    },
+    {
+      "capabilityId": "typed-parameters-and-forms",
+      "palantirBehavior": "Parameters are typed (string/boolean/integer/long/double/decimal/date/timestamp/object/objectSet/attachment/geohash/geoshape/mediaReference/marking/struct/array), individually form-exposed and editable, with static / object-property / type-class defaults; one canonical schema drives server validation, SDK, form, and MCP input schema.",
+      "foundryLiteBaseline": "parameter_schema is a JSON-Schema subset; safe_expression validates required/unknown/typed params limited to string/integer/float/boolean; defaults are absent; the ActionFormPanel renders scalar inputs.",
+      "targetBehavior": "An extensible typed parameter schema with the full type set, defaults (static/object-property/type-class), and one canonical schema generating server validation + TS SDK + browser form + MCP tool input schema.",
+      "status": "partial",
+      "sourcePaths": [
+        "libs/foundry_lite/application/safe_expression.py:115",
+        "libs/foundry_lite/application/services/ontology_validation.py:406",
+        "apps/foundry/src/features/actions"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "Scalar-only params, no object/array/struct/media/date types, no defaults, no single-source schema generation. Slice 5.",
+      "officialReference": [
+        "palantir-action-parameter-overview",
+        "palantir-action-parameters-default-value"
+      ]
+    },
+    {
+      "capabilityId": "conditional-overrides",
+      "palantirBehavior": "Conditional overrides modify a parameter's visibility/requiredness/default/constraints; first-matching block wins; conditions reference only parameters above in the form hierarchy.",
+      "foundryLiteBaseline": "None.",
+      "targetBehavior": "Typed conditional overrides evaluated first-match-wins with an above-in-hierarchy reference constraint, shared with submission-criteria condition model.",
+      "status": "missing",
+      "sourcePaths": [],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "Entire override model absent. Slice 5.",
+      "officialReference": [
+        "palantir-action-parameters-override"
+      ]
+    },
+    {
+      "capabilityId": "submission-criteria",
+      "palantirBehavior": "Submission criteria combine nestable ALL/ANY/NONE with comparison operators over parameters, object properties, linked-object attributes, and current-user identity/group/attributes; evaluated at submit; block submission with a per-condition failure message; independent of data permissions.",
+      "foundryLiteBaseline": "safe_expression preconditions support only == 'literal' and in [list] over string-coerced values; no boolean composition, numeric comparison, negation, or user/group operands.",
+      "targetBehavior": "A typed Boolean submission-criteria AST (all/any/not; equals/notEquals/in/notIn/gt/gte/lt/lte/contains/matches/exists; parameter, object-property, current-user/group/attribute operands) evaluated server-side and generated for the client from one schema.",
+      "status": "partial",
+      "sourcePaths": [
+        "libs/foundry_lite/application/safe_expression.py:10"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "Only two precondition forms; no nested boolean logic, numeric/user operands, or shared server/client evaluator. Slice 5.",
+      "officialReference": [
+        "palantir-action-submission-criteria"
+      ]
+    },
+    {
+      "capabilityId": "action-permissions",
+      "palantirBehavior": "Distinct View/Edit/Apply permissions; applying uses the submitting user's own permissions so an action cannot edit unseen objects/links; effective access is the intersection of user identity/role/group, object/link/action-type policy, OSDK app scope, and MCP scope; submission criteria are an independent gate.",
+      "foundryLiteBaseline": "PolicyService RBAC with action:execute:<name> roles (fail-closed), object:read target guard, property masking (classification/segment), not-found masking (visible_record), segment_mutation_denied_error. OSDK resource-scope enforced for function/action.",
+      "targetBehavior": "The same intersection extended to every v2 edit: per-edited-object/link read+edit checks in the plan validator, function-execute and side-effect-execute permissions, sensitive-parameter and high-risk-approval gates, uniform not-found masking.",
+      "status": "partial",
+      "sourcePaths": [
+        "libs/foundry_lite/security/policy.py:154",
+        "libs/foundry_lite/application/services/action_permission_guards.py:73",
+        "libs/foundry_lite/application/services/osdk_application_scope.py:109"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "Per-edit object/link edit-permission checks, function/side-effect permissions, and high-risk-approval gate not yet wired into a multi-object plan. Slices 2-3, 8, 10.",
+      "officialReference": [
+        "palantir-action-permissions"
+      ]
+    },
+    {
+      "capabilityId": "side-effects-before-commit",
+      "palantirBehavior": "A single before-commit (gating) webhook runs before rule evaluation; if it fails no Ontology change is made; its output can feed subsequent rules.",
+      "foundryLiteBaseline": "The external-writeback saga (external_pending WAL, receipt, outcome_unknown/compensation_required/reconciled) is the before-commit external-call substrate, but only an S3 adapter exists and the target URI is caller-supplied (not action-owned).",
+      "targetBehavior": "A before-commit gating webhook owned by the action definition (approved connector/resource only), whose durable receipt integrates the existing outcome_unknown/compensation_required/reconciliation paths and whose response fields are a rule value source.",
+      "status": "foundation",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/action_external_apply.py:146",
+        "libs/foundry_lite/application/services/action_reconciliation.py:290"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No HTTP/webhook egress adapter through the SSRF guard; side effect is not owned by the action definition; response fields not consumable by rules. Slice 6.",
+      "officialReference": [
+        "palantir-action-webhooks"
+      ]
+    },
+    {
+      "capabilityId": "side-effects-after-commit",
+      "palantirBehavior": "Multiple after-commit side effects (webhook, notification, event, schedule/build trigger, connector command) fire after edits are applied, unordered, possibly async; their failure does not roll back the edits.",
+      "foundryLiteBaseline": "action_types.definition carries sideEffects[] but no executor; the transactional outbox (at-least-once, lease reclaim, DLQ) delivers action.run.committed/object.changed only.",
+      "targetBehavior": "Action-owned after-commit side effects delivered via the outbox with stable idempotency keys, retry classification, bounded backoff, dead-letter/operator evidence, delivery receipts, secret redaction, and network policy; notifications rendered against pre-edit state.",
+      "status": "foundation",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/action_mutations.py:159",
+        "libs/foundry_lite/application/services/outbox_publisher_service.py:26"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No side-effect planner/dispatcher, no notification model, no per-side-effect receipt/retry. Slice 6.",
+      "officialReference": [
+        "palantir-action-webhooks",
+        "palantir-action-notifications"
+      ]
+    },
+    {
+      "capabilityId": "action-run-state-machine",
+      "palantirBehavior": "An action submission is a durable, auditable unit with terminal and recovery states.",
+      "foundryLiteBaseline": "action_runs has received/succeeded/failed/conflict/retryable/external_pending/outcome_unknown/compensation_required/reconciled CAS transitions (state_transitions.py:99).",
+      "targetBehavior": "The existing state machine extended (validating/planned/queued/running/commit_pending as needed) for multi-object and asynchronous function/side-effect execution without duplicating states.",
+      "status": "partial",
+      "sourcePaths": [
+        "libs/foundry_lite/application/state_transitions.py:99"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No planned/queued/commit_pending phases for async multi-object runs. Slices 4, 6, 7.",
+      "officialReference": [
+        "palantir-action-log"
+      ]
+    },
+    {
+      "capabilityId": "action-log",
+      "palantirBehavior": "Each submission creates exactly one action log object foreign-key-linked to all edited objects, recording action RID/type/version, timestamp, user, edited object PKs, optional summary/parameter values; queryable via the Ontology, links, aggregations, and a timeline widget.",
+      "foundryLiteBaseline": "action_runs + object_edits capture every v2 object and many-to-many link edit per run; repository reads return one run's ordered edit set and the latest edit touching an object. There is still no single action-log object projection linked to every edited object nor an Ontology-queryable timeline.",
+      "targetBehavior": "A durable action log (one record per submission) linked to every edited object/link, capturing full provenance, redacted parameters, side-effect receipts, and branch context, exposed as an Ontology-queryable read model.",
+      "status": "partial",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/action_edit_plan_committer.py:89",
+        "libs/foundry_lite/application/ports/action_repository.py:129",
+        "libs/foundry_lite/infrastructure/repositories/action_repository.py:334"
+      ],
+      "testPaths": [
+        "tests/integration/test_action_v2_apply.py",
+        "tests/contracts/test_action_repository_contract.py",
+        "tests/unit/test_action_edit_plan_committer.py"
+      ],
+      "liveProof": "tests/integration/test_action_v2_apply.py",
+      "remainingGap": "The current durable ledger now includes create/modify/delete object edits and create/delete link edits with tenant-scoped run/latest queries. Still absent: one Ontology-queryable action-log object per submission, object-set linkage/aggregations, timeline UI, side-effect receipts, and branch context. Slice 7.",
+      "officialReference": [
+        "palantir-action-log"
+      ]
+    },
+    {
+      "capabilityId": "action-revert",
+      "palantirBehavior": "Revert is allowed only if the edit is still the latest version, no later edit touched the object, the edit is reversible, and the caller has revert rights; it undoes object edits only, never side effects.",
+      "foundryLiteBaseline": "object_records_version history exists; no revert specification or service.",
+      "targetBehavior": "A revert eligibility specification and service that restores object/link edits when still-latest and unconflicted, records a new action log, and never claims to undo already-emitted side effects (issuing a compensating action instead when needed).",
+      "status": "missing",
+      "sourcePaths": [
+        "libs/foundry_lite/infrastructure/repositories/action_repository.py:269"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "Entire revert model absent. Slice 7.",
+      "officialReference": [
+        "palantir-action-reverts"
+      ]
+    },
+    {
+      "capabilityId": "branch-scenario-actions",
+      "palantirBehavior": "Actions can execute on a branch/scenario as an isolated edit overlay that never merges to main, with side effects suppressed by default and per-effect opt-in.",
+      "foundryLiteBaseline": "OntologyBranchService provides isolated definition edits + proposal-merge, but actions are not executable against a branch overlay.",
+      "targetBehavior": "Branch/scenario action execution against an isolated edit overlay with dry-run/preview returning the redacted edit plan and impacted objects/links, conflict checks before merge, side effects suppressed by default, and a production action log after merge.",
+      "status": "foundation",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/ontology_branch_service.py:1"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No branch-scoped object edit overlay for actions, no action dry-run/preview surface. Slice 8.",
+      "officialReference": [
+        "palantir-action-branching"
+      ]
+    },
+    {
+      "capabilityId": "interface-actions",
+      "palantirBehavior": "Interface actions modify only interface shared properties or delete objects (not concrete/type-specific properties, not primary keys) and re-validate per implementing object type uniformly.",
+      "foundryLiteBaseline": "interface_types + query_by_interface + conformance validation exist; no interface-scoped action rules.",
+      "targetBehavior": "Interface-scoped action rules (interface reference parameter, shared-property-only edits) re-validating each implementing type's constraints and permissions.",
+      "status": "foundation",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/ontology_interface_validation.py:1",
+        "apps/api/foundry_lite_api/routers/objects.py:137"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No interface rule kind or per-implementer re-validation for edits. Slice 8.",
+      "officialReference": [
+        "palantir-action-interfaces"
+      ]
+    },
+    {
+      "capabilityId": "action-api-sdk-surface",
+      "palantirBehavior": "Actions are distributed through list/get, schema/form metadata, validate, plan/dry-run, apply, run get/list, events, cancel, action log, revert-eligibility, revert, and branch execution across API and typed SDK.",
+      "foundryLiteBaseline": "3 action routes (apply/apply-batch/validate); TS SDK generated from one ontology YAML with a byte-exact drift gate; Python OSDK hand-authored.",
+      "targetBehavior": "Extended action API + generated TS/Python SDK covering plan/dry-run, multi-object apply, run get/list, events, cancel, action log, revert, and branch execution, with SDK drift failing when the action contract changes.",
+      "status": "partial",
+      "sourcePaths": [
+        "apps/api/foundry_lite_api/routers/actions.py:21",
+        "scripts/generate_sdk_ts.py:36",
+        "packages/sdk-ts/src/generated.ts:1"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "The existing /api/actions/{action}/apply endpoint now serves v2 (rulesV2) actions unchanged and returns the optional plan summary (commit ac0e2a05); the application ActionApplyResponse is the API response type so no schema fork was needed. Still partial: TS/Python SDK codegen and browser forms do not yet surface v2 typed parameters/plan, and batch/external-writeback apply paths do not yet route v2.",
+      "officialReference": [
+        "palantir-action-overview"
+      ]
+    },
+    {
+      "capabilityId": "action-ui",
+      "palantirBehavior": "A visual Action Type builder, a runtime action form auto-rendered from the canonical schema (conditional visibility/default/required, object reference picker, permission-aware dropdown, validation, dry-run impact preview, idempotent submit, version-conflict handling), and an action history view.",
+      "foundryLiteBaseline": "apps/foundry/src/features/actions renders scalar apply/batch/validate forms consuming the SDK react hooks; Workshop RuntimeActionForm consumes the same SDK.",
+      "targetBehavior": "Builder + runtime form + history that render from the canonical v2 schema and preview a real dry-run edit plan.",
+      "status": "partial",
+      "sourcePaths": [
+        "apps/foundry/src/features/actions",
+        "apps/foundry/src/features/workshop/runtime/RuntimeActionForm.tsx"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "No builder, conditional rendering, object picker filters, dry-run preview, or history view for v2. Slice 9.",
+      "officialReference": [
+        "palantir-action-overview"
+      ]
+    },
+    {
+      "capabilityId": "ontology-mcp",
+      "palantirBehavior": "An Ontology MCP server exposes object-type query and action validate/plan/apply (and approved functions) as MCP tools/resources, authorized by the intersection of application scope and the calling principal's permissions, with high-risk actions gated plan->approval->apply.",
+      "foundryLiteBaseline": "No MCP server exists; OSDK resource-scope authorization and the action service it would call do exist.",
+      "targetBehavior": "An MCP server that maps each Action Type to a deterministic tool schema and calls the same action service, enforcing app-scope ∩ principal permission and a plan->approval->apply boundary for high-risk actions.",
+      "status": "missing",
+      "sourcePaths": [
+        "libs/foundry_lite/application/services/osdk_application_scope.py:109"
+      ],
+      "testPaths": [],
+      "liveProof": null,
+      "remainingGap": "Entire MCP server, tool-schema mapping, and approval boundary absent. Slice 10.",
+      "officialReference": [
+        "palantir-mcp-overview",
+        "palantir-ontology-mcp-auth"
+      ]
+    }
+  ]
+}

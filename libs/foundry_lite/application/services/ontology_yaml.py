@@ -334,6 +334,13 @@ def _copy_sequence_fields(definition: ActionTypeDefinition, item: YamlObject) ->
     mutations = tuple(action_mutation(mutation) for mutation in mapping_sequence(item, "mutations"))
     if mutations or "mutations" in item:
         definition["mutations"] = mutations
+    rules_v2 = tuple(yaml_object(row, "rulesV2[]") for row in mapping_sequence(item, "rulesV2"))
+    if rules_v2 or "rulesV2" in item:
+        definition["rulesV2"] = rules_v2
+    _copy_effect_fields(definition, item)
+
+
+def _copy_effect_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:
     writebacks = tuple(yaml_object(row, "writebacks[]") for row in mapping_sequence(item, "writebacks"))
     if writebacks:
         definition["writebacks"] = writebacks
