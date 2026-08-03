@@ -501,8 +501,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
     assert ts_surface["actions"] == {
-        "_self": ["list", "get", "schema"],
-        "ApproveOrder": ["apply", "validate", "applyBatch"],
+        "_self": ["list", "get", "schema", "plan", "dryRun"],
+        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
     }
     assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
@@ -614,7 +614,10 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     }
     assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
     assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
-    assert surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert surface["actions"] == {
+        "_self": ["list", "get", "schema", "plan", "dryRun"],
+        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
+    }
     assert surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
     assert surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
     assert surface["materializations"] == ["run", "list"]

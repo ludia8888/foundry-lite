@@ -4568,6 +4568,23 @@ await expectSdkCall("actions.get", () => client.actions.get("Expedite Order"), {
 await expectSdkCall("actions.schema", () => client.actions.schema("Expedite Order"), {
   path: "/api/actions/Expedite%20Order/schema",
 });
+const genericActionPlan = {
+  target: { objectType: "Order", objectId: "order/1" },
+  expectedObjectVersion: 7,
+  params: { reason: "approved" },
+};
+await expectSdkCall("actions.plan", () => client.actions.plan("Expedite Order", genericActionPlan), {
+  path: "/api/actions/Expedite%20Order/plan",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: genericActionPlan,
+});
+await expectSdkCall("actions.dryRun", () => client.actions.dryRun("Expedite Order", genericActionPlan), {
+  path: "/api/actions/Expedite%20Order/dry-run",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: genericActionPlan,
+});
 await expectSdkCall(
   "actions.generated.validate",
   () =>
@@ -4587,6 +4604,46 @@ await expectSdkCall(
     },
   },
 );
+await expectSdkCall(
+  "actions.generated.plan",
+  () =>
+    client.actions.ApproveOrder.plan({
+      objectId: "order/1",
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    }),
+  {
+    path: "/api/actions/ApproveOrder/plan",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "Order", objectId: "order/1" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    },
+  },
+);
+await expectSdkCall(
+  "actions.generated.dryRun",
+  () =>
+    client.actions.ApproveOrder.dryRun({
+      objectId: "order/1",
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    }),
+  {
+    path: "/api/actions/ApproveOrder/dry-run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "Order", objectId: "order/1" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    },
+  },
+);
+coveredSurfaceIds.delete("actions.generated.plan");
+coveredSurfaceIds.delete("actions.generated.dryRun");
 await expectSdkCall(
   "actions.generated.apply",
   () =>

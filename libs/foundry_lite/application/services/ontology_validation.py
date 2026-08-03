@@ -13,6 +13,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyValidationResult,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.action_definition_validation import validate_yaml_action_definitions
 from foundry_lite.application.services.action_ir_compiler import compile_action_definition
 from foundry_lite.application.services.materialization_types import (
     MATERIALIZATION_MODES,
@@ -133,6 +134,7 @@ def validate_ontology_definition(
     object_defs = _object_definitions_by_api(definition)
     link_defs = _link_definitions_by_api(definition)
     _action_definitions_by_api(definition)
+    validate_yaml_action_definitions(definition, object_defs, link_defs)
     _validate_yaml_materializations(object_defs.values())
     for object_def in object_defs.values():
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
@@ -402,9 +404,9 @@ def _validate_yaml_action_mutations(
             continue
         persisted_definition = action_type_definition(action_def)
         compile_action_contract(persisted_definition)
-        compile_action_definition(persisted_definition)
         for mutation in persisted_definition.get("mutations", ()):
             _validate_yaml_action_mutation_property(mutation, property_defs)
+        compile_action_definition(persisted_definition)
 
 
 def _validate_yaml_action_mutation_property(

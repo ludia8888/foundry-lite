@@ -3177,6 +3177,30 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "actions.plan",
+      "route": "POST /api/actions/{action_type}/plan",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.plan",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Action planning resolves the current object versions and canonical rules, checks every edit permission, derives a fail-closed risk floor, and returns a deterministic plan hash without mutating Ontology state.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.dryRun",
+      "route": "POST /api/actions/{action_type}/dry-run",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.dryRun",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dry-run uses the same immutable EditPlan and plan hash as plan, marks the response as non-committing, and exposes redacted before/after evidence for UI review.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "actions.generated.apply",
       "route": "POST /api/actions/{action_type}/apply",
       "productArea": "action-workspace",

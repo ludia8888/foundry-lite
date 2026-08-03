@@ -29,6 +29,26 @@ class ActionCatalogPage(TypedDict):
     nextCursor: str | None
 
 
+class ActionExecutionPlanResponse(TypedDict):
+    actionApiName: str
+    ontologyVersionId: str
+    definitionFingerprint: str
+    functionVersion: str | None
+    target: Mapping[str, object]
+    parameters: Mapping[str, object]
+    editManifest: Mapping[str, object]
+    diffs: list[Mapping[str, object]]
+    effectManifest: list[Mapping[str, object]]
+    risk: Mapping[str, object]
+    authorization: Mapping[str, object]
+    approval: Mapping[str, object]
+    executionMode: str
+    isDryRun: bool
+    requestId: str
+    createdAt: str
+    planHash: str
+
+
 class ActionValidationIssue(TypedDict):
     code: str
     message: str

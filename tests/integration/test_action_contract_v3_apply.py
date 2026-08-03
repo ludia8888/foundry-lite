@@ -120,3 +120,46 @@ def test_v3_catalog_schema_cursor_and_defaulted_apply_share_one_contract(foundry
     assert response["status"] == "succeeded"
     updated = foundry.objects.get("Order", "O-1001", ctx=ctx)
     assert updated["properties"]["operatorNote"] == "Urgent handling"
+
+
+def test_v3_plan_is_deterministic_authorized_and_does_not_mutate(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = _prepare_v3_demo(foundry, tmp_path)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    version = order["objectVersion"]
+
+    plan = foundry.actions.plan(
+        "ExpediteOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=version,
+        params={"mode": "urgent"},
+        ctx=ctx,
+    )
+    replay = foundry.actions.plan(
+        "ExpediteOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=version,
+        params={"mode": "urgent"},
+        ctx=ctx,
+    )
+    dry_run = foundry.actions.dry_run(
+        "ExpediteOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=version,
+        params={"mode": "urgent"},
+        ctx=ctx,
+    )
+
+    assert plan["planHash"] == replay["planHash"] == dry_run["planHash"]
+    assert plan["parameters"]["note"] == "Urgent handling"
+    assert plan["risk"]["effectiveLevel"] == "low"
+    assert plan["approval"]["canAgentExecuteAutonomously"] is True
+    assert plan["diffs"][0]["before"] == {"operatorNote": None}
+    assert plan["diffs"][0]["after"] == {"operatorNote": "Urgent handling"}
+    assert plan["isDryRun"] is False
+    assert dry_run["isDryRun"] is True
+    unchanged = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert unchanged["objectVersion"] == version
+    assert unchanged["properties"].get("operatorNote") is None

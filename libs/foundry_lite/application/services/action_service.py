@@ -9,6 +9,7 @@ from foundry_lite.application.action_types import (
     ActionBatchApplyResponse,
     ActionCatalogItem,
     ActionCatalogPage,
+    ActionExecutionPlanResponse,
     ActionValidationResponse,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
@@ -18,6 +19,7 @@ from foundry_lite.application.action_types import (
 from foundry_lite.application.services.action_apply_service import ActionApplyService
 from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
 from foundry_lite.application.services.action_definition_service import ActionDefinitionService
+from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_validation_service import ActionValidationService
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
@@ -34,12 +36,14 @@ class ActionService(CoreService):
         "action_apply_service",
         "action_batch_apply_service",
         "action_definition_service",
+        "action_planning_service",
         "action_validation_service",
         "action_writeback_service",
     )
     action_apply_service: ActionApplyService
     action_batch_apply_service: ActionBatchApplyService
     action_definition_service: ActionDefinitionService
+    action_planning_service: ActionPlanningService
     action_validation_service: ActionValidationService
     action_writeback_service: ActionWritebackService
 
@@ -57,6 +61,27 @@ class ActionService(CoreService):
 
     def action_schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.action_definition_service.action_schema(action_api_name, ctx=ctx)
+
+    def plan_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext | None = None,
+        is_dry_run: bool = False,
+    ) -> ActionExecutionPlanResponse:
+        return self.action_planning_service.plan_action(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            ctx=ctx,
+            is_dry_run=is_dry_run,
+        )
 
     def apply_action(
         self,

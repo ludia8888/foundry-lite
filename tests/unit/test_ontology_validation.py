@@ -139,6 +139,57 @@ def test_ontology_definition_validation_rejects_unknown_link_cardinality() -> No
     assert exc_info.value.details["linkType"] == "OrderCustomer"
 
 
+def test_ontology_definition_validation_rejects_unknown_v3_rule_object() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    action = _first_action(definition)
+    action.pop("mutations")
+    action.update(
+        {
+            "contractVersion": 3,
+            "permissions": {"allowedRoles": ["ops_manager"]},
+            "rules": [
+                {
+                    "kind": "modifyObject",
+                    "ruleId": "ghost",
+                    "objectType": "Ghost",
+                    "target": {"kind": "parameter", "parameter": "__target__"},
+                    "assignments": [],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValidationFailed, match="object type reference was not found"):
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+
+def test_ontology_definition_validation_rejects_low_risk_sensitive_edit() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    _status_property(definition)["classification"] = "pii"
+    action = _first_action(definition)
+    action.pop("mutations")
+    action.update(
+        {
+            "contractVersion": 3,
+            "riskLevel": "low",
+            "agentExecutionPolicy": "autonomous",
+            "permissions": {"allowedRoles": ["ops_manager"]},
+            "rules": [
+                {
+                    "kind": "modifyObject",
+                    "ruleId": "sensitive",
+                    "objectType": "Order",
+                    "target": {"kind": "parameter", "parameter": "__target__"},
+                    "assignments": [{"property": "status", "value": {"kind": "literal", "value": "APPROVED"}}],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValidationFailed, match="sensitive property edits require high"):
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+
 def test_ontology_definition_validation_rejects_unknown_backing_and_action_enums() -> None:
     for mutation in (_set_object_backing_mode, _set_cdc_delete_policy, _set_action_parameter_type, _set_mutation_type):
         definition = _yaml_definition(primary_key_column="order_id")

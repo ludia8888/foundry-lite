@@ -8,6 +8,7 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_apply_service import ActionApplyService
 from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
 from foundry_lite.application.services.action_definition_service import ActionDefinitionService
+from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.action_validation_service import ActionValidationService
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
@@ -20,6 +21,7 @@ class ActionServices:
     batch_apply: ActionBatchApplyService
     definition: ActionDefinitionService
     entrypoint: ActionService
+    planning: ActionPlanningService
     validation: ActionValidationService
     writeback: ActionWritebackService
 
@@ -30,9 +32,18 @@ class ActionServices:
             batch_apply=build_service(ActionBatchApplyService, dependencies),
             definition=build_service(ActionDefinitionService, dependencies),
             entrypoint=build_service(ActionService, dependencies),
+            planning=build_service(ActionPlanningService, dependencies),
             validation=build_service(ActionValidationService, dependencies),
             writeback=build_service(ActionWritebackService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:
-        return (self.apply, self.batch_apply, self.definition, self.entrypoint, self.validation, self.writeback)
+        return (
+            self.apply,
+            self.batch_apply,
+            self.definition,
+            self.entrypoint,
+            self.planning,
+            self.validation,
+            self.writeback,
+        )

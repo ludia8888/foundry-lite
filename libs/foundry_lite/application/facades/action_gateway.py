@@ -9,6 +9,7 @@ from foundry_lite.application.action_types import (
     ActionBatchApplyResponse,
     ActionCatalogItem,
     ActionCatalogPage,
+    ActionExecutionPlanResponse,
     ActionValidationResponse,
 )
 from foundry_lite.application.services.action_service import ActionService
@@ -37,6 +38,45 @@ class ActionGateway:
 
     def schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._action.action_schema(action_api_name, ctx=ctx)
+
+    def plan(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext | None = None,
+    ) -> ActionExecutionPlanResponse:
+        return self._action.plan_action(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            ctx=ctx,
+        )
+
+    def dry_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext | None = None,
+    ) -> ActionExecutionPlanResponse:
+        return self._action.plan_action(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            ctx=ctx,
+            is_dry_run=True,
+        )
 
     def apply(
         self,

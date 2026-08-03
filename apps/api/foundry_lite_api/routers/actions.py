@@ -8,6 +8,7 @@ from foundry_lite.application.action_types import (
     ActionBatchApplyResponse,
     ActionCatalogItem,
     ActionCatalogPage,
+    ActionExecutionPlanResponse,
     ActionValidationResponse,
 )
 from foundry_lite.domain.errors import FoundryLiteError
@@ -63,6 +64,44 @@ def apply_action(
             expected_object_version=payload.expected_object_version,
             params=payload.params,
             idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/{action_type}/plan")
+def plan_action(
+    request: Request,
+    action_type: str,
+    payload: ActionApplyRequest,
+) -> ActionExecutionPlanResponse:
+    try:
+        return runtime.foundry.actions.plan(
+            action_type,
+            object_type=payload.target.object_type,
+            object_id=payload.target.object_id,
+            expected_object_version=payload.expected_object_version,
+            params=payload.params,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/{action_type}/dry-run")
+def dry_run_action(
+    request: Request,
+    action_type: str,
+    payload: ActionApplyRequest,
+) -> ActionExecutionPlanResponse:
+    try:
+        return runtime.foundry.actions.dry_run(
+            action_type,
+            object_type=payload.target.object_type,
+            object_id=payload.target.object_id,
+            expected_object_version=payload.expected_object_version,
+            params=payload.params,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:

@@ -4,43 +4,48 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from foundry_lite.application.action_types import (
+from foundry_lite.application.services.action_apply_contracts import (
     ActionApplyCommand,
     ActionApplyOutcome,
     ActionApplyResponse,
-)
-from foundry_lite.application.ports import (
+    ActionOsdkScopeBoundary,
     ActionRunRecord,
     ActionRunRow,
     ActionTypeRow,
+    ConflictDetected,
+    EditPlan,
+    InvariantViolation,
+    NotFound,
     ObjectRecordRow,
     OsdkResourceOperation,
+    PermissionDenied,
+    RequestContext,
     TransactionContext,
+    ValidationFailed,
 )
-from foundry_lite.application.primitives import _new_id, _now
-from foundry_lite.application.safe_expression import validate_action_request
-from foundry_lite.application.services.action_external_apply import ExternalActionApply
-from foundry_lite.application.services.action_helpers import (
+from foundry_lite.application.services.action_apply_support import (
+    _new_id,
+    _now,
     action_command,
     action_failure_transition,
     action_replay_response,
     action_target_record_error,
     audit_idempotency_conflict,
-    require_action_target_api_name,
-    require_action_write_open,
-    resolved_action_command,
-    stable_parameter_id_generator,
-)
-from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
+    require_action_target_api_name,
     require_action_target_read,
+    require_action_write_open,
     require_failure_injection_for_command,
+    resolved_action_command,
     segment_mutation_denied_error,
+    stable_parameter_id_generator,
+    validate_action_request,
+    visible_record,
 )
-from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
+from foundry_lite.application.services.action_external_apply import ExternalActionApply
+from foundry_lite.application.services.action_plan_authorization import resolve_authorized_action_edit_plan
 from foundry_lite.application.services.action_v2_commit import (
     ActionV2Committer,
-    CommitLinkTypeResolver,
     uses_action_rules_v2,
 )
 from foundry_lite.application.services.action_workflow import (
@@ -52,15 +57,7 @@ from foundry_lite.application.services.action_workflow import (
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.object_store.row_policies import visible_record
-from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    InvariantViolation,
-    NotFound,
-    PermissionDenied,
-    ValidationFailed,
-)
+from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
 
 
 class ActionApplyService(CoreService):
@@ -79,7 +76,7 @@ class ActionApplyService(CoreService):
     action_writeback_service: ActionWritebackService
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
-    ontology_lookup_service: CommitLinkTypeResolver
+    ontology_lookup_service: OntologyLookupService
     ontology_service: ActionOntologyLookup
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
@@ -287,7 +284,23 @@ class ActionApplyService(CoreService):
         if record is None:
             raise InvariantViolation("action target record disappeared before commit")
         effective_command = self._resolved_command(ctx, action_type, record, command)
-        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, effective_command, record)
+        try:
+            plan = self._authorized_edit_plan(conn, ctx, action_type, effective_command)
+        except (PermissionDenied, ValidationFailed) as authorization_error:
+            self._fail_action_run(conn, ctx, action_run_id, authorization_error)
+            return ActionApplyOutcome(deferred_error=authorization_error)
+        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, effective_command, record, plan)
+
+    def _authorized_edit_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        command: ActionApplyCommand,
+    ) -> EditPlan:
+        return resolve_authorized_action_edit_plan(
+            conn, ctx, self.policy, self.object_records_service, self.ontology_lookup_service, action_type, command
+        )
 
     def _writeback_and_commit(
         self,
@@ -297,6 +310,7 @@ class ActionApplyService(CoreService):
         action_run_id: str,
         command: ActionApplyCommand,
         record: ObjectRecordRow,
+        plan: EditPlan,
     ) -> ActionApplyOutcome:
         """Local (no external side effect): record the writeback then commit ``received -> succeeded``."""
         self.action_writeback_service.writeback_recorder().record(
@@ -312,7 +326,7 @@ class ActionApplyService(CoreService):
             # Row/segment visibility is enforced as each existing object resolves (the
             # resolution context hides forbidden rows as NotFound), and the whole plan
             # commits in this transaction so any conflict rolls it all back.
-            response = self._v2_committer().commit(conn, ctx, action_type, action_run_id, command)
+            response = self._v2_committer().commit(conn, ctx, action_type, action_run_id, command, plan=plan)
         else:
             response = self._mutation_unit_of_work().commit(
                 conn,

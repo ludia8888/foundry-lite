@@ -2085,6 +2085,20 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             "      get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`),",
             "      schema: (actionApiName) =>",
             "        request(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+            "      plan: (actionApiName, payload) => request(",
+            "        `/api/actions/${encodeURIComponent(actionApiName)}/plan`,",
+            (
+                '        { method: "POST", headers: { "Content-Type": "application/json" }, '
+                "body: JSON.stringify(payload) },"
+            ),
+            "      ),",
+            "      dryRun: (actionApiName, payload) => request(",
+            "        `/api/actions/${encodeURIComponent(actionApiName)}/dry-run`,",
+            (
+                '        { method: "POST", headers: { "Content-Type": "application/json" }, '
+                "body: JSON.stringify(payload) },"
+            ),
+            "      ),",
         ]
     )
     lines.extend(_web_action_client_lines(surface.actions))
@@ -2661,6 +2675,24 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
             [
                 f"      {action_def.api_name}: {{",
                 f"        validate: (payload) => request(`/api/actions/{action_def.api_name}/validate`, {{",
+                '          method: "POST",',
+                '          headers: { "Content-Type": "application/json" },',
+                "          body: JSON.stringify({",
+                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                "            expectedObjectVersion: payload.expectedObjectVersion,",
+                "            params: payload.params,",
+                "          }),",
+                "        }),",
+                f"        plan: (payload) => request(`/api/actions/{action_def.api_name}/plan`, {{",
+                '          method: "POST",',
+                '          headers: { "Content-Type": "application/json" },',
+                "          body: JSON.stringify({",
+                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                "            expectedObjectVersion: payload.expectedObjectVersion,",
+                "            params: payload.params,",
+                "          }),",
+                "        }),",
+                f"        dryRun: (payload) => request(`/api/actions/{action_def.api_name}/dry-run`, {{",
                 '          method: "POST",',
                 '          headers: { "Content-Type": "application/json" },',
                 "          body: JSON.stringify({",

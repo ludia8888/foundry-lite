@@ -80,6 +80,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_apply_service": "ActionApplyService",
     "action_batch_apply_service": "ActionBatchApplyService",
     "action_definition_service": "ActionDefinitionService",
+    "action_planning_service": "ActionPlanningService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",
     "action_writeback_service": "ActionWritebackService",

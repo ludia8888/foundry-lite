@@ -656,6 +656,21 @@ function-backed action, full parameter/form/criteria, side effect, Ontology-quer
 revert, branch/interface action, complete SDK/UI/MCP는 이 gate가 증명하지 않으며 matrix에
 partial/foundation/missing으로 남긴다.
 
+### Tier G14F — Action Contract v3 planning and approval evidence (🟡 bounded slice 2026-08-03)
+
+`quality:action-types-palantir`는 v1/v2/v3 정의가 하나의 canonical contract로 정규화되고,
+그 계약에서 API·SDK용 schema와 실제 실행 전 계획이 같은 방식으로 만들어지는지 검증한다.
+현재 게이트는 모든 v3 parameter type, deterministic defaults, first-match override, nested
+submission criteria, immutable fingerprint/plan hash, before/after diff, 구조적 위험도 하한,
+edit별 object/link/property 권한, AIP proposal의 plan/Action/object-version 고정, 승인 직전 drift
+재검증, catalog/schema/plan/dry-run API와 생성 SDK를 포함한다. 직접 `apply`도 같은 resolved-plan
+권한 검사를 다시 수행하므로 plan endpoint를 건너뛰어 권한을 우회할 수 없다.
+
+이것은 아직 18개 축 전체 current 증거가 아니다. Temporal durable Action run, function-backed
+`OntologyEditBatch`, governed effect receipt/DLQ, 정규 Action Log/revert, branch/interface 실행,
+Builder 전체 화면, Python OSDK, Ontology MCP OAuth/transport, PostgreSQL+Temporal 복수 worker와
+브라우저 live proof가 추가되기 전에는 해당 matrix 항목을 `current`로 승격하지 않는다.
+
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
 `scripts/quality/check_schema_revision_guard.py`는
@@ -2287,7 +2302,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 267개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 269개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

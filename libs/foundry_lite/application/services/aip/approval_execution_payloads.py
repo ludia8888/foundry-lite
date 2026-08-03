@@ -116,6 +116,9 @@ def prepared_execution(row: InsightReviewRow, proposal: Mapping[str, object]) ->
         expected_object_version=required_int(proposal, "expectedObjectVersion"),
         parameters=required_mapping(proposal, "parameters"),
         policy_version=policy_version,
+        plan_hash=optional_text(proposal, "planHash"),
+        action_version=optional_text(proposal, "actionVersion"),
+        object_versions=optional_mapping(proposal, "objectVersions"),
     )
 
 
@@ -133,6 +136,9 @@ def require_recomputed_fingerprint(
         evidence_refs=evidence_refs,
         agent_version_id=required_text(run, "agent_version_id"),
         policy_version=prepared.policy_version,
+        plan_hash=prepared.plan_hash,
+        action_version=prepared.action_version,
+        object_versions=prepared.object_versions,
     )
     if fingerprint != prepared.proposal_fingerprint:
         raise ApprovalExecutionError("fingerprint_mismatch", "approved proposal was changed after review")
@@ -211,6 +217,24 @@ def required_mapping(payload: Mapping[str, object], key: str) -> JsonObject:
     value = payload.get(key)
     if not isinstance(value, Mapping):
         raise ApprovalExecutionError("invalid_proposal", f"proposal is missing {key}")
+    return value
+
+
+def optional_text(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ApprovalExecutionError("invalid_proposal", f"proposal has invalid {key}")
+    return value
+
+
+def optional_mapping(payload: Mapping[str, object], key: str) -> JsonObject | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ApprovalExecutionError("invalid_proposal", f"proposal has invalid {key}")
     return value
 
 

@@ -28,6 +28,7 @@ from foundry_lite.domain.action_runtime.action_ir import (
     PropertyAssignment,
     validate_action_definition,
 )
+from foundry_lite.domain.action_runtime.action_risk import require_declared_risk_floor, structural_action_risk
 from foundry_lite.domain.action_runtime.value_expression import (
     LiteralValue,
     ParameterValue,
@@ -44,6 +45,7 @@ V1_TARGET_PARAMETER = "__target__"
 def compile_action_definition(definition: ActionTypeDefinition) -> ActionDefinitionV2:
     """Compile a persisted action definition into validated Action IR v2."""
     contract = compile_action_contract(definition)
+    require_declared_risk_floor(structural_action_risk(contract))
     api_name = contract.api_name
     rules: tuple[ActionRule, ...]
     if contract.function is not None:

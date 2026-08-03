@@ -91,11 +91,11 @@ flowchart LR
 | Transform and lineage | SQL transform registration/run, input/output version lineage, failed transform retry, bounded snapshot scheduler preview/tick, `worker:transform-scheduler`, OpenLineage-compatible evidence | `foundry.transforms`, FastAPI transform endpoints, `client.transforms` |
 | Pipeline Builder distributed DAG | `schemaVersion: 2` typed graph를 Temporal이 fork/join 제어하고 capability allowlist별 worker가 실행합니다. API는 기본 `202 queued`, PostgreSQL 원장은 node/attempt/artifact/event와 fencing token을 보존하며, retry·취소·worker takeover·crash resume·Dataset/Media Set exactly-once commit을 실제 Temporal worker 2개 gate로 검증합니다. Preview도 같은 orchestration 경로에서 `commitForbidden`을 유지합니다. | `docs/pipeline-builder-parity-matrix.json`, `quality:pipeline-async-dag`, `quality:pipeline-async-dag-live` |
 | Ontology and objects | ontology YAML validation/catalog, object get/query/link traversal, object sets, active index pointer, shadow reindex proof | `foundry.ontology`, `foundry.objects`, FastAPI ontology/object endpoints |
-| Actions | typed Action IR v2와 immutable EditPlan, v1 호환 compile, object create/modify/delete와 many-to-many link create/delete의 원자적 apply, permission/visibility/OCC/idempotency, unified edit ledger, audit/outbox | `foundry.actions`, `/api/actions/{action_type}/validate`, `/api/actions/{action_type}/apply`, `quality:action-types-v2` |
+| Actions | canonical Action Contract v3와 typed Action IR, v1/v2 호환 compile, 결정적 plan/dry-run hash, edit별 permission·risk·approval 판단, object create/modify/delete와 many-to-many link create/delete의 원자적 apply, OCC/idempotency, unified edit ledger, audit/outbox | `foundry.actions`, `/api/actions/{action_type}/plan`, `/api/actions/{action_type}/dry-run`, `/api/actions/{action_type}/apply`, `quality:action-types-palantir` |
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight, artifact receipt, historical artifact dataset-head execution, and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| Frontend SDK | 267 frontend route surface request contracts, 28 SDK helper contracts, 74 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| Frontend SDK | 269 frontend route surface request contracts, 28 SDK helper contracts, 74 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -186,6 +186,8 @@ foundry.demo
 | `GET /api/ontology/catalog` | ontology catalog read |
 | `POST /api/objects/{object_type}/query` | object query |
 | `POST /api/actions/{action_type}/validate` | typed action validation |
+| `POST /api/actions/{action_type}/plan` | permission·risk·approval을 포함한 immutable EditPlan |
+| `POST /api/actions/{action_type}/dry-run` | 동일 plan hash를 사용하는 non-committing before/after preview |
 | `POST /api/actions/{action_type}/apply` | typed action execution |
 | `POST /api/media/sets` | media set create |
 | `POST /api/aip/agent/run` | AIP agent run |
@@ -216,7 +218,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 267개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 269개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 

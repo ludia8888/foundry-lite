@@ -463,6 +463,8 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
             "    get(actionApiName: string): Promise<ActionCatalogItem>;",
             "    schema(actionApiName: string): Promise<Record<string, unknown>>;",
+            "    plan(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
+            "    dryRun(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
         ]
     )
     for action_def in surface.actions:
@@ -472,6 +474,8 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             [
                 f"    {action_def.api_name}: {{",
                 f"      validate(payload: {validate_payload_type}): Promise<ActionValidationResponse>;",
+                f"      plan(payload: {validate_payload_type}): Promise<ActionExecutionPlanResponse>;",
+                f"      dryRun(payload: {validate_payload_type}): Promise<ActionExecutionPlanResponse>;",
                 f"      apply(payload: {action_def.payload_type}): Promise<ActionApplyResponse>;",
                 (
                     f"      applyBatch(payload: {batch_payload_type}, options: {{ idempotencyKey: string }}): "
@@ -3257,6 +3261,17 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "        request<ActionCatalogItem>(`/api/actions/${encodeURIComponent(actionApiName)}`),",
             "      schema: (actionApiName: string) =>",
             "        request<Record<string, unknown>>(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+            "      plan: (actionApiName: string, payload: ActionPlanRequest) =>",
+            "        request<ActionExecutionPlanResponse>(`/api/actions/${encodeURIComponent(actionApiName)}/plan`, {",
+            '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
+            "        }),",
+            "      dryRun: (actionApiName: string, payload: ActionPlanRequest) =>",
+            (
+                "        request<ActionExecutionPlanResponse>("
+                "`/api/actions/${encodeURIComponent(actionApiName)}/dry-run`, {"
+            ),
+            '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
+            "        }),",
         ]
     )
     lines.extend(_ts_action_client_lines(surface.actions))
@@ -3900,6 +3915,26 @@ def _ts_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]
                 f"      {action_def.api_name}: {{",
                 f"        validate: (payload: {validate_payload_type}) =>",
                 f"          request<ActionValidationResponse>(`/api/actions/{action_def.api_name}/validate`, {{",
+                '            method: "POST",',
+                '            headers: { "Content-Type": "application/json" },',
+                "            body: JSON.stringify({",
+                f"              target: {{ objectType: {target}, objectId: payload.objectId }},",
+                "              expectedObjectVersion: payload.expectedObjectVersion,",
+                "              params: payload.params,",
+                "            }),",
+                "          }),",
+                f"        plan: (payload: {validate_payload_type}) =>",
+                f"          request<ActionExecutionPlanResponse>(`/api/actions/{action_def.api_name}/plan`, {{",
+                '            method: "POST",',
+                '            headers: { "Content-Type": "application/json" },',
+                "            body: JSON.stringify({",
+                f"              target: {{ objectType: {target}, objectId: payload.objectId }},",
+                "              expectedObjectVersion: payload.expectedObjectVersion,",
+                "              params: payload.params,",
+                "            }),",
+                "          }),",
+                f"        dryRun: (payload: {validate_payload_type}) =>",
+                f"          request<ActionExecutionPlanResponse>(`/api/actions/{action_def.api_name}/dry-run`, {{",
                 '            method: "POST",',
                 '            headers: { "Content-Type": "application/json" },',
                 "            body: JSON.stringify({",

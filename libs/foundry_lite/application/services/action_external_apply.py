@@ -46,7 +46,13 @@ from foundry_lite.application.services.action_workflow import (
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, NotFound
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    InvariantViolation,
+    NotFound,
+    PermissionDenied,
+    ValidationFailed,
+)
 
 
 class ApplyServiceCallbacks(Protocol):
@@ -93,6 +99,14 @@ class ApplyServiceCallbacks(Protocol):
         record: ObjectRecordRow,
         command: ActionApplyCommand,
     ) -> ActionApplyCommand: ...
+
+    def _authorized_edit_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        command: ActionApplyCommand,
+    ) -> object: ...
 
     def _fail_action_run(
         self, conn: TransactionContext, ctx: RequestContext, action_run_id: str, error: Exception
@@ -169,18 +183,16 @@ class ExternalActionApply:
                 if replay is not None:
                     return _ExternalPendingPrep(outcome=replay)
                 record = service._visible_target_record(conn, ctx, action_type, command)
-                deferred_error = service._action_request_error(ctx, action_type, record, command)
-                if deferred_error is not None:
-                    service._fail_action_run(conn, ctx, action_run_id, deferred_error)
-                    return _ExternalPendingPrep(outcome=ActionApplyOutcome(deferred_error=deferred_error))
-                simulated = service.action_writeback_service.writeback_recorder().simulated_before_commit_error(
-                    conn, ctx, action_run_id, command
+                blocked = self._received_state_outcome(conn, ctx, action_type, action_run_id, record, command)
+                if blocked is not None:
+                    return _ExternalPendingPrep(outcome=blocked)
+                assert record is not None  # nosec B101 - blocked handles a missing target
+                effective_command, denied = self._authorized_command(
+                    conn, ctx, action_type, action_run_id, record, command
                 )
-                if simulated is not None:
-                    return _ExternalPendingPrep(outcome=ActionApplyOutcome(deferred_error=simulated))
-                if record is None:
-                    raise InvariantViolation("action target record disappeared before commit")
-                effective_command = service._resolved_command(ctx, action_type, record, command)
+                if denied is not None:
+                    return _ExternalPendingPrep(outcome=denied)
+                assert effective_command is not None  # nosec B101 - denied is the only empty-command path
                 self._mark_pending(conn, ctx, action_run_id, effective_command)
                 return _ExternalPendingPrep(action_type=action_type, command=effective_command)
         except ConflictDetected as exc:
@@ -190,6 +202,45 @@ class ExternalActionApply:
                 ctx, command, action_run_id, action_type_for_failure, exc
             )
             return _ExternalPendingPrep(outcome=outcome)
+
+    def _received_state_outcome(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        action_run_id: str,
+        record: ObjectRecordRow | None,
+        command: ActionApplyCommand,
+    ) -> ActionApplyOutcome | None:
+        error = self.service._action_request_error(ctx, action_type, record, command)
+        if error is not None:
+            self.service._fail_action_run(conn, ctx, action_run_id, error)
+            return ActionApplyOutcome(deferred_error=error)
+        simulated = self.service.action_writeback_service.writeback_recorder().simulated_before_commit_error(
+            conn, ctx, action_run_id, command
+        )
+        if simulated is not None:
+            return ActionApplyOutcome(deferred_error=simulated)
+        if record is None:
+            raise InvariantViolation("action target record disappeared before commit")
+        return None
+
+    def _authorized_command(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        action_run_id: str,
+        record: ObjectRecordRow,
+        command: ActionApplyCommand,
+    ) -> tuple[ActionApplyCommand | None, ActionApplyOutcome | None]:
+        effective = self.service._resolved_command(ctx, action_type, record, command)
+        try:
+            self.service._authorized_edit_plan(conn, ctx, action_type, effective)
+        except (PermissionDenied, ValidationFailed) as error:
+            self.service._fail_action_run(conn, ctx, action_run_id, error)
+            return None, ActionApplyOutcome(deferred_error=error)
+        return effective, None
 
     def _mark_pending(
         self,
