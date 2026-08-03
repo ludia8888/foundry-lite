@@ -10,6 +10,9 @@ from foundry_lite.application.services.action_ir_compiler import (
 from foundry_lite.domain.action_runtime.action_ir import (
     CreateLinkRule,
     CreateObjectRule,
+    DeleteLinkRule,
+    DeleteObjectRule,
+    FunctionEditRule,
     ModifyObjectRule,
 )
 from foundry_lite.domain.action_runtime.value_expression import (
@@ -53,6 +56,11 @@ def test_v1_rejects_non_setproperty_and_bad_valuefrom() -> None:
                 "mutations": [{"type": "setProperty", "property": "p", "valueFrom": "obj.status"}],
             }  # type: ignore[arg-type]
         )
+
+
+def test_v1_rejects_an_action_without_mutations() -> None:
+    with pytest.raises(ValidationFailed, match="no setProperty mutations"):
+        compile_action_definition({"apiName": "x", "target": "Order", "mutations": []})  # type: ignore[arg-type]
 
 
 def test_native_v2_multi_rule_definition_parses_and_validates() -> None:
@@ -145,6 +153,121 @@ def test_v2_ordering_violation_surfaces_from_compile() -> None:
 def test_unsupported_rule_kind_is_rejected() -> None:
     with pytest.raises(ValidationFailed, match="unsupported action rule kind"):
         compile_action_definition({"apiName": "x", "rulesV2": [{"kind": "rawSql", "ruleId": "r"}]})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("rule", "message"),
+    [
+        ("not-an-object", "action rule must be an object"),
+        (
+            {
+                "kind": "modifyObject",
+                "objectType": "Order",
+                "target": {"kind": "parameter", "parameter": "order"},
+                "assignments": [],
+            },
+            "requires a ruleId",
+        ),
+        ({"kind": "createObject", "ruleId": "create", "assignments": []}, "field is required"),
+        (
+            {
+                "kind": "modifyObject",
+                "ruleId": "modify",
+                "objectType": "Order",
+                "target": {"kind": "parameter", "parameter": "order"},
+                "assignments": ["not-an-object"],
+            },
+            "assignment must be an object",
+        ),
+        (
+            {
+                "kind": "modifyObject",
+                "ruleId": "modify",
+                "objectType": "Order",
+                "target": {"kind": "parameter", "parameter": "order"},
+                "assignments": [{"property": "status"}],
+            },
+            "requires a value expression",
+        ),
+        (
+            {
+                "kind": "modifyObject",
+                "ruleId": "modify",
+                "objectType": "Order",
+                "assignments": [],
+            },
+            "requires a value expression",
+        ),
+    ],
+)
+def test_v2_rejects_malformed_rule_boundaries(rule: object, message: str) -> None:
+    with pytest.raises(ValidationFailed, match=message):
+        compile_action_definition({"apiName": "x", "rulesV2": [rule]})  # type: ignore[arg-type]
+
+
+def test_v2_non_sequence_assignments_are_treated_as_empty() -> None:
+    compiled = compile_action_definition(
+        {  # type: ignore[arg-type]
+            "apiName": "Create",
+            "rulesV2": [
+                {
+                    "kind": "createObject",
+                    "ruleId": "create",
+                    "objectType": "Order",
+                    "assignments": 42,
+                }
+            ],
+        }
+    )
+    rule = compiled.rules[0]
+    assert isinstance(rule, CreateObjectRule) and rule.assignments == ()
+
+
+def test_v2_delete_and_function_rule_kinds_parse() -> None:
+    deleted = compile_action_definition(
+        {  # type: ignore[arg-type]
+            "apiName": "Delete",
+            "rulesV2": [
+                {
+                    "kind": "deleteObject",
+                    "ruleId": "one",
+                    "objectType": "Order",
+                    "target": {"kind": "parameter", "parameter": "order"},
+                },
+                {
+                    "kind": "deleteObjects",
+                    "ruleId": "many",
+                    "objectType": "Order",
+                    "target": {"kind": "parameter", "parameter": "orders"},
+                },
+                {
+                    "kind": "deleteLink",
+                    "ruleId": "link",
+                    "linkType": "OrderCustomer",
+                    "source": {"kind": "parameter", "parameter": "order"},
+                    "target": {"kind": "parameter", "parameter": "customer"},
+                },
+            ],
+        }
+    )
+    assert isinstance(deleted.rules[0], DeleteObjectRule) and deleted.rules[0].cardinality == "one"
+    assert isinstance(deleted.rules[1], DeleteObjectRule) and deleted.rules[1].cardinality == "many"
+    assert isinstance(deleted.rules[2], DeleteLinkRule)
+
+    function = compile_action_definition(
+        {  # type: ignore[arg-type]
+            "apiName": "FunctionBacked",
+            "rulesV2": [
+                {
+                    "kind": "functionEdit",
+                    "ruleId": "function",
+                    "functionApiName": "buildEdits",
+                    "functionVersion": "1.0.0",
+                }
+            ],
+        }
+    )
+    assert isinstance(function.rules[0], FunctionEditRule)
 
 
 def test_created_object_default_pk_is_allowed() -> None:
