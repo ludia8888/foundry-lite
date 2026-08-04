@@ -16,6 +16,7 @@ from foundry_lite.application.facades import (
     DatasetWorkspace,
     DeveloperConsole,
     ErasureGateway,
+    FdeMcpGateway,
     FunctionGateway,
     InsightReviewWorkspace,
     MaterializationRunner,
@@ -123,6 +124,7 @@ class FoundryLite:
         self.object_read_repository = dependencies.object_read_repository
         self.object_set_repository = dependencies.object_set_repository
         self.osdk_application_repository = dependencies.osdk_application_repository
+        self.ai_run_repository = dependencies.ai_run_repository
         self.runtime_repository = dependencies.runtime_repository
         self.dataset_storage = dependencies.dataset_storage
         self.connector_registry_repository = dependencies.connector_registry_repository
@@ -159,6 +161,14 @@ class FoundryLite:
         self.developer_console = DeveloperConsole(services.osdk_applications.entrypoint)
 
     def _attach_aip_facades(self, services: CoreServices) -> None:
+        fde_mcp = FdeMcpGateway(
+            engine=self.engine,
+            policy=self.policy,
+            ai_run_repository=self.ai_run_repository,
+            context_validator=services.fde_context,
+            platform_executor=services.fde_platform_tools,
+            application_reader=services.osdk_applications.entrypoint,
+        )
         self.aip = AipWorkspace(
             services.agent_runtime,
             services.action_proposal,
@@ -166,6 +176,9 @@ class FoundryLite:
             services.builder_runtime,
             services.logic_runtime,
             services.evals,
+            services.fde_runtime,
+            fde_mcp,
+            services.fde_pilot,
             services.visual_builder,
             services.citation,
         )

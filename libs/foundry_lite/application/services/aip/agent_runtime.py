@@ -32,6 +32,7 @@ from foundry_lite.application.services.aip.agent_runtime_contracts import (
     usage_payload,
     validate_request,
 )
+from foundry_lite.application.services.aip.agent_runtime_fde_loop import FdePlatformToolExecutor, run_fde_tool_loop
 from foundry_lite.application.services.aip.agent_runtime_ledger import (
     append_events,
     event_record,
@@ -95,6 +96,7 @@ class AgentRuntimeService(CoreService):
         "content_retrieval_service",
         "citation_service",
         "tool_broker_service",
+        "fde_platform_tool_service",
         "action_proposal_service",
     )
     context_compiler_service: ContextCompilerService
@@ -104,6 +106,7 @@ class AgentRuntimeService(CoreService):
     content_retrieval_service: RetrievalContentSearch
     citation_service: CitationResolver
     tool_broker_service: ToolBroker
+    fde_platform_tool_service: FdePlatformToolExecutor
     action_proposal_service: ActionProposalCreator
 
     def run(self, ctx: RequestContext, request: AgentRuntimeRequest) -> AgentRuntimeResult:
@@ -163,7 +166,9 @@ class AgentRuntimeService(CoreService):
         final_response, answer, tool_execution, action_proposal = self._complete_model_turn(
             ctx, request, ai_run_id, compiled, response, charged
         )
-        aggregated = aggregate_response(response, final_response)
+        aggregated = (
+            final_response if request.runtime_profile == "fde" else aggregate_response(response, final_response)
+        )
         outcome = (aggregated, answer, tool_execution, action_proposal)
         self._finish_success(ctx, request, ai_run_id, session_id, context_items, *outcome, resolution)
         return outcome
@@ -198,6 +203,21 @@ class AgentRuntimeService(CoreService):
         AgentRuntimeToolExecution | None,
         AgentRuntimeActionProposalExecution | None,
     ]:
+        if request.runtime_profile == "fde":
+            loop = run_fde_tool_loop(
+                ctx=ctx,
+                executor=self.fde_platform_tool_service,
+                request=request,
+                ai_run_id=ai_run_id,
+                compiled=compiled,
+                first_response=response,
+                invoke_model=lambda model_request: self.model_gateway_service.invoke(ctx, model_request),
+                record_tool=lambda execution: self._record_tool_execution(ctx, request, ai_run_id, execution),
+                record_prompt=lambda execution, attempt: self._record_fde_prompt(ctx, ai_run_id, execution, attempt),
+                charged=charged,
+            )
+            answer = self._resolve_answer_citations(ctx, request, ai_run_id, loop.final_response)
+            return loop.aggregated_response, answer, loop.last_tool_execution, None
         action_proposal = self._execute_action_proposal_tool_call(ctx, request, ai_run_id, response)
         if action_proposal is not None:
             answer = AgentRuntimeAnswer(answer=action_proposal.answer, citations=())
@@ -368,6 +388,7 @@ class AgentRuntimeService(CoreService):
         tool_execution: AgentRuntimeToolExecution,
     ) -> None:
         now = ledger_timestamp()
+        event_start = 4 + ((tool_execution.result.ledger_record.sequence - 1) * 3)
         with self.engine.begin() as transaction:
             self.ai_run_repository.record_tool_call(transaction=transaction, record=tool_execution.result.ledger_record)
             append_events(
@@ -378,8 +399,23 @@ class AgentRuntimeService(CoreService):
                 ai_run_id,
                 ("tool_pending", "tool_running", "model_running"),
                 now,
-                start=4,
+                start=event_start,
             )
+
+    def _record_fde_prompt(
+        self,
+        ctx: RequestContext,
+        ai_run_id: str,
+        execution: AgentRuntimeToolExecution,
+        model_attempt: int,
+    ) -> None:
+        self.prompt_artifact_service.record_compiled_prompt(
+            ctx,
+            ai_run_id=ai_run_id,
+            compiled_prompt_hash=execution.followup_prompt_hash,
+            compiled_prompt_text=execution.followup_prompt_text,
+            artifact_id=f"{ai_run_id}-compiled-prompt-model-{model_attempt}",
+        )
 
     def _final_model_response(
         self,

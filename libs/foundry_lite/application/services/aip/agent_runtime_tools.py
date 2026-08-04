@@ -16,6 +16,8 @@ from foundry_lite.application.services.aip.action_proposal import (
     ActionProposalResult,
 )
 from foundry_lite.application.services.aip.context_compiler import CompiledContext, ToolDefinition
+from foundry_lite.application.services.aip.fde_ontology_tools import FdeOntologyToolError
+from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, FdePlatformToolRequest
 from foundry_lite.application.services.aip.tool_broker import (
     ToolBrokerError,
     ToolBrokerRequest,
@@ -28,8 +30,6 @@ from foundry_lite.application.services.aip.tool_broker import (
 )
 from foundry_lite.domain.context import RequestContext
 
-JsonObject = Mapping[str, object]
-
 
 class ToolBroker(Protocol):
     def execute(self, ctx: RequestContext, request: ToolBrokerRequest) -> ToolBrokerResult: ...
@@ -37,6 +37,10 @@ class ToolBroker(Protocol):
 
 class ActionProposalCreator(Protocol):
     def propose(self, ctx: RequestContext, request: ActionProposalRequest) -> ActionProposalResult: ...
+
+
+class FdePlatformToolExecutor(Protocol):
+    def execute(self, ctx: RequestContext, request: FdePlatformToolRequest) -> ToolBrokerResult: ...
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,8 @@ class AgentRuntimeToolExecution:
     followup_messages: tuple[ModelMessage, ...]
     followup_prompt_hash: str
     followup_prompt_text: str
+    model_call_count: int = 2
+    tool_call_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -116,7 +122,7 @@ class AgentRuntimeToolRequest(Protocol):
     def environment(self) -> str: ...
 
     @property
-    def output_schema(self) -> JsonObject | None: ...
+    def output_schema(self) -> Mapping[str, object] | None: ...
 
     @property
     def max_output_tokens(self) -> int: ...
@@ -154,12 +160,29 @@ class AgentRuntimeActionProposalRequest(AgentRuntimeToolRequest, Protocol):
     def policy_version(self) -> str: ...
 
 
+class AgentRuntimeFdeToolRequest(AgentRuntimeToolRequest, Protocol):
+    @property
+    def branch_id(self) -> str | None: ...
+
+    @property
+    def fde_scope_ref(self) -> str | None: ...
+
+    @property
+    def tool_catalog(self) -> tuple[ToolSpec, ...]: ...
+
+    @property
+    def approved_tool_ids(self) -> tuple[str, ...]: ...
+
+    @property
+    def state_json(self) -> Mapping[str, object]: ...
+
+
 def tool_definitions(tools: tuple[ToolSpec, ...]) -> tuple[ToolDefinition, ...]:
     return tuple(
         ToolDefinition(
             tool_id=tool.tool_id,
             version=tool.version,
-            description=f"{tool.tool_id} server-side governed tool",
+            description=tool.description or f"{tool.tool_id} server-side governed tool",
             input_schema=dict(tool.input_schema),
             effect=tool.effect,
             required_permission=tool.required_permission,
@@ -171,28 +194,40 @@ def tool_definitions(tools: tuple[ToolSpec, ...]) -> tuple[ToolDefinition, ...]:
 
 
 def model_tool_names(request: AgentRuntimeToolRequest) -> tuple[str, ...]:
-    allowed = set(request.agent_allowed_tools)
+    return _model_tool_names(request.tool_manifest, request.agent_allowed_tools)
+
+
+def _model_tool_names(tools: tuple[ToolSpec, ...], allowed_tool_ids: tuple[str, ...]) -> tuple[str, ...]:
+    allowed = set(allowed_tool_ids)
     return tuple(
         f"{tool.tool_id}@{tool.version}"
-        for tool in request.tool_manifest
+        for tool in tools
         if tool.tool_id in allowed and not is_direct_vendor_tool_id(tool.tool_id)
     )
 
 
 def followup_model_request(
-    request: AgentRuntimeToolRequest, ai_run_id: str, tool_execution: AgentRuntimeToolExecution
+    request: AgentRuntimeToolRequest,
+    ai_run_id: str,
+    tool_execution: AgentRuntimeToolExecution,
+    model_call_attempt: int = 2,
+    available_tools: tuple[ToolSpec, ...] | None = None,
+    active_tool_ids: tuple[str, ...] | None = None,
 ) -> ModelRequest:
     return ModelRequest(
         model_alias=request.model_alias,
         messages=tool_execution.followup_messages,
         environment=request.environment,
-        tools=model_tool_names(request),
+        tools=_model_tool_names(
+            available_tools or request.tool_manifest,
+            active_tool_ids or request.agent_allowed_tools,
+        ),
         response_schema=_response_schema(request.output_schema),
         max_output_tokens=request.max_output_tokens,
         request_id=request.agent_run_id,
         ai_run_id=ai_run_id,
         request_hash=tool_execution.followup_prompt_hash,
-        model_call_attempt=2,
+        model_call_attempt=model_call_attempt,
         data_classification=request.data_classification,
         region_requirement=request.region_requirement,
     )
@@ -216,7 +251,10 @@ def guard_final_response(response: ModelResponse) -> None:
 
 
 def tool_error_payload(exc: Exception) -> dict[str, object] | None:
-    if isinstance(exc, AgentRuntimeToolLoopError | ToolBrokerError | ActionProposalError):
+    if isinstance(
+        exc,
+        AgentRuntimeToolLoopError | ToolBrokerError | ActionProposalError | FdeOntologyToolError | FdePlatformToolError,
+    ):
         return {"reason": exc.reason, "detail": exc.detail}
     return None
 
@@ -226,23 +264,28 @@ def success_event_sequence(
     action_proposal_execution: AgentRuntimeActionProposalExecution | None = None,
 ) -> int:
     if tool_execution is not None:
-        return 7
+        return 4 + (tool_execution.tool_call_count * 3)
     if action_proposal_execution is not None:
         return 6
     return 4
 
 
 def _tool_call_request(
-    request: AgentRuntimeToolRequest, ai_run_id: str, call: ModelToolCall, occurred_at: str
+    request: AgentRuntimeToolRequest,
+    ai_run_id: str,
+    call: ModelToolCall,
+    occurred_at: str,
+    sequence: int = 1,
+    tool_catalog: tuple[ToolSpec, ...] | None = None,
 ) -> ToolCallRequest:
-    tool_id, version = _resolved_tool_ref(request.tool_manifest, call.tool_name)
+    tool_id, version = _resolved_tool_ref(tool_catalog or request.tool_manifest, call.tool_name)
     return ToolCallRequest(
-        tool_call_id=f"{ai_run_id}-tool-1",
+        tool_call_id=f"{ai_run_id}-tool-{sequence}",
         tool_id=tool_id,
         version=version,
         arguments_json=call.arguments_json,
         ai_run_id=ai_run_id,
-        sequence=1,
+        sequence=sequence,
         request_id=request.agent_run_id,
         occurred_at=occurred_at,
     )
@@ -274,8 +317,27 @@ def _tool_allowed_classifications(request: AgentRuntimeToolRequest) -> tuple[str
     return request.allowed_classifications or ("public", request.data_classification)
 
 
-def _tool_execution(compiled: CompiledContext, result: ToolBrokerResult) -> AgentRuntimeToolExecution:
-    messages = (*compiled.messages, ModelMessage(role="user", content=_tool_result_message(result)))
+def _required_fde_branch_id(request: AgentRuntimeFdeToolRequest) -> str:
+    if not request.branch_id:
+        raise AgentRuntimeToolLoopError("fde_branch_required", "AI FDE tool calls require an ontology branch")
+    return request.branch_id
+
+
+def required_fde_scope_ref(request: AgentRuntimeFdeToolRequest) -> str:
+    if request.fde_scope_ref:
+        return request.fde_scope_ref
+    if request.branch_id:
+        return f"ontology-branch:{request.branch_id}"
+    raise AgentRuntimeToolLoopError("fde_scope_required", "AI FDE tool calls require a governed workspace scope")
+
+
+def _tool_execution(
+    compiled: CompiledContext,
+    result: ToolBrokerResult,
+    *,
+    base_messages: tuple[ModelMessage, ...] | None = None,
+) -> AgentRuntimeToolExecution:
+    messages = (*(base_messages or compiled.messages), ModelMessage(role="user", content=_tool_result_message(result)))
     prompt_text = messages_prompt_text(messages)
     return AgentRuntimeToolExecution(
         result=result,

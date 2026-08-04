@@ -36,7 +36,25 @@ class SqlAlchemyAiRunRepository:
         self.engine = engine
 
     def create_session(self, *, transaction: Any, record: AiSessionRecord) -> None:
-        transaction.execute(insert(db.ai_sessions).values({"tenant_id": record.tenant_id, **record.__dict__}))
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(insert(db.ai_sessions).values({"tenant_id": record.tenant_id, **record.__dict__}))
+        except IntegrityError:
+            savepoint.rollback()
+            existing = self.session_by_id(
+                transaction=transaction,
+                tenant_id=record.tenant_id,
+                session_id=record.id,
+            )
+            if existing is None or not _same_session_owner(existing, record):
+                raise
+            transaction.execute(
+                update(db.ai_sessions)
+                .where(and_(db.ai_sessions.c.tenant_id == record.tenant_id, db.ai_sessions.c.id == record.id))
+                .values(last_activity_at=record.last_activity_at)
+            )
+            return
+        savepoint.commit()
 
     def create_session_state_version(self, *, transaction: Any, record: AiSessionStateVersionRecord) -> None:
         transaction.execute(
@@ -243,6 +261,13 @@ def _json_or_none(value: AiJsonObject | None) -> dict[str, object] | None:
     return dict(value) if value is not None else None
 
 
+def _same_session_owner(existing: AiLedgerRow, record: AiSessionRecord) -> bool:
+    return (
+        existing.get("actor_user_id") == record.actor_user_id
+        and existing.get("agent_version_id") == record.agent_version_id
+    )
+
+
 def _state_version_values(record: AiSessionStateVersionRecord) -> dict[str, object]:
     return {
         **record.__dict__,
@@ -273,6 +298,7 @@ def _context_item_values(record: AiContextItemRecord) -> dict[str, object]:
 def _tool_call_values(record: AiToolCallRecord) -> dict[str, object]:
     values = dict(record.__dict__)
     values["error_json"] = _json_or_none(record.error_json)
+    values["result_json"] = _json_or_none(record.result_json)
     return values
 
 

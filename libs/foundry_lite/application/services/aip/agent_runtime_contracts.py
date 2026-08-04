@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from foundry_lite.application.services.aip.agent_runtime_citations import (
     AgentRuntimeAnswer,
@@ -76,8 +76,16 @@ class AgentRuntimeRequest:
     max_output_tokens: int = 512
     policy_version: str = "policy-v1"
     tool_manifest: tuple[ToolSpec, ...] = ()
+    tool_catalog: tuple[ToolSpec, ...] = ()
     agent_allowed_tools: tuple[str, ...] = ()
     agent_allowed_actions: tuple[str, ...] = ()
+    runtime_profile: str = "consumer"
+    branch_id: str | None = None
+    fde_scope_ref: str | None = None
+    tool_discovery: str = "eager"
+    approved_tool_ids: tuple[str, ...] = ()
+    pinned_context_items: tuple[RetrievedContextItem, ...] = ()
+    allow_dynamic_retrieval: bool = True
 
 
 @dataclass(frozen=True)
@@ -115,16 +123,44 @@ class AgentRuntimeResult:
 def validate_request(ctx: RequestContext, request: AgentRuntimeRequest) -> None:
     if not request.agent_run_id or not request.user_message or not request.model_alias:
         raise AgentRuntimeError("invalid_request", "agent_run_id, user_message, and model_alias are required")
+    _validate_runtime_budget(request)
+    _validate_security_partition(ctx, request)
+    _validate_runtime_profile(request)
+
+
+def _validate_runtime_budget(request: AgentRuntimeRequest) -> None:
+    if request.runtime_profile == "fde":
+        _validate_fde_runtime_budget(request)
+        return
     if (request.max_model_calls, request.max_loop_iterations) not in {(1, 1), (2, 2)}:
         raise AgentRuntimeError("unsupported_budget", "agent runtime supports one model turn or one tool loop")
     if request.max_tool_calls not in (0, 1):
         raise AgentRuntimeError("unsupported_budget", "agent runtime supports at most one tool call in this slice")
     if request.max_tool_calls and request.max_model_calls < 2:
         raise AgentRuntimeError("unsupported_budget", "tool loops require two model calls in this slice")
+
+
+def _validate_fde_runtime_budget(request: AgentRuntimeRequest) -> None:
+    if request.max_tool_calls < 1 or request.max_tool_calls > 8:
+        raise AgentRuntimeError("unsupported_budget", "AI FDE supports between one and eight tool calls")
+    if request.max_model_calls != request.max_tool_calls + 1:
+        raise AgentRuntimeError("unsupported_budget", "AI FDE model-call budget must equal tool-call budget plus one")
+    if request.max_loop_iterations != request.max_tool_calls:
+        raise AgentRuntimeError("unsupported_budget", "AI FDE loop budget must equal its tool-call budget")
+
+
+def _validate_security_partition(ctx: RequestContext, request: AgentRuntimeRequest) -> None:
     if request.security_partition not in request.allowed_security_partitions:
         raise AgentRuntimeError("security_partition_mismatch", "security partition must be explicitly allowlisted")
     if not request.security_partition.startswith(f"{ctx.tenant_id}:"):
         raise AgentRuntimeError("security_partition_mismatch", "security partition is outside the tenant boundary")
+
+
+def _validate_runtime_profile(request: AgentRuntimeRequest) -> None:
+    if request.runtime_profile not in {"consumer", "fde"}:
+        raise AgentRuntimeError("unsupported_runtime_profile", "agent runtime profile is not supported")
+    if request.runtime_profile == "fde" and not (request.fde_scope_ref or request.branch_id):
+        raise AgentRuntimeError("fde_scope_required", "AI FDE requires an explicit governed workspace scope")
 
 
 def retrieval_request(ctx: RequestContext, request: AgentRuntimeRequest) -> ContextRetrievalRequest:
@@ -148,12 +184,33 @@ def retrieve_runtime_context(
     content_retrieval_service: RetrievalContentSearch,
     request: AgentRuntimeRequest,
 ) -> tuple[RetrievedContextItem, ...]:
-    items = RetrievalOrchestrator(
+    pinned = request.pinned_context_items
+    guard_context_budget(request, pinned)
+    if not request.allow_dynamic_retrieval:
+        return pinned
+    remaining_items = request.max_context_items - len(pinned)
+    remaining_tokens = request.max_context_tokens - sum(item.token_estimate for item in pinned)
+    if remaining_items == 0 or remaining_tokens == 0:
+        return pinned
+    dynamic_request = replace(
+        retrieval_request(ctx, request),
+        max_context_items=remaining_items,
+        max_context_tokens=remaining_tokens,
+    )
+    retrieved = RetrievalOrchestrator(
         object_query_service,
         content_retrieval_service=content_retrieval_service,
-    ).retrieve_context(ctx=ctx, request=retrieval_request(ctx, request))
+    ).retrieve_context(ctx=ctx, request=dynamic_request)
+    items = _deduplicated_context((*pinned, *retrieved))
     guard_context_budget(request, items)
     return items
+
+
+def _deduplicated_context(items: tuple[RetrievedContextItem, ...]) -> tuple[RetrievedContextItem, ...]:
+    selected: dict[str, RetrievedContextItem] = {}
+    for item in items:
+        selected.setdefault(item.context_id, item)
+    return tuple(selected.values())
 
 
 def compile_request(
@@ -209,8 +266,8 @@ def usage_payload(
     payload: dict[str, object] = {
         "inputTokens": response.input_tokens,
         "outputTokens": response.output_tokens,
-        "modelCallCount": 2 if tool_execution is not None else 1,
-        "toolCallCount": 1 if has_tool_call else 0,
+        "modelCallCount": tool_execution.model_call_count if tool_execution is not None else 1,
+        "toolCallCount": tool_execution.tool_call_count if tool_execution is not None else int(has_tool_call),
         "contextItemCount": len(context_items),
         "finishReason": response.finish_reason,
     }

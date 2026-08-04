@@ -5,20 +5,29 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TypedDict
 
+from foundry_lite.application.core_service_groups import aip_service_items, source_service_items
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.model_gateway_bridge import GovernedSemanticModelBridge
 from foundry_lite.application.services.action_effect_delivery_service import ActionEffectDeliveryService
 from foundry_lite.application.services.action_services import ActionServices
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
-from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
-from foundry_lite.application.services.aip.builder_runtime import BuilderRuntimeService
 from foundry_lite.application.services.aip.citation_service import CitationService
 from foundry_lite.application.services.aip.context_compiler import ContextCompilerService
 from foundry_lite.application.services.aip.eval_service import EvalService
 from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.aip.prompt_artifact_service import PromptArtifactService
+from foundry_lite.application.services.aip.runtime_services import (
+    AgentRuntimeService,
+    BuilderRuntimeService,
+    FdeApplicationToolService,
+    FdeContextService,
+    FdeOntologyToolService,
+    FdePilotService,
+    FdePlatformToolService,
+    FdeRuntimeService,
+)
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
 from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.backup_restore_services import BackupRestoreServices
@@ -113,6 +122,12 @@ __all__ = [
 class _SharedCoreServices(TypedDict):
     backup_restore: BackupRestoreServices
     dataset: DatasetServices
+    fde_application_tools: FdeApplicationToolService
+    fde_context: FdeContextService
+    fde_ontology_tools: FdeOntologyToolService
+    fde_pilot: FdePilotService
+    fde_platform_tools: FdePlatformToolService
+    fde_runtime: FdeRuntimeService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     media: MediaServices
@@ -152,6 +167,12 @@ class CoreServices:
     demo: DemoService
     erasure: ErasureService
     evals: EvalService
+    fde_ontology_tools: FdeOntologyToolService
+    fde_application_tools: FdeApplicationToolService
+    fde_context: FdeContextService
+    fde_pilot: FdePilotService
+    fde_platform_tools: FdePlatformToolService
+    fde_runtime: FdeRuntimeService
     function_execution: FunctionExecutionService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
@@ -180,7 +201,7 @@ class CoreServices:
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> CoreServices:
         services = _new_core_services(dependencies)
-        _bind_runtime_evidence_boundary(services)
+        services.runtime.evidence_service = services.runtime_evidence
         _bind_core_service_collaborators(services)
         return services
 
@@ -196,6 +217,12 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
     return {
         "backup_restore": BackupRestoreServices.create(dependencies),
         "dataset": DatasetServices.create(dependencies),
+        "fde_application_tools": build_service(FdeApplicationToolService, dependencies),
+        "fde_context": build_service(FdeContextService, dependencies),
+        "fde_ontology_tools": build_service(FdeOntologyToolService, dependencies),
+        "fde_pilot": build_service(FdePilotService, dependencies),
+        "fde_platform_tools": build_service(FdePlatformToolService, dependencies),
+        "fde_runtime": build_service(FdeRuntimeService, dependencies),
         "iceberg_maintenance": build_service(IcebergMaintenanceService, dependencies),
         "insight_review": build_service(InsightReviewService, dependencies),
         "media": MediaServices.create(dependencies),
@@ -209,9 +236,7 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
 
 
 # fmt: off
-def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices,
-                           model_gateway: ModelGatewayService,
-                           pipeline_dependencies: CoreDependencies) -> CoreServices:
+def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices, model_gateway: ModelGatewayService, pipeline_dependencies: CoreDependencies) -> CoreServices:  # noqa: E501
     return CoreServices(
         action=ActionServices.create(dependencies),
         action_effects=build_service(ActionEffectDeliveryService, dependencies),
@@ -228,6 +253,9 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=shared["dataset"], demo=build_service(DemoService, dependencies),
         erasure=build_service(ErasureService, dependencies), evals=build_service(EvalService, dependencies),
+        fde_ontology_tools=shared["fde_ontology_tools"], fde_pilot=shared["fde_pilot"],
+        fde_application_tools=shared["fde_application_tools"], fde_context=shared["fde_context"],
+        fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],
         function_execution=build_service(FunctionExecutionService, dependencies),
         iceberg_maintenance=shared["iceberg_maintenance"],
         materialization=build_service(MaterializationService, dependencies),
@@ -244,8 +272,8 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
         resources=build_service(ResourceCatalogService, dependencies),
-        runtime_evidence=build_service(RuntimeEvidenceService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
+        runtime_evidence=build_service(RuntimeEvidenceService, dependencies),
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies), )
 # fmt: on
@@ -274,10 +302,6 @@ def _pipeline_dependencies(
     )
 
 
-def _bind_runtime_evidence_boundary(services: CoreServices) -> None:
-    services.runtime.evidence_service = services.runtime_evidence
-
-
 def _bind_core_service_collaborators(services: CoreServices) -> None:
     collaborators = _collaborator_map(services)
     for service in _core_service_items(services):
@@ -286,30 +310,20 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
 
 def _core_service_items(services: CoreServices) -> list[CoreService]:
     return [
-        *_action_service_items(services),
-        services.agent_runtime,
-        services.action_proposal,
-        services.approval_execution,
+        *services.action.items(),
+        services.action_effects,
+        *aip_service_items(services),
         *services.backup_restore.items(),
-        services.builder_runtime,
         services.connector_onboarding,
-        *_source_service_items(services),
-        services.context_compiler,
+        *source_service_items(services),
         *services.dataset.items(),
         services.demo,
         services.erasure,
-        services.evals,
         services.function_execution,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,
         *services.media.items(),
-        services.citation,
-        services.logic_runtime,
-        services.model_gateway,
-        services.prompt_artifact,
-        services.tool_broker,
-        services.visual_builder,
         *services.object_store.items(),
         *services.ontology.items(),
         services.ontology_search,
@@ -326,21 +340,6 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
     ]
 
 
-def _action_service_items(services: CoreServices) -> list[CoreService]:
-    return [*services.action.items(), services.action_effects]
-
-
-def _source_service_items(services: CoreServices) -> list[CoreService]:
-    return [
-        services.source_management,
-        services.source_connection_test,
-        services.source_lifecycle,
-        services.source_cdc_object_index,
-        services.source_scheduler,
-        services.source_onboarding,
-    ]
-
-
 def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         **_primary_collaborator_map(services),
@@ -353,9 +352,17 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 
 def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
+        **_action_aip_collaborator_map(services),
+        **_platform_collaborator_map(services),
+    }
+
+
+def _action_aip_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
+    return {
         "action_apply_service": services.action.apply,
         "action_async_run_service": services.action.async_run,
         "action_batch_apply_service": services.action.batch_apply,
+        "action_branch_service": services.action.branch,
         "action_definition_service": services.action.definition,
         "action_effect_delivery_service": services.action_effects,
         "action_log_revert_service": services.action.log_revert,
@@ -366,6 +373,18 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "agent_runtime_service": services.agent_runtime,
         "action_proposal_service": services.action_proposal,
         "approval_execution_service": services.approval_execution,
+        "builder_runtime_service": services.builder_runtime,
+        "context_compiler_service": services.context_compiler,
+        "fde_ontology_tool_service": services.fde_ontology_tools,
+        "fde_application_tool_service": services.fde_application_tools,
+        "fde_context_service": services.fde_context,
+        "fde_pilot_service": services.fde_pilot,
+        "fde_platform_tool_service": services.fde_platform_tools,
+    }
+
+
+def _platform_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
+    return {
         "backup_restore_artifact_execution_service": services.backup_restore.artifact_execution,
         "backup_restore_artifact_restore_service": services.backup_restore.artifact_restore,
         "backup_restore_artifact_service": services.backup_restore.artifact,
@@ -373,14 +392,12 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "backup_restore_preflight_service": services.backup_restore.preflight,
         "backup_restore_service": services.backup_restore.entrypoint,
         "backup_restore_validation_service": services.backup_restore.validation,
-        "builder_runtime_service": services.builder_runtime,
         "connector_onboarding_service": services.connector_onboarding,
         "source_management_service": services.source_management,
         "source_onboarding_service": services.source_onboarding,
-        "citation_service": services.citation,
-        "context_compiler_service": services.context_compiler,
         "demo_service": services.demo,
         "function_execution_service": services.function_execution,
+        "source_connection_test_service": services.source_connection_test,
         "iceberg_maintenance_service": services.iceberg_maintenance,
         "insight_review_service": services.insight_review,
         "logic_runtime_service": services.logic_runtime,
@@ -393,6 +410,7 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 
 def _media_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
+        "citation_service": services.citation,
         "content_unit_chunking_service": services.media.chunking,
         "content_retrieval_service": services.media.retrieval,
         "media_catalog_service": services.media.catalog,
@@ -434,6 +452,7 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "pipeline_preview_service": services.pipelines.preview,
         "pipeline_run_service": services.pipelines.run,
         "pipeline_scheduler_service": services.pipelines.scheduler,
+        "resource_catalog_service": services.resources,
     }
 
 

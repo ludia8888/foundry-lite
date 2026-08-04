@@ -162,6 +162,7 @@ class AiToolCallRecord:
     started_at: str
     completed_at: str | None
     error_json: AiJsonObject | None
+    result_json: AiJsonObject | None = None
 
 
 @dataclass(frozen=True)

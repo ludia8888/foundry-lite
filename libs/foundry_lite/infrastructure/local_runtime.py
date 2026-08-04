@@ -136,6 +136,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 from foundry_lite.infrastructure.auth import LocalOAuthTokenIssuer
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyActionBranchRepository,
     SqlAlchemyActionExecutionRepository,
     SqlAlchemyActionRepository,
     SqlAlchemyAiEvalRepository,
@@ -450,6 +451,7 @@ def _create_core_dependencies(
         ),
         action=ActionDependencies(
             action_repository=SqlAlchemyActionRepository(engine),
+            action_branch_repository=SqlAlchemyActionBranchRepository(engine),
             action_execution_repository=SqlAlchemyActionExecutionRepository(engine),
             action_effect_executor=ConnectorActionEffectExecutor(
                 engine,

@@ -121,6 +121,22 @@ def revert_action_run(
         raise _handle_error(exc, request) from exc
 
 
+@router.get("/api/actions/branches/{branch_id}/diff")
+def action_branch_diff(request: Request, branch_id: str) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.branch_diff(branch_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/branches/{branch_id}/objects/{object_type}/{object_id}")
+def action_branch_object(request: Request, branch_id: str, object_type: str, object_id: str) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.branch_object(branch_id, object_type, object_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @router.get("/api/actions/{action_type}/schema")
 def action_schema(request: Request, action_type: str) -> dict[str, object]:
     try:
@@ -143,8 +159,19 @@ def apply_action(
     action_type: str,
     payload: ActionApplyRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
-) -> ActionApplyResponse:
+) -> ActionApplyResponse | dict[str, object]:
     try:
+        if payload.branch_id is not None:
+            return runtime.foundry.actions.execute_branch(
+                action_type,
+                branch_id=payload.branch_id,
+                object_type=payload.target.object_type,
+                object_id=payload.target.object_id,
+                expected_object_version=payload.expected_object_version,
+                params=payload.params,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            )
         return runtime.foundry.actions.apply(
             action_type,
             object_type=payload.target.object_type,
@@ -168,6 +195,19 @@ def start_action_run(
     wait_seconds: int = Query(default=0, ge=0, le=30, alias="waitSeconds"),
 ) -> dict[str, object]:
     try:
+        if payload.branch_id is not None:
+            snapshot = runtime.foundry.actions.execute_branch(
+                action_type,
+                branch_id=payload.branch_id,
+                object_type=payload.target.object_type,
+                object_id=payload.target.object_id,
+                expected_object_version=payload.expected_object_version,
+                params=payload.params,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            )
+            response.status_code = status.HTTP_200_OK
+            return snapshot
         snapshot = runtime.foundry.actions.start_run(
             action_type,
             object_type=payload.target.object_type,
@@ -198,6 +238,7 @@ def plan_action(
             object_id=payload.target.object_id,
             expected_object_version=payload.expected_object_version,
             params=payload.params,
+            branch_id=payload.branch_id,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:
@@ -217,6 +258,7 @@ def dry_run_action(
             object_id=payload.target.object_id,
             expected_object_version=payload.expected_object_version,
             params=payload.params,
+            branch_id=payload.branch_id,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:

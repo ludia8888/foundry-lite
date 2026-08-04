@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 from foundry_lite.application.dependency_action import (
+    ActionBranchRepository,
     ActionDependencies,
     ActionDependencyAccessors,
     ActionEffectExecutor,
@@ -166,6 +167,7 @@ class CoreDependencies(ActionDependencyAccessors):
     """Dependencies that compose the core facade without hard-coding local infrastructure."""
 
     action_repository: ActionRepository
+    action_branch_repository: ActionBranchRepository
     action_execution_repository: ActionExecutionRepository
     action_effect_executor: ActionEffectExecutor
     action_function_executor: ActionFunctionExecutor

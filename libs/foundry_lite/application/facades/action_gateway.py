@@ -47,6 +47,7 @@ class ActionGateway:
         object_id: str,
         expected_object_version: int,
         params: Mapping[str, object],
+        branch_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> ActionExecutionPlanResponse:
         return self._action.plan_action(
@@ -55,6 +56,7 @@ class ActionGateway:
             object_id=object_id,
             expected_object_version=expected_object_version,
             params=params,
+            branch_id=branch_id,
             ctx=ctx,
         )
 
@@ -66,6 +68,7 @@ class ActionGateway:
         object_id: str,
         expected_object_version: int,
         params: Mapping[str, object],
+        branch_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> ActionExecutionPlanResponse:
         return self._action.plan_action(
@@ -74,9 +77,41 @@ class ActionGateway:
             object_id=object_id,
             expected_object_version=expected_object_version,
             params=params,
+            branch_id=branch_id,
             ctx=ctx,
             is_dry_run=True,
         )
+
+    def execute_branch(
+        self,
+        action_api_name: str,
+        *,
+        branch_id: str,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._action.execute_branch_action(
+            action_api_name,
+            branch_id=branch_id,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def branch_object(
+        self, branch_id: str, object_type: str, object_id: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self._action.branch_object(branch_id, object_type, object_id, ctx=ctx)
+
+    def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._action.branch_diff(branch_id, ctx=ctx)
 
     def apply(
         self,

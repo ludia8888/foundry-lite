@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
 from foundry_lite.application.dependency_compat import required_dependency
+from foundry_lite.application.ports.action_branch_repository import (
+    ActionBranchRepository,
+    UnavailableActionBranchRepository,
+)
 from foundry_lite.application.ports.action_effect_executor import (
     ActionEffectExecutor,
     UnavailableActionEffectExecutor,
@@ -24,6 +29,9 @@ from foundry_lite.application.ports.action_run_orchestrator import (
 @dataclass(frozen=True)
 class ActionDependencies:
     action_repository: ActionRepository
+    action_branch_repository: ActionBranchRepository = field(
+        default_factory=lambda: cast(ActionBranchRepository, UnavailableActionBranchRepository())
+    )
     action_execution_repository: ActionExecutionRepository | None = None
     action_effect_executor: ActionEffectExecutor = field(default_factory=UnavailableActionEffectExecutor)
     action_function_executor: ActionFunctionExecutor = field(default_factory=UnavailableActionFunctionExecutor)
@@ -38,6 +46,10 @@ class ActionDependencyAccessors:
     @property
     def action_repository(self) -> ActionRepository:
         return self.action.action_repository
+
+    @property
+    def action_branch_repository(self) -> ActionBranchRepository:
+        return self.action.action_branch_repository
 
     @property
     def action_execution_repository(self) -> ActionExecutionRepository:

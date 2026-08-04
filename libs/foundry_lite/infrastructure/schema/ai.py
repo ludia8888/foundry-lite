@@ -215,6 +215,7 @@ ai_tool_calls = Table(
     Column("started_at", String, nullable=False),
     Column("completed_at", String),
     Column("error_json", JSON),
+    Column("result_json", JSON),
 )
 
 

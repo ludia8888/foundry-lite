@@ -168,7 +168,7 @@ def _assert_round_trip(engine: Engine) -> None:
     assert duplicate_message["id"] == "ai-message-1"
     assert updated_run is not None
     assert updated_run["status"] == "succeeded"
-    assert session is not None and session["last_activity_at"] == "2026-06-25T00:00:03Z"
+    assert session is not None and session["last_activity_at"] == "2026-06-25T00:00:04Z"
     assert message is not None and message["content_hash"] == "sha256:user-message"
     assert state_versions[0]["state_json"] == {"memory": "short"}
     assert ledger is not None
@@ -178,6 +178,7 @@ def _assert_round_trip(engine: Engine) -> None:
 
 def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tuple[Any, Any]:
     repository.create_session(transaction=transaction, record=_session_record())
+    repository.create_session(transaction=transaction, record=_reused_session_record())
     repository.create_execution_run(transaction=transaction, record=_run_record())
     repository.create_session_state_version(transaction=transaction, record=_state_version_record())
     duplicate = _insert_idempotent_message(repository, transaction)
@@ -257,6 +258,18 @@ def _session_record() -> AiSessionRecord:
         status="active",
         created_at="2026-06-25T00:00:00Z",
         last_activity_at="2026-06-25T00:00:03Z",
+    )
+
+
+def _reused_session_record() -> AiSessionRecord:
+    return AiSessionRecord(
+        id="ai-session-1",
+        tenant_id=_TENANT,
+        agent_version_id="agent-v1",
+        actor_user_id="user-1",
+        status="active",
+        created_at="2026-06-25T00:00:00Z",
+        last_activity_at="2026-06-25T00:00:04Z",
     )
 
 

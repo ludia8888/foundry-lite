@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 2,
+  "researchAsOf": "2026-08-04",
+  "scope": "Publicly documented Palantir AI FDE, Palantir MCP, and Pilot behavior compared with Foundry-lite product evidence. This does not claim access to Palantir proprietary implementation details.",
+  "statusDefinitions": {
+    "current": "A user-reachable product path has code, API or SDK surface, durable evidence, focused tests, and an explicit safety boundary.",
+    "partial": "A bounded subset is implemented and the missing boundary is explicit.",
+    "future_gap": "Not implemented as a user-reachable product capability."
+  },
+  "statusSummary": {
+    "current": 16,
+    "partial": 0,
+    "future_gap": 0
+  },
+  "officialSources": [
+    "https://www.palantir.com/docs/foundry/ai-fde/overview",
+    "https://www.palantir.com/docs/foundry/ai-fde/navigation",
+    "https://www.palantir.com/docs/foundry/ai-fde/modes-and-capabilities",
+    "https://www.palantir.com/docs/foundry/ai-fde/security-and-governance",
+    "https://www.palantir.com/docs/foundry/ai-fde/best-practices",
+    "https://www.palantir.com/docs/foundry/palantir-mcp/overview",
+    "https://www.palantir.com/docs/foundry/palantir-mcp/available-tools",
+    "https://www.palantir.com/docs/foundry/palantir-mcp/security",
+    "https://www.palantir.com/docs/foundry/palantir-mcp/tool-search",
+    "https://www.palantir.com/docs/foundry/pilot/overview"
+  ],
+  "axes": [
+    {
+      "id": "conversational-platform-operations",
+      "status": "current",
+      "palantirContract": "Natural-language intent is translated into governed native platform operations with contextual explanations.",
+      "foundryLiteEvidence": [
+        "libs/foundry_lite/application/services/aip/fde_platform_tools.py",
+        "tests/integration/test_ai_fde_platform.py"
+      ],
+      "boundary": "All execution uses native service contracts; the model cannot submit arbitrary tools or bypass platform permissions."
+    },
+    {
+      "id": "mode-capability-packages",
+      "status": "current",
+      "palantirContract": "A selected mode loads the relevant documentation, capabilities, and tools.",
+      "foundryLiteEvidence": [
+        "libs/foundry_lite/application/services/aip/fde_catalog.py",
+        "GET /api/aip/fde/catalog"
+      ],
+      "boundary": "Exploration, Ontology, data integration, data connection, Functions, governance, ML, OSDK React, and platform Q&A are permission-scoped current modes."
+    },
+    {
+      "id": "invoking-user-identity",
+      "status": "current",
+      "palantirContract": "The agent operates as the current user and remains inside normal permission and audit boundaries.",
+      "foundryLiteEvidence": [
+        "FdeRuntimeService.catalog",
+        "FdePlatformToolService.execute",
+        "test_ai_fde_catalog_is_permission_scoped_and_lists_current_modes"
+      ],
+      "boundary": "The catalog hides unavailable tools and every execution rechecks the invoking principal's normal permission."
+    },
+    {
+      "id": "minimal-explicit-context",
+      "status": "current",
+      "palantirContract": "Sessions start with minimal context and users can attach precise resources as needed.",
+      "foundryLiteEvidence": [
+        "libs/foundry_lite/application/services/aip/fde_context.py",
+        "test_ai_fde_hydrates_explicit_dataset_context_with_permission_and_ledger"
+      ],
+      "boundary": "Dataset, Ontology/Pipeline branch, Source, Function, OSDK app, Project, Resource, and Model attachments are permission-checked, version-pinned, bounded, and recorded."
+    },
+    {
+      "id": "server-owned-tool-contracts",
+      "status": "current",
+      "palantirContract": "Only configured native tools are exposed to the model.",
+      "foundryLiteEvidence": [
+        "fde_tool_catalog",
+        "FdePlatformToolService"
+      ],
+      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits."
+    },
+    {
+      "id": "explicit-mutation-confirmation",
+      "status": "current",
+      "palantirContract": "Mutating tools require explicit user confirmation while read-only tools can run without confirmation.",
+      "foundryLiteEvidence": [
+        "require_tool_approval",
+        "AiFdePanel",
+        "test_builder_mcp_requires_out_of_band_confirmation_and_rejects_untrusted_origin"
+      ],
+      "boundary": "Confirmation is named-tool and single-run scoped; Builder MCP requires a separate X-FDE-Confirm-Tool signal."
+    },
+    {
+      "id": "branch-by-default",
+      "status": "current",
+      "palantirContract": "Generated resource changes are isolated on a branch instead of directly editing production.",
+      "foundryLiteEvidence": [
+        "ontology.branch.apply_patch",
+        "pipeline.branch.update_graph",
+        "tests/e2e-foundry/ai-fde-flow.spec.ts"
+      ],
+      "boundary": "Ontology and Pipeline authoring tools can modify only the selected branch; production activation and deployment are absent from the AI tool catalog."
+    },
+    {
+      "id": "proposal-human-review",
+      "status": "current",
+      "palantirContract": "Branch changes move through proposal review before reaching the default branch.",
+      "foundryLiteEvidence": [
+        "ontology.branch.propose",
+        "pipeline.branch.propose",
+        "test_ai_fde_reuses_user_branch_session_and_submits_human_proposal"
+      ],
+      "boundary": "AI FDE may submit a proposal but cannot approve, execute, merge, deploy, or activate it."
+    },
+    {
+      "id": "closed-loop-execute-observe-adjust",
+      "status": "current",
+      "palantirContract": "The agent executes tools, observes results, and iteratively adjusts until the task is complete.",
+      "foundryLiteEvidence": [
+        "run_fde_tool_loop",
+        "test_ai_fde_runs_bounded_multi_tool_observe_adjust_loop"
+      ],
+      "boundary": "One turn supports one to eight durable tool steps, bounded outputs, and at most one consumption of each write confirmation."
+    },
+    {
+      "id": "durable-session-and-tool-ledger",
+      "status": "current",
+      "palantirContract": "Sessions and tool activity remain attributable and auditable.",
+      "foundryLiteEvidence": [
+        "ai_sessions",
+        "ai_execution_runs",
+        "ai_tool_calls.result_json",
+        "migrations/versions/e8a0c2d4f6b9_ai_fde_tool_results.py"
+      ],
+      "boundary": "Every model/tool/event/result is durable and JSON-RPC retransmission returns the original Builder MCP result."
+    },
+    {
+      "id": "validation-and-diff-evidence",
+      "status": "current",
+      "palantirContract": "The agent previews changes and uses validation or CI evidence before proposing them.",
+      "foundryLiteEvidence": [
+        "ontology.branch.validate",
+        "pipeline.branch.validate",
+        "pipeline.branch.run_tests"
+      ],
+      "boundary": "Ontology migration and Pipeline graph/test evidence are returned from native validation services before human proposal review."
+    },
+    {
+      "id": "lazy-tool-search",
+      "status": "current",
+      "palantirContract": "Large tool catalogs can be searched and loaded lazily to reduce context use.",
+      "foundryLiteEvidence": [
+        "fde.tools.search",
+        "test_ai_fde_lazy_tool_search_activates_docs_and_persists_structured_plan"
+      ],
+      "boundary": "Lazy mode starts with control tools and activates only server-catalog matches for later model turns."
+    },
+    {
+      "id": "structured-plan-and-clarification",
+      "status": "current",
+      "palantirContract": "The agent can expose a plan and ask structured clarifying questions before acting.",
+      "foundryLiteEvidence": [
+        "fde.plan.present",
+        "fde.clarification.request",
+        "AipFdeRunResult.structuredOperations"
+      ],
+      "boundary": "Plans and clarifications are first-class structured tool results, persisted in the tool ledger and returned to the UI."
+    },
+    {
+      "id": "cross-domain-fde-modes",
+      "status": "current",
+      "palantirContract": "Data, connections, functions, governance, ML, OSDK React, exploration, and platform Q&A have specialized modes.",
+      "foundryLiteEvidence": [
+        "FDE_MODES",
+        "FdePlatformToolService",
+        "FdeApplicationToolService",
+        "test_ai_fde_data_integration_mode_uses_native_pipeline_branch"
+      ],
+      "boundary": "Each mode has explicit scope prefixes, capabilities, native adapters, and permission-filtered tool contracts."
+    },
+    {
+      "id": "builder-mcp-tool-plane",
+      "status": "current",
+      "palantirContract": "A builder-oriented MCP exposes governed resource-authoring tools separately from consumer Ontology MCP.",
+      "foundryLiteEvidence": [
+        "apps/api/foundry_lite_api/routers/builder_mcp.py",
+        "test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope",
+        "test_builder_mcp_is_oauth_app_restricted_and_idempotent"
+      ],
+      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, app/client/resource-scope intersection, Origin checks, structured content, out-of-band mutation confirmation, and no approval/merge/deploy tools."
+    },
+    {
+      "id": "pilot-application-generation",
+      "status": "current",
+      "palantirContract": "Natural language can generate an Ontology design, seed data, a React application, CI evidence, and a hosted application path.",
+      "foundryLiteEvidence": [
+        "POST /api/aip/pilot/applications",
+        "apps/foundry/src/features/aip/PilotApplicationPage.tsx",
+        "test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle"
+      ],
+      "boundary": "Generation creates replay-safe seed data, an isolated Ontology branch, restricted OSDK app, OSDK-backed React source, CI contract, durable resource, and a stable preview path; production use still requires human Ontology activation."
+    }
+  ]
+}
