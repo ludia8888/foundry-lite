@@ -324,12 +324,15 @@ def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    for lane in ("local", "all", "static", "coverage", "flaky", "runtime", "runtime-full", "e2e", "release"):
+    for lane in ("pr", "local", "all", "static", "coverage", "flaky", "runtime", "runtime-full", "e2e", "release"):
         assert f'"ci:gate:{lane}": "bash scripts/ci_gate.sh {lane}"' in package_json
         assert f"{lane})" in script
 
-    assert "Usage: bash scripts/ci_gate.sh [local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]" in script
+    assert (
+        "Usage: bash scripts/ci_gate.sh [pr|local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]" in script
+    )
     assert '"ci:gate": "bash scripts/ci_gate.sh local"' in package_json
+    assert "run_pr_gate()" in script
     assert "run_local_gate()" in script
     assert "run_all_gate()" in script
     assert "run_static_gate" in script
@@ -945,9 +948,18 @@ def test_github_workflows_use_node24_action_versions() -> None:
         assert action_ref not in codeql_workflow
 
 
-def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() -> None:
+def test_github_ci_uses_budgeted_pr_gate_and_full_post_merge_lanes() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     nightly = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+
+    pr_job = workflow.split("quality_pr:", maxsplit=1)[1].split("quality_static:", maxsplit=1)[0]
+    assert "name: quality-pr-fast" in pr_job
+    assert "timeout-minutes: 5" in pr_job
+    assert "scripts/quality/pr_fast_gate.py plan" in pr_job
+    assert "run: bash scripts/ci_gate.sh pr" in pr_job
+    assert "tesseract" not in pr_job
+    assert "WhisperModel" not in pr_job
+    assert "playwright install" not in pr_job
 
     for job_name in ("quality-static", "quality-coverage", "quality-runtime", "quality-e2e"):
         assert f"name: {job_name}" in workflow
@@ -956,6 +968,7 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "cancel-in-progress: true" in workflow
     assert "name: quality-gate" in workflow
     assert "needs:" in workflow
+    assert "quality_pr" in workflow
     assert "quality_static" in workflow
     assert "quality_coverage" in workflow
     assert "quality_runtime" in workflow
@@ -967,6 +980,15 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "quality-flaky-nightly" in nightly
     assert "quality-runtime-full" in nightly
     assert "pnpm ci:gate:runtime-full" in nightly
+
+
+def test_release_gate_runs_for_tags_or_manual_dispatch_not_every_main_push() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    trigger = workflow.split("permissions:", maxsplit=1)[0]
+    assert 'tags:\n      - "v*"' in trigger
+    assert "branches:" not in trigger
+    assert "workflow_dispatch:" in trigger
 
 
 def test_release_gate_installs_live_media_prerequisites_before_release_gate() -> None:
@@ -1735,6 +1757,13 @@ def test_github_ci_installs_gitleaks_before_release_gate() -> None:
 def test_codeql_workflow_fails_on_sarif_findings() -> None:
     workflow = (ROOT / ".github" / "workflows" / "codeql.yml").read_text(encoding="utf-8")
 
+    pr_job = workflow.split("pr_diff_security:", maxsplit=1)[1].split("analyze:", maxsplit=1)[0]
+    full_job = workflow.split("analyze:", maxsplit=1)[1]
+    assert "name: CodeQL data-flow analysis" in pr_job
+    assert "timeout-minutes: 5" in pr_job
+    assert "scripts/quality/pr_fast_gate.py security" in pr_job
+    assert "github/codeql-action/init" not in pr_job
+    assert "if: github.event_name != 'pull_request'" in full_job
     assert "github/codeql-action/init@v4" in workflow
     assert "github/codeql-action/analyze@v4" in workflow
     assert "python scripts/quality/codeql/fail_on_sarif_findings.py codeql-results" in workflow

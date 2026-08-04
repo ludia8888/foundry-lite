@@ -14,8 +14,81 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality_pr:
+    name: quality-pr-fast
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # This is the branch-protection latency contract. The gate itself reserves
+    # 210 seconds for checks and leaves the rest for cache restore/setup.
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Classify pull-request change scope
+        id: scope
+        env:
+          FOUNDRY_LITE_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FOUNDRY_LITE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/quality/pr_fast_gate.py plan --github-output "$GITHUB_OUTPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Restore Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: pr-venv-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install Python dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Set up pnpm
+        if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.2
+
+      - name: Set up Node
+        if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Run five-minute pull-request gate
+        env:
+          FOUNDRY_LITE_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FOUNDRY_LITE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci_gate.sh pr
+
+      - name: Upload pull-request gate evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: foundry-lite-pr-fast-gate
+          path: artifacts/quality
+          retention-days: 14
+          if-no-files-found: warn
+
   quality_static:
     name: quality-static
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -80,6 +153,7 @@ jobs:
 
   quality_coverage:
     name: quality-coverage
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # Coverage runs the full backend suite serially so layer coverage remains
     # trustworthy. Keep the timeout above observed PR runtime instead of
@@ -148,6 +222,7 @@ jobs:
 
   quality_runtime:
     name: quality-runtime
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -213,6 +288,7 @@ jobs:
 
   quality_e2e:
     name: quality-e2e
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -293,6 +369,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs:
+      - quality_pr
       - quality_static
       - quality_coverage
       - quality_runtime
@@ -301,14 +378,24 @@ jobs:
     steps:
       - name: Verify all quality lanes passed
         run: |
+          echo "quality-pr-fast: ${{ needs.quality_pr.result }}"
           echo "quality-static:   ${{ needs.quality_static.result }}"
           echo "quality-coverage: ${{ needs.quality_coverage.result }}"
           echo "quality-runtime:  ${{ needs.quality_runtime.result }}"
           echo "quality-e2e:      ${{ needs.quality_e2e.result }}"
 
-          test "${{ needs.quality_static.result }}" = "success"
-          test "${{ needs.quality_coverage.result }}" = "success"
-          test "${{ needs.quality_runtime.result }}" = "success"
-          test "${{ needs.quality_e2e.result }}" = "success"
-
-          echo "Foundry-lite quality gate passed: all parallel lanes succeeded."
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            test "${{ needs.quality_pr.result }}" = "success"
+            test "${{ needs.quality_static.result }}" = "skipped"
+            test "${{ needs.quality_coverage.result }}" = "skipped"
+            test "${{ needs.quality_runtime.result }}" = "skipped"
+            test "${{ needs.quality_e2e.result }}" = "skipped"
+            echo "Foundry-lite PR quality gate passed inside the five-minute merge budget."
+          else
+            test "${{ needs.quality_pr.result }}" = "skipped"
+            test "${{ needs.quality_static.result }}" = "success"
+            test "${{ needs.quality_coverage.result }}" = "success"
+            test "${{ needs.quality_runtime.result }}" = "success"
+            test "${{ needs.quality_e2e.result }}" = "success"
+            echo "Foundry-lite main quality gate passed: all full parallel lanes succeeded."
+          fi
