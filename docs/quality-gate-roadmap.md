@@ -2440,7 +2440,8 @@ UI 수정에도 똑같은 전체 시스템을 다시 세우므로 병합 피드�
 diff secret/위험 코드 검사, Ruff·mypy·pyright·Bandit·아키텍처/스키마/문서 불변식,
 직접 변경되었거나 변경 모듈과 파일명이 연결된 pytest, 영향받은 TypeScript SDK/Foundry typecheck와
 request contract를 병렬 실행한다. 새 Python source가 직접 또는 변경된 테스트와 연결되지 않으면
-fail-closed하고, `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
+fail-closed하고, 변경된 fast test는 모두 실행하되 source-name 자동 연관 테스트는 전체 선택이 32개 파일을
+넘지 않게 제한한다. `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
 남긴다. GitHub job 자체가 5분 timeout이고 내부 검사 budget은 210초다.
 
 이것은 전체 증거의 삭제가 아니라 실행 시점의 변경이다. 전체 coverage/runtime/E2E와

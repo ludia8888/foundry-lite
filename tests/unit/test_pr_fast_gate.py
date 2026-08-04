@@ -75,6 +75,32 @@ def test_pr_plan_fails_closed_when_source_has_no_direct_or_changed_test(monkeypa
     assert plan.source_files_without_tests == ("libs/foundry_lite/application/services/orphan_change.py",)
 
 
+def test_pr_plan_bounds_automatic_linked_tests_without_dropping_changed_tests(monkeypatch, tmp_path: Path) -> None:
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_bounded_tests")
+    source = tmp_path / "libs/foundry_lite/application/services/reservation_engine.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def reserve() -> None:\n    return None\n", encoding="utf-8")
+    tests = tmp_path / "tests/unit"
+    tests.mkdir(parents=True)
+    changed_test = tests / "test_changed_contract.py"
+    changed_test.write_text("def test_changed() -> None:\n    assert True\n", encoding="utf-8")
+    for index in range(gate.MAX_SELECTED_TEST_FILES + 10):
+        (tests / f"test_reservation_engine_{index:02d}.py").write_text(
+            "def test_reservation() -> None:\n    assert True\n", encoding="utf-8"
+        )
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+
+    plan = gate.build_plan(
+        (
+            "libs/foundry_lite/application/services/reservation_engine.py",
+            "tests/unit/test_changed_contract.py",
+        )
+    )
+
+    assert len(plan.selected_tests) == gate.MAX_SELECTED_TEST_FILES
+    assert "tests/unit/test_changed_contract.py" in plan.selected_tests
+
+
 def test_pr_diff_security_detects_high_confidence_secret_and_unsafe_python() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_security")
     fake_aws_key = "AKIA" + ("A" * 16)

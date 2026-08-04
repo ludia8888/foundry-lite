@@ -28,6 +28,7 @@ GIT: str = _GIT_EXECUTABLE
 REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_fast_gate.json"
 SECURITY_REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_diff_security.json"
 DEFAULT_BUDGET_SECONDS = 210.0
+MAX_SELECTED_TEST_FILES = 32
 GENERIC_MODULE_STEMS = {
     "__init__",
     "base",
@@ -168,6 +169,13 @@ def _direct_test_matches(source_path: str, test_paths: tuple[Path, ...]) -> set[
     return matches
 
 
+def _bounded_test_selection(changed_tests: set[str], direct_tests: set[str]) -> tuple[str, ...]:
+    required = sorted(changed_tests)
+    remaining_slots = max(0, MAX_SELECTED_TEST_FILES - len(required))
+    linked = sorted(direct_tests - changed_tests)[:remaining_slots]
+    return tuple([*required, *linked])
+
+
 def _is_fast_test_path(path: str) -> bool:
     if not path.startswith("tests/") or not path.endswith(".py"):
         return False
@@ -191,9 +199,8 @@ def _is_fast_test_path(path: str) -> bool:
 def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
     existing_tests = tuple(sorted(ROOT.glob("tests/**/test_*.py")))
     changed_python_tests = {path for path in paths if _is_fast_test_path(path) and (ROOT / path).is_file()}
-    selected_tests = set(changed_python_tests)
     if _quality_control_changed(paths):
-        selected_tests.update(
+        changed_python_tests.update(
             {
                 "tests/unit/test_pr_fast_gate.py",
                 "tests/unit/test_quality_ci_workflows.py",
@@ -206,8 +213,10 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
         if path.endswith(".py") and path.startswith(("libs/", "apps/", "scripts/")) and not path.startswith("tests/")
     )
     source_matches = {path: _direct_test_matches(path, existing_tests) for path in source_paths}
+    direct_tests: set[str] = set()
     for matches in source_matches.values():
-        selected_tests.update(matches)
+        direct_tests.update(matches)
+    selected_tests = _bounded_test_selection(changed_python_tests, direct_tests)
     untested = tuple(
         sorted(path for path, matches in source_matches.items() if not matches and not changed_python_tests)
     )
@@ -217,7 +226,7 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
     is_docs_only = bool(paths) and all(_is_docs_path(path) for path in paths)
     return PullRequestPlan(
         changed_files=paths,
-        selected_tests=tuple(sorted(selected_tests)),
+        selected_tests=selected_tests,
         source_files_without_tests=untested,
         has_backend=has_backend,
         has_frontend=has_frontend,
