@@ -102,3 +102,8 @@ ignore_imports =
     foundry_lite_worker.pipeline_control -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.pipeline_dag -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.pipeline_node_subprocess -> foundry_lite.infrastructure.local_runtime
+    # Action worker entrypoints are the equivalent composition roots for
+    # durable Temporal activities, governed effect delivery, and recovery.
+    foundry_lite_worker.action_runs -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.action_control -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.action_effects -> foundry_lite.infrastructure.local_runtime

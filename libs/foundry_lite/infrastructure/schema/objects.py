@@ -140,6 +140,7 @@ object_edits = Table(
     Column("edit_type", String, nullable=False),
     Column("patch", JSON, nullable=False),
     Column("previous_values", JSON, nullable=False),
+    Column("revert_payload", JSON),
     Column("actor_user_id", String),
     Column("idempotency_key", String),
     Column("created_at", String, nullable=False),

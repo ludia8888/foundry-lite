@@ -83,6 +83,7 @@ class ToolSpec:
     max_result_items: int = 50
     result_classification: str = "public"
     status: str = "published"
+    description: str = ""
 
 
 @dataclass(frozen=True)

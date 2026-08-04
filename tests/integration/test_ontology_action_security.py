@@ -1550,17 +1550,30 @@ def test_action_execute_permission_does_not_bypass_object_read(
             ctx=ingest_only,
         )
 
-    # The same execute grant plus a role with object:read may act: the denial
-    # above was precisely the missing read permission, not the execute grant.
+    # Read access alone is insufficient: Action v3 intersects execute, read,
+    # and per-edit permissions before commit.
     ingest_reader = RequestContext(actor_user_id="ingest-2", roles=("connector_ingest", "viewer"))
+    with pytest.raises(PermissionDenied) as edit_denied:
+        foundry.actions.apply(
+            "ExpediteOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "reader cannot edit"},
+            idempotency_key="expedite-with-read-only",
+            ctx=ingest_reader,
+        )
+
+    # Adding an object-edit role satisfies the full permission intersection.
+    ingest_editor = RequestContext(actor_user_id="ingest-3", roles=("connector_ingest", "data_engineer"))
     applied = foundry.actions.apply(
         "ExpediteOrder",
         object_type="Order",
         object_id="O-1001",
         expected_object_version=order["objectVersion"],
-        params={"reason": "reader may act"},
-        idempotency_key="expedite-with-read",
-        ctx=ingest_reader,
+        params={"reason": "authorized editor may act"},
+        idempotency_key="expedite-with-edit",
+        ctx=ingest_editor,
     )
 
     runs = foundry.operations.list_runs(ctx=admin_ctx)
@@ -1571,6 +1584,7 @@ def test_action_execute_permission_does_not_bypass_object_read(
     ]
     assert apply_denied.value.details["permission"] == "object:read"
     assert validate_denied.value.details["permission"] == "object:read"
+    assert edit_denied.value.details["permission"] == "object:edit"
     assert applied["status"] == "succeeded"
     assert {event["action"] for event in read_denials} == {"apply", "validate"}
     assert all(event["after_ref"]["permission"] == "object:read" for event in read_denials)

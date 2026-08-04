@@ -8,7 +8,15 @@ Importing this package registers every table on the shared metadata.
 from __future__ import annotations
 
 from foundry_lite.infrastructure.schema.actions import (
+    action_branch_edits,
+    action_branch_objects,
+    action_effect_receipts,
+    action_log_entries,
+    action_log_objects,
+    action_run_events,
+    action_run_steps,
     action_runs,
+    action_step_attempts,
     action_writebacks,
 )
 from foundry_lite.infrastructure.schema.ai import (
@@ -248,6 +256,14 @@ __all__ = [
     "source_sync_runs",
     "source_syncs",
     "action_runs",
+    "action_branch_edits",
+    "action_branch_objects",
+    "action_effect_receipts",
+    "action_log_entries",
+    "action_log_objects",
+    "action_run_steps",
+    "action_step_attempts",
+    "action_run_events",
     "action_writebacks",
     "erasure_certificates",
     "erasure_redaction_executions",

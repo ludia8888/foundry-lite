@@ -11,20 +11,10 @@ from foundry_lite.application.services.aip.action_proposal import (
     ActionProposalResult,
     ActionProposalService,
 )
-from foundry_lite.application.services.aip.agent_runtime import (
-    AgentRuntimeRequest,
-    AgentRuntimeResult,
-    AgentRuntimeService,
-)
 from foundry_lite.application.services.aip.approval_execution import (
     ApprovalExecutionRequest,
     ApprovalExecutionResult,
     ApprovalExecutionService,
-)
-from foundry_lite.application.services.aip.builder_runtime import (
-    BuilderRuntimeRequest,
-    BuilderRuntimeResult,
-    BuilderRuntimeService,
 )
 from foundry_lite.application.services.aip.citation_service import (
     CitationNavigationResolveResult,
@@ -38,11 +28,24 @@ from foundry_lite.application.services.aip.eval_service import (
     ReleasePromotionRequest,
     ReleasePromotionResult,
 )
+from foundry_lite.application.services.aip.fde_mcp_service import FdeMcpGateway, FdeMcpToolCall
 from foundry_lite.application.services.aip.logic_runtime import (
     LogicBlock,
     LogicRunRequest,
     LogicRunResult,
     LogicRuntimeService,
+)
+from foundry_lite.application.services.aip.runtime_services import (
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    AgentRuntimeService,
+    BuilderRuntimeRequest,
+    BuilderRuntimeResult,
+    BuilderRuntimeService,
+    FdePilotService,
+    FdeRuntimeService,
+    FdeTurnResult,
+    fde_turn_request_from_payload,
 )
 from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.application.services.aip.visual_builder import (
@@ -65,6 +68,9 @@ class AipWorkspace:
         builder_runtime: BuilderRuntimeService,
         logic_runtime: LogicRuntimeService,
         evals: EvalService,
+        fde_runtime: FdeRuntimeService,
+        fde_mcp: FdeMcpGateway,
+        fde_pilot: FdePilotService,
         visual_builder: VisualBuilderService,
         citation: CitationService,
     ) -> None:
@@ -74,6 +80,9 @@ class AipWorkspace:
         self._builder_runtime = builder_runtime
         self._logic_runtime = logic_runtime
         self._evals = evals
+        self._fde_runtime = fde_runtime
+        self._fde_mcp = fde_mcp
+        self._fde_pilot = fde_pilot
         self._visual_builder = visual_builder
         self._citation = citation
 
@@ -267,6 +276,50 @@ class AipWorkspace:
     ) -> AgentRuntimeResult:
         return self._agent_runtime.run(ctx or RequestContext(), _agent_runtime_request_from_payload(payload))
 
+    def fde_catalog(self, *, ctx: RequestContext | None = None) -> Mapping[str, object]:
+        return self._fde_runtime.catalog(ctx or RequestContext())
+
+    def run_fde_payload(
+        self,
+        *,
+        payload: Mapping[str, object],
+        ctx: RequestContext | None = None,
+    ) -> FdeTurnResult:
+        return self._fde_runtime.run_turn(
+            ctx or RequestContext(),
+            fde_turn_request_from_payload(payload),
+        )
+
+    def fde_mcp_tools(self, application_id: str, *, ctx: RequestContext | None = None) -> Mapping[str, object]:
+        return self._fde_mcp.list_tools(ctx or RequestContext(), application_id)
+
+    def run_fde_mcp_tool(
+        self,
+        request: FdeMcpToolCall,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._fde_mcp.execute_tool(ctx or RequestContext(), request)
+
+    def plan_pilot_application(
+        self, arguments: Mapping[str, object], *, ctx: RequestContext | None = None
+    ) -> Mapping[str, object]:
+        actor = ctx or RequestContext()
+        self._fde_runtime.catalog(actor)
+        return self._fde_pilot.plan(arguments)
+
+    def generate_pilot_application(
+        self,
+        plan: Mapping[str, object],
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._fde_pilot.generate(ctx or RequestContext(), plan, idempotency_key)
+
+    def get_pilot_application(self, rid: str, *, ctx: RequestContext | None = None) -> Mapping[str, object]:
+        return self._fde_pilot.get_bundle(ctx or RequestContext(), rid)
+
     def resolve_citation_navigation(
         self,
         *,
@@ -365,6 +418,7 @@ def _builder_tool_spec(payload: Mapping[str, object]) -> ToolSpec:
     return ToolSpec(
         tool_id=_text(payload, "toolId"),
         version=_text(payload, "version"),
+        description=_text_default(payload, "description", ""),
         input_schema=_mapping(payload, "inputSchema"),
         output_schema=_mapping(payload, "outputSchema"),
         effect=cast(ToolEffect, _text(payload, "effect")),

@@ -160,6 +160,7 @@ def target_request_error(
     record: ObjectRecordRow | None,
     expected_object_version: int,
     params: Mapping[str, object],
+    ctx: RequestContext,
 ) -> Exception | None:
     """Same per-target checks as single apply: existence, version CAS read, preconditions/params."""
     if record is None:
@@ -172,7 +173,7 @@ def target_request_error(
                 "expectedObjectVersion": expected_object_version,
             },
         )
-    return validate_action_request(action_type, record, params)
+    return validate_action_request(action_type, record, params, ctx)
 
 
 def target_failure(object_id: str, error: Exception) -> TargetFailure:

@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar
 
-from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.dependencies import (
+    ActionEffectExecutor,
+    ActionExecutionRepository,
+    ActionFunctionExecutor,
+    ActionRunOrchestrator,
+    CoreDependencies,
+)
 from foundry_lite.application.pipeline_runtime_dependencies import (
     GovernedSemanticModelPort,
     MediaProcessorRegistry,
@@ -78,7 +84,13 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_apply_service": "ActionApplyService",
+    "action_async_run_service": "ActionAsyncRunService",
     "action_batch_apply_service": "ActionBatchApplyService",
+    "action_branch_service": "ActionBranchService",
+    "action_definition_service": "ActionDefinitionService",
+    "action_effect_delivery_service": "ActionEffectDeliveryService",
+    "action_log_revert_service": "ActionLogRevertService",
+    "action_planning_service": "ActionPlanningService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",
     "action_writeback_service": "ActionWritebackService",
@@ -117,6 +129,11 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "exact_dataset_version_reader_service": "ExactCommittedDatasetVersionReader",
     "demo_service": "DemoService",
     "function_execution_service": "FunctionExecutionService",
+    "fde_application_tool_service": "FdeApplicationToolService",
+    "fde_context_service": "FdeContextService",
+    "fde_ontology_tool_service": "FdeOntologyToolService",
+    "fde_pilot_service": "FdePilotService",
+    "fde_platform_tool_service": "FdePlatformToolService",
     "iceberg_maintenance_service": "IcebergMaintenanceService",
     "insight_review_service": "InsightReviewService",
     "logic_runtime_service": "LogicRuntimeService",
@@ -164,7 +181,9 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "pipeline_run_service": "PipelineRunService",
     "pipeline_scheduler_service": "PipelineSchedulerService",
     "record_dlq_service": "RecordDlqService",
+    "resource_catalog_service": "ResourceCatalogService",
     "runtime_service": "RuntimeService",
+    "source_connection_test_service": "SourceConnectionTestService",
     "tool_broker_service": "ToolBrokerService",
     "transform_definition_service": "TransformDefinitionService",
     "transform_dlq_replay_service": "TransformDlqReplayService",
@@ -247,6 +266,10 @@ class CoreService:
     metadata_repository: MetadataRepository
     insight_review_service: object
     action_repository: ActionRepository
+    action_effect_executor: ActionEffectExecutor
+    action_execution_repository: ActionExecutionRepository
+    action_function_executor: ActionFunctionExecutor
+    action_run_orchestrator: ActionRunOrchestrator
     ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository

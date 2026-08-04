@@ -9,6 +9,13 @@ from threading import Barrier
 from typing import Any, Protocol, cast
 
 import pytest
+from foundry_lite.application.action_log_types import (
+    ActionLogEntryRecord,
+    ActionLogEntryRow,
+    ActionLogObjectRecord,
+    ActionLogObjectRow,
+    ObjectRestoreWrite,
+)
 from foundry_lite.application.ports.action_repository import (
     ActionRepository,
     ActionRunRecord,
@@ -66,6 +73,8 @@ class FakeActionRepository:
     object_records: list[dict[str, Any]] = field(default_factory=list)
     object_links: list[dict[str, Any]] = field(default_factory=list)
     object_edits: list[dict[str, Any]] = field(default_factory=list)
+    action_logs: list[dict[str, Any]] = field(default_factory=list)
+    action_log_object_rows: list[dict[str, Any]] = field(default_factory=list)
 
     def action_run_by_idempotency(
         self,
@@ -130,6 +139,11 @@ class FakeActionRepository:
             row.copy() for row in self.action_runs if row["tenant_id"] == tenant_id and row["status"] in tuple(statuses)
         ]
         return matches[:limit]
+
+    def action_runs_for_monitoring(self, *, transaction: Any, tenant_id: str, limit: int) -> list[ActionRunRow]:
+        del transaction
+        rows = [row.copy() for row in self.action_runs if row["tenant_id"] == tenant_id]
+        return sorted(rows, key=lambda row: (row["created_at"], row["id"]), reverse=True)[:limit]
 
     def update_action_run_terminal(
         self,
@@ -343,6 +357,125 @@ class FakeActionRepository:
         if not rows:
             return None
         return cast(ObjectEditRow, max(rows, key=lambda row: (row["created_at"], row["id"])).copy())
+
+    def insert_action_log(
+        self,
+        *,
+        transaction: Any,
+        entry: ActionLogEntryRecord,
+        objects: Sequence[ActionLogObjectRecord],
+    ) -> ActionLogEntryRow | None:
+        del transaction
+        if any(
+            row["tenant_id"] == entry.tenant_id and row["action_run_id"] == entry.action_run_id
+            for row in self.action_logs
+        ):
+            return None
+        row = _action_log_entry_row(entry)
+        self.action_logs.append(row)
+        self.action_log_object_rows.extend(_action_log_object_row(item) for item in objects)
+        return cast(ActionLogEntryRow, row.copy())
+
+    def action_log_by_run_id(self, *, transaction: Any, tenant_id: str, action_run_id: str) -> ActionLogEntryRow | None:
+        del transaction
+        for row in self.action_logs:
+            if row["tenant_id"] == tenant_id and row["action_run_id"] == action_run_id:
+                return cast(ActionLogEntryRow, row.copy())
+        return None
+
+    def action_log_objects(
+        self, *, transaction: Any, tenant_id: str, action_log_entry_id: str
+    ) -> list[ActionLogObjectRow]:
+        del transaction
+        rows = [
+            row
+            for row in self.action_log_object_rows
+            if row["tenant_id"] == tenant_id and row["action_log_entry_id"] == action_log_entry_id
+        ]
+        return [cast(ActionLogObjectRow, row.copy()) for row in sorted(rows, key=lambda row: row["ordinal"])]
+
+    def list_action_logs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        before_created_at: str | None,
+        before_log_id: str | None,
+        limit: int,
+    ) -> list[ActionLogEntryRow]:
+        del transaction
+        rows = [row for row in self.action_logs if row["tenant_id"] == tenant_id]
+        if before_created_at is not None and before_log_id is not None:
+            rows = [row for row in rows if (row["created_at"], row["id"]) < (before_created_at, before_log_id)]
+        ordered = sorted(rows, key=lambda row: (row["created_at"], row["id"]), reverse=True)[:limit]
+        return [cast(ActionLogEntryRow, row.copy()) for row in ordered]
+
+    def mark_action_log_reverted(
+        self, *, transaction: Any, tenant_id: str, action_run_id: str, reverted_by_run_id: str
+    ) -> bool:
+        del transaction
+        for row in self.action_logs:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["action_run_id"] == action_run_id
+                and row["revert_status"] == "eligible"
+                and row["reverted_by_run_id"] is None
+            ):
+                row.update(revert_status="reverted", reverted_by_run_id=reverted_by_run_id)
+                return True
+        return False
+
+    def object_target_for_revert(
+        self, *, transaction: Any, tenant_id: str, object_type_id: str, object_id: str
+    ) -> Any | None:
+        del transaction
+        for row in self.object_records:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["object_type_id"] == object_type_id
+                and row["object_id"] == object_id
+            ):
+                return row.copy()
+        return None
+
+    def object_link_for_revert(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        link_type_id: str,
+        from_object_id: str,
+        to_object_id: str,
+    ) -> Any | None:
+        del transaction
+        for row in self.object_links:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["link_type_id"] == link_type_id
+                and row["from_object_id"] == from_object_id
+                and row["to_object_id"] == to_object_id
+            ):
+                return row.copy()
+        return None
+
+    def restore_object_target(self, *, transaction: Any, record: ObjectRestoreWrite) -> bool:
+        del transaction
+        for row in self.object_records:
+            if (
+                row["tenant_id"] == record.tenant_id
+                and row["id"] == record.object_record_id
+                and row["object_version"] == record.expected_object_version
+                and row["deleted"]
+            ):
+                row.update(
+                    deleted=False,
+                    is_active=True,
+                    deletion_reason=None,
+                    object_version=record.expected_object_version + 1,
+                    updated_at=record.updated_at,
+                )
+                return True
+        return False
 
 
 @dataclass
@@ -718,6 +851,83 @@ def _object_edit_row(record: ObjectEditRecord) -> dict[str, Any]:
         "actor_user_id": record.actor_user_id,
         "idempotency_key": record.idempotency_key,
         "created_at": record.created_at,
+        "revert_payload": record.revert_payload,
+    }
+
+
+def _action_log_entry_record() -> ActionLogEntryRecord:
+    return ActionLogEntryRecord(
+        log_entry_id="alog_1",
+        tenant_id="tenant-demo",
+        action_run_id="arun_1",
+        log_object_type_api_name="[LOG] approveOrder",
+        log_object_id="arun_1",
+        action_type_id="atype_approve",
+        action_type_api_name="approveOrder",
+        definition_version="sha256:definition",
+        actor_user_id="actor-demo",
+        status="succeeded",
+        parameters={"status": "APPROVED"},
+        result={"status": "succeeded"},
+        branch_id=None,
+        plan_hash="sha256:plan",
+        approval_id=None,
+        revert_allowed=True,
+        created_at="2026-06-10T00:00:00Z",
+        completed_at="2026-06-10T00:00:05Z",
+    )
+
+
+def _action_log_object_record() -> ActionLogObjectRecord:
+    return ActionLogObjectRecord(
+        log_object_link_id="alogobj_1",
+        tenant_id="tenant-demo",
+        action_log_entry_id="alog_1",
+        object_edit_id="edit_1",
+        object_type_id="ot_order",
+        object_type_api_name="Order",
+        object_id="O-1",
+        edit_type="set_property",
+        ordinal=0,
+    )
+
+
+def _action_log_entry_row(record: ActionLogEntryRecord) -> dict[str, Any]:
+    return {
+        "id": record.log_entry_id,
+        "tenant_id": record.tenant_id,
+        "action_run_id": record.action_run_id,
+        "log_object_type_api_name": record.log_object_type_api_name,
+        "log_object_id": record.log_object_id,
+        "action_type_id": record.action_type_id,
+        "action_type_api_name": record.action_type_api_name,
+        "definition_version": record.definition_version,
+        "actor_user_id": record.actor_user_id,
+        "status": record.status,
+        "parameters": record.parameters,
+        "result": record.result,
+        "branch_id": record.branch_id,
+        "plan_hash": record.plan_hash,
+        "approval_id": record.approval_id,
+        "revert_allowed": record.revert_allowed,
+        "revert_status": "eligible" if record.revert_allowed else "not_allowed",
+        "reverted_by_run_id": None,
+        "created_at": record.created_at,
+        "completed_at": record.completed_at,
+    }
+
+
+def _action_log_object_row(record: ActionLogObjectRecord) -> dict[str, Any]:
+    return {
+        "id": record.log_object_link_id,
+        "tenant_id": record.tenant_id,
+        "action_log_entry_id": record.action_log_entry_id,
+        "object_edit_id": record.object_edit_id,
+        "object_type_id": record.object_type_id,
+        "object_type_api_name": record.object_type_api_name,
+        "object_id": record.object_id,
+        "edit_type": record.edit_type,
+        "ordinal": record.ordinal,
     }
 
 
@@ -1371,6 +1581,67 @@ def test_action_repository_contract_queries_run_edits_and_latest_object_edit(har
     assert latest["id"] == "edit_2"
 
 
+def test_action_repository_contract_persists_one_log_and_revert_cas(harness: ActionHarness) -> None:
+    entry = _action_log_entry_record()
+    object_link = _action_log_object_record()
+    other_tenant = replace(
+        entry,
+        log_entry_id="alog_other",
+        tenant_id="tenant-other",
+        action_run_id="arun_other",
+        log_object_id="arun_other",
+    )
+    with harness.transaction() as transaction:
+        inserted = harness.repository.insert_action_log(
+            transaction=transaction,
+            entry=entry,
+            objects=(object_link,),
+        )
+        duplicate = harness.repository.insert_action_log(
+            transaction=transaction,
+            entry=entry,
+            objects=(object_link,),
+        )
+        harness.repository.insert_action_log(transaction=transaction, entry=other_tenant, objects=())
+        found = harness.repository.action_log_by_run_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+        )
+        objects = harness.repository.action_log_objects(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_log_entry_id="alog_1",
+        )
+        page = harness.repository.list_action_logs(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            before_created_at=None,
+            before_log_id=None,
+            limit=10,
+        )
+        won = harness.repository.mark_action_log_reverted(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            reverted_by_run_id="arun_revert",
+        )
+        lost = harness.repository.mark_action_log_reverted(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            reverted_by_run_id="arun_revert_2",
+        )
+
+    assert inserted is not None and inserted["id"] == "alog_1"
+    assert duplicate is None
+    assert found is not None and found["tenant_id"] == "tenant-demo"
+    assert [item["object_edit_id"] for item in objects] == ["edit_1"]
+    assert [item["id"] for item in page] == ["alog_1"]
+    assert won is True
+    assert lost is False
+
+
 def test_action_repository_contract_creates_object_and_rejects_duplicate_identity(harness: ActionHarness) -> None:
     with harness.transaction() as transaction:
         created = harness.repository.create_object_record(transaction=transaction, record=_object_create_write())
@@ -1402,13 +1673,33 @@ def test_action_repository_contract_soft_deletes_object_under_cas(harness: Actio
             transaction=transaction,
             record=_object_delete_write(expected_object_version=3),
         )
+        restored = harness.repository.restore_object_target(
+            transaction=transaction,
+            record=ObjectRestoreWrite(
+                object_record_id="obj_order_1",
+                tenant_id="tenant-demo",
+                expected_object_version=4,
+                updated_at="2026-06-10T00:00:07Z",
+            ),
+        )
+        stale_restore = harness.repository.restore_object_target(
+            transaction=transaction,
+            record=ObjectRestoreWrite(
+                object_record_id="obj_order_1",
+                tenant_id="tenant-demo",
+                expected_object_version=4,
+                updated_at="2026-06-10T00:00:08Z",
+            ),
+        )
 
     row = next(row for row in harness.object_rows() if row["id"] == "obj_order_1")
     assert deleted is True
     assert stale is False
-    assert row["deleted"] and not row["is_active"]
-    assert row["object_version"] == 4
-    assert row["deletion_reason"] == "action:FulfillOrder"
+    assert restored is True
+    assert stale_restore is False
+    assert not row["deleted"] and row["is_active"]
+    assert row["object_version"] == 5
+    assert row["deletion_reason"] is None
 
 
 def test_action_repository_contract_creates_and_reactivates_link(harness: ActionHarness) -> None:

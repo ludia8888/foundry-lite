@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Protocol, cast
 
 from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyResponse, ActionPlanSummary
@@ -23,6 +24,7 @@ from foundry_lite.application.ports.action_repository import (
     ObjectProperties,
 )
 from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _json_hash
+from foundry_lite.application.safe_expression import resolve_action_request_parameters
 from foundry_lite.application.services.action_validation import action_cache_refresh_hint, action_edit_summary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -35,6 +37,34 @@ from foundry_lite.domain.errors import (
 
 RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
 PROTECTED_RUNTIME_PROFILES = frozenset({"production", "prod", "staging", "stage"})
+
+
+def resolved_action_command(
+    ctx: RequestContext,
+    action_type: ActionTypeRow,
+    record: ObjectRecordRow,
+    command: ActionApplyCommand,
+) -> ActionApplyCommand:
+    resolution = resolve_action_request_parameters(
+        action_type,
+        record,
+        command.params,
+        ctx,
+        generate_id=stable_parameter_id_generator(command.idempotency_key),
+    )
+    return command if resolution is None else replace(command, params=dict(resolution.values))
+
+
+def stable_parameter_id_generator(idempotency_key: str) -> Callable[[str], str]:
+    sequence = 0
+
+    def generate(strategy: str) -> str:
+        nonlocal sequence
+        sequence += 1
+        payload = {"idempotencyKey": idempotency_key, "strategy": strategy, "sequence": sequence}
+        return f"{strategy}_{_json_hash(payload)[:24]}"
+
+    return generate
 
 
 class SupportsErrorPayload(Protocol):
@@ -333,6 +363,8 @@ def action_failure_transition(error: Exception) -> StatusTransition:
 
 
 def require_action_target_api_name(action_type: ActionTypeRow, requested_object_type: str) -> None:
+    if action_type.get("target_kind", "object") == "interface":
+        return
     expected_object_type = str(action_type["target_api_name"])
     if requested_object_type == expected_object_type:
         return
@@ -343,6 +375,8 @@ def require_action_target_api_name(action_type: ActionTypeRow, requested_object_
 
 
 def action_target_record_error(action_type: ActionTypeRow, record: ObjectRecordRow) -> InvariantViolation | None:
+    if action_type.get("target_kind", "object") == "interface":
+        return None
     expected_object_type_id = str(action_type["target_object_type_id"])
     if str(record["object_type_id"]) == expected_object_type_id:
         return None

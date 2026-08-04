@@ -8,7 +8,7 @@ from typing import Literal, NotRequired, Protocol, TypedDict
 from foundry_lite.application.ports.runtime_repository import RuntimeJsonObject
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
-OsdkResourceType = Literal["object", "action", "link", "function"]
+OsdkResourceType = Literal["object", "action", "link", "function", "connector"]
 OsdkResourceOperation = Literal["read", "subscribe", "validate", "execute"]
 OsdkLanguage = Literal["typescript", "python"]
 OsdkReleaseStatus = Literal["released", "blocked"]

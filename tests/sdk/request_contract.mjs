@@ -996,6 +996,89 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.fde.catalog",
+  () => client.aip.fde.catalog(),
+  {
+    path: "/api/aip/fde/catalog",
+    method: "GET",
+    headers: {},
+  },
+);
+await expectSdkCall(
+  "aip.fde.run",
+  () =>
+    client.aip.fde.run({
+      userMessage: "Create Restaurant and Booking types on my branch.",
+      workspaceRef: "ontology-branch:ontbranch-1",
+      mode: "ontology_editing",
+      toolDiscovery: "lazy",
+      capabilities: ["ontology.inspect", "ontology.validate", "ontology.edit"],
+      approvedToolIds: ["ontology.branch.apply_patch"],
+      attachedContextRefs: ["dataset:clean.restaurants"],
+      agentRunId: "fde-web-1",
+      maxToolCalls: 4,
+    }),
+  {
+    path: "/api/aip/fde/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      userMessage: "Create Restaurant and Booking types on my branch.",
+      workspaceRef: "ontology-branch:ontbranch-1",
+      mode: "ontology_editing",
+      toolDiscovery: "lazy",
+      capabilities: ["ontology.inspect", "ontology.validate", "ontology.edit"],
+      approvedToolIds: ["ontology.branch.apply_patch"],
+      attachedContextRefs: ["dataset:clean.restaurants"],
+      agentRunId: "fde-web-1",
+      maxToolCalls: 4,
+    },
+  },
+);
+await expectSdkCall(
+  "aip.pilot.plan",
+  () => client.aip.pilot.plan({ applicationName: "Dining Concierge", domainDescription: "Booking operations" }),
+  {
+    path: "/api/aip/pilot/plan",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { applicationName: "Dining Concierge", domainDescription: "Booking operations" },
+  },
+);
+const pilotPlan = {
+  operationType: "pilot_generation_plan",
+  applicationName: "Dining Concierge",
+  domainDescription: "Booking operations",
+  slug: "dining-concierge",
+  projectDisplayName: "Dining Concierge Pilot",
+  seed: {},
+  ontologyResources: [],
+  applicationResources: [],
+  react: {},
+  ci: {},
+  requiredApprovals: ["pilot.application.generate"],
+};
+await expectSdkCall(
+  "aip.pilot.generate",
+  () => client.aip.pilot.generate({ plan: pilotPlan }, { idempotencyKey: "pilot-generate-1" }),
+  {
+    path: "/api/aip/pilot/applications",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "pilot-generate-1" },
+    body: { plan: pilotPlan },
+  },
+);
+await expectSdkCall(
+  "aip.pilot.get",
+  () => client.aip.pilot.get("ri.foundry-lite.pilot.abc"),
+  { path: "/api/aip/pilot/applications/ri.foundry-lite.pilot.abc", method: "GET", headers: {} },
+);
+assertMissingIdempotencyFailFast(
+  "aip.pilot.generate",
+  () => client.aip.pilot.generate({ plan: pilotPlan }),
+  "aip.pilot.generate",
+);
+await expectSdkCall(
   "aip.citations.resolveNavigation",
   () =>
     client.aip.citations.resolveNavigation({
@@ -4559,6 +4642,127 @@ await expectSdkCall("materializations.run", () => client.materializations.run("D
 await expectSdkCall("materializations.list", () => client.materializations.list(), {
   path: "/api/materializations",
 });
+await expectSdkCall("actions.list", () => client.actions.list({ cursor: "next/action", limit: 25 }), {
+  path: "/api/actions?cursor=next%2Faction&limit=25",
+});
+await expectSdkCall("actions.get", () => client.actions.get("Expedite Order"), {
+  path: "/api/actions/Expedite%20Order",
+});
+await expectSdkCall("actions.schema", () => client.actions.schema("Expedite Order"), {
+  path: "/api/actions/Expedite%20Order/schema",
+});
+const genericActionPlan = {
+  target: { objectType: "Order", objectId: "order/1" },
+  expectedObjectVersion: 7,
+  params: { reason: "approved" },
+};
+await expectSdkCall("actions.plan", () => client.actions.plan("Expedite Order", genericActionPlan), {
+  path: "/api/actions/Expedite%20Order/plan",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: genericActionPlan,
+});
+await expectSdkCall("actions.dryRun", () => client.actions.dryRun("Expedite Order", genericActionPlan), {
+  path: "/api/actions/Expedite%20Order/dry-run",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: genericActionPlan,
+});
+await expectSdkCall("actions.logs", () => client.actions.logs({ cursor: "cursor/log", limit: 10 }), {
+  path: "/api/actions/logs?cursor=cursor%2Flog&limit=10",
+});
+await expectSdkCall("actions.branches.diff", () => client.actions.branches.diff("branch/action-1"), {
+  path: "/api/actions/branches/branch%2Faction-1/diff",
+});
+await expectSdkCall(
+  "actions.branches.object",
+  () => client.actions.branches.object("branch/action-1", "Purchase Order", "order/1"),
+  { path: "/api/actions/branches/branch%2Faction-1/objects/Purchase%20Order/order%2F1" },
+);
+await expectSdkCall(
+  "actions.runs.start",
+  () =>
+    client.actions.runs.start("Expedite Order", genericActionPlan, {
+      idempotencyKey: "idem-action-run",
+      waitSeconds: 12,
+    }),
+  {
+    path: "/api/actions/Expedite%20Order/runs?waitSeconds=12",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-action-run" },
+    body: genericActionPlan,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.start",
+  () => client.actions.runs.start("Expedite Order", genericActionPlan),
+  "actions.runs.start",
+);
+await expectSdkCall("actions.runs.list", () => client.actions.runs.list({ cursor: "cursor/action", limit: 25 }), {
+  path: "/api/actions/runs?cursor=cursor%2Faction&limit=25",
+});
+await expectSdkCall("actions.runs.get", () => client.actions.runs.get("run/action-1"), {
+  path: "/api/actions/runs/run%2Faction-1",
+});
+responseQueue.push(
+  streamResponse([
+    'id: 8\nevent: action.run.running\ndata: {"runId":"run/action-1"}\n\n',
+  ]),
+);
+const actionRunEvents = [];
+for await (const event of client.actions.runs.events("run/action-1", { lastEventId: 7 })) {
+  actionRunEvents.push(event);
+}
+assert.equal(actionRunEvents[0].id, "8");
+assert.equal(actionRunEvents[0].eventType, "action.run.running");
+const actionEventCall = calls.at(-1);
+assert.equal(
+  actionEventCall.url,
+  `${BASE_URL}/api/actions/runs/run%2Faction-1/events`,
+  "actions.runs.events",
+);
+assertBaseHeaders(actionEventCall.init.headers, "actions.runs.events");
+assert.equal(actionEventCall.init.headers["Last-Event-ID"], "7", "actions.runs.events");
+coveredSurfaceIds.add("actions.runs.events");
+await expectSdkCall(
+  "actions.runs.cancel",
+  () =>
+    client.actions.runs.cancel(
+      "run/action-1",
+      { reason: "operator stop" },
+      { idempotencyKey: "idem-action-cancel" },
+    ),
+  {
+    path: "/api/actions/runs/run%2Faction-1/cancel",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-action-cancel" },
+    body: { reason: "operator stop" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.cancel",
+  () => client.actions.runs.cancel("run/action-1", {}),
+  "actions.runs.cancel",
+);
+await expectSdkCall(
+  "actions.runs.revertEligibility",
+  () => client.actions.runs.revertEligibility("run/action-1"),
+  { path: "/api/actions/runs/run%2Faction-1/revert-eligibility" },
+);
+await expectSdkCall(
+  "actions.runs.revert",
+  () => client.actions.runs.revert("run/action-1", { idempotencyKey: "idem-action-revert" }),
+  {
+    path: "/api/actions/runs/run%2Faction-1/revert",
+    method: "POST",
+    headers: { "Idempotency-Key": "idem-action-revert" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.revert",
+  () => client.actions.runs.revert("run/action-1"),
+  "actions.runs.revert",
+);
 await expectSdkCall(
   "actions.generated.validate",
   () =>
@@ -4578,6 +4782,46 @@ await expectSdkCall(
     },
   },
 );
+await expectSdkCall(
+  "actions.generated.plan",
+  () =>
+    client.actions.ApproveOrder.plan({
+      objectId: "order/1",
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    }),
+  {
+    path: "/api/actions/ApproveOrder/plan",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "Order", objectId: "order/1" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    },
+  },
+);
+await expectSdkCall(
+  "actions.generated.dryRun",
+  () =>
+    client.actions.ApproveOrder.dryRun({
+      objectId: "order/1",
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    }),
+  {
+    path: "/api/actions/ApproveOrder/dry-run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "Order", objectId: "order/1" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    },
+  },
+);
+coveredSurfaceIds.delete("actions.generated.plan");
+coveredSurfaceIds.delete("actions.generated.dryRun");
 await expectSdkCall(
   "actions.generated.apply",
   () =>

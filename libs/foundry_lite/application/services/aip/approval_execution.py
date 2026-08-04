@@ -11,9 +11,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
 
+from foundry_lite.application.action_types import ActionExecutionPlanResponse
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.action_plan_payloads import action_plan_object_versions
 from foundry_lite.application.services.aip.approval_execution_payloads import (
     approved_executable_proposal,
     evidence_refs,
@@ -55,6 +57,20 @@ class _ActionRunner(Protocol):
         idempotency_key: str,
         ctx: RequestContext | None = None,
     ) -> Mapping[str, object]: ...
+
+
+class _ActionPlanner(Protocol):
+    def plan_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext | None = None,
+        is_dry_run: bool = False,
+    ) -> ActionExecutionPlanResponse: ...
 
 
 class _OntologyLookup(Protocol):
@@ -130,7 +146,14 @@ class ApprovalExecutionService(CoreService):
     """Execute approved ontology action proposals exactly once."""
 
     required_dependencies = ("engine", "policy", "ai_run_repository", "insight_review_repository")
-    required_collaborators = ("action_service", "ontology_service", "object_records_service", "runtime_service")
+    required_collaborators = (
+        "action_planning_service",
+        "action_service",
+        "ontology_service",
+        "object_records_service",
+        "runtime_service",
+    )
+    action_planning_service: _ActionPlanner
     action_service: _ActionRunner
     object_records_service: _ObjectRecordLookup
     ontology_service: _OntologyLookup
@@ -211,8 +234,32 @@ class ApprovalExecutionService(CoreService):
         action = self._action_type(transaction, ctx, prepared)
         if not skip_target_record:
             self._target_record(transaction, ctx, action, prepared)
+            self._require_plan_current(ctx, prepared, action)
         require_not_expired(proposal)
         require_recomputed_fingerprint(prepared, evidence_refs(proposal), cast(JsonObject, ledger["run"]))
+
+    def _require_plan_current(
+        self,
+        ctx: RequestContext,
+        prepared: PreparedExecution,
+        action: Mapping[str, object],
+    ) -> None:
+        if prepared.plan_hash is None:
+            return
+        if prepared.action_version != required_text(action, "ontology_version_id"):
+            raise ApprovalExecutionError("approval_action_version_drift", "approved Action version is no longer active")
+        current = self.action_planning_service.plan_action(
+            prepared.action_type,
+            object_type=prepared.target_object_type,
+            object_id=prepared.target_object_id,
+            expected_object_version=prepared.expected_object_version,
+            params=prepared.parameters,
+            ctx=ctx,
+        )
+        if current["planHash"] != prepared.plan_hash:
+            raise ApprovalExecutionError("approval_plan_drift", "approved Action plan no longer matches current state")
+        if prepared.object_versions != action_plan_object_versions(current):
+            raise ApprovalExecutionError("approval_object_version_conflict", "approved object versions are stale")
 
     def _finish_execution(
         self,

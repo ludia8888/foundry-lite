@@ -2071,7 +2071,120 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "      },",
     ]
     lines.extend(_web_object_client_lines(surface.objects))
-    lines.extend(["    },", "    actions: {"])
+    lines.extend(
+        [
+            "    },",
+            "    actions: {",
+            "      list: (listOptions = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (listOptions.cursor) query.set('cursor', listOptions.cursor);",
+            "        if (listOptions.limit !== undefined) query.set('limit', String(listOptions.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request(`/api/actions${suffix}`);",
+            "      },",
+            "      get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`),",
+            "      schema: (actionApiName) =>",
+            "        request(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+            "      plan: (actionApiName, payload) => request(",
+            "        `/api/actions/${encodeURIComponent(actionApiName)}/plan`,",
+            (
+                '        { method: "POST", headers: { "Content-Type": "application/json" }, '
+                "body: JSON.stringify(payload) },"
+            ),
+            "      ),",
+            "      dryRun: (actionApiName, payload) => request(",
+            "        `/api/actions/${encodeURIComponent(actionApiName)}/dry-run`,",
+            (
+                '        { method: "POST", headers: { "Content-Type": "application/json" }, '
+                "body: JSON.stringify(payload) },"
+            ),
+            "      ),",
+            "      logs: (listOptions = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (listOptions.cursor) query.set('cursor', listOptions.cursor);",
+            "        if (listOptions.limit !== undefined) query.set('limit', String(listOptions.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request(`/api/actions/logs${suffix}`);",
+            "      },",
+            "      branches: {",
+            "        diff: (branchId) =>",
+            "          request(`/api/actions/branches/${encodeURIComponent(branchId)}/diff`),",
+            "        object: (branchId, objectType, objectId) => request(",
+            (
+                "          `/api/actions/branches/${encodeURIComponent(branchId)}/objects/"
+                "${encodeURIComponent(objectType)}/${encodeURIComponent(objectId)}`,"
+            ),
+            "        ),",
+            "      },",
+            "      runs: {",
+            "        start: (actionApiName, payload, runOptions) => request(",
+            (
+                "          `/api/actions/${encodeURIComponent(actionApiName)}/runs` + "
+                "`${runOptions?.waitSeconds === undefined ? '' : `?waitSeconds=${runOptions.waitSeconds}`}`,"
+            ),
+            "          {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            '              "Idempotency-Key": requireIdempotencyKey(runOptions?.idempotencyKey, "actions.runs.start"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          },",
+            "        ),",
+            "        list: (filters = {}) => {",
+            "          const params = new URLSearchParams();",
+            "          if (filters.cursor) params.set('cursor', filters.cursor);",
+            "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+            "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+            "          return request(`/api/actions/runs${suffix}`);",
+            "        },",
+            "        get: (runId) => request(`/api/actions/runs/${encodeURIComponent(runId)}`),",
+            "        events: (runId, streamOptions = {}) => {",
+            "          const { lastEventId, ...eventOptions } = streamOptions;",
+            "          return streamFoundryLiteOperationEvents(",
+            "            `/api/actions/runs/${encodeURIComponent(runId)}/events`,",
+            "            {",
+            "              ...options,",
+            "              ...eventOptions,",
+            "              headers: {",
+            "                ...(options.headers ?? {}),",
+            "                ...(eventOptions.headers ?? {}),",
+            "                ...(lastEventId === undefined ? {} : { 'Last-Event-ID': String(lastEventId) }),",
+            "              },",
+            "            },",
+            "          );",
+            "        },",
+            "        cancel: (runId, payload = {}, cancelOptions) => request(",
+            "          `/api/actions/runs/${encodeURIComponent(runId)}/cancel`,",
+            "          {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            (
+                '              "Idempotency-Key": requireIdempotencyKey('
+                'cancelOptions?.idempotencyKey, "actions.runs.cancel"),'
+            ),
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          },",
+            "        ),",
+            "        revertEligibility: (runId) =>",
+            "          request(`/api/actions/runs/${encodeURIComponent(runId)}/revert-eligibility`),",
+            "        revert: (runId, revertOptions) => request(",
+            "          `/api/actions/runs/${encodeURIComponent(runId)}/revert`,",
+            "          {",
+            '            method: "POST",',
+            "            headers: {",
+            (
+                '              "Idempotency-Key": requireIdempotencyKey('
+                'revertOptions?.idempotencyKey, "actions.runs.revert"),'
+            ),
+            "            },",
+            "          },",
+            "        ),",
+            "      },",
+        ]
+    )
     lines.extend(_web_action_client_lines(surface.actions))
     lines.extend(["    },", "    interfaces: {"])
     lines.extend(_web_interface_client_lines(surface))
@@ -2117,6 +2230,30 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         '          headers: { "Content-Type": "application/json" },',
         "          body: JSON.stringify(payload),",
         "        }),",
+        "      },",
+        "      fde: {",
+        "        catalog: () => request(`/api/aip/fde/catalog`),",
+        "        run: (payload) => request(`/api/aip/fde/run`, {",
+        '          method: "POST",',
+        '          headers: { "Content-Type": "application/json" },',
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "      },",
+        "      pilot: {",
+        "        plan: (payload) => request(`/api/aip/pilot/plan`, {",
+        '          method: "POST",',
+        '          headers: { "Content-Type": "application/json" },',
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "        generate: (payload, options) => request(`/api/aip/pilot/applications`, {",
+        '          method: "POST",',
+        (
+            '          headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "aip.pilot.generate") },'
+        ),
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "        get: (rid) => request(`/api/aip/pilot/applications/${encodeURIComponent(rid)}`),",
         "      },",
         "      citations: {",
         "        resolveNavigation: (payload) => request(`/api/aip/citations/navigation/resolve`, {",
@@ -2646,6 +2783,24 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
             [
                 f"      {action_def.api_name}: {{",
                 f"        validate: (payload) => request(`/api/actions/{action_def.api_name}/validate`, {{",
+                '          method: "POST",',
+                '          headers: { "Content-Type": "application/json" },',
+                "          body: JSON.stringify({",
+                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                "            expectedObjectVersion: payload.expectedObjectVersion,",
+                "            params: payload.params,",
+                "          }),",
+                "        }),",
+                f"        plan: (payload) => request(`/api/actions/{action_def.api_name}/plan`, {{",
+                '          method: "POST",',
+                '          headers: { "Content-Type": "application/json" },',
+                "          body: JSON.stringify({",
+                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                "            expectedObjectVersion: payload.expectedObjectVersion,",
+                "            params: payload.params,",
+                "          }),",
+                "        }),",
+                f"        dryRun: (payload) => request(`/api/actions/{action_def.api_name}/dry-run`, {{",
                 '          method: "POST",',
                 '          headers: { "Content-Type": "application/json" },',
                 "          body: JSON.stringify({",

@@ -3,6 +3,12 @@ import type {
   AipBuilderValidateRequest,
   AipBuilderValidationResult,
   AipEvalRunResult,
+  AipFdeCatalog,
+  AipFdeRunRequest,
+  AipFdeRunResult,
+  AipPilotApplicationBundle,
+  AipPilotPlan,
+  AipPilotPlanRequest,
   AipReleasePromotionResult,
   PromptArtifactReadResult,
 } from "@foundry-lite/sdk";
@@ -12,7 +18,7 @@ import {
   useFoundryLiteMutation,
   useFoundryLiteProvidedAipAgentRunWithOperationsDetail,
 } from "@foundry-lite/sdk/react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   buildBuilderRunRequest,
@@ -37,6 +43,60 @@ export type PromotePayload = {
  */
 export function useAipWorkspace() {
   const client = useFoundryLiteClient();
+
+  const [fdeCatalog, setFdeCatalog] = useState<AipFdeCatalog | null>(null);
+  const [fdeCatalogError, setFdeCatalogError] = useState<unknown>(null);
+  useEffect(() => {
+    let isCurrent = true;
+    void client.aip.fde
+      .catalog()
+      .then((catalog) => {
+        if (isCurrent) setFdeCatalog(catalog);
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) setFdeCatalogError(error);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [client]);
+
+  const runFde = useFoundryLiteMutation<AipFdeRunResult, AipFdeRunRequest>(
+    (payload) => client.aip.fde.run(payload),
+    {
+      lockKey: (payload) =>
+        `aip:fde:${payload.workspaceRef ?? payload.branchId ?? "unscoped"}`,
+    },
+  );
+  const executeFde = useCallback(
+    (payload: AipFdeRunRequest) =>
+      runFde.execute({
+        ...payload,
+        agentRunId: payload.agentRunId ?? createRequestId("aip-fde"),
+      }),
+    [runFde],
+  );
+
+  const planPilot = useFoundryLiteMutation<AipPilotPlan, AipPilotPlanRequest>(
+    (payload) => client.aip.pilot.plan(payload),
+    { lockKey: (payload) => `aip:pilot:plan:${payload.applicationName}` },
+  );
+  const generatePilot = useFoundryLiteMutation<
+    AipPilotApplicationBundle,
+    AipPilotPlan
+  >(
+    (plan) =>
+      client.aip.pilot.generate(
+        { plan },
+        {
+          idempotencyKey: idempotencyKey(
+            "aip-pilot-generate",
+            plan.slug,
+          ),
+        },
+      ),
+    { lockKey: (plan) => `aip:pilot:generate:${plan.slug}` },
+  );
 
   // 에이전트 실행 + 연결된 operations run detail (근거 evidence 동시 로드).
   const agent = useFoundryLiteProvidedAipAgentRunWithOperationsDetail();
@@ -178,6 +238,13 @@ export function useAipWorkspace() {
   );
 
   return {
+    fdeCatalog,
+    fdeCatalogError,
+    runFde,
+    executeFde,
+    planPilot,
+    generatePilot,
+
     agent,
     runAgent,
     agentIdempotencyKey,

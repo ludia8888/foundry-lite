@@ -12,6 +12,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_action_import import import_action_types
 from foundry_lite.application.services.ontology_activation_service import OntologyActivationService
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan, reindex_operation
 from foundry_lite.application.services.ontology_validation import (
@@ -137,6 +138,57 @@ def test_ontology_definition_validation_rejects_unknown_link_cardinality() -> No
         validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
 
     assert exc_info.value.details["linkType"] == "OrderCustomer"
+
+
+def test_ontology_definition_validation_rejects_unknown_v3_rule_object() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    action = _first_action(definition)
+    action.pop("mutations")
+    action.update(
+        {
+            "contractVersion": 3,
+            "permissions": {"allowedRoles": ["ops_manager"]},
+            "rules": [
+                {
+                    "kind": "modifyObject",
+                    "ruleId": "ghost",
+                    "objectType": "Ghost",
+                    "target": {"kind": "parameter", "parameter": "__target__"},
+                    "assignments": [],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValidationFailed, match="object type reference was not found"):
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+
+def test_ontology_definition_validation_rejects_low_risk_sensitive_edit() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    _status_property(definition)["classification"] = "pii"
+    action = _first_action(definition)
+    action.pop("mutations")
+    action.update(
+        {
+            "contractVersion": 3,
+            "riskLevel": "low",
+            "agentExecutionPolicy": "autonomous",
+            "permissions": {"allowedRoles": ["ops_manager"]},
+            "rules": [
+                {
+                    "kind": "modifyObject",
+                    "ruleId": "sensitive",
+                    "objectType": "Order",
+                    "target": {"kind": "parameter", "parameter": "__target__"},
+                    "assignments": [{"property": "status", "value": {"kind": "literal", "value": "APPROVED"}}],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValidationFailed, match="sensitive property edits require high"):
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
 
 
 def test_ontology_definition_validation_rejects_unknown_backing_and_action_enums() -> None:
@@ -372,8 +424,9 @@ def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
             {"linkTypes": [{"apiName": "OrderCustomer", "from": "Order", "to": "Customer"}]},
             {"Order": "otype_Order"},
         )
-    with pytest.raises(ValidationFailed, match="action target object type not found"):
-        service._import_action_types(
+    with pytest.raises(ValidationFailed, match="action target reference was not found"):
+        import_action_types(
+            service.ontology_repository,
             FakeTransaction(),
             demo_admin_context(),
             "ont_candidate",
@@ -396,6 +449,9 @@ class _RecordingOntologyRepository:
 
     def insert_property_type(self, **kwargs: object) -> None:
         self.property_records.append(kwargs["record"])
+
+    def insert_action_type(self, **_kwargs: object) -> None:
+        raise AssertionError("invalid action target must fail before persistence")
 
 
 class _RecordingRuntimeService:

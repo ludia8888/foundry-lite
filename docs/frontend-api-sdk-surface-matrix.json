@@ -487,6 +487,67 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.fde.catalog",
+      "route": "GET /api/aip/fde/catalog",
+      "productArea": "ai-fde",
+      "sdkSurface": "aip.fde.catalog",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AI FDE exposes only server-owned modes and tools that pass the invoking user's normal platform permissions, including data, source, function, governance, ML, OSDK React, and platform Q&A surfaces.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.fde.run",
+      "route": "POST /api/aip/fde/run",
+      "productArea": "ai-fde",
+      "sdkSurface": "aip.fde.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AI FDE executes a bounded cross-domain model-tool loop as the invoking user, supports lazy tool search and explicit workspace attachments, requires named mutation approval, keeps Ontology and Pipeline edits branch-first, and links structured plan, clarification, model, tool, usage, and proposal evidence to AI Operations.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.pilot.plan",
+      "route": "POST /api/aip/pilot/plan",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.plan",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Pilot planning deterministically describes the Project, seed Dataset, Ontology resources, OSDK resource scopes, React application, CI commands, and the generation approval required before any resource is created.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.pilot.generate",
+      "route": "POST /api/aip/pilot/applications",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.generate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "An explicit Idempotency-Key creates one Project, replay-safe seed Dataset version, isolated Ontology branch, restricted OSDK application, OSDK-backed React source bundle, CI workflow, and durable Pilot resource.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract",
+      "requiresIdempotencyKey": true
+    },
+    {
+      "id": "aip.pilot.get",
+      "route": "GET /api/aip/pilot/applications/{rid}",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The generated application bundle is reloaded through the permission-scoped Resource catalog and powers its stable project application path without activating the draft Ontology.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.citations.resolveNavigation",
       "route": "POST /api/aip/citations/navigation/resolve",
       "productArea": "aip-citation-navigation",
@@ -3129,12 +3190,72 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "actions.list",
+      "route": "GET /api/actions",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The active Action catalog is cursor-paged and filtered by principal permission plus OSDK application resource scope before canonical v3 contracts are returned.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.get",
+      "route": "GET /api/actions/{action_type}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Action detail returns the immutable ontology version, canonical contract fingerprint, target, risk, agent policy, and deterministic parameter schema after scope checks.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.schema",
+      "route": "GET /api/actions/{action_type}/schema",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.schema",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The dynamic form, SDK, and future MCP tool consume the same fingerprinted JSON Schema generated from the canonical v3 contract.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "actions.generated.validate",
       "route": "POST /api/actions/{action_type}/validate",
       "productArea": "action-workspace",
       "sdkSurface": "actions.ApproveOrder.validate",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Generated action validation calls reuse the action permission, target version, parameter, and precondition boundary without creating an action run or requiring an Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.plan",
+      "route": "POST /api/actions/{action_type}/plan",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.plan",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Action planning resolves the current object versions and canonical rules, checks every edit permission, derives a fail-closed risk floor, and returns a deterministic plan hash without mutating Ontology state.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.dryRun",
+      "route": "POST /api/actions/{action_type}/dry-run",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.dryRun",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dry-run uses the same immutable EditPlan and plan hash as plan, marks the response as non-committing, and exposes redacted before/after evidence for UI review.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -3161,6 +3282,129 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Generated batch action calls include Idempotency-Key and per-target expectedObjectVersion; the all-or-nothing multi-target mutation returns one actionRunId with per-target edit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.start",
+      "route": "POST /api/actions/{action_type}/runs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.start",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The Idempotency-Key scoped API persists the immutable plan and queued run before Temporal dispatch; the SDK returns orchestration, step, attempt, and fencing evidence without exposing lease tokens.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.list",
+      "route": "GET /api/actions/runs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Cursor history returns tenant-scoped durable Action run summaries for runtime monitoring.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.get",
+      "route": "GET /api/actions/runs/{run_id}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The run snapshot exposes orchestration status, node step, retries, worker identity, fencing token, cancellation, result, and terminal error evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.events",
+      "route": "GET /api/actions/runs/{run_id}/events",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.events",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Durable ordered events support Last-Event-ID reconnection while transport heartbeats remain ephemeral.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.cancel",
+      "route": "POST /api/actions/runs/{run_id}/cancel",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.cancel",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The Idempotency-Key scoped cancellation is recorded in PostgreSQL before Temporal cancellation and late workers are fenced from committing.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.logs",
+      "route": "GET /api/actions/logs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.logs",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Cursor history exposes one normalized log per successful submission, every edited object/link, redacted parameters, revert state, effect receipt count, and bounded p95/failure/backlog monitoring.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.revertEligibility",
+      "route": "GET /api/actions/runs/{run_id}/revert-eligibility",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.revertEligibility",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Eligibility explains actor, definition policy, latest-edit, object version/state, link state, and preserved external-effect evidence without mutating Ontology state.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.revert",
+      "route": "POST /api/actions/runs/{run_id}/revert",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.revert",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The Idempotency-Key scoped revert CAS restores all still-latest internal object/link edits atomically, writes a new non-revertible run/log/audit/outbox, and never claims to undo external effects.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.branches.diff",
+      "route": "GET /api/actions/branches/{branch_id}/diff",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.branches.diff",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The Action branch diff composes immutable main records with tenant-scoped overlay edits, reports main-version drift, and never mutates the active Ontology.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.branches.object",
+      "route": "GET /api/actions/branches/{branch_id}/objects/{object_type}/{object_id}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.branches.object",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch object reads compose the base snapshot and isolated Action overlay under the same tenant and object permission boundary.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -3469,6 +3713,31 @@
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /mcp/builder/{application_id}",
+      "accessClass": "external-mcp-json-rpc",
+      "reason": "Builder MCP JSON-RPC is consumed by OAuth-authorized external coding agents and must not be wrapped as a normal product REST SDK call."
+    },
+    {
+      "route": "GET /mcp/builder/{application_id}",
+      "accessClass": "external-mcp-stream",
+      "reason": "Builder MCP Streamable HTTP reconnect and server events are governed by the MCP transport contract rather than the product REST SDK."
+    },
+    {
+      "route": "DELETE /mcp/builder/{application_id}",
+      "accessClass": "external-mcp-session",
+      "reason": "Builder MCP session termination is an external protocol operation rather than a browser product control."
+    },
+    {
+      "route": "GET /.well-known/oauth-protected-resource/mcp/builder/{application_id}",
+      "accessClass": "oauth-discovery",
+      "reason": "OAuth protected-resource metadata is consumed by MCP clients during standards-based authorization discovery."
+    },
+    {
+      "route": "GET /.well-known/oauth-authorization-server",
+      "accessClass": "oauth-discovery",
+      "reason": "OAuth authorization-server metadata is a public discovery document for external clients, not a named product SDK surface."
     }
   ]
 }

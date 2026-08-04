@@ -135,6 +135,7 @@ class FunctionTypeDefinition(TypedDict):
 
     apiName: str
     displayName: str
+    version: str
     runtime: str
     inputs: Sequence[FunctionInputDefinition]
     output: FunctionOutputDefinition
@@ -156,6 +157,14 @@ class ActionParameterDefinition(TypedDict):
     apiName: str
     type: str
     required: NotRequired[bool]
+    description: NotRequired[str]
+    default: NotRequired[OntologyJsonObject]
+    constraints: NotRequired[OntologyJsonObject]
+    overrides: NotRequired[Sequence[OntologyJsonObject]]
+    objectType: NotRequired[str]
+    interfaceType: NotRequired[str]
+    itemType: NotRequired[str]
+    fields: NotRequired[Sequence[OntologyJsonObject]]
 
 
 class RequiredActionMutationFields(TypedDict):
@@ -176,16 +185,29 @@ class ActionTypeDefinition(TypedDict, total=False):
     """Action definition payload persisted with an action type."""
 
     apiName: str
+    contractVersion: int
     displayName: str
+    description: str
     target: str
+    targetKind: str
     parameters: Sequence[ActionParameterDefinition]
     permissions: OntologyJsonObject
     preconditions: Sequence[OntologyJsonObject]
+    submissionCriteria: OntologyJsonObject
+    riskLevel: str
+    agentExecutionPolicy: str
+    agentToolDescription: str
+    actionLog: OntologyJsonObject
+    revert: OntologyJsonObject
+    branchPolicy: OntologyJsonObject
     mutations: Sequence[ActionMutationDefinition]
     # Native Action IR v2 rules (createObject/modifyObject(s)/createOrModifyObject/
     # deleteObject(s)/createLink/deleteLink/functionEdit). Presence of this key selects
     # the multi-object v2 commit path; its absence keeps the legacy setProperty path.
     rulesV2: Sequence[OntologyJsonObject]
+    rules: Sequence[OntologyJsonObject]
+    function: OntologyJsonObject
+    effects: Sequence[OntologyJsonObject]
     writebacks: Sequence[OntologyJsonObject]
     sideEffects: Sequence[OntologyJsonObject]
 

@@ -122,6 +122,7 @@ _AI_TOOL_CALL_FIELDS = (
     "started_at",
     "completed_at",
     "error_json",
+    "result_json",
 )
 _AI_CITATION_FIELDS = (
     "id",

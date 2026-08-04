@@ -330,6 +330,30 @@ def test_approval_rechecks_object_version_before_action_run(foundry: Any) -> Non
     assert _table_count(foundry.engine, db.action_runs) == before_bridge_attempt
 
 
+def test_approval_rechecks_pinned_plan_before_action_run(foundry: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    service = foundry._services.approval_execution  # noqa: SLF001 - test hooks the composition boundary.
+    original_plan = service.action_planning_service.plan_action
+
+    def drifted_plan(*args: object, **kwargs: object) -> Mapping[str, object]:
+        return {**original_plan(*args, **kwargs), "planHash": "sha256:" + "f" * 64}
+
+    monkeypatch.setattr(service.action_planning_service, "plan_action", drifted_plan)
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-plan-drift",
+            ctx=_CTX,
+        )
+
+    assert excinfo.value.reason == "approval_plan_drift"
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
 def test_approval_execution_rejects_expired_review_before_action(foundry: Any) -> None:
     ctx = prepare_indexed_demo(foundry)
     proposal = _approved_proposal(foundry, ctx, expires_at="2000-01-01T00:00:00+00:00")

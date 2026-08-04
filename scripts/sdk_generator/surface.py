@@ -183,7 +183,10 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         ),
         actions=tuple(
             ActionClientSurface(
-                item.api_name, item.target, f"{item.api_name}ApplyRequest", ("apply", "validate", "applyBatch")
+                item.api_name,
+                item.target,
+                f"{item.api_name}ApplyRequest",
+                ("apply", "validate", "plan", "dryRun", "applyBatch"),
             )
             for item in ontology.actions
         ),
@@ -200,6 +203,8 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         aip=(
             OperationClientSurface("builder", ("validate", "run")),
             OperationClientSurface("agent", ("run",)),
+            OperationClientSurface("fde", ("catalog", "run")),
+            OperationClientSurface("pilot", ("plan", "generate", "get")),
             OperationClientSurface("citations", ("resolveNavigation",)),
             OperationClientSurface("evals", ("run",)),
             OperationClientSurface("releases", ("promote",)),
@@ -311,7 +316,12 @@ def _methods_payload(
 
 def render_client_surface_json(surface: SdkClientSurface) -> str:
     payload: dict[str, object] = {
-        "actions": _methods_payload(surface.actions),
+        "actions": {
+            "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
+            "branches": ["diff", "object"],
+            "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
+            **_methods_payload(surface.actions),
+        },
         "auth": _methods_payload(surface.auth),
         "connectors": _methods_payload(surface.connectors),
         "resources": _methods_payload(surface.resources),

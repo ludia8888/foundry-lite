@@ -4,41 +4,48 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from foundry_lite.application.action_types import (
+from foundry_lite.application.services.action_apply_contracts import (
     ActionApplyCommand,
     ActionApplyOutcome,
     ActionApplyResponse,
-)
-from foundry_lite.application.ports import (
+    ActionOsdkScopeBoundary,
     ActionRunRecord,
     ActionRunRow,
     ActionTypeRow,
+    ConflictDetected,
+    EditPlan,
+    InvariantViolation,
+    NotFound,
     ObjectRecordRow,
     OsdkResourceOperation,
+    PermissionDenied,
+    RequestContext,
     TransactionContext,
+    ValidationFailed,
 )
-from foundry_lite.application.primitives import _new_id, _now
-from foundry_lite.application.safe_expression import validate_action_request
-from foundry_lite.application.services.action_external_apply import ExternalActionApply
-from foundry_lite.application.services.action_helpers import (
+from foundry_lite.application.services.action_apply_support import (
+    _new_id,
+    _now,
     action_command,
     action_failure_transition,
     action_replay_response,
     action_target_record_error,
     audit_idempotency_conflict,
-    require_action_target_api_name,
-    require_action_write_open,
-)
-from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
+    require_action_target_api_name,
     require_action_target_read,
+    require_action_write_open,
     require_failure_injection_for_command,
+    resolved_action_command,
     segment_mutation_denied_error,
+    stable_parameter_id_generator,
+    validate_action_request,
+    visible_record,
 )
-from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
+from foundry_lite.application.services.action_external_apply import ExternalActionApply
+from foundry_lite.application.services.action_plan_authorization import resolve_authorized_action_edit_plan
 from foundry_lite.application.services.action_v2_commit import (
     ActionV2Committer,
-    CommitLinkTypeResolver,
     uses_action_rules_v2,
 )
 from foundry_lite.application.services.action_workflow import (
@@ -50,15 +57,7 @@ from foundry_lite.application.services.action_workflow import (
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.object_store.row_policies import visible_record
-from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    InvariantViolation,
-    NotFound,
-    PermissionDenied,
-    ValidationFailed,
-)
+from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
 
 
 class ActionApplyService(CoreService):
@@ -77,7 +76,7 @@ class ActionApplyService(CoreService):
     action_writeback_service: ActionWritebackService
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
-    ontology_lookup_service: CommitLinkTypeResolver
+    ontology_lookup_service: OntologyLookupService
     ontology_service: ActionOntologyLookup
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
@@ -273,9 +272,7 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
         record: ObjectRecordRow | None,
     ) -> ActionApplyOutcome:
-        deferred_error = self._action_request_error(
-            ctx, action_type, record, command.expected_object_version, command.params
-        )
+        deferred_error = self._action_request_error(ctx, action_type, record, command)
         if deferred_error is not None:
             self._fail_action_run(conn, ctx, action_run_id, deferred_error)
             return ActionApplyOutcome(deferred_error=deferred_error)
@@ -286,7 +283,24 @@ class ActionApplyService(CoreService):
             return ActionApplyOutcome(deferred_error=error)
         if record is None:
             raise InvariantViolation("action target record disappeared before commit")
-        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, command, record)
+        effective_command = self._resolved_command(ctx, action_type, record, command)
+        try:
+            plan = self._authorized_edit_plan(conn, ctx, action_type, effective_command)
+        except (PermissionDenied, ValidationFailed) as authorization_error:
+            self._fail_action_run(conn, ctx, action_run_id, authorization_error)
+            return ActionApplyOutcome(deferred_error=authorization_error)
+        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, effective_command, record, plan)
+
+    def _authorized_edit_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        command: ActionApplyCommand,
+    ) -> EditPlan:
+        return resolve_authorized_action_edit_plan(
+            conn, ctx, self.policy, self.object_records_service, self.ontology_lookup_service, action_type, command
+        )
 
     def _writeback_and_commit(
         self,
@@ -296,6 +310,7 @@ class ActionApplyService(CoreService):
         action_run_id: str,
         command: ActionApplyCommand,
         record: ObjectRecordRow,
+        plan: EditPlan,
     ) -> ActionApplyOutcome:
         """Local (no external side effect): record the writeback then commit ``received -> succeeded``."""
         self.action_writeback_service.writeback_recorder().record(
@@ -311,7 +326,7 @@ class ActionApplyService(CoreService):
             # Row/segment visibility is enforced as each existing object resolves (the
             # resolution context hides forbidden rows as NotFound), and the whole plan
             # commits in this transaction so any conflict rolls it all back.
-            response = self._v2_committer().commit(conn, ctx, action_type, action_run_id, command)
+            response = self._v2_committer().commit(conn, ctx, action_type, action_run_id, command, plan=plan)
         else:
             response = self._mutation_unit_of_work().commit(
                 conn,
@@ -358,6 +373,7 @@ class ActionApplyService(CoreService):
         action_run_id: str,
         command: ActionApplyCommand,
     ) -> ActionRunRow | None:
+        concrete_target = self.ontology_lookup_service._active_object_type(conn, ctx, command.object_type)
         return self.action_repository.insert_action_run_or_get_existing(
             transaction=conn,
             record=ActionRunRecord(
@@ -366,8 +382,8 @@ class ActionApplyService(CoreService):
                 action_type_id=action_type["id"],
                 action_type_api_name=command.action_api_name,
                 actor_user_id=ctx.actor_user_id,
-                target_object_type_id=action_type["target_object_type_id"],
-                target_object_type_api_name=action_type["target_api_name"],
+                target_object_type_id=concrete_target["id"],
+                target_object_type_api_name=command.object_type,
                 target_object_id=command.object_id,
                 expected_object_version=command.expected_object_version,
                 parameters=command.params,
@@ -408,8 +424,7 @@ class ActionApplyService(CoreService):
         ctx: RequestContext,
         action_type: ActionTypeRow,
         record: ObjectRecordRow | None,
-        expected_object_version: int,
-        params: Mapping[str, object],
+        command: ActionApplyCommand,
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
@@ -418,15 +433,30 @@ class ActionApplyService(CoreService):
         # never leaks precondition/parameter detail).
         if (segment_error := segment_mutation_denied_error(self.policy, ctx, action_type)) is not None:
             return segment_error
-        if record["object_version"] != expected_object_version:
+        if record["object_version"] != command.expected_object_version:
             return ConflictDetected(
                 "object version conflict",
                 details={
                     "currentObjectVersion": record["object_version"],
-                    "expectedObjectVersion": expected_object_version,
+                    "expectedObjectVersion": command.expected_object_version,
                 },
             )
-        return validate_action_request(action_type, record, params)
+        return validate_action_request(
+            action_type,
+            record,
+            command.params,
+            ctx,
+            generate_id=stable_parameter_id_generator(command.idempotency_key),
+        )
+
+    def _resolved_command(
+        self,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow,
+        command: ActionApplyCommand,
+    ) -> ActionApplyCommand:
+        return resolved_action_command(ctx, action_type, record, command)
 
     def _fail_action_run(
         self,

@@ -194,7 +194,7 @@ class ActionBatchApplyService(CoreService):
             return self._replay_existing_batch_run(conn, ctx, existing, command.request_fingerprint)
         raced = self.action_repository.insert_action_run_or_get_existing(
             transaction=conn,
-            record=self._batch_run_record(ctx, action_type, action_run_id, command),
+            record=self._batch_run_record(conn, ctx, action_type, action_run_id, command),
         )
         if raced is not None:
             return self._replay_existing_batch_run(conn, ctx, raced, command.request_fingerprint)
@@ -202,19 +202,21 @@ class ActionBatchApplyService(CoreService):
 
     def _batch_run_record(
         self,
+        conn: TransactionContext,
         ctx: RequestContext,
         action_type: ActionTypeRow,
         action_run_id: str,
         command: ActionBatchApplyCommand,
     ) -> ActionRunRecord:
+        concrete_target = self.ontology_service._active_object_type(conn, ctx, command.object_type)
         return ActionRunRecord(
             action_run_id=action_run_id,
             tenant_id=ctx.tenant_id,
             action_type_id=action_type["id"],
             action_type_api_name=command.action_api_name,
             actor_user_id=ctx.actor_user_id,
-            target_object_type_id=action_type["target_object_type_id"],
-            target_object_type_api_name=action_type["target_api_name"],
+            target_object_type_id=concrete_target["id"],
+            target_object_type_api_name=command.object_type,
             target_object_id=BATCH_TARGET_OBJECT_ID,
             expected_object_version=BATCH_EXPECTED_OBJECT_VERSION,
             parameters=command.params,
@@ -287,7 +289,7 @@ class ActionBatchApplyService(CoreService):
             record = visible_record(record, target_type, ctx.roles)
             if record is not None and (invariant := action_target_record_error(action_type, record)) is not None:
                 raise invariant
-            error = target_request_error(action_type, record, target.expected_object_version, command.params)
+            error = target_request_error(action_type, record, target.expected_object_version, command.params, ctx)
             if error is not None:
                 failures.append(target_failure(target.object_id, error))
             elif record is not None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import cast
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from foundry_lite.application.services.aip.citation_service import CitationServiceError
 from foundry_lite.application.services.aip.eval_types import AiEvalError, EvalCaseInput
 from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, ValidationFailed
@@ -20,11 +20,70 @@ from foundry_lite_api.schemas import (
     AipCitationNavigationResolveRequest,
     AipEvalCaseRequest,
     AipEvalRunRequest,
+    AipFdeRunRequest,
+    AipPilotGenerateRequest,
+    AipPilotPlanRequest,
     AipReleasePromotionRequest,
     JsonObject,
 )
 
 router = APIRouter()
+
+
+@router.get("/api/aip/fde/catalog")
+def get_aip_fde_catalog(request: Request) -> JsonObject:
+    try:
+        return cast(JsonObject, runtime.foundry.aip.fde_catalog(ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/aip/fde/run")
+def run_aip_fde(request: Request, payload: AipFdeRunRequest) -> JsonObject:
+    try:
+        result = runtime.foundry.aip.run_fde_payload(
+            payload=payload.model_dump(by_alias=True),
+            ctx=_ctx(request),
+        )
+        return result.to_payload()
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/aip/pilot/plan")
+def plan_aip_pilot(request: Request, payload: AipPilotPlanRequest) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.aip.plan_pilot_application(payload.model_dump(by_alias=True), ctx=_ctx(request)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/aip/pilot/applications")
+def generate_aip_pilot(
+    request: Request,
+    payload: AipPilotGenerateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.aip.generate_pilot_application(
+                payload.plan, idempotency_key=idempotency_key, ctx=_ctx(request)
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/aip/pilot/applications/{rid}")
+def get_aip_pilot(request: Request, rid: str) -> JsonObject:
+    try:
+        return cast(JsonObject, runtime.foundry.aip.get_pilot_application(rid, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.post("/api/aip/builder/validate")

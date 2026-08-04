@@ -7,13 +7,16 @@ mkdir -p artifacts/coverage artifacts/demo artifacts/test-results artifacts/qual
 # CodeQL P7 is intentionally not run from this local/release shell gate.
 # Fresh Python DB builds take minutes and would slow every local feedback loop;
 # .github/workflows/codeql.yml owns that heavy data-flow gate and fails on SARIF
-# findings after each push/PR.
+# findings on main/schedule. Pull requests use the bounded diff-security guard
+# in pr_fast_gate.py so the merge path does not wait for a fresh CodeQL DB.
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/ci_gate.sh [local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]
+Usage: bash scripts/ci_gate.sh [pr|local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]
 
 Gate modes keep local feedback fast while preserving full release evidence:
+  pr       five-minute PR lane: diff security, focused invariants, directly
+           related tests, and affected frontend/SDK type contracts in parallel
   local    default developer gate: full static invariants plus Tach impact tests
   all      full serial rehearsal of the parallel CI lanes
   static   format, typing, architecture, security, complexity, doc drift gates
@@ -194,6 +197,11 @@ run_local_gate() {
   run_impact_gate
 }
 
+run_pr_gate() {
+  echo "== Pull request: budgeted fast gate =="
+  uv run --no-sync python scripts/quality/pr_fast_gate.py run
+}
+
 # PR runtime lane: the full suite already executes once in the coverage lane,
 # so per-capability ratchet subsets are verified as *inventory* (collect-only)
 # instead of being re-executed serially. The full execution rehearsal lives in
@@ -280,6 +288,8 @@ run_runtime_full_gate() {
   run_runtime_step "Media workflow Temporal ratchet" pnpm --silent quality:media-workflow-temporal
 
   run_runtime_step "Action Types v2 IR and atomic edit-plan ratchet" pnpm --silent quality:action-types-v2
+
+  run_runtime_step "Action Types two-worker Temporal fault ratchet" pnpm --silent quality:action-types-palantir-live
 
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
 
@@ -464,6 +474,10 @@ main() {
   ensure_release_postgres_contracts_enabled
 
   case "$lane" in
+    pr)
+      run_pr_gate
+      echo "Foundry-lite pull-request fast gate passed."
+      ;;
     local)
       run_local_gate
       echo "Foundry-lite local quality gate passed."

@@ -134,6 +134,11 @@ def serialize_definition_yaml(definition: Mapping[str, object]) -> str:
     return json.dumps(definition, indent=2, sort_keys=True)
 
 
+def serialize_resource_map(resources: ResourceMap) -> str:
+    """Serialize a normalized resource map back to canonical branch content."""
+    return serialize_definition_yaml(_definition_from_resource_map(resources))
+
+
 def _definition_from_resource_map(resources: ResourceMap) -> dict[str, object]:
     definition: dict[str, object] = {}
     for kind, section in _SECTION_BY_KIND.items():

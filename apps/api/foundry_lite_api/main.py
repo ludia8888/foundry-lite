@@ -39,6 +39,7 @@ from foundry_lite_api.routers import (
     actions,
     aip,
     auth,
+    builder_mcp,
     connectors,
     datasets,
     developer_console,
@@ -368,6 +369,7 @@ for resource_router in (
     transforms.router,
     actions.router,
     functions.router,
+    builder_mcp.router,
 ):
     app.include_router(resource_router)
 

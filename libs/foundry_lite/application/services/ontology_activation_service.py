@@ -8,8 +8,6 @@ from pathlib import Path
 import yaml
 
 from foundry_lite.application.ports import (
-    ActionParameterSchema,
-    ActionTypeRecord,
     LinkTypeRecord,
     ObjectTypeRecord,
     OntologyApplyResult,
@@ -28,6 +26,7 @@ from foundry_lite.application.services.ontology_function_validation import (
     validate_ontology_functions,
 )
 from foundry_lite.application.services.ontology_interface_validation import (
+    import_action_types,
     import_interface_types,
     object_type_implements,
     validate_ontology_interfaces,
@@ -51,8 +50,6 @@ from foundry_lite.application.services.ontology_validation import (
 )
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
-    action_parameter_schema,
-    action_type_definition,
     link_type_backing,
     mapping_sequence,
     object_type_backing,
@@ -139,7 +136,7 @@ class OntologyActivationService(CoreService):
         import_function_types(self.ontology_repository, conn, ctx, ontology_version_id, functions)
         object_map = self._import_object_types(conn, ctx, ontology_version_id, definition, migration_plan)
         self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
-        self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
+        import_action_types(self.ontology_repository, conn, ctx, ontology_version_id, definition, object_map)
         self._validate_ontology(conn, ctx, ontology_version_id)
         self._activate_ontology_version(conn, ctx, ontology_version_id)
         self._upsert_ontology_resource(conn, ctx, ontology_version_id, version_number)
@@ -358,47 +355,6 @@ class OntologyActivationService(CoreService):
                 to_api_name=to_api,
                 cardinality=optional_str(item, "cardinality", "many_to_one") or "many_to_one",
                 backing=link_type_backing(item),
-            ),
-        )
-
-    def _import_action_types(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        ontology_version_id: str,
-        definition: YamlObject,
-        object_map: dict[str, str],
-    ) -> None:
-        for item in mapping_sequence(definition, "actionTypes"):
-            self._insert_action_type(conn, ctx, ontology_version_id, item, object_map)
-
-    def _insert_action_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        ontology_version_id: str,
-        item: YamlObject,
-        object_map: dict[str, str],
-    ) -> None:
-        target = required_str(item, "target")
-        if target not in object_map:
-            raise ValidationFailed("action target object type not found", details=dict(item))
-        parameters = mapping_sequence(item, "parameters")
-        parameter_schema: ActionParameterSchema = action_parameter_schema(parameters)
-        api_name = required_str(item, "apiName")
-        self.ontology_repository.insert_action_type(
-            transaction=conn,
-            record=ActionTypeRecord(
-                action_type_id=_new_id("atype"),
-                tenant_id=ctx.tenant_id,
-                ontology_version_id=ontology_version_id,
-                api_name=api_name,
-                display_name=optional_str(item, "displayName", api_name) or api_name,
-                target_object_type_id=object_map[target],
-                target_api_name=target,
-                parameter_schema=parameter_schema,
-                definition=action_type_definition(item),
-                enabled=True,
             ),
         )
 

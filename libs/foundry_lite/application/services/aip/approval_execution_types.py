@@ -47,6 +47,9 @@ class PreparedExecution:
     expected_object_version: int
     parameters: JsonObject
     policy_version: str
+    plan_hash: str | None = None
+    action_version: str | None = None
+    object_versions: JsonObject | None = None
 
 
 @dataclass(frozen=True)

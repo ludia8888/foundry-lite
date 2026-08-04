@@ -19,6 +19,7 @@ from sqlalchemy import and_, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from foundry_lite.application.action_log_types import ObjectRestoreWrite
 from foundry_lite.application.ports.action_repository import (
     ObjectCreateWrite,
     ObjectDeleteWrite,
@@ -135,6 +136,34 @@ def soft_delete_object_write(transaction: Any, record: ObjectDeleteWrite) -> boo
             deleted=True,
             is_active=False,
             deletion_reason=record.deletion_reason,
+            object_version=record.expected_object_version + 1,
+            object_change_sequence=change_sequence,
+            updated_at=record.updated_at,
+        )
+    )
+    if result.rowcount != 1:
+        return False
+    snapshot_object_record_version(transaction, record.tenant_id, record.object_record_id)
+    return True
+
+
+def restore_object_write(transaction: Any, record: ObjectRestoreWrite) -> bool:
+    """CAS a soft-deleted object back to active state while advancing its version."""
+    change_sequence = next_object_change_sequence(transaction, record.tenant_id)
+    result = transaction.execute(
+        update(db.object_records)
+        .where(
+            and_(
+                db.object_records.c.tenant_id == record.tenant_id,
+                db.object_records.c.id == record.object_record_id,
+                db.object_records.c.object_version == record.expected_object_version,
+                db.object_records.c.deleted == True,  # noqa: E712
+            )
+        )
+        .values(
+            deleted=False,
+            is_active=True,
+            deletion_reason=None,
             object_version=record.expected_object_version + 1,
             object_change_sequence=change_sequence,
             updated_at=record.updated_at,

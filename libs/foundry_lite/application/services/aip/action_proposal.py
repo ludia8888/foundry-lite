@@ -13,15 +13,18 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from foundry_lite.application.action_types import ActionExecutionPlanResponse
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.ports.ai_run_repository import AiLedgerRow
+from foundry_lite.application.services.action_plan_payloads import action_plan_object_versions
+from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_protocols import ActionOntologyLookup
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import InsightReviewProposalFields
 from foundry_lite.application.services.insight_review_service import InsightReviewService
 from foundry_lite.application.services.object_store.records import ObjectRecordsService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, PermissionDenied
+from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
 JsonObject = Mapping[str, object]
 _PROPOSAL_TYPE = "ontology_action"
@@ -73,7 +76,13 @@ class ActionProposalService(CoreService):
     """Create human-review action proposals without calling ActionService."""
 
     required_dependencies = ("engine", "policy", "ai_run_repository")
-    required_collaborators = ("insight_review_service", "ontology_service", "object_records_service")
+    required_collaborators = (
+        "action_planning_service",
+        "insight_review_service",
+        "ontology_service",
+        "object_records_service",
+    )
+    action_planning_service: ActionPlanningService
     insight_review_service: InsightReviewService
     object_records_service: ObjectRecordsService
     # Narrow ontology boundary (not the concrete OntologyService) so aip
@@ -84,6 +93,7 @@ class ActionProposalService(CoreService):
     def propose(self, ctx: RequestContext, request: ActionProposalRequest) -> ActionProposalResult:
         _validate_request(request)
         self._require_policy(ctx, request)
+        execution_plan = self._execution_plan(ctx, request)
         with self.engine.begin() as transaction:
             ledger = self.ai_run_repository.ledger_for_run(
                 transaction=transaction, tenant_id=ctx.tenant_id, ai_run_id=request.originating_ai_run_id
@@ -102,8 +112,11 @@ class ActionProposalService(CoreService):
                 evidence_refs=evidence_refs,
                 agent_version_id=_required_str(ledger["run"], "agent_version_id"),
                 policy_version=request.policy_version,
+                plan_hash=execution_plan["planHash"],
+                action_version=execution_plan["ontologyVersionId"],
+                object_versions=action_plan_object_versions(execution_plan),
             )
-        proposal = _action_proposal_payload(request, evidence_refs, fingerprint)
+        proposal = _action_proposal_payload(request, evidence_refs, fingerprint, execution_plan)
         review = self._create_review(ctx, request, evidence_refs, fingerprint, proposal)
         return ActionProposalResult(
             proposal_id=str(proposal["proposalId"]),
@@ -112,6 +125,25 @@ class ActionProposalService(CoreService):
             review_payload=review,
             action_proposal=proposal,
         )
+
+    def _execution_plan(
+        self,
+        ctx: RequestContext,
+        request: ActionProposalRequest,
+    ) -> ActionExecutionPlanResponse:
+        try:
+            return self.action_planning_service.plan_action(
+                request.action_type,
+                object_type=request.target_object_type,
+                object_id=request.target_object_id,
+                expected_object_version=request.expected_object_version,
+                params=request.parameters,
+                ctx=ctx,
+            )
+        except ConflictDetected as exc:
+            raise ActionProposalError("object_version_conflict", "proposal expected object version is stale") from exc
+        except PermissionDenied as exc:
+            raise ActionProposalError("policy_denied", "proposal edit plan is not authorized") from exc
 
     def _create_review(
         self,
@@ -236,25 +268,38 @@ def compute_action_proposal_fingerprint(
     evidence_refs: Sequence[JsonObject],
     agent_version_id: str,
     policy_version: str,
+    plan_hash: str | None = None,
+    action_version: str | None = None,
+    object_versions: Mapping[str, object] | None = None,
 ) -> str:
-    return _hash_json(
-        {
-            "version": 1,
-            "proposalType": _PROPOSAL_TYPE,
-            "actionType": action_type,
-            "targetObjectType": target_object_type,
-            "targetObjectId": target_object_id,
-            "expectedObjectVersion": expected_object_version,
-            "parameters": dict(parameters),
-            "evidenceRefs": [dict(ref) for ref in evidence_refs],
-            "agentVersionId": agent_version_id,
-            "policyVersion": policy_version,
-        }
-    )
+    payload: dict[str, object] = {
+        "version": 2 if plan_hash is not None else 1,
+        "proposalType": _PROPOSAL_TYPE,
+        "actionType": action_type,
+        "targetObjectType": target_object_type,
+        "targetObjectId": target_object_id,
+        "expectedObjectVersion": expected_object_version,
+        "parameters": dict(parameters),
+        "evidenceRefs": [dict(ref) for ref in evidence_refs],
+        "agentVersionId": agent_version_id,
+        "policyVersion": policy_version,
+    }
+    if plan_hash is not None:
+        payload.update(
+            {
+                "planHash": plan_hash,
+                "actionVersion": action_version,
+                "objectVersions": dict(object_versions or {}),
+            }
+        )
+    return _hash_json(payload)
 
 
 def _action_proposal_payload(
-    request: ActionProposalRequest, evidence_refs: Sequence[JsonObject], fingerprint: str
+    request: ActionProposalRequest,
+    evidence_refs: Sequence[JsonObject],
+    fingerprint: str,
+    execution_plan: ActionExecutionPlanResponse,
 ) -> dict[str, object]:
     proposal_id = f"aip-proposal-{fingerprint.removeprefix('sha256:')[:24]}"
     return {
@@ -270,6 +315,10 @@ def _action_proposal_payload(
         "originatingAiRunId": request.originating_ai_run_id,
         "originatingToolCallId": request.originating_tool_call_id,
         "proposalFingerprint": fingerprint,
+        "planHash": execution_plan["planHash"],
+        "actionVersion": execution_plan["ontologyVersionId"],
+        "objectVersions": action_plan_object_versions(execution_plan),
+        "risk": dict(execution_plan["risk"]),
         "policyVersion": request.policy_version,
         "expiresAt": request.expires_at,
     }

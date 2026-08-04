@@ -52,7 +52,12 @@ def test_action_service_forwards_to_focused_use_case_services() -> None:
     service.bind_collaborators(
         {
             "action_apply_service": apply,
+            "action_async_run_service": object(),
             "action_batch_apply_service": batch_apply,
+            "action_branch_service": object(),
+            "action_definition_service": object(),
+            "action_log_revert_service": object(),
+            "action_planning_service": object(),
             "action_validation_service": validation,
             "action_writeback_service": writeback,
         }

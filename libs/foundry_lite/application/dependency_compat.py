@@ -47,7 +47,14 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "secret_provider",
         "secret_vault",
     ),
-    "action": ("action_repository",),
+    "action": (
+        "action_repository",
+        "action_branch_repository",
+        "action_effect_executor",
+        "action_execution_repository",
+        "action_function_executor",
+        "action_run_orchestrator",
+    ),
     "data": (
         "ontology_repository",
         "ontology_branch_repository",

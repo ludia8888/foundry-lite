@@ -28,7 +28,7 @@
 ## 1. 문서 조항 ↔ 게이트 매핑 (전수)
 
 `foundry_lite_python_engineering_guidelines_ko.md` (이하 _가이드_)의 18개 섹션 중 핵심
-조항 66개를 게이트와 매핑한다. 상태는 ✅ 강제, △ 부분, ❌ 미강제, ⏳ 미해당 (구현 전).
+조항 69개를 게이트와 매핑한다. 상태는 ✅ 강제, △ 부분, ❌ 미강제, ⏳ 미해당 (구현 전).
 
 ### §1 Python 환경과 기본 철학
 
@@ -159,10 +159,11 @@
 
 ### §16 CI
 
-| #   | 조항                        | 게이트                          | 정량 | 상태 |
-| --- | --------------------------- | ------------------------------- | ---- | ---- |
-| 56  | skip/flaky/xfail 우회 금지  | `check_no_test_bypasses`        | 0    | ✅   |
-| 57  | private test reference 부채 | `check_private_test_references` | 0    | ✅   |
+| #    | 조항                                      | 게이트                          | 정량                    | 상태 |
+| ---- | ----------------------------------------- | ------------------------------- | ----------------------- | ---- |
+| 55.1 | PR required check wall time              | `quality-pr-fast`               | workflow timeout 5분    | ✅   |
+| 56   | skip/flaky/xfail 우회 금지                | `check_no_test_bypasses`        | 0                       | ✅   |
+| 57   | private test reference 부채               | `check_private_test_references` | 0                       | ✅   |
 
 ### §18 안티패턴
 
@@ -183,13 +184,13 @@
 
 | 상태                | 개수   | 비율     |
 | ------------------- | ------ | -------- |
-| ✅ 강제             | 56     | 82%      |
-| △ 부분              | 12     | 18%      |
+| ✅ 강제             | 57     | 83%      |
+| △ 부분              | 12     | 17%      |
 | ❌ 미강제           | 0      | 0%       |
 | ⏳ 미해당 (구현 전) | 0      | 0%       |
-| **합계**            | **68** | **100%** |
+| **합계**            | **69** | **100%** |
 
-**현재 게이트는 문서 약속의 약 82%를 정량적으로 완전 강제하고, 나머지 18%는
+**현재 게이트는 문서 약속의 약 83%를 정량적으로 완전 강제하고, 나머지 17%는
 부분 강제한다.** 직접 미강제(❌) 조항은 0개이며, 다음 목표는 △ 부분 강제 항목을
 실제 구현·정밀 게이트로 줄이는 것이다.
 
@@ -461,7 +462,7 @@ Self-test: `tests/unit/test_quality_doc_drift.py`가 missing script reference �
 missing package script 실패, package script wildcard/미래 문맥 제외, missing Python symbol 실패,
 기존 path/symbol/method 허용, non-current 문서의 ontology 예시 심볼 허용, FastAPI route 존재/누락,
 pytest node id 존재/누락, Markdown target/anchor 존재/누락, 미래·제거 문맥 제외, JSON report 생성을
-검증한다. 이 게이트는 가이드 66개 조항의 직접
+검증한다. 이 게이트는 가이드 69개 조항의 직접
 mapping 카운트에는 넣지 않는 meta gate지만, 문서가 현재 코드보다 앞서 “완료”처럼 말하거나
 예전 파일/API/test 이름 또는 깨진 문서 링크를 남기는 root cause를 차단한다.
 
@@ -655,6 +656,36 @@ capability가 단순 타입·문서가 아니라 실제 실행 경로에 연결�
 function-backed action, full parameter/form/criteria, side effect, Ontology-queryable action log,
 revert, branch/interface action, complete SDK/UI/MCP는 이 gate가 증명하지 않으며 matrix에
 partial/foundation/missing으로 남긴다.
+
+### Tier G14F — Action Contract v3 planning and approval evidence (🟡 bounded slice 2026-08-03)
+
+`quality:action-types-palantir`는 v1/v2/v3 정의가 하나의 canonical contract로 정규화되고,
+그 계약에서 API·SDK용 schema와 실제 실행 전 계획이 같은 방식으로 만들어지는지 검증한다.
+현재 게이트는 모든 v3 parameter type, deterministic defaults, first-match override, nested
+submission criteria, immutable fingerprint/plan hash, before/after diff, 구조적 위험도 하한,
+edit별 object/link/property 권한, AIP proposal의 plan/Action/object-version 고정, 승인 직전 drift
+재검증, catalog/schema/plan/dry-run API와 생성 SDK를 포함한다. 직접 `apply`도 같은 resolved-plan
+권한 검사를 다시 수행하므로 plan endpoint를 건너뛰어 권한을 우회할 수 없다.
+
+이 증거는 18개 축 전체 current 증거와 구분한다. Temporal durable Action run과 function-backed
+`OntologyEditBatch`는 `quality:action-runtime-async` 및 실제 PostgreSQL+Temporal 복수 worker의
+`quality:action-types-palantir-live`로 active-covered가 되었다. `quality:action-side-effects`는
+v3 effect의 inline URI 차단, 등록 connector/OSDK scope, before-effect 영수증 선기록과
+ambiguous 무재호출, after-effect outbox/receipt 원자 생성, retry/DLQ, lease takeover/fencing,
+실제 HTTP POST idempotency/SSRF 차단, PostgreSQL tenant RLS를 검증한다. `quality:action-log-revert`는
+성공한 제출당 정규 로그 하나, 모든 object/link edit 연결, 원 실행자·최신 편집·object version·link
+상태 재검증, object/link 전체 원자 복구, revert 자체의 새 run/log/audit/outbox, 외부효과 보존,
+SQLite/PostgreSQL repository 계약, RLS, API와 생성 TS/browser SDK를 검증한다. 이 bounded proof는
+Ontology object query/aggregation과 timeline UI, 실제 동시 revert 경합, 전체 브라우저 여정을
+아직 증명하지 않는다. `quality:action-branch-interface`는 interface target을 concrete implementer로
+해석하고 shared-property/OCC/권한을 재검증하는 경로, branch object overlay의 main 격리, base+overlay
+합성 조회와 drift diff, 동일 요청 replay, SQLite/PostgreSQL concurrent CAS, API와 생성 TS/browser SDK를
+검증한다. 이는 interface link constraint, branch link overlay, branch-only Action definition 실행,
+non-production effect opt-in과 전체 브라우저 journey까지 증명하지 않으므로 관련 matrix는 partial이다.
+남은 범위는 실제 두 worker effect-delivery takeover, effect response-to-rule value, Builder 전체 화면,
+Python OSDK, Ontology MCP OAuth/transport 및 해당
+화면의 브라우저 proof이며, 이 증거가
+추가되기 전에는 관련 matrix 항목을 `current`로 승격하지 않는다.
 
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
@@ -2287,7 +2318,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 264개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 284개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key
@@ -2328,6 +2359,7 @@ browser execution은 후속 slice다.
 | 게이트                                    | 명령                               | Root cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Frontend backend API/SDK surface contract | `quality:frontend-backend-surface` | FastAPI route가 frontend/non-frontend로 분류되지 않거나, frontend-consumable route에 named SDK method/proofClass/request-contract proof test가 없거나, FastAPI `Idempotency-Key` route와 matrix `requiresIdempotencyKey` marker가 어긋나거나, 문서의 frontend route surface/helper count claim이 실제 matrix/generated SDK count와 어긋나거나, `SDK_CLIENT_SURFACE.helpers` helper가 matrix row/export/operator-evidence/helper-contract proof 없이 생기거나, `docs/frontend-backend-surface-contract.md`의 screen-level SDK recipe 계약 또는 `@foundry-lite/sdk/screen-recipes` typechecked recipe source/package export가 빠지거나, Web Operations/recipe source가 raw `/api/...` 호출로 SDK 계약을 우회하는 문제 차단 |
+| AI FDE governed platform contract | `quality:ai-fde` | 9개 mode와 native tool adapter가 invoking-user permission을 우회하거나, lazy search가 server-owned catalog 밖 tool을 활성화하거나, 사용자 확인 없이 mutation을 실행하거나, Ontology/Pipeline branch를 벗어나 쓰거나, Builder MCP의 OAuth app scope·Origin·재전송·structured content 계약이 깨지거나, Pilot의 seed/branch/OSDK/React/CI bundle idempotency 및 API/SDK/UI/runtime evidence가 drift하는 문제 차단 |
 | Browser SDK request/helper contract       | `quality:sdk-request-contract`     | named SDK method가 실제 browser SDK에서 잘못된 HTTP method/path/query/header/body/idempotency key/error metadata를 보내거나, SDK helper가 retry/backoff/cursor/duplicate-action/error classification/request context 계약에서 drift 나는 문제 차단                                                                                                                                                                                                                                                                                 |
 | SDK TypeScript typecheck                  | `quality:sdk-typecheck`            | SDK package entrypoint, generated types, optional React helpers, and screen recipes가 TypeScript strict mode에서 깨져 프론트엔드가 SDK를 import하자마자 실패하는 문제 차단                                                                                                                                                                                                                                                                                                                                                         |
 | Foundry SPA TypeScript typecheck          | `quality:foundry-typecheck`        | SDK wire response의 nullable/optional 상태를 화면이 검증 없이 강한 타입으로 가정하거나, 실제 `apps/foundry` 화면 조합이 strict TypeScript mode에서 깨지는 문제 차단                                                                                                                                                                                                                                                                                                                                                                 |
@@ -2398,6 +2430,28 @@ recovery dashboard, alert timeline, workflow cancel/reconcile executor는 후속
 - 약화의 부작용을 보완하는 다른 게이트가 있는지 명시.
 - 예: `check_service_method_conflicts` 삭제 시 — 명시적 collaborator 호출이 도입돼 글로벌 메서드 이름 충돌이 더 이상 문제 아님. `check_service_call_graph`가 보완.
 
+### 5.1 5분 PR 병합 경로와 전체 증거 분리
+
+2026-08-04 이전에는 모든 PR이 전체 branch coverage, 전체 runtime proof, 전체 Playwright,
+fresh CodeQL DB를 기다려 required check가 약 40분까지 늘어났다. 이 검사는 강하지만 작은 문서나
+UI 수정에도 똑같은 전체 시스템을 다시 세우므로 병합 피드백으로는 너무 늦었다.
+
+현재 required PR 경로는 `quality-pr-fast` 하나로 합친다. 이 게이트는 변경 범위를 계산하고,
+diff secret/위험 코드 검사, Ruff·mypy·pyright·Bandit·아키텍처/스키마/문서 불변식,
+직접 변경되었거나 변경 모듈과 파일명이 연결된 pytest, 영향받은 TypeScript SDK/Foundry typecheck와
+request contract를 병렬 실행한다. 새 Python source가 직접 또는 변경된 테스트와 연결되지 않으면
+fail-closed하고, 변경된 fast test는 모두 실행하되 source-name 자동 연관 테스트는 전체 선택이 32개 파일을
+넘지 않게 제한한다. `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
+남긴다. GitHub job 자체가 5분 timeout이고 내부 검사 budget은 210초다.
+
+이것은 전체 증거의 삭제가 아니라 실행 시점의 변경이다. 전체 coverage/runtime/E2E와
+gitleaks/Semgrep/pip-audit/full CodeQL은 main push에서 실행되고, flaky x7과 full runtime rehearsal은
+nightly, live/performance/release evidence는 tag 또는 수동 release gate에서 계속 강제된다. PR의
+CodeQL required-check 이름은 호환을 위해 유지하지만 실제 PR 단계는 고신뢰 diff security guard이며,
+로그가 full CodeQL이 main에서 이어진다는 경계를 명시한다. 부작용은 "merge 전에 전체 suite를
+완주하지 않는다"는 점이고, 보완은 직접 테스트 fail-closed, 5분 gate artifact, main full gate,
+nightly/release gate의 네 겹 계약이다.
+
 ## 6. Operational Evidence And Diagnostics
 
 이 섹션은 삭제된 별도 관측성/진단 문서의 운영 진단 역할을 흡수한다. 별도 관측성/진단
@@ -2406,16 +2460,18 @@ README를 다시 만들지 않는다. 비개발자식으로 말하면,
 
 ### 6.1 Release And Runtime Lanes
 
-| 실행 위치      | 명령/잡            | 역할                                                                              |
-| -------------- | ------------------ | --------------------------------------------------------------------------------- |
-| 로컬           | `pnpm ci:gate`     | 정적 불변식과 Tach impact-scoped pytest를 실행해 빠른 피드백을 준다.              |
-| 로컬           | `pnpm ci:gate:all` | GitHub 병렬 lane과 같은 release evidence를 직렬로 리허설한다.                    |
-| GitHub Actions | `quality-static`   | 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate를 실행한다.               |
-| GitHub Actions | `quality-coverage` | 전체 pytest branch coverage, tier/public API coverage를 확인한다.                 |
-| GitHub Actions | `quality-flaky`    | 전체 pytest suite를 반복 실행해 outcome 흔들림을 차단한다.                        |
-| GitHub Actions | `quality-runtime`  | demo, OpenLineage, audit/outbox, data correctness, trace, diagnostics를 확인한다. |
-| GitHub Actions | `quality-e2e`      | Playwright browser E2E를 실행한다.                                                |
-| GitHub Actions | `quality-gate`     | 위 lane 결과를 required check 하나로 집계한다.                                    |
+| 실행 위치       | 명령/잡             | 역할                                                                                         |
+| --------------- | ------------------- | -------------------------------------------------------------------------------------------- |
+| 로컬             | `pnpm ci:gate`      | 정적 불변식과 Tach impact-scoped pytest를 실행해 빠른 피드백을 준다.                         |
+| 로컬             | `pnpm ci:gate:pr`   | origin/main 대비 GitHub 5분 PR gate를 재현한다.                                              |
+| 로컬             | `pnpm ci:gate:all`  | 전체 release evidence를 직렬로 리허설한다.                                                   |
+| GitHub PR        | `quality-pr-fast`   | diff security, focused static/test/type contracts를 5분 안에 required evidence로 만든다.     |
+| GitHub main push | `quality-static`    | 전체 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate를 실행한다.                     |
+| GitHub main push | `quality-coverage`  | 전체 pytest branch coverage, tier/public API coverage를 확인한다.                            |
+| GitHub main push | `quality-runtime`   | demo, OpenLineage, audit/outbox, data correctness, trace, diagnostics를 확인한다.            |
+| GitHub main push | `quality-e2e`       | 전체 Playwright browser E2E를 실행한다.                                                      |
+| GitHub Actions   | `quality-gate`      | PR에서는 fast gate, main에서는 네 full lane 결과를 같은 required check 이름으로 집계한다.   |
+| GitHub nightly   | `quality-flaky-nightly` | 전체 pytest suite를 7회 반복해 outcome 흔들림을 차단한다.                                |
 
 ### 6.2 Operator Evidence Rule
 

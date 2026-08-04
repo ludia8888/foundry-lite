@@ -6,13 +6,14 @@ from collections.abc import Sequence
 
 from foundry_lite.domain.errors import ValidationFailed
 
-RESOURCE_TYPES = frozenset({"object", "action", "link", "function"})
+RESOURCE_TYPES = frozenset({"object", "action", "link", "function", "connector"})
 RESOURCE_OPERATIONS = frozenset({"read", "subscribe", "validate", "execute"})
 RESOURCE_OPERATIONS_BY_TYPE = {
     "object": frozenset({"read", "subscribe"}),
     "action": frozenset({"validate", "execute"}),
     "link": frozenset({"read"}),
     "function": frozenset({"execute"}),
+    "connector": frozenset({"execute"}),
 }
 WILDCARD_SCOPE = "osdk:*"
 

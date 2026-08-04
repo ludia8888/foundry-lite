@@ -46,6 +46,13 @@ from foundry_lite.application.services.object_store.query_cursor import (
 from foundry_lite.application.services.ontology_yaml import action_allowed_roles
 from foundry_lite.application.services.runtime_run_cursors import require_operations_cursor_signing_key_for_runtime
 from foundry_lite.domain.ontology.datasources import property_datasource_rows
+from foundry_lite.infrastructure.action_runtime_dependencies import (
+    ConnectorActionEffectExecutor,
+    LocalActionRunOrchestrator,
+    LogicDagActionFunctionExecutor,
+    TemporalActionRunConfig,
+    TemporalActionRunOrchestrator,
+)
 from foundry_lite.infrastructure.adapters import (
     AnthropicLanguageModel,
     AsrProcessorAdapter,
@@ -129,6 +136,8 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 from foundry_lite.infrastructure.auth import LocalOAuthTokenIssuer
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyActionBranchRepository,
+    SqlAlchemyActionExecutionRepository,
     SqlAlchemyActionRepository,
     SqlAlchemyAiEvalRepository,
     SqlAlchemyAiRunRepository,
@@ -388,10 +397,13 @@ def _create_core_dependencies(
     stream_adapter = _stream_adapter(profiles.stream)
     workflow_adapter = _workflow_adapter(profiles.workflow)
     pipeline_dag_orchestrator = _pipeline_dag_orchestrator(profiles.workflow)
+    action_run_orchestrator = _action_run_orchestrator(profiles.workflow)
+    action_function_executor = LogicDagActionFunctionExecutor()
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
+    connector_registry_repository = SqlAlchemyConnectorRegistryRepository(engine)
     media_repository = SqlAlchemyMediaRepository(engine)
     media_derivative_repository = SqlAlchemyMediaDerivativeRepository(engine)
     policy = PolicyService(
@@ -437,7 +449,19 @@ def _create_core_dependencies(
             secret_provider=secret_provider,
             secret_vault=secret_vault,
         ),
-        action=ActionDependencies(action_repository=SqlAlchemyActionRepository(engine)),
+        action=ActionDependencies(
+            action_repository=SqlAlchemyActionRepository(engine),
+            action_branch_repository=SqlAlchemyActionBranchRepository(engine),
+            action_execution_repository=SqlAlchemyActionExecutionRepository(engine),
+            action_effect_executor=ConnectorActionEffectExecutor(
+                engine,
+                connector_registry_repository,
+                secret_provider,
+                stream_adapter,
+            ),
+            action_function_executor=action_function_executor,
+            action_run_orchestrator=action_run_orchestrator,
+        ),
         data=DataDependencies(
             ontology_repository=ontology_repository,
             ontology_branch_repository=SqlAlchemyOntologyBranchRepository(engine),
@@ -502,7 +526,7 @@ def _create_core_dependencies(
         ),
         source=SourceDependencies(
             connector_adapter=connector_adapter,
-            connector_registry_repository=SqlAlchemyConnectorRegistryRepository(engine),
+            connector_registry_repository=connector_registry_repository,
             source_registry_repository=SqlAlchemySourceRegistryRepository(engine),
             source_management_repository=SqlAlchemySourceManagementRepository(engine),
             source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
@@ -775,6 +799,21 @@ def _pipeline_dag_orchestrator(
             )
         )
     return LocalPipelineDagOrchestrator()
+
+
+def _action_run_orchestrator(
+    workflow_profile: str,
+) -> LocalActionRunOrchestrator | TemporalActionRunOrchestrator:
+    workflow_profile = _env_profile(os.environ, "FOUNDRY_LITE_WORKFLOW_PROFILE", workflow_profile)
+    if workflow_profile == "temporal":
+        return TemporalActionRunOrchestrator(
+            TemporalActionRunConfig(
+                address=os.getenv("FOUNDRY_LITE_TEMPORAL_ADDRESS", "localhost:7233"),
+                namespace=os.getenv("FOUNDRY_LITE_TEMPORAL_NAMESPACE", "default"),
+                task_queue=os.getenv("FOUNDRY_LITE_ACTION_RUN_TASK_QUEUE", "foundry-lite-action-runs"),
+            )
+        )
+    return LocalActionRunOrchestrator()
 
 
 def _schema_mutation_allowed_from_env() -> bool:

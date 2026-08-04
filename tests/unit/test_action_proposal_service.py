@@ -57,6 +57,14 @@ def test_action_proposal_creates_review_from_selected_context_without_executing_
     assert row["approved_action_run_id"] is None
     assert result.action_proposal["expectedObjectVersion"] == order["objectVersion"]
     assert result.action_proposal["evidenceRefs"][0]["contextId"] == "ctx-order-1"
+    assert str(result.action_proposal["planHash"]).startswith("sha256:")
+    assert str(result.action_proposal["actionVersion"]).startswith("ont_")
+    assert result.action_proposal["objectVersions"] == {"Order:O-1001": 1}
+    assert result.action_proposal["risk"] == {
+        "declaredLevel": "high",
+        "effectiveLevel": "high",
+        "reasons": ["external_effect"],
+    }
     assert _table_count(foundry.engine, db.action_runs) == before_action_runs
 
 

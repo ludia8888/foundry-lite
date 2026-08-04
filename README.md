@@ -48,6 +48,9 @@ pnpm web:static
 pnpm ci:gate
 ```
 
+GitHub의 5분 PR 병합 게이트를 로컬에서 재현하려면 `pnpm ci:gate:pr`을 사용합니다.
+전체 coverage/runtime/browser/CodeQL 증거는 main, nightly, release lane에서 이어집니다.
+
 로컬에서 release lane을 더 넓게 확인하려면 아래를 사용합니다.
 
 ```bash
@@ -91,11 +94,12 @@ flowchart LR
 | Transform and lineage | SQL transform registration/run, input/output version lineage, failed transform retry, bounded snapshot scheduler preview/tick, `worker:transform-scheduler`, OpenLineage-compatible evidence | `foundry.transforms`, FastAPI transform endpoints, `client.transforms` |
 | Pipeline Builder distributed DAG | `schemaVersion: 2` typed graph를 Temporal이 fork/join 제어하고 capability allowlist별 worker가 실행합니다. API는 기본 `202 queued`, PostgreSQL 원장은 node/attempt/artifact/event와 fencing token을 보존하며, retry·취소·worker takeover·crash resume·Dataset/Media Set exactly-once commit을 실제 Temporal worker 2개 gate로 검증합니다. Preview도 같은 orchestration 경로에서 `commitForbidden`을 유지합니다. | `docs/pipeline-builder-parity-matrix.json`, `quality:pipeline-async-dag`, `quality:pipeline-async-dag-live` |
 | Ontology and objects | ontology YAML validation/catalog, object get/query/link traversal, object sets, active index pointer, shadow reindex proof | `foundry.ontology`, `foundry.objects`, FastAPI ontology/object endpoints |
-| Actions | typed Action IR v2와 immutable EditPlan, v1 호환 compile, object create/modify/delete와 many-to-many link create/delete의 원자적 apply, permission/visibility/OCC/idempotency, unified edit ledger, audit/outbox | `foundry.actions`, `/api/actions/{action_type}/validate`, `/api/actions/{action_type}/apply`, `quality:action-types-v2` |
+| Actions | canonical Action Contract v3와 typed Action IR, v1/v2 호환 compile, 결정적 plan/dry-run hash, edit별 permission·risk·approval 판단, object create/modify/delete와 many-to-many link create/delete의 원자적 apply, OCC/idempotency, unified edit ledger, audit/outbox | `foundry.actions`, `/api/actions/{action_type}/plan`, `/api/actions/{action_type}/dry-run`, `/api/actions/{action_type}/apply`, `quality:action-types-palantir` |
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight, artifact receipt, historical artifact dataset-head execution, and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| Frontend SDK | 264 frontend route surface request contracts, 28 SDK helper contracts, 74 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| AI FDE | 9개 permission-scoped mode, lazy tool search, structured plan/clarification, explicit multi-resource context, branch-first Ontology/Pipeline authoring, Builder MCP OAuth, Pilot app generation, durable AI Operations ledger | `foundry.aip.run_fde_payload`, `/api/aip/fde/*`, `/mcp/builder/*`, `client.aip.fde`, `client.aip.pilot` |
+| Frontend SDK | 284 frontend route surface request contracts, 28 SDK helper contracts, 78 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -186,9 +190,16 @@ foundry.demo
 | `GET /api/ontology/catalog` | ontology catalog read |
 | `POST /api/objects/{object_type}/query` | object query |
 | `POST /api/actions/{action_type}/validate` | typed action validation |
+| `POST /api/actions/{action_type}/plan` | permission·risk·approval을 포함한 immutable EditPlan |
+| `POST /api/actions/{action_type}/dry-run` | 동일 plan hash를 사용하는 non-committing before/after preview |
 | `POST /api/actions/{action_type}/apply` | typed action execution |
 | `POST /api/media/sets` | media set create |
 | `POST /api/aip/agent/run` | AIP agent run |
+| `GET /api/aip/fde/catalog` | invoking-user 권한으로 축소된 AI FDE mode/tool/safety catalog |
+| `POST /api/aip/fde/run` | bounded one-to-eight-tool cross-domain execute/observe/adjust turn |
+| `POST /api/aip/pilot/plan` | Project·Dataset·Ontology·OSDK·React·CI 생성 계획 |
+| `POST /api/aip/pilot/applications` | idempotent branch-first Pilot application 생성 |
+| `GET /api/aip/pilot/applications/{rid}` | 생성된 Pilot bundle과 stable preview path 조회 |
 | `GET /api/insights/reviews` | insight review queue |
 | `GET /api/operations/runs` | operations run list |
 | `POST /api/transforms/sql` | SQL transform registration |
@@ -216,7 +227,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 264개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 284개 frontend route surface는 모두 `named-sdk-only` 정책이며, 9개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback, MCP transport, OAuth discovery처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 
@@ -266,6 +277,7 @@ pnpm worker:pipeline-control
 | `pnpm dev` | FastAPI app을 로컬에서 실행합니다. |
 | `pnpm web:static` | static web shell을 4173 포트에서 서빙합니다. |
 | `pnpm ci:gate` | 빠른 local static plus impact gate입니다. |
+| `pnpm ci:gate:pr` | diff security, 직접 연관 테스트, focused static/type 검사를 5분 budget으로 실행합니다. |
 | `pnpm ci:gate:all` | 로컬에서 release lane을 직렬로 넓게 확인합니다. |
 | `pnpm --silent quality:media-active-covered` | Media/Content Plane active-covered proof를 확인합니다. |
 | `pnpm --silent quality:operations-recovery` | Operations/Recovery backend/API/SDK slice를 확인합니다. |

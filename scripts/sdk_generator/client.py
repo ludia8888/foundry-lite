@@ -456,7 +456,40 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 "    };",
             ]
         )
-    lines.extend(["  };", "  actions: {"])
+    lines.extend(
+        [
+            "  };",
+            "  actions: {",
+            "    list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
+            "    get(actionApiName: string): Promise<ActionCatalogItem>;",
+            "    schema(actionApiName: string): Promise<Record<string, unknown>>;",
+            "    plan(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
+            "    dryRun(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
+            "    logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
+            "    branches: {",
+            "      diff(branchId: string): Promise<Record<string, unknown>>;",
+            ("      object(branchId: string, objectType: string, objectId: string): Promise<Record<string, unknown>>;"),
+            "    };",
+            "    runs: {",
+            (
+                "      start(actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }): Promise<ActionRun>;"
+            ),
+            "      list(filters?: { cursor?: string; limit?: number }): Promise<ActionRunListResult>;",
+            "      get(runId: string): Promise<ActionRun>;",
+            (
+                "      events(runId: string, options?: StreamFoundryLiteOperationEventsOptions<ActionRunEvent> & "
+                "{ lastEventId?: string | number }): AsyncGenerator<ActionRunEvent, void, unknown>;"
+            ),
+            (
+                "      cancel(runId: string, payload: ActionRunCancelRequest | undefined, "
+                "options: { idempotencyKey: string }): Promise<ActionRun>;"
+            ),
+            "      revertEligibility(runId: string): Promise<ActionRevertEligibility>;",
+            ("      revert(runId: string, options: { idempotencyKey: string }): Promise<ActionRevertResult>;"),
+            "    };",
+        ]
+    )
     for action_def in surface.actions:
         validate_payload_type = action_def.payload_type.replace("ApplyRequest", "ValidateRequest")
         batch_payload_type = action_def.payload_type.replace("ApplyRequest", "ApplyBatchRequest")
@@ -464,6 +497,8 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             [
                 f"    {action_def.api_name}: {{",
                 f"      validate(payload: {validate_payload_type}): Promise<ActionValidationResponse>;",
+                f"      plan(payload: {validate_payload_type}): Promise<ActionExecutionPlanResponse>;",
+                f"      dryRun(payload: {validate_payload_type}): Promise<ActionExecutionPlanResponse>;",
                 f"      apply(payload: {action_def.payload_type}): Promise<ActionApplyResponse>;",
                 (
                     f"      applyBatch(payload: {batch_payload_type}, options: {{ idempotencyKey: string }}): "
@@ -495,6 +530,18 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    };",
             "    agent: {",
             "      run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;",
+            "    };",
+            "    fde: {",
+            "      catalog(): Promise<AipFdeCatalog>;",
+            "      run(payload: AipFdeRunRequest): Promise<AipFdeRunResult>;",
+            "    };",
+            "    pilot: {",
+            "      plan(payload: AipPilotPlanRequest): Promise<AipPilotPlan>;",
+            (
+                "      generate(payload: { plan: AipPilotPlan }, options: { idempotencyKey: string }): "
+                "Promise<AipPilotApplicationBundle>;"
+            ),
+            "      get(rid: string): Promise<AipPilotApplicationBundle>;",
             "    };",
             "    citations: {",
             (
@@ -3234,7 +3281,121 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "      },",
     ]
     lines.extend(_ts_object_client_lines(surface.objects))
-    lines.extend(["    },", "    actions: {"])
+    lines.extend(
+        [
+            "    },",
+            "    actions: {",
+            "      list: (options: { cursor?: string; limit?: number } = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (options.cursor) query.set('cursor', options.cursor);",
+            "        if (options.limit !== undefined) query.set('limit', String(options.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request<ActionCatalogPage>(`/api/actions${suffix}`);",
+            "      },",
+            "      get: (actionApiName: string) =>",
+            "        request<ActionCatalogItem>(`/api/actions/${encodeURIComponent(actionApiName)}`),",
+            "      schema: (actionApiName: string) =>",
+            "        request<Record<string, unknown>>(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+            "      plan: (actionApiName: string, payload: ActionPlanRequest) =>",
+            "        request<ActionExecutionPlanResponse>(`/api/actions/${encodeURIComponent(actionApiName)}/plan`, {",
+            '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
+            "        }),",
+            "      dryRun: (actionApiName: string, payload: ActionPlanRequest) =>",
+            (
+                "        request<ActionExecutionPlanResponse>("
+                "`/api/actions/${encodeURIComponent(actionApiName)}/dry-run`, {"
+            ),
+            '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
+            "        }),",
+            "      logs: (options: { cursor?: string; limit?: number } = {}) => {",
+            "        const query = new URLSearchParams();",
+            "        if (options.cursor) query.set('cursor', options.cursor);",
+            "        if (options.limit !== undefined) query.set('limit', String(options.limit));",
+            "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "        return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
+            "      },",
+            "      branches: {",
+            "        diff: (branchId: string) =>",
+            (
+                "          request<Record<string, unknown>>("
+                "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`),"
+            ),
+            "        object: (branchId: string, objectType: string, objectId: string) =>",
+            (
+                "          request<Record<string, unknown>>(`/api/actions/branches/"
+                "${encodeURIComponent(branchId)}/objects/${encodeURIComponent(objectType)}/"
+                "${encodeURIComponent(objectId)}`),"
+            ),
+            "      },",
+            "      runs: {",
+            (
+                "        start: (actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }) =>"
+            ),
+            (
+                "          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/runs` + "
+                "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+            ),
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.start"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          }),",
+            "        list: (filters: { cursor?: string; limit?: number } = {}) => {",
+            "          const params = new URLSearchParams();",
+            "          if (filters.cursor) params.set('cursor', filters.cursor);",
+            "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+            "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+            "          return request<ActionRunListResult>(`/api/actions/runs${suffix}`);",
+            "        },",
+            "        get: (runId: string) => request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}`),",
+            (
+                "        events: (runId: string, options: StreamFoundryLiteOperationEventsOptions<ActionRunEvent> & "
+                "{ lastEventId?: string | number } = {}) => {"
+            ),
+            "          const { lastEventId, ...streamOptions } = options;",
+            "          return streamFoundryLiteOperationEvents<ActionRunEvent>(",
+            "            `/api/actions/runs/${encodeURIComponent(runId)}/events`,",
+            "            {",
+            "              ...clientOptions,",
+            "              ...streamOptions,",
+            "              headers: {",
+            "                ...(clientOptions.headers ?? {}),",
+            "                ...(streamOptions.headers ?? {}),",
+            "                ...(lastEventId === undefined ? {} : { 'Last-Event-ID': String(lastEventId) }),",
+            "              },",
+            "            },",
+            "          );",
+            "        },",
+            (
+                "        cancel: (runId: string, payload: ActionRunCancelRequest = {}, "
+                "options: { idempotencyKey: string }) =>"
+            ),
+            "          request<ActionRun>(`/api/actions/runs/${encodeURIComponent(runId)}/cancel`, {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.cancel"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          }),",
+            "        revertEligibility: (runId: string) =>",
+            (
+                "          request<ActionRevertEligibility>("
+                "`/api/actions/runs/${encodeURIComponent(runId)}/revert-eligibility`),"
+            ),
+            "        revert: (runId: string, options: { idempotencyKey: string }) =>",
+            "          request<ActionRevertResult>(`/api/actions/runs/${encodeURIComponent(runId)}/revert`, {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.revert"),',
+            "            },",
+            "          }),",
+            "      },",
+        ]
+    )
     lines.extend(_ts_action_client_lines(surface.actions))
     lines.extend(["    },", "    interfaces: {"])
     lines.extend(_ts_interface_client_lines(surface))
@@ -3283,6 +3444,34 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         '            headers: { "Content-Type": "application/json" },',
         "            body: JSON.stringify(payload),",
         "          }),",
+        "      },",
+        "      fde: {",
+        "        catalog: () => request<AipFdeCatalog>(`/api/aip/fde/catalog`),",
+        "        run: (payload: AipFdeRunRequest) =>",
+        "          request<AipFdeRunResult>(`/api/aip/fde/run`, {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "      },",
+        "      pilot: {",
+        "        plan: (payload: AipPilotPlanRequest) =>",
+        "          request<AipPilotPlan>(`/api/aip/pilot/plan`, {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        generate: (payload: { plan: AipPilotPlan }, options: { idempotencyKey: string }) =>",
+        "          request<AipPilotApplicationBundle>(`/api/aip/pilot/applications`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "aip.pilot.generate") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        get: (rid: string) =>",
+        "          request<AipPilotApplicationBundle>(`/api/aip/pilot/applications/${encodeURIComponent(rid)}`),",
         "      },",
         "      citations: {",
         "        resolveNavigation: (payload: AipCitationNavigationResolveRequest) =>",
@@ -3876,6 +4065,26 @@ def _ts_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]
                 f"      {action_def.api_name}: {{",
                 f"        validate: (payload: {validate_payload_type}) =>",
                 f"          request<ActionValidationResponse>(`/api/actions/{action_def.api_name}/validate`, {{",
+                '            method: "POST",',
+                '            headers: { "Content-Type": "application/json" },',
+                "            body: JSON.stringify({",
+                f"              target: {{ objectType: {target}, objectId: payload.objectId }},",
+                "              expectedObjectVersion: payload.expectedObjectVersion,",
+                "              params: payload.params,",
+                "            }),",
+                "          }),",
+                f"        plan: (payload: {validate_payload_type}) =>",
+                f"          request<ActionExecutionPlanResponse>(`/api/actions/{action_def.api_name}/plan`, {{",
+                '            method: "POST",',
+                '            headers: { "Content-Type": "application/json" },',
+                "            body: JSON.stringify({",
+                f"              target: {{ objectType: {target}, objectId: payload.objectId }},",
+                "              expectedObjectVersion: payload.expectedObjectVersion,",
+                "              params: payload.params,",
+                "            }),",
+                "          }),",
+                f"        dryRun: (payload: {validate_payload_type}) =>",
+                f"          request<ActionExecutionPlanResponse>(`/api/actions/{action_def.api_name}/dry-run`, {{",
                 '            method: "POST",',
                 '            headers: { "Content-Type": "application/json" },',
                 "            body: JSON.stringify({",

@@ -6,6 +6,50 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NotRequired, TypedDict
 
+from foundry_lite.application.ports.ontology_definitions import OntologyJsonObject
+
+
+class ActionCatalogItem(TypedDict):
+    apiName: str
+    displayName: str
+    description: str | None
+    target: OntologyJsonObject
+    ontologyVersionId: str
+    contractVersion: int
+    contractFingerprint: str
+    parameterSchema: OntologyJsonObject
+    contract: OntologyJsonObject
+    riskLevel: str
+    agentExecutionPolicy: str
+    enabled: bool
+
+
+class ActionCatalogPage(TypedDict):
+    items: list[ActionCatalogItem]
+    nextCursor: str | None
+
+
+class ActionExecutionPlanResponse(TypedDict):
+    actionApiName: str
+    ontologyVersionId: str
+    definitionFingerprint: str
+    functionVersion: str | None
+    target: Mapping[str, object]
+    parameters: Mapping[str, object]
+    editManifest: Mapping[str, object]
+    diffs: list[Mapping[str, object]]
+    effectManifest: list[Mapping[str, object]]
+    risk: Mapping[str, object]
+    authorization: Mapping[str, object]
+    approval: Mapping[str, object]
+    executionMode: str
+    isDryRun: bool
+    requestId: str
+    createdAt: str
+    planHash: str
+    branchId: NotRequired[str]
+    suppressedEffects: NotRequired[list[Mapping[str, object]]]
+
 
 class ActionValidationIssue(TypedDict):
     code: str

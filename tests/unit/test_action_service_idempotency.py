@@ -56,6 +56,9 @@ class _Ontology:
     def link_type(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
         raise AssertionError("v1 idempotency path must not resolve link types")
 
+    def _active_object_type(self, _conn: object, _ctx: RequestContext, object_type: str) -> dict[str, Any]:
+        return {"id": "ot_order", "api_name": object_type}
+
 
 class _UnexpectedMutation:
     def _object_record(self, *_args: object, **_kwargs: object) -> None:

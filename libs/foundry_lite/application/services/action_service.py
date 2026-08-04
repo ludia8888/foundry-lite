@@ -7,17 +7,27 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
     ActionBatchApplyResponse,
+    ActionCatalogItem,
+    ActionCatalogPage,
+    ActionExecutionPlanResponse,
     ActionValidationResponse,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
     ActionWritebackRecoveryItem,
     ActionWritebackRecoveryResult,
 )
-from foundry_lite.application.services.action_apply_service import ActionApplyService
-from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
-from foundry_lite.application.services.action_validation_service import ActionValidationService
+from foundry_lite.application.services.action_service_registry import (
+    ActionApplyService,
+    ActionAsyncRunService,
+    ActionBatchApplyService,
+    ActionBranchService,
+    ActionDefinitionService,
+    ActionLogRevertService,
+    ActionPlanningService,
+    ActionValidationService,
+    ActionWritebackService,
+)
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
-from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
@@ -29,14 +39,103 @@ class ActionService(CoreService):
     required_dependencies = ()
     required_collaborators = (
         "action_apply_service",
+        "action_async_run_service",
         "action_batch_apply_service",
+        "action_branch_service",
+        "action_definition_service",
+        "action_planning_service",
+        "action_log_revert_service",
         "action_validation_service",
         "action_writeback_service",
     )
     action_apply_service: ActionApplyService
+    action_async_run_service: ActionAsyncRunService
     action_batch_apply_service: ActionBatchApplyService
+    action_branch_service: ActionBranchService
+    action_definition_service: ActionDefinitionService
+    action_planning_service: ActionPlanningService
+    action_log_revert_service: ActionLogRevertService
     action_validation_service: ActionValidationService
     action_writeback_service: ActionWritebackService
+
+    def list_actions(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionCatalogPage:
+        return self.action_definition_service.list_actions(cursor=cursor, limit=limit, ctx=ctx)
+
+    def get_action(self, action_api_name: str, *, ctx: RequestContext | None = None) -> ActionCatalogItem:
+        return self.action_definition_service.get_action(action_api_name, ctx=ctx)
+
+    def action_schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.action_definition_service.action_schema(action_api_name, ctx=ctx)
+
+    def plan_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext | None = None,
+        is_dry_run: bool = False,
+        branch_id: str | None = None,
+    ) -> ActionExecutionPlanResponse:
+        if branch_id is not None:
+            return self.action_branch_service.plan(
+                action_api_name,
+                branch_id=branch_id,
+                object_type=object_type,
+                object_id=object_id,
+                expected_object_version=expected_object_version,
+                params=params,
+                ctx=ctx or RequestContext(),
+                is_dry_run=is_dry_run,
+            )
+        return self.action_planning_service.plan_action(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            ctx=ctx,
+            is_dry_run=is_dry_run,
+        )
+
+    def execute_branch_action(
+        self,
+        action_api_name: str,
+        *,
+        branch_id: str,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_branch_service.execute(
+            action_api_name,
+            branch_id=branch_id,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx or RequestContext(),
+        )
+
+    def branch_object(
+        self, branch_id: str, object_type: str, object_id: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_branch_service.get_object(branch_id, object_type, object_id, ctx=ctx or RequestContext())
+
+    def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.action_branch_service.diff(branch_id, ctx=ctx or RequestContext())
 
     def apply_action(
         self,
@@ -69,6 +168,76 @@ class ActionService(CoreService):
             simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required=simulate_writeback_compensation_required,
             external_writeback_uri=external_writeback_uri,
+        )
+
+    def start_action_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        wait_seconds: int,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.start(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=ctx or RequestContext(),
+        )
+
+    def get_action_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.action_async_run_service.get(run_id, ctx=ctx or RequestContext())
+
+    def list_action_runs(
+        self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_async_run_service.list_runs(cursor=cursor, limit=limit, ctx=ctx or RequestContext())
+
+    def action_run_events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.events(
+            run_id, after_sequence=after_sequence, limit=limit, ctx=ctx or RequestContext()
+        )
+
+    def cancel_action_run(
+        self,
+        run_id: str,
+        *,
+        idempotency_key: str,
+        reason: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.cancel(
+            run_id, idempotency_key=idempotency_key, reason=reason, ctx=ctx or RequestContext()
+        )
+
+    def list_action_logs(
+        self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_log_revert_service.list_logs(cursor=cursor, limit=limit, ctx=ctx or RequestContext())
+
+    def action_revert_eligibility(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return dict(self.action_log_revert_service.revert_eligibility(run_id, ctx=ctx or RequestContext()))
+
+    def revert_action_run(
+        self, run_id: str, *, idempotency_key: str, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_log_revert_service.revert(
+            run_id, idempotency_key=idempotency_key, ctx=ctx or RequestContext()
         )
 
     def apply_action_batch(

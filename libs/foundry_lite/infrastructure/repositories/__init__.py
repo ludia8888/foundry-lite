@@ -1,5 +1,7 @@
 """Concrete metadata repositories."""
 
+from foundry_lite.infrastructure.repositories.action_branch_repository import SqlAlchemyActionBranchRepository
+from foundry_lite.infrastructure.repositories.action_execution_repository import SqlAlchemyActionExecutionRepository
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
 from foundry_lite.infrastructure.repositories.ai_eval_repository import SqlAlchemyAiEvalRepository
 from foundry_lite.infrastructure.repositories.ai_run_repository import SqlAlchemyAiRunRepository
@@ -51,6 +53,8 @@ from foundry_lite.infrastructure.repositories.source_registry_repository import 
 from foundry_lite.infrastructure.repositories.transform_repository import SqlAlchemyTransformRepository
 
 __all__ = [
+    "SqlAlchemyActionExecutionRepository",
+    "SqlAlchemyActionBranchRepository",
     "SqlAlchemyActionRepository",
     "SqlAlchemyAiEvalRepository",
     "SqlAlchemyAiRunRepository",

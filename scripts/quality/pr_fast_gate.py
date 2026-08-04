@@ -1,0 +1,440 @@
+"""Run the budgeted pull-request gate without weakening release evidence.
+
+Enforces engineering guideline §16 and quality-gate roadmap §5. Pull requests
+run diff security checks, repository invariants, directly related tests, and
+frontend type contracts inside one bounded job. Full coverage, live runtime,
+browser, dependency, and CodeQL evidence continues on main/release/nightly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess  # nosec B404 - this gate intentionally spawns fixed quality commands
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+_GIT_EXECUTABLE = shutil.which("git")
+if _GIT_EXECUTABLE is None:
+    raise RuntimeError("git executable is required for the pull-request gate")
+GIT: str = _GIT_EXECUTABLE
+REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_fast_gate.json"
+SECURITY_REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_diff_security.json"
+DEFAULT_BUDGET_SECONDS = 210.0
+MAX_SELECTED_TEST_FILES = 32
+GENERIC_MODULE_STEMS = {
+    "__init__",
+    "base",
+    "client",
+    "common",
+    "config",
+    "constants",
+    "dependencies",
+    "helpers",
+    "main",
+    "models",
+    "policy",
+    "protocols",
+    "repository",
+    "runtime",
+    "schemas",
+    "service",
+    "types",
+    "utils",
+}
+HIGH_CONFIDENCE_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("private-key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
+    ("aws-access-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
+    ("slack-token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b")),
+)
+DANGEROUS_PYTHON_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("dynamic-eval", re.compile(r"(?<![A-Za-z0-9_])(eval|exec)\s*\(")),
+    ("shell-true", re.compile(r"\bshell\s*=\s*True\b")),
+    ("unsafe-pickle-load", re.compile(r"\bpickle\.loads?\s*\(")),
+)
+
+
+@dataclass(frozen=True)
+class PullRequestPlan:
+    changed_files: tuple[str, ...]
+    selected_tests: tuple[str, ...]
+    source_files_without_tests: tuple[str, ...]
+    has_backend: bool
+    has_frontend: bool
+    has_sdk_contract: bool
+    is_docs_only: bool
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    name: str
+    returncode: int
+    duration_seconds: float
+    output: str
+
+
+def _safe_ref(value: str) -> str:
+    if value.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_./-]+", value):
+        raise ValueError(f"unsafe git ref: {value!r}")
+    return value
+
+
+def _git_output(arguments: list[str]) -> str:
+    completed = subprocess.run(  # nosec B603 - fixed git executable and validated refs
+        [GIT, *arguments],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
+def changed_files(base: str, head: str) -> tuple[str, ...]:
+    diff_range = f"{_safe_ref(base)}...{_safe_ref(head)}"
+    output = _git_output(["diff", "--name-only", "--diff-filter=ACMRTUXB", diff_range])
+    paths = {line.strip() for line in output.splitlines() if line.strip()}
+    if head == "HEAD" and os.environ.get("GITHUB_ACTIONS") != "true":
+        local_output = _git_output(["ls-files", "--modified", "--others", "--exclude-standard"])
+        paths.update(line.strip() for line in local_output.splitlines() if line.strip())
+    return tuple(sorted(paths))
+
+
+def _is_backend_path(path: str) -> bool:
+    return (
+        path.endswith(".py")
+        or path.startswith(("migrations/", "infra/schema_revisions/"))
+        or path
+        in {
+            "pyproject.toml",
+            "uv.lock",
+        }
+    )
+
+
+def _is_frontend_path(path: str) -> bool:
+    return (
+        path.startswith(("apps/foundry/", "apps/web/", "packages/sdk-ts/", "tests/sdk/"))
+        or path.endswith((".ts", ".tsx", ".js", ".mjs", ".css"))
+        or path in {"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"}
+    )
+
+
+def _needs_sdk_contract(path: str) -> bool:
+    return _is_frontend_path(path) or path.startswith(
+        ("apps/api/", "scripts/sdk_generator/", "libs/foundry_lite/interfaces/")
+    )
+
+
+def _is_docs_path(path: str) -> bool:
+    return path.endswith((".md", ".json")) and (
+        path.startswith("docs/") or "/docs/" in path or path in {"README.md", "AGENTS.md"}
+    )
+
+
+def _quality_control_changed(paths: tuple[str, ...]) -> bool:
+    return any(
+        path.startswith((".github/workflows/", "scripts/quality/"))
+        or path in {"package.json", "pyproject.toml", "scripts/ci_gate.sh"}
+        for path in paths
+    )
+
+
+def _source_module_marker(path: str) -> str:
+    source = Path(path)
+    if source.suffix != ".py" or path.startswith("tests/"):
+        return ""
+    return source.stem if source.stem not in GENERIC_MODULE_STEMS and len(source.stem) >= 6 else ""
+
+
+def _direct_test_matches(source_path: str, test_paths: tuple[Path, ...]) -> set[str]:
+    stem = _source_module_marker(source_path)
+    if not stem:
+        return set()
+    matches: set[str] = set()
+    for test_path in test_paths:
+        relative = test_path.relative_to(ROOT).as_posix()
+        if not _is_fast_test_path(relative):
+            continue
+        if stem in test_path.stem:
+            matches.add(relative)
+    return matches
+
+
+def _bounded_test_selection(changed_tests: set[str], direct_tests: set[str]) -> tuple[str, ...]:
+    required = sorted(changed_tests)
+    remaining_slots = max(0, MAX_SELECTED_TEST_FILES - len(required))
+    linked = sorted(direct_tests - changed_tests)[:remaining_slots]
+    return tuple([*required, *linked])
+
+
+def _is_fast_test_path(path: str) -> bool:
+    if not path.startswith("tests/") or not path.endswith(".py"):
+        return False
+    slow_markers = (
+        "_live.py",
+        "temporal",
+        "infra_composition",
+        "all_infra",
+        "golden_pipeline",
+        "rest_connector",
+    )
+    if any(marker in path for marker in slow_markers):
+        return False
+    if path.startswith(("tests/unit/", "tests/contracts/", "tests/smoke/")):
+        return True
+    if not path.startswith("tests/integration/test_"):
+        return False
+    return True
+
+
+def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
+    existing_tests = tuple(sorted(ROOT.glob("tests/**/test_*.py")))
+    changed_python_tests = {path for path in paths if _is_fast_test_path(path) and (ROOT / path).is_file()}
+    if _quality_control_changed(paths):
+        changed_python_tests.update(
+            {
+                "tests/unit/test_pr_fast_gate.py",
+                "tests/unit/test_quality_ci_workflows.py",
+            }
+        )
+
+    source_paths = tuple(
+        path
+        for path in paths
+        if path.endswith(".py") and path.startswith(("libs/", "apps/", "scripts/")) and not path.startswith("tests/")
+    )
+    source_matches = {path: _direct_test_matches(path, existing_tests) for path in source_paths}
+    direct_tests: set[str] = set()
+    for matches in source_matches.values():
+        direct_tests.update(matches)
+    selected_tests = _bounded_test_selection(changed_python_tests, direct_tests)
+    untested = tuple(
+        sorted(path for path, matches in source_matches.items() if not matches and not changed_python_tests)
+    )
+    has_backend = any(_is_backend_path(path) for path in paths)
+    has_frontend = any(_is_frontend_path(path) for path in paths)
+    has_sdk_contract = any(_needs_sdk_contract(path) for path in paths)
+    is_docs_only = bool(paths) and all(_is_docs_path(path) for path in paths)
+    return PullRequestPlan(
+        changed_files=paths,
+        selected_tests=selected_tests,
+        source_files_without_tests=untested,
+        has_backend=has_backend,
+        has_frontend=has_frontend,
+        has_sdk_contract=has_sdk_contract,
+        is_docs_only=is_docs_only,
+    )
+
+
+def _github_output(plan: PullRequestPlan, path: Path) -> None:
+    values = {
+        "has_backend": str(plan.has_backend).lower(),
+        "has_frontend": str(plan.has_frontend).lower(),
+        "has_sdk_contract": str(plan.has_sdk_contract).lower(),
+        "is_docs_only": str(plan.is_docs_only).lower(),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            handle.write(f"{key}={value}\n")
+
+
+def _added_lines_by_file(base: str, head: str) -> dict[str, list[str]]:
+    diff_range = f"{_safe_ref(base)}...{_safe_ref(head)}"
+    patch = _git_output(["diff", "--unified=0", "--no-color", diff_range])
+    if head == "HEAD" and os.environ.get("GITHUB_ACTIONS") != "true":
+        patch += _git_output(["diff", "--unified=0", "--no-color", "HEAD"])
+    added: dict[str, list[str]] = {}
+    current = ""
+    for line in patch.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            added.setdefault(current, [])
+        elif current and line.startswith("+") and not line.startswith("+++"):
+            added[current].append(line[1:])
+    if head == "HEAD" and os.environ.get("GITHUB_ACTIONS") != "true":
+        tracked = set(added)
+        untracked = {
+            line.strip()
+            for line in _git_output(["ls-files", "--others", "--exclude-standard"]).splitlines()
+            if line.strip()
+        }
+        for path in untracked:
+            candidate = ROOT / path
+            if path not in tracked and candidate.is_file():
+                added[path] = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+    return added
+
+
+def security_violations(added_lines: dict[str, list[str]]) -> list[str]:
+    violations: list[str] = []
+    for path, lines in sorted(added_lines.items()):
+        for line_number, line in enumerate(lines, start=1):
+            for name, pattern in HIGH_CONFIDENCE_SECRET_PATTERNS:
+                if pattern.search(line):
+                    violations.append(f"{path}:added-{line_number}:{name}")
+            if path.endswith(".py") and not path.startswith("tests/"):
+                for name, pattern in DANGEROUS_PYTHON_PATTERNS:
+                    if pattern.search(line) and "# nosec" not in line:
+                        violations.append(f"{path}:added-{line_number}:{name}")
+    return violations
+
+
+def _write_report(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def run_security(base: str, head: str) -> int:
+    violations = security_violations(_added_lines_by_file(base, head))
+    report = {"count": len(violations), "violations": violations, "baseline": 0, "gate_pass": not violations}
+    _write_report(SECURITY_REPORT_PATH, report)
+    print(json.dumps(report, ensure_ascii=False))
+    return int(bool(violations))
+
+
+def _docs_commands() -> list[tuple[str, list[str]]]:
+    scripts = (
+        "check_doc_drift.py",
+        "check_documentation_map.py",
+        "check_evidence_ledger_commands.py",
+        "check_semantic_doc_consistency.py",
+        "check_data_pattern_matrix.py",
+        "check_data_platform_sprint_status.py",
+    )
+    return [(script.removesuffix(".py"), [sys.executable, f"scripts/quality/{script}"]) for script in scripts]
+
+
+def _commands(plan: PullRequestPlan, base: str, head: str) -> list[tuple[str, list[str]]]:
+    commands: list[tuple[str, list[str]]] = [
+        (
+            "diff-security",
+            [sys.executable, "scripts/quality/pr_fast_gate.py", "security", "--base", base, "--head", head],
+        )
+    ]
+    if plan.is_docs_only:
+        commands.extend(_docs_commands())
+        return commands
+    commands.append(
+        (
+            "static-invariants",
+            [sys.executable, "scripts/quality/run_static_checks.py", "--profile", "pr", "--jobs", "3"],
+        )
+    )
+    if plan.selected_tests:
+        commands.append(
+            (
+                "direct-tests",
+                [sys.executable, "-m", "pytest", *plan.selected_tests, "-q", "-n", "2", "-p", "no:tach"],
+            )
+        )
+    if plan.has_frontend:
+        commands.extend(
+            (
+                ("sdk-typecheck", ["pnpm", "--filter", "@foundry-lite/sdk", "typecheck"]),
+                ("foundry-typecheck", ["pnpm", "--filter", "@foundry-lite/foundry", "typecheck"]),
+            )
+        )
+    if plan.has_sdk_contract:
+        commands.append(("sdk-request-contract", ["node", "tests/sdk/request_contract.mjs"]))
+    return commands
+
+
+def _run_command(name: str, command: list[str], timeout_seconds: float) -> CommandResult:
+    started = time.perf_counter()
+    env = dict(os.environ)
+    env.setdefault("PYTHONPATH", ".:libs:apps/cli:apps/api:apps/worker")
+    env.setdefault("FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS", "1")
+    try:
+        completed = subprocess.run(  # nosec B603 - commands are built from fixed gate inventory
+            command,
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        output = (completed.stdout + completed.stderr).strip()
+        return CommandResult(name, completed.returncode, time.perf_counter() - started, output)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        output = f"timed out after {timeout_seconds:.0f}s\n{stdout}\n{stderr}".strip()
+        return CommandResult(name, 124, time.perf_counter() - started, output)
+
+
+def run_gate(base: str, head: str, budget_seconds: float) -> int:
+    started = time.perf_counter()
+    plan = build_plan(changed_files(base, head))
+    results: list[CommandResult] = []
+    commands = _commands(plan, base, head)
+    command_timeout = max(30.0, budget_seconds - 5.0)
+    with ThreadPoolExecutor(max_workers=min(5, len(commands))) as pool:
+        futures = {pool.submit(_run_command, name, command, command_timeout): name for name, command in commands}
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            print(f"[{'PASS' if result.returncode == 0 else 'FAIL'}] {result.name} ({result.duration_seconds:.1f}s)")
+    duration = time.perf_counter() - started
+    violations = [result.name for result in results if result.returncode != 0]
+    violations.extend(f"missing-direct-test:{path}" for path in plan.source_files_without_tests)
+    if duration > budget_seconds:
+        violations.append(f"wall-time-budget:{duration:.1f}s>{budget_seconds:.1f}s")
+    payload: dict[str, object] = {
+        "count": len(violations),
+        "violations": violations,
+        "baseline": 0,
+        "gate_pass": not violations,
+        "budget_seconds": budget_seconds,
+        "duration_seconds": round(duration, 3),
+        "plan": asdict(plan),
+        "checks": [
+            asdict(result) | {"output": result.output[-4000:]} for result in sorted(results, key=lambda item: item.name)
+        ],
+    }
+    _write_report(REPORT_PATH, payload)
+    for result in results:
+        if result.returncode != 0:
+            print(f"\n===== FAIL {result.name} =====\n{result.output}", file=sys.stderr)
+    print(f"PR fast gate: {len(results)} checks in {duration:.1f}s; violations={len(violations)}")
+    return int(bool(violations))
+
+
+def _default_ref(name: str, fallback: str) -> str:
+    return os.environ.get(name) or fallback
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("plan", "security", "run"):
+        child = subparsers.add_parser(command)
+        child.add_argument("--base", default=_default_ref("FOUNDRY_LITE_PR_BASE_SHA", "origin/main"))
+        child.add_argument("--head", default=_default_ref("FOUNDRY_LITE_PR_HEAD_SHA", "HEAD"))
+    plan_parser = subparsers.choices["plan"]
+    plan_parser.add_argument("--github-output", type=Path)
+    run_parser = subparsers.choices["run"]
+    run_parser.add_argument("--budget-seconds", type=float, default=DEFAULT_BUDGET_SECONDS)
+    args = parser.parse_args(argv)
+
+    if args.command == "security":
+        return run_security(args.base, args.head)
+    if args.command == "run":
+        return run_gate(args.base, args.head, args.budget_seconds)
+    plan = build_plan(changed_files(args.base, args.head))
+    if args.github_output:
+        _github_output(plan, args.github_output)
+    print(json.dumps(asdict(plan), ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

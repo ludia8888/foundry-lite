@@ -175,7 +175,7 @@ export function RuntimeActionForm({
       </div>
 
       {form.parameterFields.length > 0 ? (
-        form.parameterFields.map((field) => (
+        form.parameterFields.filter((field) => field.isVisible).map((field) => (
           <div key={field.name} className="space-y-1">
             <label className="flex items-center gap-1 text-xs font-medium">
               {field.label}

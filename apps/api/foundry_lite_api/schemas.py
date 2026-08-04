@@ -138,6 +138,11 @@ class ActionApplyRequest(BaseModel):
     target: ActionTargetRequest
     expected_object_version: int = Field(alias="expectedObjectVersion")
     params: JsonObject
+    branch_id: str | None = Field(default=None, alias="branchId")
+
+
+class ActionRunCancelRequest(BaseModel):
+    reason: str | None = None
 
 
 class ActionBatchTargetItemRequest(BaseModel):
@@ -429,6 +434,7 @@ class AipBuilderToolSpecRequest(BaseModel):
 
     tool_id: str = Field(alias="toolId")
     version: str
+    description: str = ""
     input_schema: JsonObject = Field(default_factory=dict, alias="inputSchema")
     output_schema: JsonObject = Field(default_factory=dict, alias="outputSchema")
     effect: str = "READ"
@@ -513,6 +519,39 @@ class AipAgentRunRequest(BaseModel):
     tool_manifest: list[AipBuilderToolSpecRequest] = Field(default_factory=list, alias="toolManifest")
     agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
     agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
+
+
+class AipFdeRunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    user_message: str = Field(alias="userMessage", min_length=1, max_length=20000)
+    workspace_ref: str | None = Field(default=None, alias="workspaceRef", min_length=1, max_length=512)
+    branch_id: str | None = Field(default=None, alias="branchId", min_length=1, max_length=255)
+    mode: str = Field(default="ontology_editing", max_length=64)
+    capabilities: list[str] = Field(default_factory=list, max_length=20)
+    approved_tool_ids: list[str] = Field(default_factory=list, alias="approvedToolIds", max_length=20)
+    attached_context_refs: list[str] = Field(default_factory=list, alias="attachedContextRefs", max_length=20)
+    model_alias: str = Field(default="default-completion", alias="modelAlias", max_length=255)
+    session_id: str | None = Field(default=None, alias="sessionId", max_length=255)
+    agent_run_id: str | None = Field(default=None, alias="agentRunId", max_length=255)
+    tool_discovery: str = Field(default="eager", alias="toolDiscovery", pattern="^(eager|lazy)$")
+    max_context_items: int = Field(default=6, ge=1, le=20, alias="maxContextItems")
+    max_context_tokens: int = Field(default=2400, ge=128, le=32000, alias="maxContextTokens")
+    max_tool_calls: int = Field(default=4, ge=1, le=8, alias="maxToolCalls")
+    max_output_tokens: int = Field(default=512, ge=64, le=16000, alias="maxOutputTokens")
+
+
+class AipPilotPlanRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    application_name: str = Field(alias="applicationName", min_length=1, max_length=255)
+    domain_description: str = Field(alias="domainDescription", min_length=1, max_length=10000)
+
+
+class AipPilotGenerateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    plan: JsonObject
 
 
 class AipCitationNavigationResolveRequest(BaseModel):

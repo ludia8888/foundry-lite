@@ -21,12 +21,16 @@ from foundry_lite.application.ports.action_repository import (
     ObjectTargetUpdate,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.action_edit_plan_results import CommittedEdit
 from foundry_lite.application.services.action_helpers import (
     action_patch,
     action_success_response,
     previous_action_values,
 )
+from foundry_lite.application.services.action_log_writer import record_action_log
 from foundry_lite.application.services.action_protocols import ActionObjectIndexer, ActionRuntimeBoundary
+from foundry_lite.application.services.action_revert_evidence import property_revert_payload
+from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 from foundry_lite.security.policy import PolicyService
@@ -67,6 +71,14 @@ class ActionMutationUnitOfWork:
         )
         if not updated:
             raise ConflictDetected("action run terminal state changed concurrently")
+        record_action_log(
+            self.action_repository,
+            conn,
+            ctx,
+            action_run_id,
+            compile_action_contract(action_type["definition"]),
+            (CommittedEdit(edit_id, record["object_type_api_name"], record["object_id"], "set_property"),),
+        )
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
         self._audit_action_commit(conn, ctx, action_run_id, record, previous_values, patch, edit_id)
         return response
@@ -123,6 +135,7 @@ class ActionMutationUnitOfWork:
                 actor_user_id=ctx.actor_user_id,
                 idempotency_key=idempotency_key,
                 created_at=_now(),
+                revert_payload=property_revert_payload(record, patch),
             ),
         )
         return edit_id

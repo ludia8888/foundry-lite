@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
+from foundry_lite.domain.action_runtime.action_conditions import (
+    StaticActionConditionContext,
+    evaluate_action_condition,
+)
+from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
+from foundry_lite.domain.action_runtime.action_parameters import (
+    ActionParameterResolution,
+    default_action_parameter_context,
+    resolve_action_parameters,
+)
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 OBJECT_IN_PATTERN = re.compile(r"^object\.([A-Za-z_][A-Za-z0-9_]*)\s+in\s+\[(.*)]$")
@@ -116,19 +127,64 @@ def validate_action_request(
     action_type: Mapping[str, object],
     record: Mapping[str, object],
     params: Mapping[str, object],
+    ctx: RequestContext | None = None,
+    generate_id: Callable[[str], str] | None = None,
+) -> Exception | None:
+    resolution, resolution_error = _resolve_action_parameters_or_error(action_type, record, params, ctx, generate_id)
+    if resolution_error is not None:
+        return resolution_error
+    effective_params = resolution.values if resolution is not None else params
+    return _validated_action_request_error(action_type, record, effective_params, ctx)
+
+
+def _resolve_action_parameters_or_error(
+    action_type: Mapping[str, object],
+    record: Mapping[str, object],
+    params: Mapping[str, object],
+    ctx: RequestContext | None,
+    generate_id: Callable[[str], str] | None,
+) -> tuple[ActionParameterResolution | None, ValidationFailed | None]:
+    try:
+        resolution = resolve_action_request_parameters(action_type, record, params, ctx, generate_id=generate_id)
+    except ValidationFailed as exc:
+        return None, exc
+    return resolution, None
+
+
+def _validated_action_request_error(
+    action_type: Mapping[str, object],
+    record: Mapping[str, object],
+    effective_params: Mapping[str, object],
+    ctx: RequestContext | None,
+) -> Exception | None:
+    criteria_error = _submission_criteria_error(action_type, record, effective_params, ctx)
+    if criteria_error is not None:
+        return criteria_error
+    schema_error = _parameter_schema_error(action_type, effective_params)
+    if schema_error is not None:
+        return schema_error
+    return _legacy_precondition_error(action_type, record)
+
+
+def _parameter_schema_error(
+    action_type: Mapping[str, object], effective_params: Mapping[str, object]
 ) -> Exception | None:
     schema = _mapping_or_empty(action_type.get("parameter_schema"))
     required = _string_sequence(schema.get("required", ()))
-    missing = [name for name in required if name not in params]
+    missing = [name for name in required if name not in effective_params]
     if missing:
         return ValidationFailed("missing required action parameters", details={"missing": missing})
     properties = schema.get("properties")
     if properties is not None:
         # A declared parameter schema rejects unknown parameters and enforces the
         # declared type, so a stray or wrong-typed value never reaches the patch.
-        type_error = _validate_parameter_values(_mapping_or_empty(properties), params)
+        type_error = _validate_parameter_values(_mapping_or_empty(properties), effective_params)
         if type_error is not None:
             return type_error
+    return None
+
+
+def _legacy_precondition_error(action_type: Mapping[str, object], record: Mapping[str, object]) -> Exception | None:
     definition = _mapping_or_empty(action_type.get("definition"))
     for raw_precondition in _object_sequence(definition.get("preconditions", ())):
         precondition = _mapping_or_empty(raw_precondition)
@@ -139,6 +195,60 @@ def validate_action_request(
                 details={"expression": expression},
             )
     return None
+
+
+def resolve_action_request_parameters(
+    action_type: Mapping[str, object],
+    record: Mapping[str, object],
+    params: Mapping[str, object],
+    ctx: RequestContext | None = None,
+    *,
+    generate_id: Callable[[str], str] | None = None,
+) -> ActionParameterResolution | None:
+    """Resolve canonical v3 parameters; return None for non-Action schemas."""
+    definition = _mapping_or_empty(action_type.get("definition"))
+    if not _is_action_definition(definition):
+        return None
+    request_context = ctx or RequestContext()
+    contract = compile_action_contract(definition)
+    resolver_context = default_action_parameter_context(
+        params,
+        _mapping_or_empty(record.get("properties")),
+        request_context.actor_user_id,
+        request_context.roles,
+        generate_id or (lambda strategy: f"preview-{strategy}"),
+    )
+    return resolve_action_parameters(contract, resolver_context)
+
+
+def _submission_criteria_error(
+    action_type: Mapping[str, object],
+    record: Mapping[str, object],
+    params: Mapping[str, object],
+    ctx: RequestContext | None,
+) -> ValidationFailed | None:
+    definition = _mapping_or_empty(action_type.get("definition"))
+    raw = definition.get("submissionCriteria")
+    if not isinstance(raw, Mapping):
+        return None
+    request_context = ctx or RequestContext()
+    condition_context = StaticActionConditionContext(
+        parameters=params,
+        object_properties=_mapping_or_empty(record.get("properties")),
+        actor_user_id=request_context.actor_user_id,
+        actor_groups=request_context.roles,
+    )
+    if evaluate_action_condition(raw, condition_context):
+        return None
+    message = raw.get("message")
+    return ValidationFailed(
+        message if isinstance(message, str) and message else "action submission criteria failed",
+        details={"criteria": dict(raw)},
+    )
+
+
+def _is_action_definition(definition: Mapping[str, object]) -> bool:
+    return isinstance(definition.get("apiName"), str) and definition.get("target") is not None
 
 
 def _validate_parameter_values(properties: Mapping[str, object], params: Mapping[str, object]) -> Exception | None:

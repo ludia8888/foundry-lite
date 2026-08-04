@@ -13,6 +13,8 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyValidationResult,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.action_definition_validation import validate_yaml_action_definitions
+from foundry_lite.application.services.action_ir_compiler import compile_action_definition
 from foundry_lite.application.services.materialization_types import (
     MATERIALIZATION_MODES,
     materialization_spec_name,
@@ -32,6 +34,7 @@ from foundry_lite.application.services.ontology_yaml import (
     optional_str,
     required_str,
 )
+from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -131,6 +134,7 @@ def validate_ontology_definition(
     object_defs = _object_definitions_by_api(definition)
     link_defs = _link_definitions_by_api(definition)
     _action_definitions_by_api(definition)
+    validate_yaml_action_definitions(definition, object_defs, link_defs)
     _validate_yaml_materializations(object_defs.values())
     for object_def in object_defs.values():
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
@@ -398,16 +402,11 @@ def _validate_yaml_action_mutations(
     for action_def in mapping_sequence(definition, "actionTypes"):
         if required_str(action_def, "target") != object_api_name:
             continue
-        _validate_yaml_action_parameters(action_def)
-        for mutation in action_type_definition(action_def).get("mutations", ()):
+        persisted_definition = action_type_definition(action_def)
+        compile_action_contract(persisted_definition)
+        for mutation in persisted_definition.get("mutations", ()):
             _validate_yaml_action_mutation_property(mutation, property_defs)
-
-
-def _validate_yaml_action_parameters(action_def: YamlObject) -> None:
-    action_api = required_str(action_def, "apiName")
-    for parameter in mapping_sequence(action_def, "parameters"):
-        details = {"actionType": action_api, "parameter": required_str(parameter, "apiName")}
-        _require_allowed(required_str(parameter, "type"), PROPERTY_DATA_TYPES, "action parameter type", details)
+        compile_action_definition(persisted_definition)
 
 
 def _validate_yaml_action_mutation_property(

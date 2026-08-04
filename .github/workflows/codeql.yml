@@ -15,8 +15,34 @@ permissions:
   security-events: write
 
 jobs:
-  analyze:
+  pr_diff_security:
+    # Keep the historical required-check name so branch protection needs no
+    # manual rewrite. The log is explicit that full CodeQL follows on main.
     name: CodeQL data-flow analysis
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run bounded PR diff security guard
+        env:
+          FOUNDRY_LITE_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FOUNDRY_LITE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/quality/pr_fast_gate.py security
+
+      - name: Explain full security evidence boundary
+        run: echo "Full CodeQL, Semgrep, gitleaks, Bandit, and pip-audit evidence runs after merge on main and before release."
+
+  analyze:
+    name: CodeQL data-flow analysis (full)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

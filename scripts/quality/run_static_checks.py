@@ -8,9 +8,11 @@ Two structural speedups over the old one-command-per-line shell lane:
 2. All checks always run to completion and failures are reported together,
    so one broken gate no longer hides the rest (the old lane was fail-fast).
 
-The check inventory is identical to the previous serial lane; only the
-execution model changed. Heavier tools are scheduled first so they overlap
-with the cheap AST checks.
+The full check inventory is identical to the previous serial lane; only the
+execution model changed. The ``pr`` profile is an explicit latency profile:
+it keeps typing, architecture, security, schema, and documentation invariants
+but moves network CVE lookup, full product-test bundles, and broad complexity
+rehearsals to the post-merge/release lanes.
 """
 
 from __future__ import annotations
@@ -159,6 +161,24 @@ HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ),
 )
 
+# The PR profile must fit inside the five-minute workflow budget, including a
+# cold dependency restore. Full Semgrep/pip-audit/gitleaks, product test
+# bundles, and broad complexity/documentation coverage remain mandatory on
+# main/release/nightly. Pull requests get Bandit, both type checkers, Ruff,
+# dependency boundaries, schema/SDK drift, and every focused Python invariant.
+PR_HEAVY_CHECK_NAMES = frozenset(
+    {
+        "pyright",
+        "mypy",
+        "bandit",
+        "sdk-ts-drift",
+        "ruff-lint",
+        "ruff-format",
+        "import-linter",
+        "tach",
+    }
+)
+
 # name -> (script, extra args); all run as `<this python> scripts/quality/<script>`.
 PYTHON_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("dependency-graph", ["scripts/quality/check_dependency_graph.py"]),
@@ -245,7 +265,11 @@ def _gitleaks_check() -> tuple[str, list[str]] | None:
     return None
 
 
-def _all_checks() -> list[tuple[str, list[str]]]:
+def _all_checks(profile: str = "full") -> list[tuple[str, list[str]]]:
+    if profile == "pr":
+        pr_checks = [check for check in HEAVY_CHECKS if check[0] in PR_HEAVY_CHECK_NAMES]
+        pr_checks.extend((name, [PYTHON, *script]) for name, script in PYTHON_CHECKS)
+        return pr_checks
     checks: list[tuple[str, list[str]]] = list(HEAVY_CHECKS)
     gitleaks = _gitleaks_check()
     if gitleaks is not None:
@@ -327,11 +351,12 @@ def _report(results: list[CheckResult], jobs: int, total_seconds: float) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs", type=int, default=min(10, os.cpu_count() or 4))
+    parser.add_argument("--profile", choices=("full", "pr"), default="full")
     args = parser.parse_args(argv)
 
     (ROOT / "artifacts" / "quality").mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    results = _run_checks(_all_checks(), _check_env(), args.jobs)
+    results = _run_checks(_all_checks(args.profile), _check_env(), args.jobs)
     return _report(results, args.jobs, time.perf_counter() - started)
 
 

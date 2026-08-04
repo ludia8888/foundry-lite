@@ -149,6 +149,7 @@ class SqlAlchemyOntologyRepository:
                 ontology_version_id=record.ontology_version_id,
                 api_name=record.api_name,
                 display_name=record.display_name,
+                target_kind=record.target_kind,
                 target_object_type_id=record.target_object_type_id,
                 target_api_name=record.target_api_name,
                 parameter_schema=record.parameter_schema,

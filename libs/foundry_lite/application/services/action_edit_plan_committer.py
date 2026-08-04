@@ -17,7 +17,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from foundry_lite.application.action_types import ActionPlanSummary
 from foundry_lite.application.ports import (
     ACTION_RUN_SUCCEEDED,
     LinkTypeRow,
@@ -35,12 +34,26 @@ from foundry_lite.application.ports.action_repository import (
     ObjectTargetUpdate,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.action_edit_plan_results import (
+    ActionEditPlanResult,
+    CommittedEdit,
+    action_edit_audit_summary,
+    action_edit_result_payload,
+)
+from foundry_lite.application.services.action_log_writer import record_action_log
 from foundry_lite.application.services.action_protocols import (
     ActionObjectIndexer,
     ActionObjectRecordLookup,
     ActionOntologyLookup,
     ActionRuntimeBoundary,
 )
+from foundry_lite.application.services.action_revert_evidence import (
+    created_object_revert_payload,
+    deleted_object_revert_payload,
+    link_revert_payload,
+    property_revert_payload,
+)
+from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3
 from foundry_lite.domain.action_runtime.edit_plan import (
     EditPlan,
     LinkCreate,
@@ -60,27 +73,6 @@ class CommitLinkTypeResolver(Protocol):
 
 
 @dataclass(frozen=True)
-class CommittedEdit:
-    """One object edit that the plan produced, for the run result and events."""
-
-    edit_id: str
-    object_type: str
-    object_id: str
-    operation: str
-
-
-@dataclass(frozen=True)
-class ActionEditPlanResult:
-    action_run_id: str
-    status: str
-    edits: tuple[CommittedEdit, ...]
-    created_object_ids: tuple[str, ...]
-    deleted_object_ids: tuple[str, ...]
-    links_created: int
-    links_deleted: int
-
-
-@dataclass(frozen=True)
 class ActionEditPlanCommitter:
     action_repository: ActionRepository
     object_indexer: ActionObjectIndexer
@@ -96,6 +88,7 @@ class ActionEditPlanCommitter:
         *,
         action_run_id: str,
         plan: EditPlan,
+        contract: ActionDefinitionV3 | None = None,
         transition: StatusTransition = ACTION_RUN_SUCCEEDED,
     ) -> ActionEditPlanResult:
         create_edits = self._apply_creates(conn, ctx, action_run_id, plan)
@@ -111,6 +104,8 @@ class ActionEditPlanCommitter:
             action_run_id, transition.to_status, edits, created, deleted, len(link_create_edits), len(link_delete_edits)
         )
         self._finalize_run(conn, ctx, action_run_id, transition, result)
+        if contract is not None:
+            record_action_log(self.action_repository, conn, ctx, action_run_id, contract, edits)
         self._emit_events(conn, ctx, action_run_id, edits)
         self._audit_commit(conn, ctx, action_run_id, result)
         return result
@@ -154,6 +149,7 @@ class ActionEditPlanCommitter:
             properties,
             {},
             source.operation_key,
+            created_object_revert_payload(),
         )
         return CommittedEdit(edit_id, object_type, object_id, "create_object")
 
@@ -209,6 +205,7 @@ class ActionEditPlanCommitter:
             dict(modify.patch),
             previous,
             modify.operation_key,
+            property_revert_payload(record, modify.patch),
         )
         return CommittedEdit(edit_id, modify.object_type, modify.object_id, "set_property")
 
@@ -252,6 +249,7 @@ class ActionEditPlanCommitter:
             {},
             dict(record["properties"]),
             delete.operation_key,
+            deleted_object_revert_payload(record),
         )
         return CommittedEdit(edit_id, delete.object_type, delete.object_id, "delete_object")
 
@@ -313,6 +311,7 @@ class ActionEditPlanCommitter:
             patch,
             {},
             link.operation_key,
+            link_revert_payload(meta, link.link_type, link.source_object_id, link.target_object_id, edit_type),
         )
         return CommittedEdit(edit_id, meta["from_api_name"], link.source_object_id, edit_type)
 
@@ -328,6 +327,7 @@ class ActionEditPlanCommitter:
         patch: Mapping[str, object],
         previous: Mapping[str, object],
         operation_key: str,
+        revert_payload: Mapping[str, object],
     ) -> str:
         edit_id = _new_id("edit")
         self.action_repository.insert_object_edit(
@@ -345,6 +345,7 @@ class ActionEditPlanCommitter:
                 actor_user_id=ctx.actor_user_id,
                 idempotency_key=operation_key,
                 created_at=_now(),
+                revert_payload=dict(revert_payload),
             ),
         )
         return edit_id
@@ -364,7 +365,7 @@ class ActionEditPlanCommitter:
             transition=transition,
             error=None,
             completed_at=_now(),
-            result=_result_payload(result),
+            result=action_edit_result_payload(result),
         )
         if not updated:
             raise ConflictDetected("action run terminal state changed concurrently")
@@ -410,7 +411,7 @@ class ActionEditPlanCommitter:
             resource_type="action_run",
             resource_id=action_run_id,
             action="apply",
-            after_ref=_audit_summary(result),
+            after_ref=action_edit_audit_summary(result),
             correlation_id=action_run_id,
         )
 
@@ -465,33 +466,3 @@ def _link_write(tenant_id: str, link: LinkCreate, meta: LinkTypeRow) -> ObjectLi
         to_object_id=link.target_object_id,
         updated_at=_now(),
     )
-
-
-def _audit_summary(result: ActionEditPlanResult) -> dict[str, object]:
-    return {
-        "edits": [
-            {"objectType": edit.object_type, "objectId": edit.object_id, "operation": edit.operation}
-            for edit in result.edits
-        ],
-        "linksCreated": result.links_created,
-        "linksDeleted": result.links_deleted,
-    }
-
-
-def plan_summary(result: ActionEditPlanResult) -> ActionPlanSummary:
-    """The multi-object/link result shape shared by the fresh response and idempotent replay."""
-    return {
-        "editCount": len(result.edits),
-        "createdObjectIds": list(result.created_object_ids),
-        "deletedObjectIds": list(result.deleted_object_ids),
-        "linksCreated": result.links_created,
-        "linksDeleted": result.links_deleted,
-        "edits": [
-            {"objectType": edit.object_type, "objectId": edit.object_id, "operation": edit.operation}
-            for edit in result.edits
-        ],
-    }
-
-
-def _result_payload(result: ActionEditPlanResult) -> dict[str, object]:
-    return {"status": result.status, "plan": dict(plan_summary(result))}

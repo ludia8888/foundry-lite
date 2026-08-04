@@ -58,6 +58,13 @@ class _HttpGetResult:
 
 
 @dataclass(frozen=True)
+class SecureHttpWriteResult:
+    outcome: str
+    response: Mapping[str, object]
+    network_evidence: Mapping[str, object]
+
+
+@dataclass(frozen=True)
 class _SnapshotPages:
     rows: tuple[Mapping[str, object], ...]
     cursor: Mapping[str, object] | None
@@ -393,6 +400,67 @@ def _http_get(
         raise _transport_error(target, route, connection_id, request, started_at, exc) from exc
 
 
+def secure_http_json_write(
+    url: str,
+    headers: Mapping[str, str],
+    payload: Mapping[str, object],
+    *,
+    allow_private_network: bool,
+    connection_id: str,
+    max_response_bytes: int = 1024 * 1024,
+) -> SecureHttpWriteResult:
+    """POST bounded JSON to an operator-registered URL with SSRF and redirect protection."""
+    target = _validated_http_target(url, allow_private_network=allow_private_network)
+    body = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    request_headers = {**dict(headers), "Content-Type": "application/json"}
+    request = Request(target.url, data=body, headers=request_headers, method="POST")
+    setattr(request, _TARGET_ATTR, target)
+    started_at = time.monotonic()
+    try:
+        with _open_write_request(request, allow_private_network=allow_private_network) as response:
+            response_body = _read_bounded_response(response, max_bytes=max_response_bytes)
+            status_code = int(getattr(response, "status", 200))
+        evidence = _network_evidence(
+            target,
+            None,
+            connection_id=connection_id,
+            duration_ms=_duration_ms(started_at),
+            response_flags="NONE",
+            bytes_sent=_estimated_request_bytes(request),
+            bytes_received=len(response_body),
+            is_egress_succeeded=True,
+        )
+        return SecureHttpWriteResult(
+            "delivered",
+            _safe_write_response(response_body, status_code),
+            evidence,
+        )
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise ConnectorRateLimitedError(
+                exc.headers.get("Retry-After"),
+                adapter_profile=REST_CONNECTOR_PROFILE,
+                operation="action_effect",
+                idempotency_key=request.headers.get("Idempotency-key"),
+            ) from exc
+        raise ValidationFailed(
+            "registered Action webhook rejected the request",
+            details={"status": exc.code, "targetRef": "registered_connector"},
+        ) from exc
+    except URLError:
+        evidence = _network_evidence(
+            target,
+            None,
+            connection_id=connection_id,
+            duration_ms=_duration_ms(started_at),
+            response_flags="UPSTREAM_RESULT_UNKNOWN",
+            bytes_sent=_estimated_request_bytes(request),
+            bytes_received=0,
+            is_egress_succeeded=False,
+        )
+        return SecureHttpWriteResult("ambiguous", {"status": "outcome_unknown"}, evidence)
+
+
 def _connection_id(request: ConnectorSnapshotRequest, page_index: int = 0) -> str:
     base = f"{request.request_id}:{request.connector_name}:{request.resource_name}"
     return base if page_index == 0 else f"{base}:page-{page_index + 1}"
@@ -403,9 +471,10 @@ def _duration_ms(started_at: float) -> int:
 
 
 def _estimated_request_bytes(request: Request) -> int:
-    request_line = f"GET {request.selector} HTTP/1.1\r\n"
+    request_line = f"{request.get_method()} {request.selector} HTTP/1.1\r\n"
     headers = sum(len(key) + len(value) + 4 for key, value in request.header_items())
-    return len(request_line.encode("utf-8")) + headers + 2
+    body = request.data if isinstance(request.data, bytes) else b""
+    return len(request_line.encode("utf-8")) + headers + len(body) + 2
 
 
 def _network_evidence(
@@ -586,6 +655,22 @@ class _ValidatingRedirectHandler(HTTPRedirectHandler):
         return redirected
 
 
+class _RejectingWriteRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        raise ValidationFailed(
+            "registered Action webhook redirects are forbidden",
+            details={"status": code, "targetRef": "registered_connector"},
+        )
+
+
 class _PinnedHTTPHandler(HTTPHandler):
     def __init__(
         self,
@@ -631,6 +716,28 @@ def _open_http_request(
         _ValidatingRedirectHandler(allow_private_network),
     )
     return cast(_ReadableHTTPResponse, opener.open(request, timeout=5))
+
+
+def _open_write_request(request: Request, *, allow_private_network: bool) -> _ReadableHTTPResponse:
+    opener = build_opener(
+        ProxyHandler({}),
+        _PinnedHTTPHandler(allow_private_network),
+        _PinnedHTTPSHandler(allow_private_network),
+        _RejectingWriteRedirectHandler(),
+    )
+    return cast(_ReadableHTTPResponse, opener.open(request, timeout=5))
+
+
+def _safe_write_response(payload: bytes, status_code: int) -> Mapping[str, object]:
+    if not payload:
+        return {"statusCode": status_code}
+    try:
+        decoded = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"statusCode": status_code, "responseBytes": len(payload)}
+    if isinstance(decoded, Mapping):
+        return {"statusCode": status_code, "body": dict(decoded)}
+    return {"statusCode": status_code, "responseBytes": len(payload)}
 
 
 def _target_for_request(req: Request, *, allow_private_network: bool) -> _ValidatedHttpTarget:

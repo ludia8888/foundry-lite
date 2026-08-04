@@ -9,6 +9,9 @@ import { API_BASE_URL, DEMO_CONTEXT, DEMO_SESSION } from "@/lib/api";
 
 const HomePage = lazy(() => import("@/features/home/HomePage"));
 const ProjectsPage = lazy(() => import("@/features/projects/ProjectsPage"));
+const PilotApplicationPage = lazy(
+  () => import("@/features/aip/PilotApplicationPage"),
+);
 const DataConnectionPage = lazy(
   () => import("@/features/data-connection/DataConnectionPage"),
 );
@@ -56,6 +59,7 @@ export function App() {
           <Routes>
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
+              <Route path="projects/:projectId/pilot/:slug" element={<PilotApplicationPage />} />
               <Route path="projects/*" element={<ProjectsPage />} />
               <Route
                 path="data/connections/*"

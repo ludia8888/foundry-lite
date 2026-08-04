@@ -126,6 +126,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipBuilderValidationResult = {" in generated
     assert "export type AipBuilderRunResult = {" in generated
     assert "export type AipAgentRunRequest = {" in generated
+    assert "export type AipFdeRunRequest = {" in generated
+    assert "export type AipFdeCatalog = {" in generated
     assert "export type AipAgentRunResult = {" in generated
     assert "export type AipEvalRunRequest = {" in generated
     assert "export type AipReleasePromotionRequest = {" in generated
@@ -218,6 +220,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
     assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
     assert "run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;" in generated
+    assert "catalog(): Promise<AipFdeCatalog>;" in generated
+    assert "run(payload: AipFdeRunRequest): Promise<AipFdeRunResult>;" in generated
     assert "run(payload: AipEvalRunRequest): Promise<AipEvalRunResult>;" in generated
     assert "promote(payload: AipReleasePromotionRequest): Promise<AipReleasePromotionResult>;" in generated
     assert (
@@ -452,6 +456,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["aip"] == {
         "builder": ["validate", "run"],
         "agent": ["run"],
+        "fde": ["catalog", "run"],
+        "pilot": ["plan", "generate", "get"],
         "citations": ["resolveNavigation"],
         "evals": ["run"],
         "releases": ["promote"],
@@ -500,7 +506,12 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         ],
     }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
-    assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert ts_surface["actions"] == {
+        "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
+        "branches": ["diff", "object"],
+        "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
+        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
+    }
     assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
     assert ts_surface["pipelines"] == {
@@ -611,7 +622,14 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     }
     assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
     assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
-    assert surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert surface["actions"] == {
+        "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
+        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
+        "branches": ["diff", "object"],
+        "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
+    }
+    assert "export type ActionEffectReceipt" in generated
+    assert "effects: ActionEffectReceipt[];" in generated
     assert surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
     assert surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
     assert surface["materializations"] == ["run", "list"]
@@ -654,6 +672,20 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "applyBatch(payload: ApproveOrderApplyBatchRequest, options: { idempotencyKey: string })",
         "export type ApproveOrderApplyBatchRequest = {",
         "export type ActionBatchApplyResponse = {",
+        "export type ActionCatalogItem = {",
+        "export type ActionLogListResult = {",
+        "logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
+        "object(branchId: string, objectType: string, objectId: string): Promise<Record<string, unknown>>;",
+        "branchId?: string;",
+        "revertEligibility(runId: string): Promise<ActionRevertEligibility>;",
+        "revert(runId: string, options: { idempotencyKey: string }): Promise<ActionRevertResult>;",
+        "list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
+        "get(actionApiName: string): Promise<ActionCatalogItem>;",
+        "schema(actionApiName: string): Promise<Record<string, unknown>>;",
+        "return request<ActionCatalogPage>(`/api/actions${suffix}`);",
+        "return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
+        "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
+        'requireIdempotencyKey(options?.idempotencyKey, "actions.runs.revert")',
         "query(interfaceType: string, payload?: InterfaceQueryRequest)",
         "query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
         "execute(functionType: string, payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
@@ -695,6 +727,12 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "`/api/objects/${encodeURIComponent(objectType)}/aggregate`",
         "aggregate: (payload) => request(`/api/objects/Order/aggregate`, {",
         "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",
+        "return request(`/api/actions${suffix}`);",
+        "get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`)",
+        "return request(`/api/actions/logs${suffix}`);",
+        "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
+        "revertEligibility: (runId) =>",
+        'requireIdempotencyKey(revertOptions?.idempotencyKey, "actions.runs.revert")',
         'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
         "`/api/interfaces/${encodeURIComponent(interfaceType)}/query`",
         "query: (payload = {}) => request(`/api/interfaces/Asset/query`, {",
@@ -725,6 +763,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "run: (payload) => request(`/api/aip/builder/run`, {",
         "agent: {",
         "run: (payload) => request(`/api/aip/agent/run`, {",
+        "catalog: () => request(`/api/aip/fde/catalog`),",
+        "run: (payload) => request(`/api/aip/fde/run`, {",
         "evals: {",
         "releases: {",
         "mediaUploadFormData(payload)",
@@ -911,6 +951,11 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "export function useFoundryLiteProvidedActionForm" in react_helpers
     assert "export function foundryLiteActionFormSubmitRequest" in react_helpers
     assert "parameterFields" in react_helpers
+    assert "matchedOverride" in react_helpers
+    assert "isVisible" in react_helpers
+    assert "isEditable" in react_helpers
+    assert "foundryLiteEffectiveParameterConfig" in react_helpers
+    assert "foundryLiteActionConditionMatches" in react_helpers
     assert "requiredParameterNames" in react_helpers
     assert "missingParameterNames" in react_helpers
     assert "canSubmitAction" in react_helpers

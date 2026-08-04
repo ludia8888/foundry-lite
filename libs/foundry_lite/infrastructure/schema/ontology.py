@@ -90,6 +90,7 @@ action_types = Table(
     Column("ontology_version_id", String, nullable=False),
     Column("api_name", String, nullable=False),
     Column("display_name", String, nullable=False),
+    Column("target_kind", String, nullable=False, server_default="object"),
     Column("target_object_type_id", String, nullable=False),
     Column("target_api_name", String, nullable=False),
     Column("parameter_schema", JSON, nullable=False),
