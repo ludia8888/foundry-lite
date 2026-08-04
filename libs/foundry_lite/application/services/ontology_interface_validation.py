@@ -26,6 +26,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyRepository,
 )
 from foundry_lite.application.primitives import _new_id
+from foundry_lite.application.services.ontology_action_import import import_action_types as import_action_types
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     mapping_sequence,

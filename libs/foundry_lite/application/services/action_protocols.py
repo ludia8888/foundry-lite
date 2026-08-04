@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from foundry_lite.application.ports import (
     ActionTypeRow,
+    InterfaceTypeRow,
     ObjectRecordRow,
     ObjectTypeRow,
+    OntologyVersionRow,
     OsdkResourceOperation,
     OsdkResourceType,
     RuntimeRunType,
@@ -40,6 +42,19 @@ class ActionObjectRecordLookup(Protocol):
 
 
 class ActionOntologyLookup(Protocol):
+    def _active_ontology_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+    ) -> OntologyVersionRow: ...
+
+    def _interface_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[InterfaceTypeRow]: ...
+
     def _active_action_type(
         self,
         conn: TransactionContext,

@@ -18,6 +18,8 @@ _V3_ACTION = """
     riskLevel: low
     agentExecutionPolicy: autonomous
     agentToolDescription: Expedite a pending order after validating its version.
+    branchPolicy:
+      enabled: true
     parameters:
       - apiName: mode
         type: string
@@ -58,6 +60,31 @@ _V3_ACTION = """
             value: {kind: parameter, parameter: note}
 """
 
+_INTERFACE_ACTION = """
+  - apiName: SetAssetRisk
+    contractVersion: 3
+    displayName: Set asset risk
+    target: Asset
+    targetKind: interface
+    riskLevel: low
+    agentExecutionPolicy: approval_required
+    permissions:
+      allowedRoles: [ops_manager]
+    parameters:
+      - apiName: riskScore
+        type: float
+        required: true
+    rules:
+      - kind: modifyObject
+        ruleId: set-risk
+        objectType: Order
+        onInterface: Asset
+        target: {kind: parameter, parameter: __target__}
+        assignments:
+          - property: riskScore
+            value: {kind: parameter, parameter: riskScore}
+"""
+
 
 def _v3_ontology(tmp_path: Path) -> Path:
     source = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
@@ -66,7 +93,27 @@ def _v3_ontology(tmp_path: Path) -> Path:
     return target
 
 
+def _interface_ontology(tmp_path: Path) -> Path:
+    source = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    source = source.replace(
+        "        indexed: true\n      - apiName: operatorNote",
+        "        indexed: true\n        editable: true\n        editPolicy: edit_wins\n      - apiName: operatorNote",
+    )
+    source = source.replace(
+        "        indexed: true\n      - apiName: approvedOrderCount",
+        "        indexed: true\n        editable: true\n        editPolicy: edit_wins\n"
+        "      - apiName: approvedOrderCount",
+    )
+    target = tmp_path / "order-customer-interface-action.yaml"
+    target.write_text(source + _INTERFACE_ACTION, encoding="utf-8")
+    return target
+
+
 def _prepare_v3_demo(foundry: FoundryLite, tmp_path: Path) -> RequestContext:
+    return _prepare_demo(foundry, _v3_ontology(tmp_path))
+
+
+def _prepare_demo(foundry: FoundryLite, ontology_path: Path) -> RequestContext:
     ctx = demo_admin_context()
     foundry.demo.seed_files()
     for dataset_ref, primary_key in (
@@ -82,7 +129,7 @@ def _prepare_v3_demo(foundry: FoundryLite, tmp_path: Path) -> RequestContext:
     foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
     for transform in ("clean_orders", "clean_order_finance", "clean_customers"):
         foundry.transforms.run(transform, ctx=ctx)
-    foundry.ontology.apply(str(_v3_ontology(tmp_path)), ctx=ctx)
+    foundry.ontology.apply(str(ontology_path), ctx=ctx)
     foundry.objects.reindex("Order", ctx=ctx)
     foundry.objects.reindex("Customer", ctx=ctx)
     return ctx
@@ -163,3 +210,91 @@ def test_v3_plan_is_deterministic_authorized_and_does_not_mutate(foundry: Foundr
     unchanged = foundry.objects.get("Order", "O-1001", ctx=ctx)
     assert unchanged["objectVersion"] == version
     assert unchanged["properties"].get("operatorNote") is None
+
+
+def test_interface_action_resolves_each_concrete_implementer_and_commits_through_one_contract(
+    foundry: FoundryLite, tmp_path: Path
+) -> None:
+    ctx = _prepare_demo(foundry, _interface_ontology(tmp_path))
+    customer = foundry.objects.get("Customer", "C-100", ctx=ctx)
+
+    plan = foundry.actions.plan(
+        "SetAssetRisk",
+        object_type="Customer",
+        object_id="C-100",
+        expected_object_version=customer["objectVersion"],
+        params={"riskScore": 0.17},
+        ctx=ctx,
+    )
+    assert plan["target"]["objectType"] == "Customer"
+    assert plan["editManifest"]["objectModifies"][0]["objectType"] == "Customer"
+
+    result = foundry.actions.apply(
+        "SetAssetRisk",
+        object_type="Customer",
+        object_id="C-100",
+        expected_object_version=customer["objectVersion"],
+        params={"riskScore": 0.17},
+        idempotency_key="interface-customer-risk",
+        ctx=ctx,
+    )
+    assert result["status"] == "succeeded"
+    assert foundry.objects.get("Customer", "C-100", ctx=ctx)["properties"]["riskScore"] == 0.17
+
+
+def test_branch_action_commits_overlay_and_preserves_main(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = _prepare_v3_demo(foundry, tmp_path)
+    branch = foundry.ontology.create_branch(name="expedite-scenario", idempotency_key="branch-expedite", ctx=ctx)
+    branch_id = str(branch["id"])
+    main_before = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    result = foundry.actions.execute_branch(
+        "ExpediteOrder",
+        branch_id=branch_id,
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=main_before["objectVersion"],
+        params={"mode": "urgent"},
+        idempotency_key="branch-expedite-order",
+        ctx=ctx,
+    )
+    assert result["status"] == "succeeded"
+    overlay = foundry.actions.branch_object(branch_id, "Order", "O-1001", ctx=ctx)
+    assert overlay["properties"]["operatorNote"] == "Urgent handling"
+    assert overlay["objectVersion"] == main_before["objectVersion"] + 1
+
+    replay = foundry.actions.execute_branch(
+        "ExpediteOrder",
+        branch_id=branch_id,
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=main_before["objectVersion"],
+        params={"mode": "urgent"},
+        idempotency_key="branch-expedite-order",
+        ctx=ctx,
+    )
+    assert replay["actionRunId"] == result["actionRunId"]
+    assert replay["idempotentReplay"] is True
+    assert foundry.actions.branch_diff(branch_id, ctx=ctx)["editCount"] == 1
+
+    second = foundry.actions.execute_branch(
+        "ExpediteOrder",
+        branch_id=branch_id,
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=overlay["objectVersion"],
+        params={"mode": "standard"},
+        idempotency_key="branch-expedite-order-again",
+        ctx=ctx,
+    )
+    assert second["status"] == "succeeded"
+    updated_overlay = foundry.actions.branch_object(branch_id, "Order", "O-1001", ctx=ctx)
+    assert updated_overlay["properties"]["operatorNote"] == "Standard handling"
+    assert updated_overlay["objectVersion"] == overlay["objectVersion"] + 1
+
+    main_after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert main_after["objectVersion"] == main_before["objectVersion"]
+    assert main_after["properties"].get("operatorNote") is None
+    diff = foundry.actions.branch_diff(branch_id, ctx=ctx)
+    assert diff["editCount"] == 2
+    assert diff["items"][0]["hasMainDrift"] is False

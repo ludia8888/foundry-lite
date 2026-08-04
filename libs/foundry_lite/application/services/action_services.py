@@ -5,15 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.action_service_registry import (
     ActionApplyService,
     ActionAsyncRunService,
     ActionBatchApplyService,
+    ActionBranchService,
     ActionDefinitionService,
     ActionDistributedRunService,
     ActionLogRevertService,
     ActionPlanningService,
-    ActionService,
     ActionValidationService,
     ActionWritebackService,
 )
@@ -25,6 +26,7 @@ class ActionServices:
     apply: ActionApplyService
     async_run: ActionAsyncRunService
     batch_apply: ActionBatchApplyService
+    branch: ActionBranchService
     definition: ActionDefinitionService
     distributed: ActionDistributedRunService
     log_revert: ActionLogRevertService
@@ -39,6 +41,7 @@ class ActionServices:
             apply=build_service(ActionApplyService, dependencies),
             async_run=build_service(ActionAsyncRunService, dependencies),
             batch_apply=build_service(ActionBatchApplyService, dependencies),
+            branch=build_service(ActionBranchService, dependencies),
             definition=build_service(ActionDefinitionService, dependencies),
             distributed=build_service(ActionDistributedRunService, dependencies),
             log_revert=build_service(ActionLogRevertService, dependencies),
@@ -53,6 +56,7 @@ class ActionServices:
             self.apply,
             self.async_run,
             self.batch_apply,
+            self.branch,
             self.definition,
             self.distributed,
             self.log_revert,

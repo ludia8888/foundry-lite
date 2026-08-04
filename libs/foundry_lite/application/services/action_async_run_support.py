@@ -64,6 +64,7 @@ def async_run_record(
     snapshot: dict[str, object],
     idempotency_key: str,
     request_fingerprint: str,
+    target_object_type_id: str,
 ) -> ActionAsyncRunRecord:
     target = _mapping(plan["target"])
     return ActionAsyncRunRecord(
@@ -72,7 +73,7 @@ def async_run_record(
         action_type_id=action_type["id"],
         action_api_name=action_type["api_name"],
         actor_user_id=ctx.actor_user_id,
-        target_object_type_id=action_type["target_object_type_id"],
+        target_object_type_id=target_object_type_id,
         target_object_type=str(target["objectType"]),
         target_object_id=str(target["objectId"]),
         expected_object_version=_version(target.get("expectedObjectVersion")),

@@ -15,6 +15,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_definitions import ActionMutationDefinition, ActionTypeDefinition
+from foundry_lite.application.services.action_interface_resolution import (
+    resolve_interface_action_definition as resolve_interface_action_definition,
+)
 from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
 from foundry_lite.domain.action_runtime.action_ir import (
     ActionDefinitionV2,

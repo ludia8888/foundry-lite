@@ -47,6 +47,8 @@ class ActionExecutionPlanResponse(TypedDict):
     requestId: str
     createdAt: str
     planHash: str
+    branchId: NotRequired[str]
+    suppressedEffects: NotRequired[list[Mapping[str, object]]]
 
 
 class ActionValidationIssue(TypedDict):

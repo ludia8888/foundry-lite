@@ -61,6 +61,8 @@ def test_postgres_rls_hides_action_execution_ledger_between_tenants(postgres_fix
         db.action_effect_receipts,
         db.action_log_entries,
         db.action_log_objects,
+        db.action_branch_objects,
+        db.action_branch_edits,
     )
     for table in tables:
         assert _rls_enabled(engine, table.name)
@@ -245,6 +247,14 @@ def _seed_action_execution_rows(engine: Engine) -> None:
             insert(db.action_log_objects),
             [_action_log_object_row("demo", "tenant-demo"), _action_log_object_row("other", "tenant-other")],
         )
+        conn.execute(
+            insert(db.action_branch_objects),
+            [_action_branch_object_row("demo", "tenant-demo"), _action_branch_object_row("other", "tenant-other")],
+        )
+        conn.execute(
+            insert(db.action_branch_edits),
+            [_action_branch_edit_row("demo", "tenant-demo"), _action_branch_edit_row("other", "tenant-other")],
+        )
 
 
 def _action_run_row(suffix: str, tenant_id: str) -> dict[str, object]:
@@ -368,6 +378,42 @@ def _action_log_object_row(suffix: str, tenant_id: str) -> dict[str, object]:
         "object_id": f"order-{suffix}",
         "edit_type": "set_property",
         "ordinal": 0,
+    }
+
+
+def _action_branch_object_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_branch_objects-{suffix}",
+        "tenant_id": tenant_id,
+        "branch_id": f"branch-{suffix}",
+        "object_type_id": f"order-type-{suffix}",
+        "object_type_api_name": "Order",
+        "object_id": f"order-{suffix}",
+        "base_object_version": 1,
+        "overlay_version": 2,
+        "properties": {"status": "REVIEW"},
+        "deleted": False,
+        "last_action_run_id": f"action_runs-{suffix}",
+        "created_at": "2026-08-03T00:00:00Z",
+        "updated_at": "2026-08-03T00:00:01Z",
+    }
+
+
+def _action_branch_edit_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_branch_edits-{suffix}",
+        "tenant_id": tenant_id,
+        "branch_id": f"branch-{suffix}",
+        "action_run_id": f"action_runs-{suffix}",
+        "operation_key": f"operation-{suffix}",
+        "ordinal": 0,
+        "edit_kind": "set_property",
+        "object_type_id": f"order-type-{suffix}",
+        "object_type_api_name": "Order",
+        "object_id": f"order-{suffix}",
+        "before": {"status": "PENDING"},
+        "after": {"status": "REVIEW"},
+        "created_at": "2026-08-03T00:00:01Z",
     }
 
 

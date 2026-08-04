@@ -363,6 +363,8 @@ def action_failure_transition(error: Exception) -> StatusTransition:
 
 
 def require_action_target_api_name(action_type: ActionTypeRow, requested_object_type: str) -> None:
+    if action_type.get("target_kind", "object") == "interface":
+        return
     expected_object_type = str(action_type["target_api_name"])
     if requested_object_type == expected_object_type:
         return
@@ -373,6 +375,8 @@ def require_action_target_api_name(action_type: ActionTypeRow, requested_object_
 
 
 def action_target_record_error(action_type: ActionTypeRow, record: ObjectRecordRow) -> InvariantViolation | None:
+    if action_type.get("target_kind", "object") == "interface":
+        return None
     expected_object_type_id = str(action_type["target_object_type_id"])
     if str(record["object_type_id"]) == expected_object_type_id:
         return None

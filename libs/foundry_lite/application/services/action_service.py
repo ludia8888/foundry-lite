@@ -16,15 +16,18 @@ from foundry_lite.application.action_types import (
     ActionWritebackRecoveryItem,
     ActionWritebackRecoveryResult,
 )
-from foundry_lite.application.services.action_apply_service import ActionApplyService
-from foundry_lite.application.services.action_async_run_service import ActionAsyncRunService
-from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
-from foundry_lite.application.services.action_definition_service import ActionDefinitionService
-from foundry_lite.application.services.action_log_revert_service import ActionLogRevertService
-from foundry_lite.application.services.action_planning_service import ActionPlanningService
-from foundry_lite.application.services.action_validation_service import ActionValidationService
+from foundry_lite.application.services.action_service_registry import (
+    ActionApplyService,
+    ActionAsyncRunService,
+    ActionBatchApplyService,
+    ActionBranchService,
+    ActionDefinitionService,
+    ActionLogRevertService,
+    ActionPlanningService,
+    ActionValidationService,
+    ActionWritebackService,
+)
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
-from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
@@ -38,6 +41,7 @@ class ActionService(CoreService):
         "action_apply_service",
         "action_async_run_service",
         "action_batch_apply_service",
+        "action_branch_service",
         "action_definition_service",
         "action_planning_service",
         "action_log_revert_service",
@@ -47,6 +51,7 @@ class ActionService(CoreService):
     action_apply_service: ActionApplyService
     action_async_run_service: ActionAsyncRunService
     action_batch_apply_service: ActionBatchApplyService
+    action_branch_service: ActionBranchService
     action_definition_service: ActionDefinitionService
     action_planning_service: ActionPlanningService
     action_log_revert_service: ActionLogRevertService
@@ -78,7 +83,19 @@ class ActionService(CoreService):
         params: Mapping[str, object],
         ctx: RequestContext | None = None,
         is_dry_run: bool = False,
+        branch_id: str | None = None,
     ) -> ActionExecutionPlanResponse:
+        if branch_id is not None:
+            return self.action_branch_service.plan(
+                action_api_name,
+                branch_id=branch_id,
+                object_type=object_type,
+                object_id=object_id,
+                expected_object_version=expected_object_version,
+                params=params,
+                ctx=ctx or RequestContext(),
+                is_dry_run=is_dry_run,
+            )
         return self.action_planning_service.plan_action(
             action_api_name,
             object_type=object_type,
@@ -88,6 +105,37 @@ class ActionService(CoreService):
             ctx=ctx,
             is_dry_run=is_dry_run,
         )
+
+    def execute_branch_action(
+        self,
+        action_api_name: str,
+        *,
+        branch_id: str,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_branch_service.execute(
+            action_api_name,
+            branch_id=branch_id,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx or RequestContext(),
+        )
+
+    def branch_object(
+        self, branch_id: str, object_type: str, object_id: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self.action_branch_service.get_object(branch_id, object_type, object_id, ctx=ctx or RequestContext())
+
+    def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.action_branch_service.diff(branch_id, ctx=ctx or RequestContext())
 
     def apply_action(
         self,

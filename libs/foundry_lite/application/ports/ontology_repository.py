@@ -177,6 +177,7 @@ class ActionTypeRow(TypedDict):
     ontology_version_id: str
     api_name: str
     display_name: str
+    target_kind: str
     target_object_type_id: str
     target_api_name: str
     parameter_schema: ActionParameterSchema
@@ -271,6 +272,7 @@ class ActionTypeRecord:
     ontology_version_id: str
     api_name: str
     display_name: str
+    target_kind: str
     target_object_type_id: str
     target_api_name: str
     parameter_schema: ActionParameterSchema
@@ -494,6 +496,4 @@ class OntologyRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         action_type_id: str,
-    ) -> ActionTypeRow | None:
-        """Return one action type by immutable persisted id."""
-        ...
+    ) -> ActionTypeRow | None: ...

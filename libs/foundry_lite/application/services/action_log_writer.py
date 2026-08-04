@@ -26,8 +26,8 @@ def record_action_log(
 ) -> str:
     """Write one Action log and every edited-object link in the commit transaction."""
     run = repository.action_run_by_id(transaction=transaction, tenant_id=ctx.tenant_id, action_run_id=action_run_id)
-    if run is None or run["status"] != "succeeded" or run["completed_at"] is None:
-        raise InvariantViolation("successful Action run is required before writing its Action log")
+    if run is None or run["status"] not in {"succeeded", "reconciled"} or run["completed_at"] is None:
+        raise InvariantViolation("successful or reconciled Action run is required before writing its Action log")
     entry = _log_entry(
         ctx,
         run,

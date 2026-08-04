@@ -61,6 +61,7 @@ class ActionRunRow(TypedDict):
     definition_version: NotRequired[str | None]
     plan_hash: NotRequired[str | None]
     execution_plan: NotRequired[ActionResultPayload | None]
+    branch_id: NotRequired[str | None]
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,10 @@ class ActionRunRecord:
     created_at: str
     completed_at: str | None
     external_writeback_uri: str | None = None
+    definition_version: str | None = None
+    plan_hash: str | None = None
+    execution_plan: ActionResultPayload | None = None
+    branch_id: str | None = None
 
 
 @dataclass(frozen=True)

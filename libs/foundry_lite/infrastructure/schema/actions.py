@@ -30,6 +30,7 @@ action_runs = Table(
     Column("definition_version", String),
     Column("plan_hash", String),
     Column("execution_plan", JSON),
+    Column("branch_id", String),
     Column("execution_mode", String, nullable=False, server_default="sync"),
     Column("workflow_run_id", String),
     Column("dispatch_status", String, nullable=False, server_default="not_required"),
@@ -213,6 +214,48 @@ action_log_objects = Table(
     UniqueConstraint("tenant_id", "action_log_entry_id", "object_edit_id", name="uq_action_log_edit"),
 )
 Index("ix_action_log_objects_tenant_log", action_log_objects.c.tenant_id, action_log_objects.c.action_log_entry_id)
+
+
+action_branch_objects = Table(
+    "action_branch_objects",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("branch_id", String, nullable=False),
+    Column("object_type_id", String, nullable=False),
+    Column("object_type_api_name", String, nullable=False),
+    Column("object_id", String, nullable=False),
+    Column("base_object_version", Integer),
+    Column("overlay_version", Integer, nullable=False),
+    Column("properties", JSON, nullable=False),
+    Column("deleted", Boolean, nullable=False),
+    Column("last_action_run_id", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "branch_id", "object_type_api_name", "object_id", name="uq_action_branch_object"),
+)
+Index("ix_action_branch_objects_scope", action_branch_objects.c.tenant_id, action_branch_objects.c.branch_id)
+
+
+action_branch_edits = Table(
+    "action_branch_edits",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("branch_id", String, nullable=False),
+    Column("action_run_id", String, nullable=False),
+    Column("operation_key", String, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("edit_kind", String, nullable=False),
+    Column("object_type_id", String, nullable=False),
+    Column("object_type_api_name", String, nullable=False),
+    Column("object_id", String, nullable=False),
+    Column("before", JSON, nullable=False),
+    Column("after", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "branch_id", "operation_key", name="uq_action_branch_edit_operation"),
+)
+Index("ix_action_branch_edits_scope", action_branch_edits.c.tenant_id, action_branch_edits.c.branch_id)
 
 
 action_writebacks = Table(

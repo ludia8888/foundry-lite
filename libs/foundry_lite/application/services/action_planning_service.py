@@ -8,6 +8,10 @@ from typing import cast
 
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
 from foundry_lite.application.services.action_effect_authorization import authorize_action_effects
+from foundry_lite.application.services.action_interface_resolution import (
+    require_interface_action_target,
+    resolve_interface_action_definition,
+)
 from foundry_lite.application.services.action_planning_contracts import (
     ActionApplyCommand,
     ActionDefinitionV3,
@@ -32,7 +36,6 @@ from foundry_lite.application.services.action_planning_resolution_support import
     build_edit_plan,
     compile_action_definition,
     require_action_permission,
-    require_action_target_api_name,
     require_action_target_read,
     resolved_action_command,
     segment_mutation_denied_error,
@@ -94,6 +97,30 @@ class ActionPlanningService(CoreService):
         ctx: RequestContext | None = None,
         is_dry_run: bool = False,
     ) -> ActionExecutionPlanResponse:
+        return self.plan_action_with_object_lookup(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            object_lookup=self.object_records_service,
+            ctx=ctx,
+            is_dry_run=is_dry_run,
+        )
+
+    def plan_action_with_object_lookup(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        object_lookup: ActionObjectRecordLookup,
+        branch_id: str | None = None,
+        ctx: RequestContext | None = None,
+        is_dry_run: bool = False,
+    ) -> ActionExecutionPlanResponse:
         request_context = ctx or RequestContext()
         self._authorize_request(request_context, action_api_name, object_type, object_id)
         with self.engine.begin() as conn:
@@ -105,8 +132,17 @@ class ActionPlanningService(CoreService):
                 object_id,
                 expected_object_version,
                 params,
+                object_lookup,
+                branch_id,
             )
-            return self._plan_response(conn, request_context, prepared, is_dry_run=is_dry_run)
+            return self._plan_response(
+                conn,
+                request_context,
+                prepared,
+                object_lookup,
+                branch_id=branch_id,
+                is_dry_run=is_dry_run,
+            )
 
     def _authorize_request(
         self,
@@ -139,25 +175,28 @@ class ActionPlanningService(CoreService):
         object_id: str,
         expected_object_version: int,
         params: Mapping[str, object],
+        object_lookup: ActionObjectRecordLookup,
+        branch_id: str | None,
     ) -> _PreparedPlan:
         action_type = self.ontology_lookup_service._active_action_type(conn, ctx, action_api_name)
-        require_action_target_api_name(action_type, object_type)
-        target = self._target_record(conn, ctx, action_type, object_type, object_id)
+        contract = compile_action_contract(action_type["definition"])
+        require_interface_action_target(conn, ctx, self.ontology_lookup_service, contract, object_type)
+        target = self._target_record(conn, ctx, action_type, object_type, object_id, object_lookup)
         command = _plan_command(action_api_name, object_type, object_id, expected_object_version, params)
         error = self._request_error(ctx, action_type, target, command)
         if error is not None:
             raise error
         effective = resolved_action_command(ctx, action_type, target, command)
-        contract = compile_action_contract(action_type["definition"])
-        authorize_action_effects(
-            conn,
-            ctx,
-            self.policy,
-            self.osdk_application_scope_service,
-            self.connector_registry_repository,
-            contract,
-        )
-        plan = self._resolved_edit_plan(conn, ctx, action_type, effective, contract)
+        if branch_id is None:
+            authorize_action_effects(
+                conn,
+                ctx,
+                self.policy,
+                self.osdk_application_scope_service,
+                self.connector_registry_repository,
+                contract,
+            )
+        plan = self._resolved_edit_plan(conn, ctx, action_type, effective, contract, object_lookup)
         sensitive = authorize_action_edit_plan(conn, ctx, self.policy, self.ontology_lookup_service, contract, plan)
         risk = action_plan_risk(contract, plan, sensitive)
         require_declared_risk_floor(risk)
@@ -170,8 +209,9 @@ class ActionPlanningService(CoreService):
         action_type: ActionTypeRow,
         object_type: str,
         object_id: str,
+        object_lookup: ActionObjectRecordLookup,
     ) -> ObjectRecordRow:
-        record = self.object_records_service._object_record(conn, ctx, object_type, object_id)
+        record = object_lookup._object_record(conn, ctx, object_type, object_id)
         target_type = self.ontology_lookup_service._active_object_type(conn, ctx, object_type)
         record = visible_record(record, target_type, ctx.roles)
         if record is None:
@@ -204,6 +244,7 @@ class ActionPlanningService(CoreService):
         action_type: ActionTypeRow,
         command: ActionApplyCommand,
         contract: ActionDefinitionV3,
+        object_lookup: ActionObjectRecordLookup,
     ) -> EditPlan:
         if contract.function is not None:
             self.policy.require(ctx, "function:execute")
@@ -214,12 +255,19 @@ class ActionPlanningService(CoreService):
                 operation="execute",
             )
             return EditPlan()
-        compiled = compile_action_definition(action_type["definition"])
+        compiled = resolve_interface_action_definition(
+            conn,
+            ctx,
+            self.ontology_lookup_service,
+            contract,
+            compile_action_definition(action_type["definition"]),
+            command.object_type,
+        )
         resolution = LivePlanResolutionContext(
             conn,
             ctx,
             command,
-            self.object_records_service,
+            object_lookup,
             self.ontology_lookup_service,
             self.ontology_lookup_service,
         )
@@ -232,7 +280,9 @@ class ActionPlanningService(CoreService):
         conn: TransactionContext,
         ctx: RequestContext,
         prepared: _PreparedPlan,
+        object_lookup: ActionObjectRecordLookup,
         *,
+        branch_id: str | None,
         is_dry_run: bool,
     ) -> ActionExecutionPlanResponse:
         contract = prepared.contract
@@ -244,16 +294,19 @@ class ActionPlanningService(CoreService):
             "target": _target_payload(prepared.command, prepared.target),
             "parameters": dict(prepared.command.params),
             "editManifest": edit_plan_manifest(prepared.plan),
-            "diffs": action_plan_diffs(conn, ctx, self.policy, self.object_records_service, prepared.plan),
-            "effectManifest": [action_effect_payload(effect) for effect in contract.effects],
+            "diffs": action_plan_diffs(conn, ctx, self.policy, object_lookup, prepared.plan),
+            "effectManifest": [] if branch_id else [action_effect_payload(effect) for effect in contract.effects],
             "risk": _risk_payload(prepared.risk),
             "authorization": _authorization_payload(ctx),
             "approval": _approval_payload(contract, prepared.risk),
-            "executionMode": _execution_mode(contract, prepared.plan),
+            "executionMode": "branch_overlay" if branch_id else _execution_mode(contract, prepared.plan),
             "isDryRun": is_dry_run,
             "requestId": ctx.request_id,
             "createdAt": _now(),
         }
+        if branch_id is not None:
+            payload["branchId"] = branch_id
+            payload["suppressedEffects"] = [action_effect_payload(effect) for effect in contract.effects]
         return cast(ActionExecutionPlanResponse, seal_action_execution_plan(payload))
 
 

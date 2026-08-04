@@ -373,6 +373,7 @@ class ActionApplyService(CoreService):
         action_run_id: str,
         command: ActionApplyCommand,
     ) -> ActionRunRow | None:
+        concrete_target = self.ontology_lookup_service._active_object_type(conn, ctx, command.object_type)
         return self.action_repository.insert_action_run_or_get_existing(
             transaction=conn,
             record=ActionRunRecord(
@@ -381,8 +382,8 @@ class ActionApplyService(CoreService):
                 action_type_id=action_type["id"],
                 action_type_api_name=command.action_api_name,
                 actor_user_id=ctx.actor_user_id,
-                target_object_type_id=action_type["target_object_type_id"],
-                target_object_type_api_name=action_type["target_api_name"],
+                target_object_type_id=concrete_target["id"],
+                target_object_type_api_name=command.object_type,
                 target_object_id=command.object_id,
                 expected_object_version=command.expected_object_version,
                 parameters=command.params,

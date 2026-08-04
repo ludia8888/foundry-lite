@@ -342,13 +342,20 @@
       "palantirBehavior": "Actions can execute on a branch/scenario as an isolated edit overlay that never merges to main, with side effects suppressed by default and per-effect opt-in.",
       "foundryLiteBaseline": "OntologyBranchService provides isolated definition edits + proposal-merge, but actions are not executable against a branch overlay.",
       "targetBehavior": "Branch/scenario action execution against an isolated edit overlay with dry-run/preview returning the redacted edit plan and impacted objects/links, conflict checks before merge, side effects suppressed by default, and a production action log after merge.",
-      "status": "foundation",
+      "status": "partial",
       "sourcePaths": [
-        "libs/foundry_lite/application/services/ontology_branch_service.py:1"
+        "libs/foundry_lite/application/services/action_branch_service.py",
+        "libs/foundry_lite/application/services/action_branch_committer.py",
+        "libs/foundry_lite/infrastructure/repositories/action_branch_repository.py",
+        "apps/api/foundry_lite_api/routers/actions.py"
       ],
-      "testPaths": [],
+      "testPaths": [
+        "tests/integration/test_action_contract_v3_apply.py",
+        "tests/contracts/test_action_branch_repository_contract.py",
+        "tests/sdk/request_contract.mjs"
+      ],
       "liveProof": null,
-      "remainingGap": "No branch-scoped object edit overlay for actions, no action dry-run/preview surface. Slice 8.",
+      "remainingGap": "Active v3 Actions can plan and commit repeated object edits into a tenant-scoped branch overlay without changing main; reads compose base+overlay, diff reports main drift, exact request replay is idempotent, effects are structurally suppressed, and PostgreSQL proves concurrent overlay CAS has one winner. It stays partial because link overlays, execution of a new/modified Action definition authored only on the branch, non-production effect opt-in, Python SDK, visual branch diff, and browser journey proof are absent.",
       "officialReference": [
         "palantir-action-branching"
       ]
@@ -358,14 +365,19 @@
       "palantirBehavior": "Interface actions modify only interface shared properties or delete objects (not concrete/type-specific properties, not primary keys) and re-validate per implementing object type uniformly.",
       "foundryLiteBaseline": "interface_types + query_by_interface + conformance validation exist; no interface-scoped action rules.",
       "targetBehavior": "Interface-scoped action rules (interface reference parameter, shared-property-only edits) re-validating each implementing type's constraints and permissions.",
-      "status": "foundation",
+      "status": "partial",
       "sourcePaths": [
-        "libs/foundry_lite/application/services/ontology_interface_validation.py:1",
-        "apps/api/foundry_lite_api/routers/objects.py:137"
+        "libs/foundry_lite/application/services/action_interface_resolution.py",
+        "libs/foundry_lite/application/services/action_definition_validation.py",
+        "libs/foundry_lite/application/services/action_plan_authorization.py",
+        "libs/foundry_lite/application/services/ontology_interface_validation.py"
       ],
-      "testPaths": [],
+      "testPaths": [
+        "tests/integration/test_action_contract_v3_apply.py",
+        "tests/contracts/test_ontology_repository_contract.py"
+      ],
       "liveProof": null,
-      "remainingGap": "No interface rule kind or per-implementer re-validation for edits. Slice 8.",
+      "remainingGap": "Interface-target Actions persist their target kind, resolve a requested concrete implementer, bind object rules to that type, restrict assignments to shared interface properties, reject primary-key edits, and re-run concrete object/property permission and OCC checks before the common committer. It stays partial because interface link constraints/rules, explicit concrete-type selection for create rules, generated Python SDK, Builder/UI and browser proof remain absent.",
       "officialReference": [
         "palantir-action-interfaces"
       ]
@@ -387,7 +399,7 @@
         "tests/sdk/request_contract.mjs"
       ],
       "liveProof": null,
-      "remainingGap": "Catalog/get/schema/plan/dry-run, durable run start/list/get/events/cancel, logs, revert-eligibility and revert now have typed TS/browser SDK surfaces, including effect receipts without lease-token exposure. Branch execution API, complete generated Python SDK, runtime/history UI and browser proof remain incomplete.",
+      "remainingGap": "Catalog/get/schema/plan/dry-run, durable run start/list/get/events/cancel, logs, revert-eligibility/revert, optional branchId planning/apply, and branch object/diff reads now have typed TS/browser SDK surfaces, including effect receipts without lease-token exposure. Complete generated Python SDK, runtime/history/branch UI and browser proof remain incomplete.",
       "officialReference": [
         "palantir-action-overview"
       ]

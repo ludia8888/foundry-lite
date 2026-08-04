@@ -26,7 +26,7 @@ def validate_yaml_action_definitions(
         required_str(item, "apiName"): str(item.get("version") or "v1")
         for item in mapping_sequence(definition, "functionTypes")
     }
-    interfaces = {required_str(item, "apiName") for item in mapping_sequence(definition, "interfaceTypes")}
+    interfaces = {required_str(item, "apiName") for item in mapping_sequence(definition, "interfaces")}
     for action in mapping_sequence(definition, "actionTypes"):
         persisted = action_type_definition(action)
         contract = compile_action_contract(persisted)
@@ -35,7 +35,7 @@ def validate_yaml_action_definitions(
         _require_target(contract, object_defs, interfaces)
         _require_function(contract, functions)
         for rule in contract.rules:
-            _validate_rule(contract, rule, object_defs, link_defs, functions)
+            _validate_rule(contract, rule, object_defs, link_defs, functions, definition)
 
 
 def _require_target(
@@ -74,6 +74,7 @@ def _validate_rule(
     object_defs: Mapping[str, YamlObject],
     link_defs: Mapping[str, YamlObject],
     functions: Mapping[str, str],
+    definition: YamlObject,
 ) -> None:
     kind = str(rule.get("kind") or "")
     if kind == "functionEdit":
@@ -93,7 +94,51 @@ def _validate_rule(
             "action rule object type reference was not found",
             details={"actionType": contract.api_name, "objectType": object_type},
         )
+    _require_rule_interface(contract, rule, object_type, object_defs[object_type], definition)
     _validate_assignments(contract, kind, rule, object_defs[object_type])
+
+
+def _require_rule_interface(
+    contract: ActionDefinitionV3,
+    rule: Mapping[str, object],
+    object_type: str,
+    object_def: YamlObject,
+    definition: YamlObject,
+) -> None:
+    interface = rule.get("onInterface")
+    if contract.target.kind == "interface" and interface != contract.target.api_name:
+        raise ValidationFailed(
+            "interface Action object rules must declare the target interface",
+            details={"actionType": contract.api_name, "ruleInterface": interface},
+        )
+    if interface is None:
+        return
+    declared = set(_strings(object_def.get("implements")))
+    if not isinstance(interface, str) or interface not in declared:
+        raise ValidationFailed(
+            "action rule concrete object type does not implement its interface",
+            details={"objectType": object_type, "interface": interface},
+        )
+    shared = _interface_properties(definition, interface)
+    assigned = {str(item.get("property")) for item in _sequence(rule.get("assignments")) if isinstance(item, Mapping)}
+    if invalid := assigned - shared:
+        raise ValidationFailed(
+            "interface Action may edit shared interface properties only",
+            details={"interface": interface, "properties": sorted(invalid)},
+        )
+
+
+def _interface_properties(definition: YamlObject, interface: str) -> set[str]:
+    for item in mapping_sequence(definition, "interfaces"):
+        if required_str(item, "apiName") == interface:
+            return {required_str(prop, "apiName") for prop in mapping_sequence(item, "properties")}
+    raise ValidationFailed("action rule interface reference was not found", details={"interface": interface})
+
+
+def _strings(raw: object) -> tuple[str, ...]:
+    if not isinstance(raw, Sequence) or isinstance(raw, str | bytes):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str))
 
 
 def _require_link(

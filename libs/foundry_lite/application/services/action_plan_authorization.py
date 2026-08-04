@@ -6,7 +6,10 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.action_types import ActionApplyCommand
 from foundry_lite.application.ports import ActionTypeRow, PropertyTypeRow, TransactionContext
-from foundry_lite.application.services.action_ir_compiler import compile_action_definition
+from foundry_lite.application.services.action_ir_compiler import (
+    compile_action_definition,
+    resolve_interface_action_definition,
+)
 from foundry_lite.application.services.action_plan_resolution import LivePlanResolutionContext
 from foundry_lite.application.services.action_protocols import ActionObjectRecordLookup
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
@@ -32,7 +35,14 @@ def resolve_authorized_action_edit_plan(
     contract = compile_action_contract(action_type["definition"])
     if contract.function is not None:
         raise ValidationFailed("function-backed action requires a durable run")
-    compiled = compile_action_definition(action_type["definition"])
+    compiled = resolve_interface_action_definition(
+        conn,
+        ctx,
+        ontology,
+        contract,
+        compile_action_definition(action_type["definition"]),
+        command.object_type,
+    )
     resolution = LivePlanResolutionContext(conn, ctx, command, object_lookup, ontology, ontology)
     plan = build_edit_plan(compiled, resolution)
     validate_edit_plan(plan)
@@ -56,8 +66,11 @@ def authorize_action_edit_plan(
     for object_type in sorted(touched_types):
         policy.require(ctx, "object:read")
         policy.require(ctx, "object:edit")
-        properties = _properties_for_type(conn, ctx, ontology, object_type)
-        _require_editable_properties(ctx, policy, contract, object_type, properties, plan)
+        type_row = ontology._active_object_type(conn, ctx, object_type)
+        properties = ontology._properties_for_object_type(conn, type_row["id"])
+        _require_editable_properties(
+            ctx, policy, contract, object_type, type_row["primary_key_property"], properties, plan
+        )
         sensitive_by_type[object_type] = frozenset(
             prop["api_name"] for prop in properties if prop["classification"] in {"finance", "pii"}
         )
@@ -71,33 +84,20 @@ def authorize_action_edit_plan(
     return sensitive_by_type
 
 
-def _properties_for_type(
-    conn: TransactionContext,
-    ctx: RequestContext,
-    ontology: OntologyLookupService,
-    object_type: str,
-) -> Sequence[PropertyTypeRow]:
-    row = ontology._active_object_type(conn, ctx, object_type)
-    return ontology._properties_for_object_type(conn, row["id"])
-
-
 def _require_editable_properties(
     ctx: RequestContext,
     policy: PolicyService,
     contract: ActionDefinitionV3,
     object_type: str,
+    primary_key_property: str,
     properties: Sequence[PropertyTypeRow],
     plan: EditPlan,
 ) -> None:
     by_name = {row["api_name"]: row for row in properties}
     edited = _edited_properties(plan, object_type)
-    missing = edited - set(by_name)
-    if missing:
-        raise ValidationFailed(
-            "action plan edits unknown properties",
-            details={"objectType": object_type, "properties": sorted(missing)},
-        )
     modified = _modified_properties(plan, object_type)
+    _require_known_properties(object_type, edited, by_name)
+    _require_primary_key_unchanged(object_type, primary_key_property, modified)
     non_editable = {name for name in modified if not by_name[name]["editable"]}
     if non_editable:
         raise PermissionDenied(
@@ -113,6 +113,31 @@ def _require_editable_properties(
         "propertyRoles",
         {f"{object_type}.{name}" for name in edited},
     )
+
+
+def _require_known_properties(
+    object_type: str,
+    edited: set[str],
+    by_name: Mapping[str, PropertyTypeRow],
+) -> None:
+    missing = edited - set(by_name)
+    if missing:
+        raise ValidationFailed(
+            "action plan edits unknown properties",
+            details={"objectType": object_type, "properties": sorted(missing)},
+        )
+
+
+def _require_primary_key_unchanged(
+    object_type: str,
+    primary_key_property: str,
+    modified: set[str],
+) -> None:
+    if primary_key_property in modified:
+        raise PermissionDenied(
+            "action plan cannot modify an object primary key",
+            details={"objectType": object_type, "property": primary_key_property},
+        )
 
 
 def _touched_object_types(plan: EditPlan) -> set[str]:

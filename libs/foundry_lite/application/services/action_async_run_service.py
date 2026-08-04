@@ -185,8 +185,14 @@ class ActionAsyncRunService(CoreService):
     ) -> tuple[ActionAsyncRunRow, bool]:
         with self.engine.begin() as transaction:
             action_type = self.ontology_lookup_service._active_action_type(transaction, ctx, action_api_name)
+            target = plan["target"]
+            if not isinstance(target, Mapping):
+                raise ValidationFailed("Action plan target is invalid")
+            concrete = self.ontology_lookup_service._active_object_type(transaction, ctx, str(target["objectType"]))
             snapshot = action_execution_snapshot(action_type, plan, ctx)
-            record = async_run_record(ctx, action_type, plan, snapshot, idempotency_key, request_fingerprint)
+            record = async_run_record(
+                ctx, action_type, plan, snapshot, idempotency_key, request_fingerprint, concrete["id"]
+            )
             row = self.action_execution_repository.insert_run(
                 transaction=transaction, record=record, steps=async_run_steps(record, plan)
             )

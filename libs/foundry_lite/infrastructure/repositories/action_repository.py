@@ -124,6 +124,10 @@ class SqlAlchemyActionRepository:
                 result=dict(record.result) if record.result is not None else None,
                 error=dict(record.error) if record.error is not None else None,
                 external_writeback_uri=record.external_writeback_uri,
+                definition_version=record.definition_version,
+                plan_hash=record.plan_hash,
+                execution_plan=dict(record.execution_plan) if record.execution_plan is not None else None,
+                branch_id=record.branch_id,
                 created_at=record.created_at,
                 completed_at=record.completed_at,
             )
@@ -459,6 +463,10 @@ def _action_run_values(record: ActionRunRecord) -> dict[str, object]:
         "result": dict(record.result) if record.result is not None else None,
         "error": dict(record.error) if record.error is not None else None,
         "external_writeback_uri": record.external_writeback_uri,
+        "definition_version": record.definition_version,
+        "plan_hash": record.plan_hash,
+        "execution_plan": dict(record.execution_plan) if record.execution_plan is not None else None,
+        "branch_id": record.branch_id,
         "created_at": record.created_at,
         "completed_at": record.completed_at,
     }

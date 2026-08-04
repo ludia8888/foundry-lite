@@ -12,6 +12,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_action_import import import_action_types
 from foundry_lite.application.services.ontology_activation_service import OntologyActivationService
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan, reindex_operation
 from foundry_lite.application.services.ontology_validation import (
@@ -423,8 +424,9 @@ def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
             {"linkTypes": [{"apiName": "OrderCustomer", "from": "Order", "to": "Customer"}]},
             {"Order": "otype_Order"},
         )
-    with pytest.raises(ValidationFailed, match="action target object type not found"):
-        service._import_action_types(
+    with pytest.raises(ValidationFailed, match="action target reference was not found"):
+        import_action_types(
+            service.ontology_repository,
             FakeTransaction(),
             demo_admin_context(),
             "ont_candidate",
@@ -447,6 +449,9 @@ class _RecordingOntologyRepository:
 
     def insert_property_type(self, **kwargs: object) -> None:
         self.property_records.append(kwargs["record"])
+
+    def insert_action_type(self, **_kwargs: object) -> None:
+        raise AssertionError("invalid action target must fail before persistence")
 
 
 class _RecordingRuntimeService:
