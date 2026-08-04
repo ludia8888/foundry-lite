@@ -126,6 +126,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipBuilderValidationResult = {" in generated
     assert "export type AipBuilderRunResult = {" in generated
     assert "export type AipAgentRunRequest = {" in generated
+    assert "export type AipFdeRunRequest = {" in generated
+    assert "export type AipFdeCatalog = {" in generated
     assert "export type AipAgentRunResult = {" in generated
     assert "export type AipEvalRunRequest = {" in generated
     assert "export type AipReleasePromotionRequest = {" in generated
@@ -218,6 +220,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
     assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
     assert "run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;" in generated
+    assert "catalog(): Promise<AipFdeCatalog>;" in generated
+    assert "run(payload: AipFdeRunRequest): Promise<AipFdeRunResult>;" in generated
     assert "run(payload: AipEvalRunRequest): Promise<AipEvalRunResult>;" in generated
     assert "promote(payload: AipReleasePromotionRequest): Promise<AipReleasePromotionResult>;" in generated
     assert (
@@ -452,6 +456,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["aip"] == {
         "builder": ["validate", "run"],
         "agent": ["run"],
+        "fde": ["catalog", "run"],
+        "pilot": ["plan", "generate", "get"],
         "citations": ["resolveNavigation"],
         "evals": ["run"],
         "releases": ["promote"],
@@ -502,6 +508,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["objectSets"] == ["list", "create", "get"]
     assert ts_surface["actions"] == {
         "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
+        "branches": ["diff", "object"],
         "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
         "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
     }
@@ -618,6 +625,7 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     assert surface["actions"] == {
         "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
         "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
+        "branches": ["diff", "object"],
         "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
     }
     assert "export type ActionEffectReceipt" in generated
@@ -667,6 +675,8 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "export type ActionCatalogItem = {",
         "export type ActionLogListResult = {",
         "logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
+        "object(branchId: string, objectType: string, objectId: string): Promise<Record<string, unknown>>;",
+        "branchId?: string;",
         "revertEligibility(runId: string): Promise<ActionRevertEligibility>;",
         "revert(runId: string, options: { idempotencyKey: string }): Promise<ActionRevertResult>;",
         "list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
@@ -674,6 +684,7 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "schema(actionApiName: string): Promise<Record<string, unknown>>;",
         "return request<ActionCatalogPage>(`/api/actions${suffix}`);",
         "return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
+        "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
         'requireIdempotencyKey(options?.idempotencyKey, "actions.runs.revert")',
         "query(interfaceType: string, payload?: InterfaceQueryRequest)",
         "query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
@@ -719,6 +730,7 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "return request(`/api/actions${suffix}`);",
         "get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`)",
         "return request(`/api/actions/logs${suffix}`);",
+        "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
         "revertEligibility: (runId) =>",
         'requireIdempotencyKey(revertOptions?.idempotencyKey, "actions.runs.revert")',
         'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
@@ -751,6 +763,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "run: (payload) => request(`/api/aip/builder/run`, {",
         "agent: {",
         "run: (payload) => request(`/api/aip/agent/run`, {",
+        "catalog: () => request(`/api/aip/fde/catalog`),",
+        "run: (payload) => request(`/api/aip/fde/run`, {",
         "evals: {",
         "releases: {",
         "mediaUploadFormData(payload)",

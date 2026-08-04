@@ -487,6 +487,67 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.fde.catalog",
+      "route": "GET /api/aip/fde/catalog",
+      "productArea": "ai-fde",
+      "sdkSurface": "aip.fde.catalog",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AI FDE exposes only server-owned modes and tools that pass the invoking user's normal platform permissions, including data, source, function, governance, ML, OSDK React, and platform Q&A surfaces.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.fde.run",
+      "route": "POST /api/aip/fde/run",
+      "productArea": "ai-fde",
+      "sdkSurface": "aip.fde.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AI FDE executes a bounded cross-domain model-tool loop as the invoking user, supports lazy tool search and explicit workspace attachments, requires named mutation approval, keeps Ontology and Pipeline edits branch-first, and links structured plan, clarification, model, tool, usage, and proposal evidence to AI Operations.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.pilot.plan",
+      "route": "POST /api/aip/pilot/plan",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.plan",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Pilot planning deterministically describes the Project, seed Dataset, Ontology resources, OSDK resource scopes, React application, CI commands, and the generation approval required before any resource is created.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.pilot.generate",
+      "route": "POST /api/aip/pilot/applications",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.generate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "An explicit Idempotency-Key creates one Project, replay-safe seed Dataset version, isolated Ontology branch, restricted OSDK application, OSDK-backed React source bundle, CI workflow, and durable Pilot resource.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract",
+      "requiresIdempotencyKey": true
+    },
+    {
+      "id": "aip.pilot.get",
+      "route": "GET /api/aip/pilot/applications/{rid}",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The generated application bundle is reloaded through the permission-scoped Resource catalog and powers its stable project application path without activating the draft Ontology.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.citations.resolveNavigation",
       "route": "POST /api/aip/citations/navigation/resolve",
       "productArea": "aip-citation-navigation",
@@ -3324,6 +3385,30 @@
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
       "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.branches.diff",
+      "route": "GET /api/actions/branches/{branch_id}/diff",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.branches.diff",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The Action branch diff composes immutable main records with tenant-scoped overlay edits, reports main-version drift, and never mutates the active Ontology.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.branches.object",
+      "route": "GET /api/actions/branches/{branch_id}/objects/{object_type}/{object_id}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.branches.object",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch object reads compose the base snapshot and isolated Action overlay under the same tenant and object permission boundary.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
     }
   ],
   "sdkHelpers": [
@@ -3628,6 +3713,31 @@
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /mcp/builder/{application_id}",
+      "accessClass": "external-mcp-json-rpc",
+      "reason": "Builder MCP JSON-RPC is consumed by OAuth-authorized external coding agents and must not be wrapped as a normal product REST SDK call."
+    },
+    {
+      "route": "GET /mcp/builder/{application_id}",
+      "accessClass": "external-mcp-stream",
+      "reason": "Builder MCP Streamable HTTP reconnect and server events are governed by the MCP transport contract rather than the product REST SDK."
+    },
+    {
+      "route": "DELETE /mcp/builder/{application_id}",
+      "accessClass": "external-mcp-session",
+      "reason": "Builder MCP session termination is an external protocol operation rather than a browser product control."
+    },
+    {
+      "route": "GET /.well-known/oauth-protected-resource/mcp/builder/{application_id}",
+      "accessClass": "oauth-discovery",
+      "reason": "OAuth protected-resource metadata is consumed by MCP clients during standards-based authorization discovery."
+    },
+    {
+      "route": "GET /.well-known/oauth-authorization-server",
+      "accessClass": "oauth-discovery",
+      "reason": "OAuth authorization-server metadata is a public discovery document for external clients, not a named product SDK surface."
     }
   ]
 }

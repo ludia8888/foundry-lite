@@ -996,6 +996,89 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.fde.catalog",
+  () => client.aip.fde.catalog(),
+  {
+    path: "/api/aip/fde/catalog",
+    method: "GET",
+    headers: {},
+  },
+);
+await expectSdkCall(
+  "aip.fde.run",
+  () =>
+    client.aip.fde.run({
+      userMessage: "Create Restaurant and Booking types on my branch.",
+      workspaceRef: "ontology-branch:ontbranch-1",
+      mode: "ontology_editing",
+      toolDiscovery: "lazy",
+      capabilities: ["ontology.inspect", "ontology.validate", "ontology.edit"],
+      approvedToolIds: ["ontology.branch.apply_patch"],
+      attachedContextRefs: ["dataset:clean.restaurants"],
+      agentRunId: "fde-web-1",
+      maxToolCalls: 4,
+    }),
+  {
+    path: "/api/aip/fde/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      userMessage: "Create Restaurant and Booking types on my branch.",
+      workspaceRef: "ontology-branch:ontbranch-1",
+      mode: "ontology_editing",
+      toolDiscovery: "lazy",
+      capabilities: ["ontology.inspect", "ontology.validate", "ontology.edit"],
+      approvedToolIds: ["ontology.branch.apply_patch"],
+      attachedContextRefs: ["dataset:clean.restaurants"],
+      agentRunId: "fde-web-1",
+      maxToolCalls: 4,
+    },
+  },
+);
+await expectSdkCall(
+  "aip.pilot.plan",
+  () => client.aip.pilot.plan({ applicationName: "Dining Concierge", domainDescription: "Booking operations" }),
+  {
+    path: "/api/aip/pilot/plan",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { applicationName: "Dining Concierge", domainDescription: "Booking operations" },
+  },
+);
+const pilotPlan = {
+  operationType: "pilot_generation_plan",
+  applicationName: "Dining Concierge",
+  domainDescription: "Booking operations",
+  slug: "dining-concierge",
+  projectDisplayName: "Dining Concierge Pilot",
+  seed: {},
+  ontologyResources: [],
+  applicationResources: [],
+  react: {},
+  ci: {},
+  requiredApprovals: ["pilot.application.generate"],
+};
+await expectSdkCall(
+  "aip.pilot.generate",
+  () => client.aip.pilot.generate({ plan: pilotPlan }, { idempotencyKey: "pilot-generate-1" }),
+  {
+    path: "/api/aip/pilot/applications",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "pilot-generate-1" },
+    body: { plan: pilotPlan },
+  },
+);
+await expectSdkCall(
+  "aip.pilot.get",
+  () => client.aip.pilot.get("ri.foundry-lite.pilot.abc"),
+  { path: "/api/aip/pilot/applications/ri.foundry-lite.pilot.abc", method: "GET", headers: {} },
+);
+assertMissingIdempotencyFailFast(
+  "aip.pilot.generate",
+  () => client.aip.pilot.generate({ plan: pilotPlan }),
+  "aip.pilot.generate",
+);
+await expectSdkCall(
   "aip.citations.resolveNavigation",
   () =>
     client.aip.citations.resolveNavigation({
@@ -4588,6 +4671,14 @@ await expectSdkCall("actions.dryRun", () => client.actions.dryRun("Expedite Orde
 await expectSdkCall("actions.logs", () => client.actions.logs({ cursor: "cursor/log", limit: 10 }), {
   path: "/api/actions/logs?cursor=cursor%2Flog&limit=10",
 });
+await expectSdkCall("actions.branches.diff", () => client.actions.branches.diff("branch/action-1"), {
+  path: "/api/actions/branches/branch%2Faction-1/diff",
+});
+await expectSdkCall(
+  "actions.branches.object",
+  () => client.actions.branches.object("branch/action-1", "Purchase Order", "order/1"),
+  { path: "/api/actions/branches/branch%2Faction-1/objects/Purchase%20Order/order%2F1" },
+);
 await expectSdkCall(
   "actions.runs.start",
   () =>

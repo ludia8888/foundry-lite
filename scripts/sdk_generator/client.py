@@ -466,6 +466,10 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    plan(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
             "    dryRun(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
             "    logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
+            "    branches: {",
+            "      diff(branchId: string): Promise<Record<string, unknown>>;",
+            ("      object(branchId: string, objectType: string, objectId: string): Promise<Record<string, unknown>>;"),
+            "    };",
             "    runs: {",
             (
                 "      start(actionApiName: string, payload: ActionPlanRequest, "
@@ -526,6 +530,18 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    };",
             "    agent: {",
             "      run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;",
+            "    };",
+            "    fde: {",
+            "      catalog(): Promise<AipFdeCatalog>;",
+            "      run(payload: AipFdeRunRequest): Promise<AipFdeRunResult>;",
+            "    };",
+            "    pilot: {",
+            "      plan(payload: AipPilotPlanRequest): Promise<AipPilotPlan>;",
+            (
+                "      generate(payload: { plan: AipPilotPlan }, options: { idempotencyKey: string }): "
+                "Promise<AipPilotApplicationBundle>;"
+            ),
+            "      get(rid: string): Promise<AipPilotApplicationBundle>;",
             "    };",
             "    citations: {",
             (
@@ -3298,6 +3314,19 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
             "        return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
             "      },",
+            "      branches: {",
+            "        diff: (branchId: string) =>",
+            (
+                "          request<Record<string, unknown>>("
+                "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`),"
+            ),
+            "        object: (branchId: string, objectType: string, objectId: string) =>",
+            (
+                "          request<Record<string, unknown>>(`/api/actions/branches/"
+                "${encodeURIComponent(branchId)}/objects/${encodeURIComponent(objectType)}/"
+                "${encodeURIComponent(objectId)}`),"
+            ),
+            "      },",
             "      runs: {",
             (
                 "        start: (actionApiName: string, payload: ActionPlanRequest, "
@@ -3415,6 +3444,34 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         '            headers: { "Content-Type": "application/json" },',
         "            body: JSON.stringify(payload),",
         "          }),",
+        "      },",
+        "      fde: {",
+        "        catalog: () => request<AipFdeCatalog>(`/api/aip/fde/catalog`),",
+        "        run: (payload: AipFdeRunRequest) =>",
+        "          request<AipFdeRunResult>(`/api/aip/fde/run`, {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "      },",
+        "      pilot: {",
+        "        plan: (payload: AipPilotPlanRequest) =>",
+        "          request<AipPilotPlan>(`/api/aip/pilot/plan`, {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        generate: (payload: { plan: AipPilotPlan }, options: { idempotencyKey: string }) =>",
+        "          request<AipPilotApplicationBundle>(`/api/aip/pilot/applications`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "aip.pilot.generate") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        get: (rid: string) =>",
+        "          request<AipPilotApplicationBundle>(`/api/aip/pilot/applications/${encodeURIComponent(rid)}`),",
         "      },",
         "      citations: {",
         "        resolveNavigation: (payload: AipCitationNavigationResolveRequest) =>",

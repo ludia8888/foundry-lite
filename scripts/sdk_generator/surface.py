@@ -203,6 +203,8 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         aip=(
             OperationClientSurface("builder", ("validate", "run")),
             OperationClientSurface("agent", ("run",)),
+            OperationClientSurface("fde", ("catalog", "run")),
+            OperationClientSurface("pilot", ("plan", "generate", "get")),
             OperationClientSurface("citations", ("resolveNavigation",)),
             OperationClientSurface("evals", ("run",)),
             OperationClientSurface("releases", ("promote",)),
@@ -316,6 +318,7 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
     payload: dict[str, object] = {
         "actions": {
             "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
+            "branches": ["diff", "object"],
             "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
             **_methods_payload(surface.actions),
         },

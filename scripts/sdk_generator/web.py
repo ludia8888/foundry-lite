@@ -2106,6 +2106,16 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
             "        return request(`/api/actions/logs${suffix}`);",
             "      },",
+            "      branches: {",
+            "        diff: (branchId) =>",
+            "          request(`/api/actions/branches/${encodeURIComponent(branchId)}/diff`),",
+            "        object: (branchId, objectType, objectId) => request(",
+            (
+                "          `/api/actions/branches/${encodeURIComponent(branchId)}/objects/"
+                "${encodeURIComponent(objectType)}/${encodeURIComponent(objectId)}`,"
+            ),
+            "        ),",
+            "      },",
             "      runs: {",
             "        start: (actionApiName, payload, runOptions) => request(",
             (
@@ -2220,6 +2230,30 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         '          headers: { "Content-Type": "application/json" },',
         "          body: JSON.stringify(payload),",
         "        }),",
+        "      },",
+        "      fde: {",
+        "        catalog: () => request(`/api/aip/fde/catalog`),",
+        "        run: (payload) => request(`/api/aip/fde/run`, {",
+        '          method: "POST",',
+        '          headers: { "Content-Type": "application/json" },',
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "      },",
+        "      pilot: {",
+        "        plan: (payload) => request(`/api/aip/pilot/plan`, {",
+        '          method: "POST",',
+        '          headers: { "Content-Type": "application/json" },',
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "        generate: (payload, options) => request(`/api/aip/pilot/applications`, {",
+        '          method: "POST",',
+        (
+            '          headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "aip.pilot.generate") },'
+        ),
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "        get: (rid) => request(`/api/aip/pilot/applications/${encodeURIComponent(rid)}`),",
         "      },",
         "      citations: {",
         "        resolveNavigation: (payload) => request(`/api/aip/citations/navigation/resolve`, {",
