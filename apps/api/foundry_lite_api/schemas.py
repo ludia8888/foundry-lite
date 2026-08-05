@@ -730,6 +730,15 @@ class MediaIndexDerivativeRequest(BaseModel):
     generation: str
 
 
+class MediaContentPromoteRequest(BaseModel):
+    """Compare-and-swap promotion of one text content-index generation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_active: str = Field(alias="expectedActive")
+    generation: str
+
+
 class MediaVisualPromoteRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

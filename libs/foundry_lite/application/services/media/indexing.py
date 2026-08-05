@@ -26,6 +26,9 @@ class IndexingOutcome:
     generation: str
     indexed: int
     failed: int
+    # The generation search reads right now. Indexing writes into a shadow, so a caller that
+    # wants its upload to become searchable promotes with this as the compare-and-swap base.
+    active_generation: str = ""
 
 
 class MediaIndexingService(CoreService):
@@ -99,7 +102,12 @@ class MediaIndexingService(CoreService):
         )
         batch = ContentIndexBatch(generation=generation, units=self._indexed_units(units, model_version))
         result = self.content_index_adapter.upsert_units(batch)
-        return IndexingOutcome(generation=generation, indexed=result.indexed, failed=result.failed)
+        return IndexingOutcome(
+            generation=generation,
+            indexed=result.indexed,
+            failed=result.failed,
+            active_generation=self.content_index_adapter.active_generation(),
+        )
 
     def _indexed_units(self, units: list[ContentUnitRecord], model_version: str) -> tuple[IndexedContentUnit, ...]:
         if not self.embedding_model_adapter.is_available:

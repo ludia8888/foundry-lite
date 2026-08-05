@@ -1029,7 +1029,11 @@ def render_typescript(ontology: OntologyDef) -> str:
         "};",
         "export type MediaContentUnitFilters = { afterOrdinal?: number; pageNumber?: number; limit?: number };",
         "export type MediaIndexDerivativeRequest = { generation: string };",
-        "export type MediaIndexingOutcome = { generation: string; indexed: number; failed: number };",
+        (
+            "export type MediaIndexingOutcome = "
+            "{ generation: string; indexed: number; failed: number; active_generation: string };"
+        ),
+        "export type MediaContentPromoteRequest = { expectedActive: string; generation: string };",
         "export type MediaVisualPromoteRequest = { expectedActive: string; generation: string };",
         "export type MediaSearchRequest = {",
         "  text?: string | null;",

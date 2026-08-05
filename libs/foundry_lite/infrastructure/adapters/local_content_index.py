@@ -99,6 +99,9 @@ class LocalContentIndexAdapter:
                 f"embedding model mismatch (index {active_model!r}, query {query.embedding_model_version!r})",
             )
 
+    def active_generation(self) -> str:
+        return self._active
+
     def promote_generation(self, expected_active: str, shadow: str) -> None:
         if shadow not in self._generations:
             raise self._error("promote_generation", f"unknown shadow generation: {shadow}")

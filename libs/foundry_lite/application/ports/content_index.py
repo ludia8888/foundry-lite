@@ -138,6 +138,16 @@ class ContentIndexAdapter(Protocol):
         """Return ranked content hits with exact citations."""
         ...
 
+    def active_generation(self) -> str:
+        """Return the generation search currently reads, or "" when none is active.
+
+        Promotion is a compare-and-swap, so a caller that has just filled a shadow generation
+        needs the value it is swapping away from. Without this the only ways to promote are to
+        guess or to skip the check, and skipping it lets two concurrent uploads silently
+        overwrite each other's promotion.
+        """
+        ...
+
     def promote_generation(self, expected_active: str, shadow: str) -> None:
         """Atomically promote a validated shadow generation to active."""
         ...

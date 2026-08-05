@@ -155,6 +155,60 @@ def test_index_then_search_returns_cited_hits(env: _Env) -> None:
     assert hits[0].classification == "confidential"
 
 
+def test_indexed_content_is_not_searchable_until_the_generation_is_promoted(env: _Env) -> None:
+    """Indexing alone must not make an upload searchable.
+
+    This is the flow that was broken in the browser: every upload created a fresh
+    `gen-<timestamp>`, indexed into it, and stopped. The units were written but the active
+    generation still pointed elsewhere, so the content was invisible to search. Palantir draws
+    the same boundary — an object type is queryable only once its indexing job completes; a
+    half-built generation is never served.
+    """
+    derivative_id = env.seed([("cu-1", "acme termination clause", "h1")])
+    env.indexing.configure(env.ctx, generation="gen-1")
+    outcome = env.indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="gen-1")
+
+    assert outcome.indexed == 1
+    query = HybridContentQuery(tenant_id=env.ctx.tenant_id, text="termination")
+    assert env.retrieval.search_content(env.ctx, query=query) == [], "a shadow generation must not serve search"
+
+    env.indexing.promote(env.ctx, expected_active=outcome.active_generation, generation=outcome.generation)
+
+    hits = env.retrieval.search_content(env.ctx, query=query)
+    assert [hit.content_unit_id for hit in hits] == ["cu-1"]
+
+
+def test_indexing_reports_the_active_generation_to_swap_away_from(env: _Env) -> None:
+    """The caller cannot compare-and-swap without knowing what is active.
+
+    Before this the only ways to promote were to guess the current value or to skip the
+    check, and skipping it lets two concurrent uploads overwrite each other's promotion.
+    """
+    derivative_id = env.seed([("cu-1", "first upload", "h1")])
+    env.indexing.configure(env.ctx, generation="gen-1")
+    first = env.indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="gen-1")
+    assert first.active_generation == "", "nothing is active before the first promotion"
+    env.indexing.promote(env.ctx, expected_active=first.active_generation, generation=first.generation)
+
+    env.indexing.configure(env.ctx, generation="gen-2")
+    second = env.indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="gen-2")
+
+    assert second.active_generation == "gen-1", "indexing must observe the generation search reads now"
+
+
+def test_two_uploads_racing_on_the_same_base_leave_one_winner(env: _Env) -> None:
+    derivative_id = env.seed([("cu-1", "contested clause", "h1")])
+    for generation in ("gen-a", "gen-b"):
+        env.indexing.configure(env.ctx, generation=generation)
+        env.indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation=generation)
+
+    env.indexing.promote(env.ctx, expected_active="", generation="gen-a")
+
+    # The loser still holds the stale base it observed before the winner landed.
+    with pytest.raises(Exception, match="active"):
+        env.indexing.promote(env.ctx, expected_active="", generation="gen-b")
+
+
 def test_retrieval_returns_authoritative_unit_text_not_index_text(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'm3authtext.db'}", future=True)
     db.create_database(engine)

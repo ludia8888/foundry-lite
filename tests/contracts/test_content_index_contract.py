@@ -42,7 +42,12 @@ class _FakeContentIndex:
             )
         ]
 
+    def active_generation(self) -> str:
+        return self.active
+
     def promote_generation(self, expected_active: str, shadow: str) -> None:
+        if self.active != expected_active:
+            raise AssertionError(f"active moved: expected {expected_active!r}, found {self.active!r}")
         self.active = shadow
 
 
@@ -50,7 +55,9 @@ def test_content_index_projection_shape() -> None:
     adapter: ContentIndexAdapter = _FakeContentIndex()
     adapter.configure_generation(ContentIndexSchema(generation="g1", fields=("text",)))
     result = adapter.upsert_units(ContentIndexBatch(generation="g1", units=(object(), object())))
-    adapter.promote_generation("g0", "g1")
+    assert adapter.active_generation() == "g0", "a fresh index must report its active generation"
+    adapter.promote_generation(adapter.active_generation(), "g1")
+    assert adapter.active_generation() == "g1"
     hits = adapter.search(HybridContentQuery(tenant_id="t", text="acme", top_k=5))
 
     assert result.indexed == 2 and result.failed == 0

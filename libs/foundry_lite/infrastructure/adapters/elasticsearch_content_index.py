@@ -93,6 +93,10 @@ class ElasticsearchContentIndexAdapter:
             raise classify_es_error(self.profile_name, "search", exc) from exc
         return [_hit(raw) for raw in _raw_hits(response)]
 
+    def active_generation(self) -> str:
+        with self._guard("active_generation"):
+            return self._active_generation()
+
     def promote_generation(self, expected_active: str, shadow: str) -> None:
         with self._guard("promote_generation"):
             if not self.client.indices.exists(index=self._index_name(shadow)):
