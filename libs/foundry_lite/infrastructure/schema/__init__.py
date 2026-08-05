@@ -175,6 +175,7 @@ from foundry_lite.infrastructure.schema.sources import (
     source_network_policies,
     source_sync_runs,
     source_syncs,
+    virtual_tables,
 )
 from foundry_lite.infrastructure.schema.transforms import (
     materialization_runs,
@@ -272,6 +273,7 @@ __all__ = [
     "source_network_policies",
     "source_sync_runs",
     "source_syncs",
+    "virtual_tables",
     "action_runs",
     "action_branch_edits",
     "action_branch_links",

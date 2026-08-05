@@ -54,6 +54,9 @@ from foundry_lite.infrastructure.repositories.semantic_row_cache_repository impo
 from foundry_lite.infrastructure.repositories.source_management_repository import SqlAlchemySourceManagementRepository
 from foundry_lite.infrastructure.repositories.source_registry_repository import SqlAlchemySourceRegistryRepository
 from foundry_lite.infrastructure.repositories.transform_repository import SqlAlchemyTransformRepository
+from foundry_lite.infrastructure.repositories.virtual_table_repository import (
+    SqlAlchemyVirtualTableRepository,
+)
 
 __all__ = [
     "SqlAlchemyActionExecutionRepository",
@@ -72,6 +75,7 @@ __all__ = [
     "SqlAlchemyMediaAccessCacheRepository",
     "SqlAlchemyMediaDerivativeRepository",
     "SqlAlchemyMediaReferenceBindingRepository",
+    "SqlAlchemyVirtualTableRepository",
     "SqlAlchemyMediaRepository",
     "SqlAlchemyModelRegistryRepository",
     "SchemaMutationDisabledError",

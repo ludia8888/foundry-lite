@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, Column, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, Index, Integer, String, Table, Text, UniqueConstraint
 
 from foundry_lite.infrastructure.schema.base import metadata
 
@@ -210,4 +210,30 @@ source_sync_runs = Table(
     Column("completed_at", String),
     Column("created_at", String, nullable=False),
     UniqueConstraint("tenant_id", "sync_name", "idempotency_key", name="uq_source_sync_run_idempotency"),
+)
+
+
+# A virtual table stores the POINTER only — never the external rows. The pinned ``schema``
+# column is what downstream object types and pipeline nodes were built against, so a source
+# that drifts away from it is reported rather than silently followed.
+virtual_tables = Table(
+    "virtual_tables",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("parent_rid", String, nullable=False),
+    Column("connection_rid", String, nullable=False),
+    # Union-shaped per Palantir's Create Virtual Table contract: a SQL source identifies a
+    # table by schema+name, object storage by path+format. Flattening loses that distinction.
+    Column("config", JSON, nullable=False),
+    Column("pinned_schema", JSON, nullable=False),
+    Column("markings", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "parent_rid", "name", name="uq_virtual_table_name"),
+)
+Index(
+    "ix_virtual_tables_tenant_connection",
+    virtual_tables.c.tenant_id,
+    virtual_tables.c.connection_rid,
 )
