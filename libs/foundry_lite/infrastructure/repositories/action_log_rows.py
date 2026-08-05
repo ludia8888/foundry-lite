@@ -72,9 +72,13 @@ def list_action_log_rows(
     before_created_at: str | None,
     before_log_id: str | None,
     limit: int,
+    *,
+    action_type_api_name: str | None = None,
 ) -> list[ActionLogEntryRow]:
     """Load one newest-first cursor page."""
     statement = _log_select(tenant_id)
+    if action_type_api_name is not None:
+        statement = statement.where(db.action_log_entries.c.action_type_api_name == action_type_api_name)
     if before_created_at is not None and before_log_id is not None:
         statement = statement.where(
             or_(
@@ -91,11 +95,16 @@ def list_action_log_rows(
     return [cast(ActionLogEntryRow, dict(row)) for row in rows.mappings().all()]
 
 
-def action_runs_for_monitoring_rows(transaction: Any, tenant_id: str, limit: int) -> list[ActionRunRow]:
-    """Load a bounded newest-first run window without mixing tenants."""
+def action_runs_for_monitoring_rows(
+    transaction: Any, tenant_id: str, created_at_from: str, limit: int
+) -> list[ActionRunRow]:
+    """Load a bounded newest-first UTC run window without mixing tenants."""
     rows = transaction.execute(
         select(db.action_runs)
-        .where(db.action_runs.c.tenant_id == tenant_id)
+        .where(
+            db.action_runs.c.tenant_id == tenant_id,
+            db.action_runs.c.created_at >= created_at_from,
+        )
         .order_by(db.action_runs.c.created_at.desc(), db.action_runs.c.id.desc())
         .limit(limit)
     )

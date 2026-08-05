@@ -744,6 +744,94 @@ await expectSdkCall(
     body: { yamlText: "objectTypes: []", expectedFingerprint: "sha256:branch" },
   },
 );
+await expectSdkCall("ontology.branches.actionTypes.list", () => client.ontology.branches.actionTypes.list("branch/1"), {
+  path: "/api/ontology/branches/branch%2F1/action-types",
+});
+await expectSdkCall(
+  "ontology.branches.actionTypes.get",
+  () => client.ontology.branches.actionTypes.get("branch/1", "Set/Status"),
+  { path: "/api/ontology/branches/branch%2F1/action-types/Set%2FStatus" },
+);
+const branchActionDefinition = {
+  contractVersion: 3,
+  apiName: "SetOrderStatus",
+  target: "Order",
+  parameters: [],
+  rules: [],
+};
+await expectSdkCall(
+  "ontology.branches.actionTypes.create",
+  () =>
+    client.ontology.branches.actionTypes.create(
+      "branch/1",
+      { definition: branchActionDefinition, expectedFingerprint: "sha256:branch" },
+      { idempotencyKey: "branch-action-create" },
+    ),
+  {
+    path: "/api/ontology/branches/branch%2F1/action-types",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-action-create" },
+    body: { definition: branchActionDefinition, expectedFingerprint: "sha256:branch" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.actionTypes.create",
+  () =>
+    client.ontology.branches.actionTypes.create("branch/1", {
+      definition: branchActionDefinition,
+      expectedFingerprint: "sha256:branch",
+    }),
+  "ontology.branches.actionTypes.create",
+);
+await expectSdkCall(
+  "ontology.branches.actionTypes.update",
+  () =>
+    client.ontology.branches.actionTypes.update(
+      "branch/1",
+      "Set/Status",
+      { definition: branchActionDefinition, expectedFingerprint: "sha256:branch-2" },
+      { idempotencyKey: "branch-action-update" },
+    ),
+  {
+    path: "/api/ontology/branches/branch%2F1/action-types/Set%2FStatus",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-action-update" },
+    body: { definition: branchActionDefinition, expectedFingerprint: "sha256:branch-2" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.actionTypes.update",
+  () =>
+    client.ontology.branches.actionTypes.update("branch/1", "SetOrderStatus", {
+      definition: branchActionDefinition,
+      expectedFingerprint: "sha256:branch-2",
+    }),
+  "ontology.branches.actionTypes.update",
+);
+await expectSdkCall(
+  "ontology.branches.actionTypes.delete",
+  () =>
+    client.ontology.branches.actionTypes.delete(
+      "branch/1",
+      "Set/Status",
+      { expectedFingerprint: "sha256:branch-3" },
+      { idempotencyKey: "branch-action-delete" },
+    ),
+  {
+    path: "/api/ontology/branches/branch%2F1/action-types/Set%2FStatus",
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-action-delete" },
+    body: { expectedFingerprint: "sha256:branch-3" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.actionTypes.delete",
+  () =>
+    client.ontology.branches.actionTypes.delete("branch/1", "SetOrderStatus", {
+      expectedFingerprint: "sha256:branch-3",
+    }),
+  "ontology.branches.actionTypes.delete",
+);
 await expectSdkCall("ontology.branches.diff", () => client.ontology.branches.diff("branch/1"), {
   path: "/api/ontology/branches/branch%2F1/diff",
 });
@@ -2037,6 +2125,7 @@ responseQueue.push(
     },
     parameters: { reason: { result: "VALID", required: true, issues: [] } },
     submissionCriteria: [],
+    submissionCriteriaEvaluation: null,
   }));
   const actionValidation = await order.$actions.approveOrder.validateAction(
     { reason: "approved through bound action" },
@@ -4218,6 +4307,74 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "developerConsole.osdkApplications.rotateClientSecret",
+  () =>
+    client.developerConsole.osdkApplications.rotateClientSecret(
+      "app/orders",
+      "client-row/1",
+      { reason: "scheduled rotation" },
+      { idempotencyKey: "osdk-client-secret-rotate-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients/client-row%2F1/secrets/rotate",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-client-secret-rotate-key" },
+    body: { reason: "scheduled rotation" },
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.revokeClientSecret",
+  () =>
+    client.developerConsole.osdkApplications.revokeClientSecret("app/orders", "client-row/1", {
+      idempotencyKey: "osdk-client-secret-revoke-key",
+    }),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients/client-row%2F1/secrets/revoke",
+    method: "POST",
+    headers: { "Idempotency-Key": "osdk-client-secret-revoke-key" },
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.listClientSecretVersions",
+  () => client.developerConsole.osdkApplications.listClientSecretVersions("app/orders", "client-row/1"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients/client-row%2F1/secrets",
+  },
+);
+await expectSdkCall(
+  "developerConsole.mcpServers.configure",
+  () =>
+    client.developerConsole.mcpServers.configure(
+      "app/orders",
+      {
+        status: "enabled",
+        descriptionMarkdown: "Order operations for external agents.",
+        allowedOrigins: ["https://chat.example.test"],
+      },
+      { idempotencyKey: "mcp-server-configure-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/mcp-server",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "mcp-server-configure-key" },
+    body: {
+      status: "enabled",
+      descriptionMarkdown: "Order operations for external agents.",
+      allowedOrigins: ["https://chat.example.test"],
+    },
+  },
+);
+await expectSdkCall(
+  "developerConsole.mcpServers.get",
+  () => client.developerConsole.mcpServers.get("app/orders"),
+  { path: "/api/developer-console/osdk-applications/app%2Forders/mcp-server" },
+);
+await expectSdkCall(
+  "developerConsole.mcpServers.list",
+  () => client.developerConsole.mcpServers.list(),
+  { path: "/api/developer-console/mcp-servers" },
+);
+await expectSdkCall(
   "developerConsole.sdkVersions.create",
   () =>
     client.developerConsole.sdkVersions.create(
@@ -4388,6 +4545,30 @@ assertMissingIdempotencyFailFast(
   "developerConsole.osdkApplications.deactivateClient",
   () => client.developerConsole.osdkApplications.deactivateClient("app/orders", "client-row/1"),
   "developerConsole.osdkApplications.deactivateClient",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.rotateClientSecret",
+  () =>
+    client.developerConsole.osdkApplications.rotateClientSecret(
+      "app/orders",
+      "client-row/1",
+      { reason: "scheduled rotation" },
+    ),
+  "developerConsole.osdkApplications.rotateClientSecret",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.revokeClientSecret",
+  () => client.developerConsole.osdkApplications.revokeClientSecret("app/orders", "client-row/1"),
+  "developerConsole.osdkApplications.revokeClientSecret",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.mcpServers.configure",
+  () =>
+    client.developerConsole.mcpServers.configure("app/orders", {
+      status: "enabled",
+      descriptionMarkdown: "Order operations for external agents.",
+    }),
+  "developerConsole.mcpServers.configure",
 );
 assertMissingIdempotencyFailFast(
   "developerConsole.sdkVersions.promote",
@@ -4671,6 +4852,139 @@ await expectSdkCall("actions.dryRun", () => client.actions.dryRun("Expedite Orde
 await expectSdkCall("actions.logs", () => client.actions.logs({ cursor: "cursor/log", limit: 10 }), {
   path: "/api/actions/logs?cursor=cursor%2Flog&limit=10",
 });
+await expectSdkCall(
+  "actions.notificationPolicies.list",
+  () => client.actions.notificationPolicies.list({ cursor: "cursor/policy", limit: 20 }),
+  { path: "/api/actions/notification-policies?cursor=cursor%2Fpolicy&limit=20" },
+);
+await expectSdkCall(
+  "actions.notificationPolicies.get",
+  () => client.actions.notificationPolicies.get("travel/ops"),
+  { path: "/api/actions/notification-policies/travel%2Fops" },
+);
+const notificationPolicy = {
+  policyName: "travelOps",
+  displayName: "Travel operations",
+  deliveryMode: "strict",
+  recipients: [{ userId: "operator-1", roles: ["ops_manager"] }],
+};
+await expectSdkCall(
+  "actions.notificationPolicies.create",
+  () => client.actions.notificationPolicies.create(notificationPolicy, { idempotencyKey: "policy-create" }),
+  {
+    path: "/api/actions/notification-policies",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "policy-create" },
+    body: notificationPolicy,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.notificationPolicies.create",
+  () => client.actions.notificationPolicies.create(notificationPolicy),
+  "actions.notificationPolicies.create",
+);
+const notificationPolicyUpdate = {
+  displayName: "Travel operations",
+  deliveryMode: "best_effort",
+  recipients: [{ userId: "operator-1", roles: ["ops_manager"] }],
+  status: "active",
+  expectedFingerprint: "sha256:policy-v1",
+};
+await expectSdkCall(
+  "actions.notificationPolicies.update",
+  () => client.actions.notificationPolicies.update("travelOps", notificationPolicyUpdate, { idempotencyKey: "policy-update" }),
+  {
+    path: "/api/actions/notification-policies/travelOps",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "policy-update" },
+    body: notificationPolicyUpdate,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.notificationPolicies.update",
+  () => client.actions.notificationPolicies.update("travelOps", notificationPolicyUpdate),
+  "actions.notificationPolicies.update",
+);
+await expectSdkCall(
+  "actions.notificationPolicies.disable",
+  () => client.actions.notificationPolicies.disable(
+    "travelOps",
+    { expectedFingerprint: "sha256:policy-v2" },
+    { idempotencyKey: "policy-disable" },
+  ),
+  {
+    path: "/api/actions/notification-policies/travelOps",
+    method: "DELETE",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "policy-disable" },
+    body: { expectedFingerprint: "sha256:policy-v2" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.notificationPolicies.disable",
+  () => client.actions.notificationPolicies.disable("travelOps", { expectedFingerprint: "sha256:policy-v2" }),
+  "actions.notificationPolicies.disable",
+);
+await expectSdkCall(
+  "actions.effects.list",
+  () => client.actions.effects.list({ status: "outcome_unknown", cursor: "cursor/effect", limit: 15 }),
+  { path: "/api/actions/effects?status=outcome_unknown&cursor=cursor%2Feffect&limit=15" },
+);
+await expectSdkCall("actions.effects.get", () => client.actions.effects.get("receipt/1"), {
+  path: "/api/actions/effects/receipt%2F1",
+});
+await expectSdkCall(
+  "actions.effects.cancel",
+  () => client.actions.effects.cancel("receipt/1", { reason: "obsolete" }, { idempotencyKey: "effect-cancel" }),
+  {
+    path: "/api/actions/effects/receipt%2F1/cancel",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "effect-cancel" },
+    body: { reason: "obsolete" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.effects.cancel",
+  () => client.actions.effects.cancel("receipt/1", {}),
+  "actions.effects.cancel",
+);
+await expectSdkCall(
+  "actions.effects.retry",
+  () => client.actions.effects.retry("receipt/1", { idempotencyKey: "effect-retry" }),
+  {
+    path: "/api/actions/effects/receipt%2F1/retry",
+    method: "POST",
+    headers: { "Idempotency-Key": "effect-retry" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.effects.retry",
+  () => client.actions.effects.retry("receipt/1"),
+  "actions.effects.retry",
+);
+const effectReconciliation = {
+  resolution: "confirmed_delivered",
+  evidence: {
+    verificationMethod: "provider_query",
+    providerReference: "case-1",
+    verifiedAt: "2026-08-05T12:00:00Z",
+    externalExecutionId: "provider-1",
+  },
+};
+await expectSdkCall(
+  "actions.effects.reconcile",
+  () => client.actions.effects.reconcile("receipt/1", effectReconciliation, { idempotencyKey: "effect-reconcile" }),
+  {
+    path: "/api/actions/effects/receipt%2F1/reconcile",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "effect-reconcile" },
+    body: effectReconciliation,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.effects.reconcile",
+  () => client.actions.effects.reconcile("receipt/1", effectReconciliation),
+  "actions.effects.reconcile",
+);
 await expectSdkCall("actions.branches.diff", () => client.actions.branches.diff("branch/action-1"), {
   path: "/api/actions/branches/branch%2Faction-1/diff",
 });
@@ -4678,6 +4992,13 @@ await expectSdkCall(
   "actions.branches.object",
   () => client.actions.branches.object("branch/action-1", "Purchase Order", "order/1"),
   { path: "/api/actions/branches/branch%2Faction-1/objects/Purchase%20Order/order%2F1" },
+);
+await expectSdkCall(
+  "actions.branches.link",
+  () => client.actions.branches.link("branch/action-1", "Order Customer", "order/1", "customer/1"),
+  {
+    path: "/api/actions/branches/branch%2Faction-1/links/Order%20Customer/order%2F1/customer%2F1",
+  },
 );
 await expectSdkCall(
   "actions.runs.start",
@@ -4697,6 +5018,35 @@ assertMissingIdempotencyFailFast(
   "actions.runs.start",
   () => client.actions.runs.start("Expedite Order", genericActionPlan),
   "actions.runs.start",
+);
+const functionBatchRun = {
+  objectType: "Order",
+  items: [
+    {
+      objectId: "order/1",
+      expectedObjectVersion: 7,
+      params: { objectId: "order/1", status: "APPROVED" },
+    },
+  ],
+};
+await expectSdkCall(
+  "actions.runs.startBatch",
+  () =>
+    client.actions.runs.startBatch("Approve Orders", functionBatchRun, {
+      idempotencyKey: "idem-action-batch-run",
+      waitSeconds: 8,
+    }),
+  {
+    path: "/api/actions/Approve%20Orders/batch-runs?waitSeconds=8",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-action-batch-run" },
+    body: functionBatchRun,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.runs.startBatch",
+  () => client.actions.runs.startBatch("Approve Orders", functionBatchRun),
+  "actions.runs.startBatch",
 );
 await expectSdkCall("actions.runs.list", () => client.actions.runs.list({ cursor: "cursor/action", limit: 25 }), {
   path: "/api/actions/runs?cursor=cursor%2Faction&limit=25",
@@ -4783,6 +5133,45 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "actions.uploadParameter",
+  () =>
+    client.actions.uploadParameter("ApproveOrder", "attachment", {
+      objectType: "Order",
+      objectId: "order/1",
+      file: new File(["invoice"], "invoice.txt", { type: "text/plain" }),
+      fileName: "invoice.txt",
+      suppliedMimeType: "text/plain",
+      format: "txt",
+      idempotencyKey: "action-upload-key",
+    }),
+  {
+    path: "/api/actions/ApproveOrder/parameters/attachment/uploads",
+    method: "POST",
+    headers: { "Idempotency-Key": "action-upload-key" },
+    body: {
+      kind: "formData",
+      fields: {
+        objectType: "Order",
+        objectId: "order/1",
+        suppliedMimeType: "text/plain",
+        format: "txt",
+      },
+      file: { name: "invoice.txt", type: "text/plain", size: 7 },
+    },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "actions.uploadParameter",
+  () =>
+    client.actions.uploadParameter("ApproveOrder", "attachment", {
+      objectType: "Order",
+      objectId: "order/1",
+      file: new File(["invoice"], "invoice.txt", { type: "text/plain" }),
+      idempotencyKey: "",
+    }),
+  "actions.uploadParameter",
+);
+await expectSdkCall(
   "actions.generated.plan",
   () =>
     client.actions.ApproveOrder.plan({
@@ -4861,6 +5250,86 @@ await expectSdkCall(
       params: { reason: "osdk-approved" },
     },
   },
+);
+
+await expectSdkCall(
+  "actions.generated.validate",
+  () =>
+    client.actions.validate("EscalateSupplier", {
+      target: { objectType: "SupplierRisk", objectId: "supplier/1" },
+      expectedObjectVersion: 2,
+      params: { riskScore: 91 },
+    }),
+  {
+    path: "/api/actions/EscalateSupplier/validate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "SupplierRisk", objectId: "supplier/1" },
+      expectedObjectVersion: 2,
+      params: { riskScore: 91 },
+    },
+  },
+);
+await expectSdkCall(
+  "actions.generated.apply",
+  () =>
+    client.actions.apply(
+      "EscalateSupplier",
+      {
+        target: { objectType: "SupplierRisk", objectId: "supplier/1" },
+        expectedObjectVersion: 2,
+        params: { riskScore: 91 },
+      },
+      { idempotencyKey: "dynamic-action-key" },
+    ),
+  {
+    path: "/api/actions/EscalateSupplier/apply",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "dynamic-action-key" },
+    body: {
+      target: { objectType: "SupplierRisk", objectId: "supplier/1" },
+      expectedObjectVersion: 2,
+      params: { riskScore: 91 },
+    },
+  },
+);
+const dynamicActionType = {
+  kind: "action",
+  apiName: "EscalateSupplier",
+  targetObjectType: "SupplierRisk",
+  targetKind: "object",
+};
+await expectSdkCall(
+  "actions.generated.apply",
+  () =>
+    osdk(dynamicActionType).applyAction({
+      objectId: "supplier/2",
+      expectedObjectVersion: 3,
+      params: { riskScore: 95 },
+      idempotencyKey: "dynamic-osdk-key",
+    }),
+  {
+    path: "/api/actions/EscalateSupplier/apply",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "dynamic-osdk-key" },
+    body: {
+      target: { objectType: "SupplierRisk", objectId: "supplier/2" },
+      expectedObjectVersion: 3,
+      params: { riskScore: 95 },
+    },
+  },
+);
+
+assertMissingIdempotencyFailFast(
+  "actions.generated.apply",
+  () =>
+    client.actions.apply("EscalateSupplier", {
+      target: { objectType: "SupplierRisk", objectId: "supplier/1" },
+      expectedObjectVersion: 2,
+      params: { riskScore: 91 },
+    }),
+  "actions.apply",
 );
 
 assertMissingIdempotencyFailFast(

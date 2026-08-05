@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, delete, func, insert, or_, select, update
 from sqlalchemy.engine import Engine
 
-from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRecord
+from foundry_lite.application.ports.media_reference_binding_repository import (
+    AttachmentHolderAssociationRecord,
+    AttachmentHolderReservationResult,
+    MediaReferenceBindingRecord,
+)
 from foundry_lite.infrastructure import schema as db
 
 
@@ -83,6 +87,127 @@ class SqlAlchemyMediaReferenceBindingRepository:
             )
         )
 
+    def delete_bindings_by_holder_property(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        holder_type: str,
+        holder_id: str,
+        property_name: str,
+    ) -> int:
+        result = transaction.execute(
+            delete(db.media_reference_bindings).where(
+                and_(
+                    db.media_reference_bindings.c.tenant_id == tenant_id,
+                    db.media_reference_bindings.c.holder_type == holder_type,
+                    db.media_reference_bindings.c.holder_id == holder_id,
+                    or_(
+                        db.media_reference_bindings.c.property_name == property_name,
+                        db.media_reference_bindings.c.property_name.like(f"{property_name}[%"),
+                        db.media_reference_bindings.c.property_name.like(f"{property_name}.%"),
+                    ),
+                )
+            )
+        )
+        return int(result.rowcount or 0)
+
+    def delete_bindings_by_holder(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        holder_type: str,
+        holder_id: str,
+    ) -> int:
+        result = transaction.execute(
+            delete(db.media_reference_bindings).where(
+                and_(
+                    db.media_reference_bindings.c.tenant_id == tenant_id,
+                    db.media_reference_bindings.c.holder_type == holder_type,
+                    db.media_reference_bindings.c.holder_id == holder_id,
+                )
+            )
+        )
+        return int(result.rowcount or 0)
+
+    def reserve_attachment_holder(
+        self,
+        *,
+        transaction: Any,
+        record: AttachmentHolderAssociationRecord,
+        max_holders: int,
+    ) -> AttachmentHolderReservationResult:
+        transaction.execute(
+            select(db.media_item_versions.c.id)
+            .where(
+                and_(
+                    db.media_item_versions.c.tenant_id == record.tenant_id,
+                    db.media_item_versions.c.id == record.media_item_version_id,
+                )
+            )
+            .with_for_update()
+        ).scalar_one()
+        existing = transaction.execute(
+            select(db.media_attachment_associations.c.id).where(
+                and_(
+                    db.media_attachment_associations.c.tenant_id == record.tenant_id,
+                    db.media_attachment_associations.c.media_item_version_id == record.media_item_version_id,
+                    db.media_attachment_associations.c.holder_type == record.holder_type,
+                    db.media_attachment_associations.c.holder_id == record.holder_id,
+                )
+            )
+        ).scalar_one_or_none()
+        holder_count = self._attachment_holder_count(transaction, record.tenant_id, record.media_item_version_id)
+        if existing is not None:
+            return AttachmentHolderReservationResult(True, True, holder_count)
+        if holder_count >= max_holders:
+            return AttachmentHolderReservationResult(False, False, holder_count)
+        transaction.execute(
+            insert(db.media_attachment_associations).values(
+                tenant_id=record.tenant_id,
+                **_association_values(record),
+            )
+        )
+        return AttachmentHolderReservationResult(True, False, holder_count + 1)
+
+    def attachment_associations_for_media_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        media_item_version_id: str,
+    ) -> list[AttachmentHolderAssociationRecord]:
+        rows = (
+            transaction.execute(
+                select(db.media_attachment_associations)
+                .where(
+                    and_(
+                        db.media_attachment_associations.c.tenant_id == tenant_id,
+                        db.media_attachment_associations.c.media_item_version_id == media_item_version_id,
+                    )
+                )
+                .order_by(db.media_attachment_associations.c.created_at, db.media_attachment_associations.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [_association_from_row(row) for row in rows]
+
+    @staticmethod
+    def _attachment_holder_count(transaction: Any, tenant_id: str, media_item_version_id: str) -> int:
+        count = transaction.execute(
+            select(func.count())
+            .select_from(db.media_attachment_associations)
+            .where(
+                and_(
+                    db.media_attachment_associations.c.tenant_id == tenant_id,
+                    db.media_attachment_associations.c.media_item_version_id == media_item_version_id,
+                )
+            )
+        ).scalar_one()
+        return int(count)
+
 
 def _binding_values(record: MediaReferenceBindingRecord) -> dict[str, object]:
     return {
@@ -102,6 +227,17 @@ def _binding_values(record: MediaReferenceBindingRecord) -> dict[str, object]:
     }
 
 
+def _association_values(record: AttachmentHolderAssociationRecord) -> dict[str, object]:
+    return {
+        "id": record.association_id,
+        "media_item_version_id": record.media_item_version_id,
+        "holder_type": record.holder_type,
+        "holder_id": record.holder_id,
+        "first_action_run_id": record.first_action_run_id,
+        "created_at": record.created_at,
+    }
+
+
 def _binding_from_row(row: Any) -> MediaReferenceBindingRecord:
     return MediaReferenceBindingRecord(
         media_reference_binding_id=str(row["id"]),
@@ -118,4 +254,16 @@ def _binding_from_row(row: Any) -> MediaReferenceBindingRecord:
         idempotency_key=str(row["idempotency_key"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _association_from_row(row: Any) -> AttachmentHolderAssociationRecord:
+    return AttachmentHolderAssociationRecord(
+        association_id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        media_item_version_id=str(row["media_item_version_id"]),
+        holder_type=str(row["holder_type"]),
+        holder_id=str(row["holder_id"]),
+        first_action_run_id=str(row["first_action_run_id"]),
+        created_at=str(row["created_at"]),
     )

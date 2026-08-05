@@ -8,7 +8,7 @@ The same AST is used by parameter overrides and submission criteria.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 from foundry_lite.domain.errors import ValidationFailed
@@ -27,6 +27,24 @@ class ActionConditionContext(Protocol):
 
     def current_user(self, attribute: str | None) -> object: ...
 
+    def linked_object_property(
+        self, link_type: str, direction: str, property_name: str, aggregation: str
+    ) -> object: ...
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class LinkedObjectPropertyReference:
+    """One permission-scoped linked-object value source used by criteria."""
+
+    link_type: str
+    direction: str
+    property_name: str
+    aggregation: str
+
+    @property
+    def key(self) -> str:
+        return linked_object_property_key(self.link_type, self.direction, self.property_name, self.aggregation)
+
 
 @dataclass(frozen=True, slots=True)
 class StaticActionConditionContext:
@@ -36,6 +54,8 @@ class StaticActionConditionContext:
     object_properties: Mapping[str, object]
     actor_user_id: str
     actor_groups: tuple[str, ...]
+    actor_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
+    linked_object_properties: Mapping[str, object] = field(default_factory=dict[str, object])
 
     def parameter(self, name: str) -> object:
         return self.parameters.get(name)
@@ -44,11 +64,20 @@ class StaticActionConditionContext:
         return self.object_properties.get(name)
 
     def current_user(self, attribute: str | None) -> object:
-        if attribute in (None, "id"):
+        if attribute is None or attribute == "id":
             return self.actor_user_id
         if attribute in {"group", "groups", "roles"}:
             return self.actor_groups
-        raise ValidationFailed("unsupported current-user attribute", details={"attribute": attribute})
+        return self.actor_attributes.get(attribute)
+
+    def linked_object_property(self, link_type: str, direction: str, property_name: str, aggregation: str) -> object:
+        key = linked_object_property_key(link_type, direction, property_name, aggregation)
+        if key not in self.linked_object_properties:
+            raise ValidationFailed(
+                "linked-object condition value was not resolved",
+                details={"linkType": link_type, "direction": direction, "property": property_name},
+            )
+        return self.linked_object_properties[key]
 
 
 def evaluate_action_condition(condition: Mapping[str, object], context: ActionConditionContext) -> bool:
@@ -71,7 +100,10 @@ def validate_action_condition(condition: Mapping[str, object]) -> None:
         _validate_children(condition["any"], "any")
         return
     if "not" in condition:
-        validate_action_condition(_condition(condition["not"], "not"))
+        child = _condition(condition["not"], "not")
+        if _uses_group_identity(child):
+            raise ValidationFailed("group identity conditions cannot be negated")
+        validate_action_condition(child)
         return
     _validate_comparison(condition)
 
@@ -88,10 +120,55 @@ def referenced_condition_parameters(condition: Mapping[str, object]) -> frozense
     return frozenset(ref for ref in refs if ref is not None)
 
 
+def referenced_condition_value_kinds(condition: Mapping[str, object]) -> frozenset[str]:
+    """Return every value-source kind used by a condition tree."""
+    if "all" in condition:
+        return _children_value_kinds(condition["all"], "all")
+    if "any" in condition:
+        return _children_value_kinds(condition["any"], "any")
+    if "not" in condition:
+        return referenced_condition_value_kinds(_condition(condition["not"], "not"))
+    values = (condition.get("left"), condition.get("right"))
+    return frozenset(kind for raw in values if (kind := _condition_value_kind(raw)) is not None)
+
+
+def referenced_condition_object_properties(condition: Mapping[str, object]) -> frozenset[str]:
+    """Return target-object property names read by a condition tree."""
+    if "all" in condition:
+        return _children_object_properties(condition["all"], "all")
+    if "any" in condition:
+        return _children_object_properties(condition["any"], "any")
+    if "not" in condition:
+        return referenced_condition_object_properties(_condition(condition["not"], "not"))
+    values = (condition.get("left"), condition.get("right"))
+    return frozenset(name for raw in values if (name := _object_property_ref(raw)) is not None)
+
+
+def referenced_linked_object_properties(
+    condition: Mapping[str, object],
+) -> frozenset[LinkedObjectPropertyReference]:
+    """Return every unique linked-object property read by a condition tree."""
+    if "all" in condition:
+        return _children_linked_refs(condition["all"], "all")
+    if "any" in condition:
+        return _children_linked_refs(condition["any"], "any")
+    if "not" in condition:
+        return referenced_linked_object_properties(_condition(condition["not"], "not"))
+    refs = {_linked_object_ref(condition.get("left")), _linked_object_ref(condition.get("right"))}
+    return frozenset(ref for ref in refs if ref is not None)
+
+
+def linked_object_property_key(link_type: str, direction: str, property_name: str, aggregation: str = "values") -> str:
+    """Build the stable in-memory coordinate for one resolved linked value set."""
+    return f"{direction}:{link_type}:{property_name}:{aggregation}"
+
+
 def _evaluate_comparison(condition: Mapping[str, object], context: ActionConditionContext) -> bool:
     operator = _operator(condition)
     left = _condition_value(condition.get("left"), context)
     if operator == "exists":
+        if _condition_value_kind(condition.get("left")) == "linkedObjectProperty":
+            return bool(left)
         return left is not None
     right = _condition_value(condition.get("right"), context)
     return _compare(operator, left, right)
@@ -152,6 +229,13 @@ def _condition_value(raw: object, context: ActionConditionContext) -> object:
     if kind == "currentUser":
         attribute = value.get("attribute")
         return context.current_user(attribute if isinstance(attribute, str) else None)
+    if kind == "linkedObjectProperty":
+        return context.linked_object_property(
+            _required_text(value, "linkType"),
+            _linked_direction(value),
+            _required_text(value, "property"),
+            _linked_aggregation(value),
+        )
     raise ValidationFailed("unsupported action condition value", details={"kind": kind})
 
 
@@ -160,6 +244,8 @@ def _validate_comparison(condition: Mapping[str, object]) -> None:
     _validate_condition_value(condition.get("left"))
     if operator != "exists":
         _validate_condition_value(condition.get("right"))
+    if operator in {"neq", "notIn"} and _comparison_uses_group_identity(condition):
+        raise ValidationFailed("group identity conditions require a positive operator")
 
 
 def _validate_condition_value(raw: object) -> None:
@@ -174,6 +260,13 @@ def _validate_condition_value(raw: object) -> None:
         _required_text(value, "property")
         return
     if kind == "currentUser":
+        _validate_current_user_attribute(value)
+        return
+    if kind == "linkedObjectProperty":
+        _required_text(value, "linkType")
+        _linked_direction(value)
+        _required_text(value, "property")
+        _linked_aggregation(value)
         return
     raise ValidationFailed("unsupported action condition value", details={"kind": kind})
 
@@ -193,6 +286,27 @@ def _children_parameter_refs(raw: object, field: str) -> frozenset[str]:
     return frozenset(refs)
 
 
+def _children_value_kinds(raw: object, field: str) -> frozenset[str]:
+    kinds: set[str] = set()
+    for child in _condition_list(raw, field):
+        kinds.update(referenced_condition_value_kinds(child))
+    return frozenset(kinds)
+
+
+def _children_object_properties(raw: object, field: str) -> frozenset[str]:
+    names: set[str] = set()
+    for child in _condition_list(raw, field):
+        names.update(referenced_condition_object_properties(child))
+    return frozenset(names)
+
+
+def _children_linked_refs(raw: object, field: str) -> frozenset[LinkedObjectPropertyReference]:
+    refs: set[LinkedObjectPropertyReference] = set()
+    for child in _condition_list(raw, field):
+        refs.update(referenced_linked_object_properties(child))
+    return frozenset(refs)
+
+
 def _operator(condition: Mapping[str, object]) -> str:
     operator = condition.get("op")
     if not isinstance(operator, str) or operator not in COMPARISON_OPERATORS:
@@ -208,6 +322,88 @@ def _parameter_ref(raw: object) -> str | None:
         return None
     value = payload.get("parameter")
     return value if isinstance(value, str) and value else None
+
+
+def _object_property_ref(raw: object) -> str | None:
+    if not isinstance(raw, Mapping):
+        return None
+    payload = cast(Mapping[str, object], raw)
+    if payload.get("kind") != "objectProperty":
+        return None
+    value = payload.get("property")
+    return value if isinstance(value, str) and value else None
+
+
+def _condition_value_kind(raw: object) -> str | None:
+    if not isinstance(raw, Mapping):
+        return None
+    kind = cast(Mapping[str, object], raw).get("kind")
+    return kind if isinstance(kind, str) and kind else None
+
+
+def _uses_group_identity(condition: Mapping[str, object]) -> bool:
+    if "all" in condition:
+        return any(_uses_group_identity(child) for child in _condition_list(condition["all"], "all"))
+    if "any" in condition:
+        return any(_uses_group_identity(child) for child in _condition_list(condition["any"], "any"))
+    if "not" in condition:
+        return _uses_group_identity(_condition(condition["not"], "not"))
+    return _comparison_uses_group_identity(condition)
+
+
+def _comparison_uses_group_identity(condition: Mapping[str, object]) -> bool:
+    return any(_is_group_identity_value(condition.get(side)) for side in ("left", "right"))
+
+
+def _is_group_identity_value(raw: object) -> bool:
+    if not isinstance(raw, Mapping):
+        return False
+    value = cast(Mapping[str, object], raw)
+    return value.get("kind") == "currentUser" and value.get("attribute", "id") in {
+        "group",
+        "groups",
+        "roles",
+    }
+
+
+def _linked_object_ref(raw: object) -> LinkedObjectPropertyReference | None:
+    if not isinstance(raw, Mapping):
+        return None
+    value = cast(Mapping[str, object], raw)
+    if value.get("kind") != "linkedObjectProperty":
+        return None
+    return LinkedObjectPropertyReference(
+        _required_text(value, "linkType"),
+        _linked_direction(value),
+        _required_text(value, "property"),
+        _linked_aggregation(value),
+    )
+
+
+def _linked_direction(value: Mapping[str, object]) -> str:
+    direction = value.get("direction", "outgoing")
+    if direction not in {"outgoing", "incoming"}:
+        raise ValidationFailed(
+            "linked-object condition direction must be outgoing or incoming",
+            details={"direction": direction},
+        )
+    return str(direction)
+
+
+def _linked_aggregation(value: Mapping[str, object]) -> str:
+    aggregation = value.get("aggregation", "values")
+    if aggregation not in {"values", "count"}:
+        raise ValidationFailed(
+            "linked-object condition aggregation must be values or count",
+            details={"aggregation": aggregation},
+        )
+    return str(aggregation)
+
+
+def _validate_current_user_attribute(value: Mapping[str, object]) -> None:
+    attribute = value.get("attribute", "id")
+    if not isinstance(attribute, str) or not attribute.strip():
+        raise ValidationFailed("unsupported current-user attribute", details={"attribute": attribute})
 
 
 def _condition(raw: object, field: str) -> Mapping[str, object]:

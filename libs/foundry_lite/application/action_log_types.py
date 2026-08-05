@@ -6,6 +6,27 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NotRequired, TypedDict
 
+ACTION_LOG_PROPERTY_TYPES = {
+    "actionRunId": "string",
+    "logEntryId": "string",
+    "definitionVersion": "string",
+    "actorUserId": "string",
+    "status": "string",
+    "parameters": "struct",
+    "result": "struct",
+    "branchId": "string",
+    "planHash": "string",
+    "approvalId": "string",
+    "revertAllowed": "boolean",
+    "revertStatus": "string",
+    "revertedByRunId": "string",
+    "effectReceiptCount": "integer",
+    "editedObjectCount": "integer",
+    "editedObjects": "array",
+    "createdAt": "timestamp",
+    "completedAt": "timestamp",
+}
+
 
 class ActionLogEntryRow(TypedDict):
     """One immutable Action submission log with mutable revert disposition."""
@@ -54,6 +75,7 @@ class ActionRevertEligibility(TypedDict):
     reason: str | None
     editCount: int
     hasPreservedExternalEffects: bool
+    compensationAction: NotRequired[str]
     logEntryId: NotRequired[str]
 
 

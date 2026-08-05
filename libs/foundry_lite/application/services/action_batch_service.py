@@ -42,6 +42,11 @@ from foundry_lite.application.services.action_batch_helpers import (
     target_failure,
     target_request_error,
 )
+from foundry_lite.application.services.action_batch_media import (
+    ActionMediaBatchBoundary,
+    batch_media_edit_plan,
+    resolved_batch_media_command,
+)
 from foundry_lite.application.services.action_helpers import (
     action_failure_transition,
     action_patch,
@@ -80,6 +85,7 @@ class ActionBatchApplyService(CoreService):
 
     required_dependencies = ("engine", "policy", "action_repository")
     required_collaborators = (
+        "action_media_runtime_service",
         "object_index_record_mutation_service",
         "object_records_service",
         "ontology_service",
@@ -91,6 +97,7 @@ class ActionBatchApplyService(CoreService):
     ontology_service: ActionOntologyLookup
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
+    action_media_runtime_service: ActionMediaBatchBoundary
 
     def apply_action_batch(
         self,
@@ -161,6 +168,9 @@ class ActionBatchApplyService(CoreService):
                 action_type_for_failure = action_type
                 require_action_target_api_name(action_type, command.object_type)
                 require_batch_supported_action(action_type)
+                command = resolved_batch_media_command(
+                    self.action_media_runtime_service, conn, ctx, action_type, command
+                )
                 replay = self._replay_or_none(conn, ctx, action_type, action_run_id, command)
                 if replay is not None:
                     return replay
@@ -287,8 +297,10 @@ class ActionBatchApplyService(CoreService):
         for target in command.targets:
             record = self.object_records_service._object_record(conn, ctx, command.object_type, target.object_id)
             record = visible_record(record, target_type, ctx.roles)
-            if record is not None and (invariant := action_target_record_error(action_type, record)) is not None:
-                raise invariant
+            if record is not None:
+                record_type = self.ontology_service._object_type_by_id_or_none(conn, ctx, record["object_type_id"])
+                if (invariant := action_target_record_error(action_type, record, record_type)) is not None:
+                    raise invariant
             error = target_request_error(action_type, record, target.expected_object_version, command.params, ctx)
             if error is not None:
                 failures.append(target_failure(target.object_id, error))
@@ -318,6 +330,12 @@ class ActionBatchApplyService(CoreService):
             result, previous_values = self._mutate_target(conn, ctx, action_run_id, command, record, patch)
             previous_by_object[record["object_id"]] = previous_values
             results.append(result)
+        self.action_media_runtime_service.bind_plan_references(
+            conn,
+            ctx,
+            action_run_id,
+            batch_media_edit_plan(command, records, patch),
+        )
         response = batch_success_response(action_run_id, command.object_type, results)
         self._finish_batch_run(conn, ctx, action_run_id, response)
         publish_batch_commit_events(self.runtime_service, conn, ctx, action_run_id, command.object_type, results)

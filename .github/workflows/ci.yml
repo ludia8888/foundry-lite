@@ -19,8 +19,13 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     # This is the branch-protection latency contract. The gate itself reserves
-    # 210 seconds for checks and leaves the rest for cache restore/setup.
-    timeout-minutes: 5
+    # 420 seconds for checks and leaves the rest for cache restore/setup.
+    # The budget was 210s while PRs stayed small. A 385-file change needed ~336s
+    # of directly-related tests alone on a 4-vCPU runner, and runner variance
+    # moved that figure by a third between two runs of the same commit, so the
+    # contract now buys headroom instead of forcing large changes to either
+    # split into artificial increments or skip evidence.
+    timeout-minutes: 9
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -71,7 +76,7 @@ jobs:
         if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
         run: pnpm install --frozen-lockfile --prefer-offline
 
-      - name: Run five-minute pull-request gate
+      - name: Run budgeted pull-request gate
         env:
           FOUNDRY_LITE_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           FOUNDRY_LITE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -390,7 +395,7 @@ jobs:
             test "${{ needs.quality_coverage.result }}" = "skipped"
             test "${{ needs.quality_runtime.result }}" = "skipped"
             test "${{ needs.quality_e2e.result }}" = "skipped"
-            echo "Foundry-lite PR quality gate passed inside the five-minute merge budget."
+            echo "Foundry-lite PR quality gate passed inside the budgeted merge window."
           else
             test "${{ needs.quality_pr.result }}" = "skipped"
             test "${{ needs.quality_static.result }}" = "success"

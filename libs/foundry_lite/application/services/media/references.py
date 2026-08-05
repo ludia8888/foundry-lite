@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRecord
 from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaReference
 from foundry_lite.application.ports.media_storage import ByteRange, MediaReadGrant, MediaReadGrantRequest
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.attachment_access import (
+    AttachmentObjectQuery,
+    has_visible_attachment_holder,
+)
 from foundry_lite.application.services.media.read_access import require_media_version_clearance
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, NotFound, ValidationFailed
@@ -38,8 +43,15 @@ class MediaReferenceService(CoreService):
     committed row, that is a hard failure, never a silent empty read.
     """
 
-    required_dependencies = ("engine", "policy", "media_repository", "media_storage")
-    required_collaborators = ()
+    required_dependencies = (
+        "engine",
+        "policy",
+        "media_repository",
+        "media_reference_binding_repository",
+        "media_storage",
+    )
+    required_collaborators = ("object_query_service",)
+    object_query_service: AttachmentObjectQuery
 
     def resolve(self, ctx: RequestContext, *, media_item_version_id: str) -> ResolvedMediaReference:
         self.policy.require(ctx, "media:read")
@@ -58,8 +70,14 @@ class MediaReferenceService(CoreService):
             item = self.media_repository.media_item_by_id(
                 transaction=conn, tenant_id=ctx.tenant_id, media_item_id=version.media_item_id
             )
+            bindings = self.media_reference_binding_repository.bindings_for_media_versions(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                media_item_version_ids=[version.media_item_version_id],
+            )
         if item is None:
             raise NotFound("media item not found", details={"media_item_id": version.media_item_id})
+        self._require_attachment_holder_access(ctx, version, bindings)
         reference = MediaReference(
             media_set_id=item.media_set_id,
             media_item_id=version.media_item_id,
@@ -69,6 +87,19 @@ class MediaReferenceService(CoreService):
         )
         self._verify_blob(version)
         return ResolvedMediaReference(reference=reference, version=version)
+
+    def _require_attachment_holder_access(
+        self,
+        ctx: RequestContext,
+        version: MediaItemVersionRecord,
+        bindings: list[MediaReferenceBindingRecord],
+    ) -> None:
+        if has_visible_attachment_holder(ctx, version.security_envelope, bindings, self.object_query_service):
+            return
+        raise NotFound(
+            "attachment is not reachable through an object visible to the caller",
+            details={"media_item_version_id": version.media_item_version_id},
+        )
 
     def source_read(
         self,

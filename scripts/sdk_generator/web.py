@@ -1748,6 +1748,58 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "            },",
         "          },",
         "        ),",
+        "        rotateClientSecret: (appId, clientRowId, payload, clientOptions) => request(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/` +",
+        "            `${encodeURIComponent(clientRowId)}/secrets/rotate`,",
+        "          {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": requireIdempotencyKey('
+            'clientOptions?.idempotencyKey, "developerConsole.osdkApplications.rotateClientSecret"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "        revokeClientSecret: (appId, clientRowId, clientOptions) => request(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/` +",
+        "            `${encodeURIComponent(clientRowId)}/secrets/revoke`,",
+        "          {",
+        '            method: "POST",',
+        "            headers: {",
+        (
+            '              "Idempotency-Key": requireIdempotencyKey('
+            'clientOptions?.idempotencyKey, "developerConsole.osdkApplications.revokeClientSecret"),'
+        ),
+        "            },",
+        "          },",
+        "        ),",
+        "        listClientSecretVersions: (appId, clientRowId) => request(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/` +",
+        "            `${encodeURIComponent(clientRowId)}/secrets`,",
+        "        ),",
+        "      },",
+        "      mcpServers: {",
+        "        configure: (appId, payload, options) => request(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/mcp-server`,",
+        "          {",
+        '            method: "PUT",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "developerConsole.mcpServers.configure"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "        get: (appId) => request(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/mcp-server`,",
+        "        ),",
+        "        list: () => request(`/api/developer-console/mcp-servers`),",
         "      },",
         "      sdkVersions: {",
         "        create: (appId, payload, options) => request(",
@@ -1983,6 +2035,56 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "          `/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`,",
         '          { method: "POST" },',
         "        ),",
+        "        actionTypes: {",
+        "          list: (branchId) => request(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types`,",
+        "          ),",
+        "          get: (branchId, actionApiName) => request(",
+        (
+            "            `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types/"
+            "${encodeURIComponent(actionApiName)}`,"
+        ),
+        "          ),",
+        "          create: (branchId, payload, actionOptions) => request(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types`,",
+        "            {",
+        '              method: "POST",',
+        (
+            '              headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.create") },'
+        ),
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "          update: (branchId, actionApiName, payload, actionOptions) => request(",
+        (
+            "            `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types/"
+            "${encodeURIComponent(actionApiName)}`,"
+        ),
+        "            {",
+        '              method: "PUT",',
+        (
+            '              headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.update") },'
+        ),
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "          delete: (branchId, actionApiName, payload, actionOptions) => request(",
+        (
+            "            `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types/"
+            "${encodeURIComponent(actionApiName)}`,"
+        ),
+        "            {",
+        '              method: "DELETE",',
+        (
+            '              headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.delete") },'
+        ),
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        },",
         "      },",
         "    },",
         "    insights: {",
@@ -2085,6 +2187,41 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             "      get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`),",
             "      schema: (actionApiName) =>",
             "        request(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+            "      validate: (actionApiName, payload) => request(",
+            "        `/api/actions/${encodeURIComponent(actionApiName)}/validate`,",
+            (
+                '        { method: "POST", headers: { "Content-Type": "application/json" }, '
+                "body: JSON.stringify(payload) },"
+            ),
+            "      ),",
+            "      apply: (actionApiName, payload, applyOptions) => request(",
+            "        `/api/actions/${encodeURIComponent(actionApiName)}/apply`,",
+            "        {",
+            '          method: "POST",',
+            "          headers: {",
+            '            "Content-Type": "application/json",',
+            ('            "Idempotency-Key": requireIdempotencyKey(applyOptions?.idempotencyKey, "actions.apply"),'),
+            "          },",
+            "          body: JSON.stringify(payload),",
+            "        },",
+            "      ),",
+            "      uploadParameter: (actionApiName, parameterName, payload) => {",
+            "        const form = new FormData();",
+            "        form.append('objectType', payload.objectType);",
+            "        form.append('objectId', payload.objectId);",
+            "        form.append('file', payload.file, payload.fileName ?? 'upload.bin');",
+            "        if (payload.suppliedMimeType) form.append('suppliedMimeType', payload.suppliedMimeType);",
+            "        if (payload.format) form.append('format', payload.format);",
+            "        return request(",
+            (
+                "          `/api/actions/${encodeURIComponent(actionApiName)}/parameters/"
+                "${encodeURIComponent(parameterName)}/uploads`,"
+            ),
+            "          { method: 'POST', headers: { 'Idempotency-Key': requireIdempotencyKey(",
+            "            payload.idempotencyKey, 'actions.uploadParameter',",
+            "          ) }, body: form },",
+            "        );",
+            "      },",
             "      plan: (actionApiName, payload) => request(",
             "        `/api/actions/${encodeURIComponent(actionApiName)}/plan`,",
             (
@@ -2106,6 +2243,80 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
             "        return request(`/api/actions/logs${suffix}`);",
             "      },",
+            "      notificationPolicies: {",
+            "        list: (listOptions = {}) => {",
+            "          const query = new URLSearchParams();",
+            "          if (listOptions.cursor) query.set('cursor', listOptions.cursor);",
+            "          if (listOptions.limit !== undefined) query.set('limit', String(listOptions.limit));",
+            "          const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "          return request(`/api/actions/notification-policies${suffix}`);",
+            "        },",
+            "        get: (policyName) =>",
+            "          request(`/api/actions/notification-policies/${encodeURIComponent(policyName)}`),",
+            "        create: (payload, policyOptions) => request(`/api/actions/notification-policies`, {",
+            "          method: 'POST', headers: { 'Content-Type': 'application/json',",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(policyOptions?.idempotencyKey, "
+                "'actions.notificationPolicies.create'), }, body: JSON.stringify(payload),"
+            ),
+            "        }),",
+            "        update: (policyName, payload, policyOptions) => request(",
+            "          `/api/actions/notification-policies/${encodeURIComponent(policyName)}`, {",
+            "            method: 'PUT', headers: { 'Content-Type': 'application/json',",
+            (
+                "              'Idempotency-Key': requireIdempotencyKey(policyOptions?.idempotencyKey, "
+                "'actions.notificationPolicies.update'), }, body: JSON.stringify(payload),"
+            ),
+            "          },",
+            "        ),",
+            "        disable: (policyName, payload, policyOptions) => request(",
+            "          `/api/actions/notification-policies/${encodeURIComponent(policyName)}`, {",
+            "            method: 'DELETE', headers: { 'Content-Type': 'application/json',",
+            (
+                "              'Idempotency-Key': requireIdempotencyKey(policyOptions?.idempotencyKey, "
+                "'actions.notificationPolicies.disable'), }, body: JSON.stringify(payload),"
+            ),
+            "          },",
+            "        ),",
+            "      },",
+            "      effects: {",
+            "        list: (listOptions = {}) => {",
+            "          const query = new URLSearchParams();",
+            "          if (listOptions.status) query.set('status', listOptions.status);",
+            "          if (listOptions.cursor) query.set('cursor', listOptions.cursor);",
+            "          if (listOptions.limit !== undefined) query.set('limit', String(listOptions.limit));",
+            "          const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "          return request(`/api/actions/effects${suffix}`);",
+            "        },",
+            "        get: (receiptId) => request(`/api/actions/effects/${encodeURIComponent(receiptId)}`),",
+            "        cancel: (receiptId, payload, effectOptions) => request(",
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}/cancel`, {",
+            "            method: 'POST', headers: { 'Content-Type': 'application/json',",
+            (
+                "              'Idempotency-Key': requireIdempotencyKey(effectOptions?.idempotencyKey, "
+                "'actions.effects.cancel'), }, body: JSON.stringify(payload ?? {}),"
+            ),
+            "          },",
+            "        ),",
+            "        retry: (receiptId, effectOptions) => request(",
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}/retry`, {",
+            "            method: 'POST', headers: {",
+            (
+                "              'Idempotency-Key': requireIdempotencyKey(effectOptions?.idempotencyKey, "
+                "'actions.effects.retry'), },"
+            ),
+            "          },",
+            "        ),",
+            "        reconcile: (receiptId, payload, effectOptions) => request(",
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}/reconcile`, {",
+            "            method: 'POST', headers: { 'Content-Type': 'application/json',",
+            (
+                "              'Idempotency-Key': requireIdempotencyKey(effectOptions?.idempotencyKey, "
+                "'actions.effects.reconcile'), }, body: JSON.stringify(payload),"
+            ),
+            "          },",
+            "        ),",
+            "      },",
             "      branches: {",
             "        diff: (branchId) =>",
             "          request(`/api/actions/branches/${encodeURIComponent(branchId)}/diff`),",
@@ -2113,6 +2324,14 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             (
                 "          `/api/actions/branches/${encodeURIComponent(branchId)}/objects/"
                 "${encodeURIComponent(objectType)}/${encodeURIComponent(objectId)}`,"
+            ),
+            "        ),",
+            "        link: (branchId, linkType, fromObjectId, toObjectId) => request(",
+            (
+                "          `/api/actions/branches/${encodeURIComponent(branchId)}/links/"
+                "${encodeURIComponent(linkType)}/${encodeURIComponent(fromObjectId)}/"
+                "${encodeURIComponent(toObjectId)}`"
+                ","
             ),
             "        ),",
             "      },",
@@ -2127,6 +2346,23 @@ def render_web_javascript(ontology: OntologyDef) -> str:
             "            headers: {",
             '              "Content-Type": "application/json",',
             '              "Idempotency-Key": requireIdempotencyKey(runOptions?.idempotencyKey, "actions.runs.start"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          },",
+            "        ),",
+            "        startBatch: (actionApiName, payload, runOptions) => request(",
+            (
+                "          `/api/actions/${encodeURIComponent(actionApiName)}/batch-runs` + "
+                "`${runOptions?.waitSeconds === undefined ? '' : `?waitSeconds=${runOptions.waitSeconds}`}`,"
+            ),
+            "          {",
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            (
+                '              "Idempotency-Key": requireIdempotencyKey('
+                'runOptions?.idempotencyKey, "actions.runs.startBatch"),'
+            ),
             "            },",
             "            body: JSON.stringify(payload),",
             "          },",
@@ -2779,14 +3015,31 @@ def _web_object_client_lines(objects: Sequence[ObjectClientSurface]) -> list[str
 def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]:
     lines: list[str] = []
     for action_def in actions:
+        target = "payload.objectType" if action_def.target_kind == "interface" else f'"{action_def.target}"'
         lines.extend(
             [
                 f"      {action_def.api_name}: {{",
+                "        uploadParameter: (parameterName, payload) => {",
+                "          const form = new FormData();",
+                f"          form.append('objectType', {target});",
+                "          form.append('objectId', payload.objectId);",
+                "          form.append('file', payload.file, payload.fileName ?? 'upload.bin');",
+                "          if (payload.suppliedMimeType) form.append('suppliedMimeType', payload.suppliedMimeType);",
+                "          if (payload.format) form.append('format', payload.format);",
+                f"          return request(`/api/actions/{action_def.api_name}/parameters/"
+                + "${encodeURIComponent(parameterName)}/uploads`, {",
+                "            method: 'POST',",
+                "            headers: { 'Idempotency-Key': requireIdempotencyKey(",
+                f"              payload.idempotencyKey, '{action_def.api_name}.uploadParameter',",
+                "            ) },",
+                "            body: form,",
+                "          });",
+                "        },",
                 f"        validate: (payload) => request(`/api/actions/{action_def.api_name}/validate`, {{",
                 '          method: "POST",',
                 '          headers: { "Content-Type": "application/json" },',
                 "          body: JSON.stringify({",
-                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                f"            target: {{ objectType: {target}, objectId: payload.objectId }},",
                 "            expectedObjectVersion: payload.expectedObjectVersion,",
                 "            params: payload.params,",
                 "          }),",
@@ -2795,7 +3048,7 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
                 '          method: "POST",',
                 '          headers: { "Content-Type": "application/json" },',
                 "          body: JSON.stringify({",
-                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                f"            target: {{ objectType: {target}, objectId: payload.objectId }},",
                 "            expectedObjectVersion: payload.expectedObjectVersion,",
                 "            params: payload.params,",
                 "          }),",
@@ -2804,7 +3057,7 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
                 '          method: "POST",',
                 '          headers: { "Content-Type": "application/json" },',
                 "          body: JSON.stringify({",
-                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                f"            target: {{ objectType: {target}, objectId: payload.objectId }},",
                 "            expectedObjectVersion: payload.expectedObjectVersion,",
                 "            params: payload.params,",
                 "          }),",
@@ -2819,7 +3072,7 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
                 ),
                 "          },",
                 "          body: JSON.stringify({",
-                f'            target: {{ objectType: "{action_def.target}", objectId: payload.objectId }},',
+                f"            target: {{ objectType: {target}, objectId: payload.objectId }},",
                 "            expectedObjectVersion: payload.expectedObjectVersion,",
                 "            params: payload.params,",
                 "          }),",
@@ -2837,7 +3090,7 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
                 ),
                 "          },",
                 "          body: JSON.stringify({",
-                f'            objectType: "{action_def.target}",',
+                f"            objectType: {target},",
                 "            targets: payload.targets,",
                 "            params: payload.params,",
                 "          }),",

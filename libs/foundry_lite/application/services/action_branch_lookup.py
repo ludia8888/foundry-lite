@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
-from foundry_lite.application.action_branch_types import ActionBranchObjectRow
-from foundry_lite.application.ports import ObjectRecordRow, TransactionContext
+from foundry_lite.application.action_branch_types import ActionBranchLinkRow, ActionBranchObjectRow
+from foundry_lite.application.ports import ObjectLinkRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.ports.action_branch_repository import ActionBranchRepository
 from foundry_lite.application.services.action_protocols import ActionObjectRecordLookup
 from foundry_lite.domain.context import RequestContext
@@ -92,3 +92,98 @@ def _compose_created(ctx: RequestContext, overlay: ActionBranchObjectRow) -> Obj
             "updated_at": overlay["updated_at"],
         },
     )
+
+
+def branch_link_view(
+    repository: ActionBranchRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    branch_id: str,
+    link_type: str,
+    from_object_id: str,
+    to_object_id: str,
+) -> dict[str, object] | None:
+    overlay = repository.link_overlay(
+        transaction=transaction,
+        tenant_id=ctx.tenant_id,
+        branch_id=branch_id,
+        link_type_api_name=link_type,
+        from_object_id=from_object_id,
+        to_object_id=to_object_id,
+    )
+    base = _base_link(repository, transaction, ctx, link_type, from_object_id, to_object_id)
+    if overlay is None and base is None:
+        return None
+    return _link_payload(branch_id, link_type, from_object_id, to_object_id, overlay, base)
+
+
+def branch_link_diff_items(
+    repository: ActionBranchRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    branch_id: str,
+    overlays: list[ActionBranchLinkRow],
+) -> list[dict[str, object]]:
+    return [
+        _link_payload(
+            branch_id,
+            overlay["link_type_api_name"],
+            overlay["from_object_id"],
+            overlay["to_object_id"],
+            overlay,
+            _base_link(
+                repository,
+                transaction,
+                ctx,
+                overlay["link_type_api_name"],
+                overlay["from_object_id"],
+                overlay["to_object_id"],
+            ),
+        )
+        for overlay in overlays
+    ]
+
+
+def _base_link(
+    repository: ActionBranchRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    link_type: str,
+    from_object_id: str,
+    to_object_id: str,
+) -> ObjectLinkRow | None:
+    return repository.active_base_link(
+        transaction=transaction,
+        tenant_id=ctx.tenant_id,
+        link_type_api_name=link_type,
+        from_object_id=from_object_id,
+        to_object_id=to_object_id,
+    )
+
+
+def _link_payload(
+    branch_id: str,
+    link_type: str,
+    from_object_id: str,
+    to_object_id: str,
+    overlay: ActionBranchLinkRow | None,
+    base: ObjectLinkRow | None,
+) -> dict[str, object]:
+    identity = overlay if overlay is not None else base
+    assert identity is not None
+    base_version = overlay["base_link_version"] if overlay else (base["link_version"] if base else None)
+    current_version = base["link_version"] if base else None
+    return {
+        "branchId": branch_id,
+        "linkType": link_type,
+        "fromApiName": identity["from_api_name"],
+        "fromObjectId": from_object_id,
+        "toApiName": identity["to_api_name"],
+        "toObjectId": to_object_id,
+        "linkVersion": overlay["overlay_version"] if overlay else current_version,
+        "isDeleted": overlay["deleted"] if overlay else False,
+        "baseLinkVersion": base_version,
+        "currentMainVersion": current_version,
+        "hasMainDrift": current_version != base_version,
+        "lastActionRunId": overlay["last_action_run_id"] if overlay else None,
+    }

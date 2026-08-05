@@ -27,7 +27,7 @@ if _GIT_EXECUTABLE is None:
 GIT: str = _GIT_EXECUTABLE
 REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_fast_gate.json"
 SECURITY_REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_diff_security.json"
-DEFAULT_BUDGET_SECONDS = 210.0
+DEFAULT_BUDGET_SECONDS = 420.0
 MAX_SELECTED_TEST_FILES = 32
 GENERIC_MODULE_STEMS = {
     "__init__",
@@ -179,8 +179,17 @@ def _bounded_test_selection(changed_tests: set[str], direct_tests: set[str]) -> 
 def _is_fast_test_path(path: str) -> bool:
     if not path.startswith("tests/") or not path.endswith(".py"):
         return False
+    # Live-infrastructure tests boot real brokers, clusters, and CDC connectors
+    # through testcontainers, so they belong to the runtime lane (AGENTS.md §28)
+    # and are already enforced by named ratchets there. The `_live.py` suffix
+    # only covers files that end that way; `test_kafka_live_broker_*`,
+    # `test_debezium_live_cdc.py`, and `test_elasticsearch_live_cluster.py` name
+    # the infrastructure mid-stem and previously leaked into the PR budget.
     slow_markers = (
         "_live.py",
+        "live_broker",
+        "live_cdc",
+        "live_cluster",
         "temporal",
         "infra_composition",
         "all_infra",
@@ -197,7 +206,22 @@ def _is_fast_test_path(path: str) -> bool:
 
 
 def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
+    """Build the bounded PR evidence plan from changed paths."""
     existing_tests = tuple(sorted(ROOT.glob("tests/**/test_*.py")))
+    changed_python_tests = _changed_python_tests(paths)
+    selected_tests, untested = _source_test_evidence(paths, existing_tests, changed_python_tests)
+    return PullRequestPlan(
+        changed_files=paths,
+        selected_tests=selected_tests,
+        source_files_without_tests=untested,
+        has_backend=any(_is_backend_path(path) for path in paths),
+        has_frontend=any(_is_frontend_path(path) for path in paths),
+        has_sdk_contract=any(_needs_sdk_contract(path) for path in paths),
+        is_docs_only=bool(paths) and all(_is_docs_path(path) for path in paths),
+    )
+
+
+def _changed_python_tests(paths: tuple[str, ...]) -> set[str]:
     changed_python_tests = {path for path in paths if _is_fast_test_path(path) and (ROOT / path).is_file()}
     if _quality_control_changed(paths):
         changed_python_tests.update(
@@ -206,33 +230,31 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
                 "tests/unit/test_quality_ci_workflows.py",
             }
         )
+    return changed_python_tests
 
+
+def _source_test_evidence(
+    paths: tuple[str, ...],
+    existing_tests: tuple[Path, ...],
+    changed_python_tests: set[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    source_paths = _source_python_paths(paths)
+    source_matches = {path: _direct_test_matches(path, existing_tests) for path in source_paths}
+    direct_tests = {test for matches in source_matches.values() for test in matches}
+    selected_tests = _bounded_test_selection(changed_python_tests, direct_tests)
+    untested = tuple(
+        sorted(path for path, matches in source_matches.items() if not matches and not changed_python_tests)
+    )
+    return selected_tests, untested
+
+
+def _source_python_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     source_paths = tuple(
         path
         for path in paths
         if path.endswith(".py") and path.startswith(("libs/", "apps/", "scripts/")) and not path.startswith("tests/")
     )
-    source_matches = {path: _direct_test_matches(path, existing_tests) for path in source_paths}
-    direct_tests: set[str] = set()
-    for matches in source_matches.values():
-        direct_tests.update(matches)
-    selected_tests = _bounded_test_selection(changed_python_tests, direct_tests)
-    untested = tuple(
-        sorted(path for path, matches in source_matches.items() if not matches and not changed_python_tests)
-    )
-    has_backend = any(_is_backend_path(path) for path in paths)
-    has_frontend = any(_is_frontend_path(path) for path in paths)
-    has_sdk_contract = any(_needs_sdk_contract(path) for path in paths)
-    is_docs_only = bool(paths) and all(_is_docs_path(path) for path in paths)
-    return PullRequestPlan(
-        changed_files=paths,
-        selected_tests=selected_tests,
-        source_files_without_tests=untested,
-        has_backend=has_backend,
-        has_frontend=has_frontend,
-        has_sdk_contract=has_sdk_contract,
-        is_docs_only=is_docs_only,
-    )
+    return source_paths
 
 
 def _github_output(plan: PullRequestPlan, path: Path) -> None:
@@ -248,10 +270,21 @@ def _github_output(plan: PullRequestPlan, path: Path) -> None:
 
 
 def _added_lines_by_file(base: str, head: str) -> dict[str, list[str]]:
+    added = _parse_added_lines(_diff_patch(base, head))
+    if _is_local_head(head):
+        _include_untracked_lines(added)
+    return added
+
+
+def _diff_patch(base: str, head: str) -> str:
     diff_range = f"{_safe_ref(base)}...{_safe_ref(head)}"
     patch = _git_output(["diff", "--unified=0", "--no-color", diff_range])
-    if head == "HEAD" and os.environ.get("GITHUB_ACTIONS") != "true":
+    if _is_local_head(head):
         patch += _git_output(["diff", "--unified=0", "--no-color", "HEAD"])
+    return patch
+
+
+def _parse_added_lines(patch: str) -> dict[str, list[str]]:
     added: dict[str, list[str]] = {}
     current = ""
     for line in patch.splitlines():
@@ -260,18 +293,23 @@ def _added_lines_by_file(base: str, head: str) -> dict[str, list[str]]:
             added.setdefault(current, [])
         elif current and line.startswith("+") and not line.startswith("+++"):
             added[current].append(line[1:])
-    if head == "HEAD" and os.environ.get("GITHUB_ACTIONS") != "true":
-        tracked = set(added)
-        untracked = {
-            line.strip()
-            for line in _git_output(["ls-files", "--others", "--exclude-standard"]).splitlines()
-            if line.strip()
-        }
-        for path in untracked:
-            candidate = ROOT / path
-            if path not in tracked and candidate.is_file():
-                added[path] = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
     return added
+
+
+def _is_local_head(head: str) -> bool:
+    return head == "HEAD" and os.environ.get("GITHUB_ACTIONS") != "true"
+
+
+def _include_untracked_lines(added: dict[str, list[str]]) -> None:
+    untracked = {
+        line.strip()
+        for line in _git_output(["ls-files", "--others", "--exclude-standard"]).splitlines()
+        if line.strip()
+    }
+    for path in untracked - set(added):
+        candidate = ROOT / path
+        if candidate.is_file():
+            added[path] = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
 
 
 def security_violations(added_lines: dict[str, list[str]]) -> list[str]:
@@ -372,23 +410,52 @@ def _run_command(name: str, command: list[str], timeout_seconds: float) -> Comma
 
 
 def run_gate(base: str, head: str, budget_seconds: float) -> int:
+    """Run independent PR checks in parallel and persist one bounded report."""
     started = time.perf_counter()
     plan = build_plan(changed_files(base, head))
-    results: list[CommandResult] = []
     commands = _commands(plan, base, head)
     command_timeout = max(30.0, budget_seconds - 5.0)
+    results = _execute_commands(commands, command_timeout)
+    duration = time.perf_counter() - started
+    violations = _gate_violations(plan, results, duration, budget_seconds)
+    _write_report(REPORT_PATH, _gate_payload(plan, results, violations, duration, budget_seconds))
+    _print_command_failures(results)
+    print(f"PR fast gate: {len(results)} checks in {duration:.1f}s; violations={len(violations)}")
+    return int(bool(violations))
+
+
+def _execute_commands(commands: list[tuple[str, list[str]]], timeout_seconds: float) -> list[CommandResult]:
+    results: list[CommandResult] = []
     with ThreadPoolExecutor(max_workers=min(5, len(commands))) as pool:
-        futures = {pool.submit(_run_command, name, command, command_timeout): name for name, command in commands}
+        futures = {pool.submit(_run_command, name, command, timeout_seconds): name for name, command in commands}
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
             print(f"[{'PASS' if result.returncode == 0 else 'FAIL'}] {result.name} ({result.duration_seconds:.1f}s)")
-    duration = time.perf_counter() - started
+    return results
+
+
+def _gate_violations(
+    plan: PullRequestPlan,
+    results: list[CommandResult],
+    duration: float,
+    budget_seconds: float,
+) -> list[str]:
     violations = [result.name for result in results if result.returncode != 0]
     violations.extend(f"missing-direct-test:{path}" for path in plan.source_files_without_tests)
     if duration > budget_seconds:
         violations.append(f"wall-time-budget:{duration:.1f}s>{budget_seconds:.1f}s")
-    payload: dict[str, object] = {
+    return violations
+
+
+def _gate_payload(
+    plan: PullRequestPlan,
+    results: list[CommandResult],
+    violations: list[str],
+    duration: float,
+    budget_seconds: float,
+) -> dict[str, object]:
+    return {
         "count": len(violations),
         "violations": violations,
         "baseline": 0,
@@ -400,12 +467,12 @@ def run_gate(base: str, head: str, budget_seconds: float) -> int:
             asdict(result) | {"output": result.output[-4000:]} for result in sorted(results, key=lambda item: item.name)
         ],
     }
-    _write_report(REPORT_PATH, payload)
+
+
+def _print_command_failures(results: list[CommandResult]) -> None:
     for result in results:
         if result.returncode != 0:
             print(f"\n===== FAIL {result.name} =====\n{result.output}", file=sys.stderr)
-    print(f"PR fast gate: {len(results)} checks in {duration:.1f}s; violations={len(violations)}")
-    return int(bool(violations))
 
 
 def _default_ref(name: str, fallback: str) -> str:

@@ -1,277 +1,160 @@
-import type { GenericObject } from "@foundry-lite/sdk";
-import {
-  useFoundryLiteClient,
-  useFoundryLiteGenericObjectQuery,
-  type FoundryLiteOntologyObjectView,
+import type {
+  FoundryLiteOntologyActionView,
+  FoundryLiteOntologyObjectView,
 } from "@foundry-lite/sdk/react";
-import { LayoutGrid } from "lucide-react";
-import { useMemo, useState } from "react";
+import { X } from "lucide-react";
+import { useState } from "react";
 
-import { EmptyState } from "@/components/shared/EmptyState";
-import { ErrorState } from "@/components/shared/ErrorState";
-import { LoadingState } from "@/components/shared/LoadingState";
-import { StatusPill } from "@/components/shared/StatusPill";
 import { cn } from "@/lib/utils";
 
 import {
-  collectWidgets,
-  formatCellValue,
-  statusIntentOf,
-  tableColumnNames,
-  type AppPage,
+  initialVariableValues,
+  type AppDefinition,
+  type AppOverlay,
+  type AppSection,
+  type AppWidget,
 } from "../lib/app-model";
-import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
-import { RuntimeFilterRail } from "./RuntimeFilterRail";
+import {
+  RuntimeDispatchProvider,
+  RuntimeStateProvider,
+  useRuntimeDispatch,
+  useRuntimeState,
+  useRuntimeStateReducer,
+} from "../lib/runtime-state";
+import { WidgetRenderer } from "./widgets/registry";
 
 interface RuntimeModeProps {
-  page: AppPage;
+  definition: AppDefinition;
   objectViewsByApiName: Record<string, FoundryLiteOntologyObjectView>;
+  actionViews: readonly FoundryLiteOntologyActionView[];
 }
 
-/** facet 후보: status 우선 + 낮은 카디널리티 문자열 속성. */
-function facetPropertiesFor(
-  objectView: FoundryLiteOntologyObjectView | null,
-  objects: readonly GenericObject[],
-): string[] {
-  const candidates = new Set<string>();
-  if (objects.some((object) => object.properties.status !== undefined))
-    candidates.add("status");
-  const stringProps = (objectView?.properties ?? [])
-    .filter(
-      (property) => !property.isPrimaryKey && property.dataType === "string",
-    )
-    .map((property) => property.apiName);
-  for (const name of stringProps) {
-    const distinct = new Set(
-      objects.map((object) => String(object.properties[name] ?? "")),
-    );
-    if (distinct.size > 1 && distinct.size <= 8) candidates.add(name);
-  }
-  return Array.from(candidates).slice(0, 3);
-}
+type RuntimeBindings = Pick<RuntimeModeProps, "objectViewsByApiName" | "actionViews">;
 
-/**
- * 런타임 모드: 앱 정의의 객체 테이블 위젯이 지정한 객체 타입을 실제 쿼리하고
- * 좌 필터 · 중앙 테이블 · 우 상세(액션 폼)로 렌더링한다.
- */
-export function RuntimeMode({ page, objectViewsByApiName }: RuntimeModeProps) {
-  const widgets = collectWidgets(page);
-  const tableWidget =
-    widgets.find((widget) => widget.kind === "objectTable") ?? null;
-  const objectApiName = tableWidget?.objectApiName ?? null;
-  const objectView = objectApiName
-    ? (objectViewsByApiName[objectApiName] ?? null)
-    : null;
-
-  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
-  const [selectedFacets, setSelectedFacets] = useState<
-    Record<string, Set<string>>
-  >({});
-  const [dataVersion, setDataVersion] = useState(0);
-
-  const client = useFoundryLiteClient();
-  const query = useFoundryLiteGenericObjectQuery(client, {
-    objectApiName,
-    pageSize: 100,
-    key: ["workshop-runtime", objectApiName ?? "none", dataVersion],
-  });
-
-  const allObjects = query.objects;
-  const facetProperties = useMemo(
-    () => facetPropertiesFor(objectView, allObjects),
-    [objectView, allObjects],
-  );
-
-  const filteredObjects = useMemo(() => {
-    const activeFacets = Object.entries(selectedFacets).filter(
-      ([, values]) => values.size > 0,
-    );
-    if (activeFacets.length === 0) return allObjects;
-    return allObjects.filter((object) =>
-      activeFacets.every(([property, values]) =>
-        values.has(String(object.properties[property] ?? "")),
-      ),
-    );
-  }, [allObjects, selectedFacets]);
-
-  const columnNames = useMemo(
-    () => tableColumnNames(objectView, filteredObjects).slice(0, 6),
-    [objectView, filteredObjects],
-  );
-
-  const selectedObject =
-    filteredObjects.find((object) => object.objectId === selectedObjectId) ??
-    allObjects.find((object) => object.objectId === selectedObjectId) ??
-    null;
-
-  const handleToggleFacet = (property: string, value: string) => {
-    setSelectedFacets((previous) => {
-      const nextValues = new Set(previous[property] ?? []);
-      if (nextValues.has(value)) nextValues.delete(value);
-      else nextValues.add(value);
-      return { ...previous, [property]: nextValues };
-    });
-  };
-
-  const handleApplied = () => setDataVersion((version) => version + 1);
-
-  if (!tableWidget || !objectApiName) {
-    return (
-      <div className="p-8">
-        <EmptyState
-          icon={LayoutGrid}
-          title="객체 테이블 위젯이 없습니다"
-          description="빌더 모드에서 객체 테이블 위젯을 배치하고 객체 타입을 지정하세요."
-        />
-      </div>
-    );
-  }
-
-  if (query.isLoading && allObjects.length === 0) {
-    return (
-      <div className="p-4">
-        <LoadingState rowCount={8} />
-      </div>
-    );
-  }
-
-  if (query.error && allObjects.length === 0) {
-    return (
-      <div className="p-4">
-        <ErrorState error={query.error} onRetry={() => query.reload()} />
-      </div>
-    );
-  }
-
-  const hasDetailWidget = widgets.some(
-    (widget) => widget.kind === "objectDetail",
-  );
-
+/** Render the published Workshop contract with the same widget graph authored by the Builder. */
+export function RuntimeMode({ definition, objectViewsByApiName, actionViews }: RuntimeModeProps) {
+  const [state, dispatch] = useRuntimeStateReducer(initialVariableValues(definition.variables));
+  const bindings = { objectViewsByApiName, actionViews };
   return (
-    <div className="grid h-full min-h-0 grid-cols-[248px_1fr_400px] divide-x divide-[#d5dce1]">
-      <RuntimeFilterRail
-        objects={allObjects}
-        facetProperties={facetProperties}
-        selectedFacets={selectedFacets}
-        onToggleFacet={handleToggleFacet}
-      />
+    <RuntimeStateProvider value={state}>
+      <RuntimeDispatchProvider value={dispatch}>
+        <main aria-label="Workshop runtime canvas" className="h-full overflow-auto bg-[#f6f8fa]">
+          <RuntimeHeader definition={definition} bindings={bindings} />
+          <RuntimeSections sections={definition.page.sections} bindings={bindings} />
+          <RuntimeOverlay overlays={definition.overlays} bindings={bindings} />
+        </main>
+      </RuntimeDispatchProvider>
+    </RuntimeStateProvider>
+  );
+}
 
-      <div className="flex h-full min-h-0 flex-col bg-white">
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#d5dce1] px-3">
-          <span className="text-[13px] font-semibold text-[#1c2127]">
-            {objectView?.displayName ?? objectApiName}
-          </span>
-          <StatusPill intent="neutral">
-            {filteredObjects.length.toLocaleString("en-US")}행
-          </StatusPill>
-          <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-            objects.generic.query · {objectApiName}
-          </span>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <table className="w-full border-collapse text-[12px]">
-            <thead className="sticky top-0 bg-white">
-              <tr className="border-b border-[#e4e9ed]">
-                <th className="section-label h-8 w-8 px-2 text-left" />
-                {columnNames.map((name) => (
-                  <th
-                    key={name}
-                    className="section-label h-8 px-3 text-left align-middle"
-                  >
-                    {name}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredObjects.map((object) => {
-                const isSelected = object.objectId === selectedObjectId;
-                return (
-                  <tr
-                    key={object.objectId}
-                    onClick={() => setSelectedObjectId(object.objectId)}
-                    className={cn(
-                      "cursor-pointer border-b border-[#eef1f4] last:border-b-0 hover:bg-[#f6f8fa]",
-                      isSelected && "bg-[#e8f0fb] hover:bg-[#e8f0fb]",
-                    )}
-                  >
-                    <td className="h-8 px-2 align-middle">
-                      <span className="flex size-4 items-center justify-center rounded-[3px] bg-[#c87619] text-[10px] font-bold text-white">
-                        {object.objectType.slice(0, 1).toUpperCase()}
-                      </span>
-                    </td>
-                    {columnNames.map((name) => {
-                      const value = object.properties[name];
-                      return (
-                        <td
-                          key={name}
-                          className={cn(
-                            "h-8 px-3 align-middle whitespace-nowrap",
-                            typeof value === "number" &&
-                              "font-mono tabular-nums",
-                          )}
-                        >
-                          {name === "status" && typeof value === "string" ? (
-                            <StatusPill intent={statusIntentOf(value)}>
-                              {value}
-                            </StatusPill>
-                          ) : (
-                            <span className="truncate text-[#1c2127]">
-                              {formatCellValue(value)}
-                            </span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-              {filteredObjects.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={columnNames.length + 1}
-                    className="h-16 px-3 text-center text-xs text-muted-foreground"
-                  >
-                    필터 조건에 맞는 객체가 없습니다.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+function RuntimeHeader({ definition, bindings }: { definition: AppDefinition; bindings: RuntimeBindings }) {
+  if (!definition.header.visible) return null;
+  const slots = definition.header.slots;
+  return (
+    <header className="border-b border-[#d5dce1] bg-white px-4 py-3">
+      <h1 className="mb-2 text-[15px] font-semibold text-[#1c2127]">{definition.header.title}</h1>
+      <div className="grid gap-3 lg:grid-cols-3">
+        {[slots.left, slots.center, slots.right].map((section) => (
+          <RuntimeSection key={section.id} section={section} bindings={bindings} isHeader />
+        ))}
       </div>
+    </header>
+  );
+}
 
-      <div className="h-full min-h-0">
-        {!hasDetailWidget ? (
-          <div className="flex h-full items-center justify-center p-8">
-            <EmptyState
-              title="객체 상세 위젯이 없습니다"
-              description="빌더에서 객체 상세 위젯을 배치하면 선택 객체의 속성과 액션이 표시됩니다."
-            />
-          </div>
-        ) : selectedObject ? (
-          <RuntimeDetailPanel
-            object={selectedObject}
-            objectView={objectView}
-            onClose={() => setSelectedObjectId(null)}
-            onApplied={handleApplied}
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center bg-white p-8">
-            <div className="text-center">
-              <div className="mx-auto mb-2 flex size-10 items-center justify-center rounded-full bg-[#eef1f4] text-[#5f6b7c]">
-                <LayoutGrid className="size-5" />
-              </div>
-              <p className="text-[13px] font-medium text-[#1c2127]">
-                객체를 선택하세요
-              </p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                왼쪽 테이블에서 행을 클릭하면 속성과 액션이 열립니다.
-              </p>
-            </div>
-          </div>
-        )}
+function RuntimeSections({ sections, bindings }: { sections: AppSection[]; bindings: RuntimeBindings }) {
+  return (
+    <div className="grid min-h-full gap-3 p-4 lg:grid-cols-12">
+      {sections.map((section) => (
+        <div key={section.id} className="min-w-0 lg:col-span-12">
+          <RuntimeSection section={section} bindings={bindings} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RuntimeSection({ section, bindings, isHeader = false }: {
+  section: AppSection;
+  bindings: RuntimeBindings;
+  isHeader?: boolean;
+}) {
+  const [activeTab, setActiveTab] = useState(0);
+  const widgets = section.layout === "tabs" ? section.widgets.slice(activeTab, activeTab + 1) : section.widgets;
+  return (
+    <section
+      aria-label={section.title}
+      className={cn(sectionClass(section), isHeader && "border-0 bg-transparent p-0 shadow-none")}
+      style={{ backgroundColor: isHeader ? "transparent" : section.style.background }}
+    >
+      {section.title && !isHeader ? <h2 className="mb-2 text-[12px] font-semibold text-[#404854]">{section.title}</h2> : null}
+      {section.layout === "tabs" ? <RuntimeTabs widgets={section.widgets} active={activeTab} onChange={setActiveTab} /> : null}
+      <div className={widgetLayoutClass(section.layout)}>
+        {widgets.map((widget) => <RuntimeWidget key={widget.id} widget={widget} bindings={bindings} />)}
+      </div>
+    </section>
+  );
+}
+
+function RuntimeTabs({ widgets, active, onChange }: { widgets: AppWidget[]; active: number; onChange: (index: number) => void }) {
+  return (
+    <div role="tablist" className="mb-3 flex gap-1 border-b border-[#d5dce1]">
+      {widgets.map((widget, index) => (
+        <button
+          key={widget.id}
+          role="tab"
+          aria-selected={active === index}
+          onClick={() => onChange(index)}
+          className={cn("border-b-2 px-3 py-1.5 text-[11px]", active === index ? "border-[#2d72d2] text-[#215db0]" : "border-transparent text-[#5f6b7c]")}
+        >
+          {widget.config.title || widget.kind}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function RuntimeWidget({ widget, bindings }: { widget: AppWidget; bindings: RuntimeBindings }) {
+  return (
+    <div className={cn("min-w-0", widgetHeightClass(widget.kind))} data-workshop-widget={widget.kind}>
+      <WidgetRenderer widget={widget} {...bindings} />
+    </div>
+  );
+}
+
+function RuntimeOverlay({ overlays, bindings }: { overlays: AppOverlay[]; bindings: RuntimeBindings }) {
+  const state = useRuntimeState();
+  const dispatch = useRuntimeDispatch();
+  const overlay = overlays.find((item) => item.id === state.openOverlayId);
+  if (!overlay) return null;
+  return (
+    <div role="dialog" aria-modal="true" aria-label={overlay.name} className="fixed inset-0 z-50 flex justify-end bg-black/30 p-4">
+      <div className={cn("h-full overflow-auto rounded bg-[#f6f8fa] shadow-xl", overlay.kind === "modal" && "m-auto max-h-[85vh]")} style={{ width: overlay.widthPx }}>
+        <div className="flex items-center border-b bg-white px-3 py-2">
+          <h2 className="text-sm font-semibold">{overlay.name}</h2>
+          <button className="ml-auto rounded p-1 hover:bg-muted" aria-label="오버레이 닫기" onClick={() => dispatch({ type: "closeOverlay" })}><X className="size-4" /></button>
+        </div>
+        <RuntimeSections sections={overlay.sections} bindings={bindings} />
       </div>
     </div>
   );
+}
+
+function sectionClass(section: AppSection): string {
+  const padding = { none: "p-0", compact: "p-2", regular: "p-4", large: "p-6" }[section.style.padding];
+  const border = { none: "", bordered: "border border-[#d5dce1]", shadow: "border border-[#e4e9ed] shadow-sm" }[section.style.border];
+  return cn("rounded bg-white", padding, border);
+}
+
+function widgetLayoutClass(layout: AppSection["layout"]): string {
+  if (layout === "columns") return "grid gap-3 md:grid-cols-2 xl:grid-cols-3";
+  if (layout === "toolbar") return "flex flex-wrap items-start gap-2";
+  return "grid gap-3";
+}
+
+function widgetHeightClass(kind: AppWidget["kind"]): string {
+  if (["objectTable", "objectList", "timeline", "barChart", "pieChart"].includes(kind)) return "min-h-[280px]";
+  if (["objectDetail", "actionForm", "aipChatbot"].includes(kind)) return "min-h-[220px]";
+  return "min-h-[80px]";
 }

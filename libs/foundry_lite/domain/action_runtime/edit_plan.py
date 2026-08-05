@@ -85,6 +85,21 @@ class LinkDelete:
 
 
 @dataclass(frozen=True)
+class CriteriaReadExpectation:
+    """Opaque OCC evidence for one linked-object submission-criteria read."""
+
+    reference_key: str
+    link_type: str
+    direction: str
+    anchor_object_type: str
+    anchor_object_id: str
+    linked_object_type: str
+    property_name: str
+    aggregation: str
+    snapshot_fingerprint: str
+
+
+@dataclass(frozen=True)
 class EditPlan:
     """The complete, immutable set of edits one action submission will commit."""
 
@@ -94,6 +109,7 @@ class EditPlan:
     links_to_create: tuple[LinkCreate, ...] = ()
     links_to_delete: tuple[LinkDelete, ...] = ()
     read_set_versions: Mapping[str, int] = field(default_factory=lambda: {})
+    criteria_read_expectations: tuple[CriteriaReadExpectation, ...] = ()
 
     def is_empty(self) -> bool:
         return not (

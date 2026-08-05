@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import BinaryIO
 
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
@@ -10,22 +11,26 @@ from foundry_lite.application.action_types import (
     ActionCatalogItem,
     ActionCatalogPage,
     ActionExecutionPlanResponse,
+    ActionMediaUploadResult,
     ActionValidationResponse,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
     ActionWritebackRecoveryItem,
     ActionWritebackRecoveryResult,
 )
-from foundry_lite.application.services.action_service_registry import (
+from foundry_lite.application.services.action_execution_service_registry import (
     ActionApplyService,
     ActionAsyncRunService,
     ActionBatchApplyService,
+    ActionLogRevertService,
+    ActionWritebackService,
+)
+from foundry_lite.application.services.action_service_registry import (
     ActionBranchService,
     ActionDefinitionService,
-    ActionLogRevertService,
+    ActionMediaService,
     ActionPlanningService,
     ActionValidationService,
-    ActionWritebackService,
 )
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
 from foundry_lite.application.services.base import CoreService
@@ -45,6 +50,7 @@ class ActionService(CoreService):
         "action_definition_service",
         "action_planning_service",
         "action_log_revert_service",
+        "action_media_service",
         "action_validation_service",
         "action_writeback_service",
     )
@@ -55,6 +61,7 @@ class ActionService(CoreService):
     action_definition_service: ActionDefinitionService
     action_planning_service: ActionPlanningService
     action_log_revert_service: ActionLogRevertService
+    action_media_service: ActionMediaService
     action_validation_service: ActionValidationService
     action_writeback_service: ActionWritebackService
 
@@ -72,6 +79,33 @@ class ActionService(CoreService):
 
     def action_schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.action_definition_service.action_schema(action_api_name, ctx=ctx)
+
+    def upload_action_media_parameter(
+        self,
+        action_api_name: str,
+        parameter_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        file_name: str,
+        source: BinaryIO,
+        supplied_mime_type: str,
+        idempotency_key: str,
+        format: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> ActionMediaUploadResult:
+        return self.action_media_service.upload_parameter(
+            action_api_name,
+            parameter_name,
+            object_type=object_type,
+            object_id=object_id,
+            file_name=file_name,
+            source=source,
+            supplied_mime_type=supplied_mime_type,
+            idempotency_key=idempotency_key,
+            format=format,
+            ctx=ctx or RequestContext(),
+        )
 
     def plan_action(
         self,
@@ -134,6 +168,19 @@ class ActionService(CoreService):
     ) -> dict[str, object]:
         return self.action_branch_service.get_object(branch_id, object_type, object_id, ctx=ctx or RequestContext())
 
+    def branch_link(
+        self,
+        branch_id: str,
+        link_type: str,
+        from_object_id: str,
+        to_object_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_branch_service.get_link(
+            branch_id, link_type, from_object_id, to_object_id, ctx=ctx or RequestContext()
+        )
+
     def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.action_branch_service.diff(branch_id, ctx=ctx or RequestContext())
 
@@ -188,6 +235,46 @@ class ActionService(CoreService):
             object_id=object_id,
             expected_object_version=expected_object_version,
             params=params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=ctx or RequestContext(),
+        )
+
+    def resume_idempotent_action_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object] | None:
+        return self.action_async_run_service.resume_idempotent(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx or RequestContext(),
+        )
+
+    def start_action_batch_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        items: Sequence[Mapping[str, object]],
+        idempotency_key: str,
+        wait_seconds: int,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self.action_async_run_service.start_batch(
+            action_api_name,
+            object_type=object_type,
+            raw_items=tuple(items),
             idempotency_key=idempotency_key,
             wait_seconds=wait_seconds,
             ctx=ctx or RequestContext(),

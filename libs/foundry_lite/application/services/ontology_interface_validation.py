@@ -18,6 +18,7 @@ persist in the ``interface_types`` table mirroring ``action_types``.
 from __future__ import annotations
 
 from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.ports.ontology_definitions import InterfaceLinkConstraintDefinition
 from foundry_lite.application.ports.ontology_repository import (
     InterfacePropertyDefinition,
     InterfaceTypeDefinition,
@@ -44,7 +45,7 @@ IMPLEMENTS_CONFIG_KEY = "implements"
 #: Interface properties use the object property type vocabulary. Kept in sync
 #: with OBJECT_PROPERTY_DATA_TYPES in ontology_validation (importing it here
 #: would create a module cycle once validation delegates to this module).
-INTERFACE_PROPERTY_DATA_TYPES = frozenset({"boolean", "float", "integer", "media_reference", "string"})
+INTERFACE_PROPERTY_DATA_TYPES = frozenset({"attachment", "boolean", "float", "integer", "media_reference", "string"})
 
 
 def object_type_implements(item: YamlObject) -> tuple[str, ...]:
@@ -92,6 +93,46 @@ def _interface_type_definition(item: YamlObject, api_name: str) -> InterfaceType
         "apiName": api_name,
         "displayName": optional_str(item, "displayName", api_name) or api_name,
         "properties": properties,
+        "linkConstraints": _interface_link_constraints(item, api_name),
+    }
+
+
+def _interface_link_constraints(item: YamlObject, interface_api_name: str) -> list[InterfaceLinkConstraintDefinition]:
+    constraints: list[InterfaceLinkConstraintDefinition] = []
+    seen: set[str] = set()
+    for raw in mapping_sequence(item, "linkConstraints"):
+        constraint = _interface_link_constraint(raw, interface_api_name)
+        if constraint["apiName"] in seen:
+            raise ValidationFailed(
+                "duplicate interface link constraint apiName",
+                details={"interface": interface_api_name, "constraint": constraint["apiName"]},
+            )
+        seen.add(constraint["apiName"])
+        constraints.append(constraint)
+    return constraints
+
+
+def _interface_link_constraint(item: YamlObject, interface_api_name: str) -> InterfaceLinkConstraintDefinition:
+    api_name = required_str(item, "apiName")
+    target_kind = optional_str(item, "targetKind", "object") or "object"
+    cardinality = optional_str(item, "cardinality", "many") or "many"
+    if target_kind not in {"object", "interface"}:
+        raise ValidationFailed(
+            "unsupported interface link target kind",
+            details={"interface": interface_api_name, "constraint": api_name, "targetKind": target_kind},
+        )
+    if cardinality not in {"one", "many"}:
+        raise ValidationFailed(
+            "unsupported interface link cardinality",
+            details={"interface": interface_api_name, "constraint": api_name, "cardinality": cardinality},
+        )
+    return {
+        "apiName": api_name,
+        "displayName": optional_str(item, "displayName", api_name) or api_name,
+        "targetKind": target_kind,
+        "target": required_str(item, "target"),
+        "cardinality": cardinality,
+        "required": optional_bool(item, "required", False),
     }
 
 
@@ -121,14 +162,100 @@ def validate_ontology_interfaces(definition: YamlObject) -> None:
     interfaces = interface_definitions_by_api(definition)
     object_api_names = {required_str(item, "apiName"): item for item in mapping_sequence(definition, "objectTypes")}
     _require_interface_names_disjoint_from_objects(interfaces, object_api_names)
+    _require_interface_link_targets(interfaces, object_api_names)
     violations: list[dict[str, object]] = []
     for object_api_name, object_def in object_api_names.items():
         violations.extend(_object_type_conformance_violations(object_api_name, object_def, interfaces))
+    violations.extend(_required_interface_link_violations(definition, object_api_names, interfaces))
     if violations:
         raise ValidationFailed(
             "object types do not conform to declared interfaces",
             details={"violations": violations},
         )
+
+
+def _require_interface_link_targets(
+    interfaces: dict[str, InterfaceTypeDefinition], object_types: dict[str, YamlObject]
+) -> None:
+    for interface in interfaces.values():
+        for constraint in interface["linkConstraints"]:
+            allowed = object_types if constraint["targetKind"] == "object" else interfaces
+            if constraint["target"] not in allowed:
+                raise ValidationFailed(
+                    "interface link constraint target was not found",
+                    details={
+                        "interface": interface["apiName"],
+                        "constraint": constraint["apiName"],
+                        "targetKind": constraint["targetKind"],
+                        "target": constraint["target"],
+                    },
+                )
+
+
+def _required_interface_link_violations(
+    definition: YamlObject,
+    object_types: dict[str, YamlObject],
+    interfaces: dict[str, InterfaceTypeDefinition],
+) -> list[dict[str, object]]:
+    links = mapping_sequence(definition, "linkTypes")
+    violations: list[dict[str, object]] = []
+    for object_name, object_def in object_types.items():
+        for interface_name in object_type_implements(object_def):
+            interface = interfaces.get(interface_name)
+            if interface is None:
+                continue
+            for constraint in interface["linkConstraints"]:
+                if constraint["required"] and not _has_concrete_interface_link(
+                    object_name, constraint, object_types, links
+                ):
+                    violations.append(_interface_link_violation(object_name, interface_name, constraint["apiName"]))
+    return violations
+
+
+def _has_concrete_interface_link(
+    object_name: str,
+    constraint: InterfaceLinkConstraintDefinition,
+    object_types: dict[str, YamlObject],
+    links: tuple[YamlObject, ...],
+) -> bool:
+    return any(_concrete_link_matches(object_name, constraint, object_types, link) for link in links)
+
+
+def _concrete_link_matches(
+    object_name: str,
+    constraint: InterfaceLinkConstraintDefinition,
+    object_types: dict[str, YamlObject],
+    link: YamlObject,
+) -> bool:
+    if optional_str(link, "from") != object_name or not _cardinality_matches(constraint, link):
+        return False
+    target = optional_str(link, "to")
+    if constraint["targetKind"] == "object":
+        return target == constraint["target"]
+    target_def = object_types.get(str(target))
+    return target_def is not None and constraint["target"] in object_type_implements(target_def)
+
+
+def _cardinality_matches(constraint: InterfaceLinkConstraintDefinition, link: YamlObject) -> bool:
+    concrete = optional_str(link, "cardinality", "many_to_one") or "many_to_one"
+    allowed = (
+        {"one_to_one", "many_to_one"}
+        if constraint["cardinality"] == "one"
+        else {
+            "one_to_many",
+            "many_to_many",
+        }
+    )
+    return concrete in allowed
+
+
+def _interface_link_violation(object_name: str, interface_name: str, constraint: str) -> dict[str, object]:
+    return {
+        "kind": "missing_required_interface_link",
+        "objectType": object_name,
+        "interface": interface_name,
+        "constraint": constraint,
+    }
 
 
 def _require_interface_names_disjoint_from_objects(

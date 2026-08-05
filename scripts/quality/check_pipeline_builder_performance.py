@@ -136,6 +136,7 @@ def _measure_preview(iterations: int) -> dict[str, object]:
             ctx=ctx,
         )
         graph = _preview_graph()
+        _warm_preview(foundry, ctx, str(branch["id"]), graph)
         acknowledgements, executions = _preview_samples(foundry, ctx, str(branch["id"]), graph, iterations)
     return {
         "previewAcknowledgement": _metric(
@@ -201,6 +202,25 @@ def _preview_samples(
         acknowledgements.append(acknowledgement)
         executions.append(execution)
     return acknowledgements, executions
+
+
+def _warm_preview(
+    foundry: FoundryLite,
+    ctx: RequestContext,
+    branch_id: str,
+    graph: Mapping[str, object],
+) -> None:
+    """Exclude process/database first-use initialization from the documented warm-state SLO."""
+    queued = foundry.pipelines.create_preview_run(
+        branch_id,
+        graph=graph,
+        target_node_id="out",
+        limits={"tableRows": PREVIEW_ROW_COUNT},
+        idempotency_key="pipeline-performance-preview-warmup",
+        ctx=ctx,
+    )
+    completed = foundry.pipelines.execute_preview_run(str(_mapping(queued)["id"]), ctx=ctx)
+    _require_preview_rows(completed)
 
 
 def _require_preview_rows(value: object) -> None:

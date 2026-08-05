@@ -48,7 +48,10 @@ def validate_persisted_ontology(
         tenant_id=ctx.tenant_id,
         ontology_version_id=ontology_version_id,
     ):
-        columns = dataset_columns_for_ref(conn, ctx, link["backing"]["dataset"])
+        dataset_ref = link["backing"].get("dataset")
+        if not isinstance(dataset_ref, str) or not dataset_ref:
+            raise ValidationFailed("persisted link dataset backing missing", details={"linkType": link["api_name"]})
+        columns = dataset_columns_for_ref(conn, ctx, dataset_ref)
         validate_persisted_link(link, object_by_api, columns)
 
 

@@ -16,8 +16,33 @@ from foundry_lite.domain.object_store.indexing import (
 def test_object_indexing_domain_rules_gate_full_mode_side_effects() -> None:
     assert should_emit_source_object_change(is_changed=True, index_mode="full") is True
     assert should_emit_source_object_change(is_changed=True, index_mode="shadow") is False
-    assert should_delete_missing_source_item(is_deleted=False, is_present_in_source=False, index_mode="full") is True
-    assert should_delete_missing_source_item(is_deleted=False, is_present_in_source=False, index_mode="shadow") is False
+    assert (
+        should_delete_missing_source_item(
+            is_deleted=False,
+            is_present_in_source=False,
+            is_source_backed=True,
+            index_mode="full",
+        )
+        is True
+    )
+    assert (
+        should_delete_missing_source_item(
+            is_deleted=False,
+            is_present_in_source=False,
+            is_source_backed=True,
+            index_mode="shadow",
+        )
+        is False
+    )
+    assert (
+        should_delete_missing_source_item(
+            is_deleted=False,
+            is_present_in_source=False,
+            is_source_backed=False,
+            index_mode="full",
+        )
+        is False
+    )
     assert should_delete_missing_source_link(is_deleted=True, is_present_in_source=False, index_mode="full") is False
 
 

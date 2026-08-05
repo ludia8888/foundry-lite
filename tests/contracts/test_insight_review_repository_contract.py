@@ -46,6 +46,29 @@ def test_insight_review_create_is_idempotent_by_tenant_and_key() -> None:
     assert existing["claim_id"] == "claim-1"
 
 
+def test_insight_review_create_key_lookup_is_tenant_scoped() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_1", create_key="mcp-call-key"),
+        )
+        found = harness.repository.review_by_create_idempotency_key(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            idempotency_key="mcp-call-key",
+        )
+        other_tenant = harness.repository.review_by_create_idempotency_key(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            idempotency_key="mcp-call-key",
+        )
+
+    assert found is not None
+    assert found["id"] == "review_1"
+    assert other_tenant is None
+
+
 def test_insight_review_list_filters_status_and_assignee() -> None:
     harness = _sqlalchemy_harness()
     with harness.transaction() as transaction:

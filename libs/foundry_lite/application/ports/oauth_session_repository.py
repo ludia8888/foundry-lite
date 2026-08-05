@@ -129,6 +129,16 @@ class OAuthSessionRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, session_id: str, revoked_at: str
     ) -> None: ...
 
+    def revoke_active_sessions_for_client(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        app_id: str,
+        client_id: str,
+        revoked_at: str,
+    ) -> int: ...
+
     def compromise_refresh_token_family(
         self,
         *,

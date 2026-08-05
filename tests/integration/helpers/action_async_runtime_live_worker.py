@@ -57,7 +57,8 @@ def run_activity() -> None:
         dependencies=create_runtime_core_dependencies(
             db_url=os.environ["FOUNDRY_LITE_DB_URL"],
             storage_root=os.environ["FOUNDRY_LITE_STORAGE_ROOT"],
-        )
+        ),
+        should_initialize_schema=False,
     )
     executor = cast(
         LogicDagActionFunctionExecutor,
@@ -72,29 +73,44 @@ def run_activity() -> None:
 def _function_result(
     foundry: FoundryLite, run_id: str, inputs: Mapping[str, object], worker_id: str
 ) -> dict[str, object]:
-    attempt_number = _latest_attempt_number(foundry, run_id)
-    if inputs.get("shouldBlock") is True and attempt_number == 1:
-        _write_marker(run_id, worker_id)
+    action_run_id = run_id.split(":invocation:", 1)[0]
+    requests = _function_requests(inputs)
+    attempt_number = _latest_attempt_number(foundry, action_run_id)
+    if any(item.get("shouldBlock") is True for item in requests) and attempt_number == 1:
+        _write_marker(action_run_id, worker_id)
         Event().wait(30)
+    edits = [_object_edit(item) for item in requests]
+    read_set = {f"Order:{edit['objectId']}": edit["expectedVersion"] for edit in edits}
+    return {
+        "logicRunId": f"{run_id}:logic",
+        "output": {
+            "edits": edits,
+            "readSetVersions": read_set,
+            "provenance": {"adapter": "live-temporal", "workerId": worker_id},
+        },
+    }
+
+
+def _function_requests(inputs: Mapping[str, object]) -> list[Mapping[str, object]]:
+    requests = inputs.get("requests")
+    if requests is None:
+        return [inputs]
+    if not isinstance(requests, list) or not all(isinstance(item, Mapping) for item in requests):
+        raise ValueError("requests must be a list of structs")
+    return cast(list[Mapping[str, object]], requests)
+
+
+def _object_edit(inputs: Mapping[str, object]) -> dict[str, object]:
     object_id = str(inputs["objectId"])
     expected_version = inputs["expectedVersion"]
     if not isinstance(expected_version, int):
         raise ValueError("expectedVersion must be an integer")
     return {
-        "logicRunId": f"{run_id}:logic",
-        "output": {
-            "edits": [
-                {
-                    "kind": "modifyObject",
-                    "objectType": "Order",
-                    "objectId": object_id,
-                    "expectedVersion": expected_version,
-                    "patch": {"status": "APPROVED"},
-                }
-            ],
-            "readSetVersions": {f"Order:{object_id}": expected_version},
-            "provenance": {"adapter": "live-temporal", "workerId": worker_id},
-        },
+        "kind": "modifyObject",
+        "objectType": "Order",
+        "objectId": object_id,
+        "expectedVersion": expected_version,
+        "patch": {"status": "APPROVED"},
     }
 
 

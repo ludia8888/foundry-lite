@@ -38,6 +38,30 @@ def test_media_reference_property_must_not_be_dataset_backed() -> None:
         )
 
 
+def test_attachment_property_supports_bounded_object_inherited_collection() -> None:
+    _check(
+        {
+            "apiName": "receipts",
+            "type": "attachment",
+            "mediaSet": "legal.receipts",
+            "allowMultiple": True,
+            "source": "edit_layer",
+        }
+    )
+
+
+def test_attachment_property_rejects_non_boolean_multiplicity() -> None:
+    with pytest.raises(ValidationFailed):
+        _check(
+            {
+                "apiName": "receipts",
+                "type": "attachment",
+                "mediaSet": "legal.receipts",
+                "allowMultiple": "yes",
+            }
+        )
+
+
 def test_unknown_property_type_is_still_rejected() -> None:
     with pytest.raises(ValidationFailed):
         _check({"apiName": "x", "type": "blob"})

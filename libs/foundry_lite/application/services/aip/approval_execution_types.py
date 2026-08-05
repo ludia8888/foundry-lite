@@ -47,6 +47,10 @@ class PreparedExecution:
     expected_object_version: int
     parameters: JsonObject
     policy_version: str
+    source: str | None = None
+    application_id: str | None = None
+    client_id: str | None = None
+    token_scopes: tuple[str, ...] = ()
     plan_hash: str | None = None
     action_version: str | None = None
     object_versions: JsonObject | None = None

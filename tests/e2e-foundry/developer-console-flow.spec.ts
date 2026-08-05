@@ -128,4 +128,35 @@ test("Developer Console creates an OSDK application and OAuth client through bac
   );
   expect(applicationRecord(appDetail).id).toBe(appId);
   expect((appDetail.clients ?? []).some((client) => (client.client_id ?? client.clientId) === clientId)).toBe(true);
+
+  const serviceClientId = uniqueName("e2e-service-client");
+  await page.getByRole("button", { name: "새 클라이언트" }).click();
+  await page.getByRole("button", { name: /서비스 · Client Secret/ }).click();
+  await page.getByRole("textbox", { name: "client id", exact: true }).fill(serviceClientId);
+  const rotateSecretResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/secrets/rotate") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "클라이언트 생성" }).click();
+  const secretPayload = (await (await rotateSecretResponse).json()) as {
+    clientSecret: string;
+  };
+  expect(secretPayload.clientSecret.length).toBeGreaterThan(32);
+  await expect(page.locator("body")).toContainText("Client Secret");
+  await expect(page.locator("body")).toContainText("다시 조회할 수 없습니다");
+
+  await page.getByRole("button", { name: "Ontology MCP · Hub" }).click();
+  await expect(page.locator("body")).toContainText("Ontology MCP 서버");
+  await page.getByText("외부 에이전트에 공개", { exact: true }).click();
+  await page.getByText("에이전트용 설명").locator("..").getByRole("textbox").fill("E2E governed Ontology MCP server");
+  const configureMcpResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/mcp-server`) &&
+      response.request().method() === "PUT",
+  );
+  await page.getByRole("button", { name: "설정 저장" }).click();
+  expect((await configureMcpResponse).ok()).toBe(true);
+  await expect(page.locator("body")).toContainText("MCP Hub");
+  await expect(page.locator("body")).toContainText("E2E governed Ontology MCP server");
 });

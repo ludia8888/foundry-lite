@@ -31,6 +31,13 @@ from foundry_lite.application.ports.action_repository import (
     ObjectLinkWrite,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.object_read_repository import (
+    ObjectAggregationGroup,
+    ObjectAggregationMetric,
+    ObjectOrderBy,
+    ObjectQueryCursor,
+    ObjectQueryItem,
+)
 from foundry_lite.application.ports.transaction_context import (
     ACTION_RUN_COMPENSATION_REQUIRED,
     ACTION_RUN_FAILED,
@@ -40,6 +47,8 @@ from foundry_lite.application.ports.transaction_context import (
     ACTION_RUN_SUCCEEDED,
     StatusTransition,
 )
+from foundry_lite.application.services.action_log_ontology_aggregation import aggregate_action_log_items
+from foundry_lite.application.services.action_log_ontology_query import filtered_sorted_logs
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyActionRepository
 from sqlalchemy import create_engine, insert, select
@@ -140,10 +149,13 @@ class FakeActionRepository:
         ]
         return matches[:limit]
 
-    def action_runs_for_monitoring(self, *, transaction: Any, tenant_id: str, limit: int) -> list[ActionRunRow]:
+    def action_runs_for_monitoring(
+        self, *, transaction: Any, tenant_id: str, created_at_from: str, limit: int
+    ) -> list[ActionRunRow]:
         del transaction
         rows = [row.copy() for row in self.action_runs if row["tenant_id"] == tenant_id]
-        return sorted(rows, key=lambda row: (row["created_at"], row["id"]), reverse=True)[:limit]
+        recent = [row for row in rows if row["created_at"] >= created_at_from]
+        return sorted(recent, key=lambda row: (row["created_at"], row["id"]), reverse=True)[:limit]
 
     def update_action_run_terminal(
         self,
@@ -164,6 +176,21 @@ class FakeActionRepository:
                 and row["status"] in transition.from_statuses
             ):
                 row.update(status=transition.to_status, error=error, result=result, completed_at=completed_at)
+                return True
+        return False
+
+    def update_action_run_parameters(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_run_id: str,
+        parameters: Mapping[str, object],
+    ) -> bool:
+        del transaction
+        for row in self.action_runs:
+            if row["tenant_id"] == tenant_id and row["id"] == action_run_id and row["status"] == "received":
+                row["parameters"] = dict(parameters)
                 return True
         return False
 
@@ -402,13 +429,61 @@ class FakeActionRepository:
         before_created_at: str | None,
         before_log_id: str | None,
         limit: int,
+        action_type_api_name: str | None = None,
     ) -> list[ActionLogEntryRow]:
         del transaction
         rows = [row for row in self.action_logs if row["tenant_id"] == tenant_id]
+        if action_type_api_name is not None:
+            rows = [row for row in rows if row["action_type_api_name"] == action_type_api_name]
         if before_created_at is not None and before_log_id is not None:
             rows = [row for row in rows if (row["created_at"], row["id"]) < (before_created_at, before_log_id)]
         ordered = sorted(rows, key=lambda row: (row["created_at"], row["id"]), reverse=True)[:limit]
         return [cast(ActionLogEntryRow, row.copy()) for row in ordered]
+
+    def query_action_logs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: ObjectQueryCursor | None,
+        search_text: str | None,
+        limit: int,
+    ) -> list[ActionLogEntryRow]:
+        del transaction
+        rows = [
+            row
+            for row in self.action_logs
+            if row["tenant_id"] == tenant_id and row["action_type_api_name"] == action_type_api_name
+        ]
+        items = [_fake_log_query_item(row, self.action_log_object_rows) for row in rows]
+        visible = filtered_sorted_logs(items, filter_ast, order_by, search_text)
+        start = _fake_log_cursor_start(visible, order_by, cursor)
+        by_run_id = {str(row["action_run_id"]): row for row in rows}
+        return [cast(ActionLogEntryRow, by_run_id[item["objectId"]].copy()) for item in visible[start : start + limit]]
+
+    def aggregate_action_logs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        group_by: Sequence[str],
+        metrics: Sequence[ObjectAggregationMetric],
+        group_limit: int,
+    ) -> list[ObjectAggregationGroup]:
+        del transaction
+        items = [
+            _fake_log_query_item(row, self.action_log_object_rows)
+            for row in self.action_logs
+            if row["tenant_id"] == tenant_id and row["action_type_api_name"] == action_type_api_name
+        ]
+        visible = filtered_sorted_logs(items, filter_ast, [], None)
+        result = aggregate_action_log_items("[LOG] test", visible, group_by, metrics)
+        return result["groups"][:group_limit]
 
     def mark_action_log_reverted(
         self, *, transaction: Any, tenant_id: str, action_run_id: str, reverted_by_run_id: str
@@ -931,6 +1006,48 @@ def _action_log_object_row(record: ActionLogObjectRecord) -> dict[str, Any]:
     }
 
 
+def _fake_log_query_item(row: Mapping[str, object], object_rows: Sequence[Mapping[str, object]]) -> ObjectQueryItem:
+    edited = [item for item in object_rows if item["action_log_entry_id"] == row["id"]]
+    properties = {
+        "actionRunId": row["action_run_id"],
+        "logEntryId": row["id"],
+        "definitionVersion": row["definition_version"],
+        "actorUserId": row["actor_user_id"],
+        "status": row["status"],
+        "parameters": row["parameters"],
+        "result": row["result"],
+        "branchId": row["branch_id"],
+        "planHash": row["plan_hash"],
+        "approvalId": row["approval_id"],
+        "revertAllowed": row["revert_allowed"],
+        "revertStatus": row["revert_status"],
+        "revertedByRunId": row["reverted_by_run_id"],
+        "effectReceiptCount": 0,
+        "editedObjectCount": len(edited),
+        "editedObjects": edited,
+        "createdAt": row["created_at"],
+        "completedAt": row["completed_at"],
+    }
+    return {
+        "objectType": str(row["log_object_type_api_name"]),
+        "objectId": str(row["action_run_id"]),
+        "objectVersion": 2 if row["reverted_by_run_id"] else 1,
+        "properties": properties,
+    }
+
+
+def _fake_log_cursor_start(
+    items: Sequence[ObjectQueryItem], order_by: Sequence[ObjectOrderBy], cursor: ObjectQueryCursor | None
+) -> int:
+    if cursor is None:
+        return 0
+    for index, item in enumerate(items):
+        values = [item["properties"].get(order["property"]) for order in order_by]
+        if item["objectId"] == cursor["object_id"] and values == cursor["values"]:
+            return index + 1
+    return len(items)
+
+
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ActionHarness:
     if request.param == "fake":
@@ -1039,6 +1156,35 @@ def test_action_repository_contract_insert_or_get_existing_replays_duplicate(har
     assert replay is not None
     assert replay["id"] == "arun_winner"
     assert [row["id"] for row in rows] == ["arun_winner"]
+
+
+def test_action_repository_contract_replaces_only_received_parameters(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        updated = harness.repository.update_action_run_parameters(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            parameters={"receipt": {"mediaItemVersionId": "miv_committed"}},
+        )
+        harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_SUCCEEDED,
+            error=None,
+            completed_at="2026-06-10T00:00:05Z",
+        )
+        stale = harness.repository.update_action_run_parameters(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            parameters={"receipt": "tampered"},
+        )
+
+    assert updated is True
+    assert stale is False
+    assert harness.action_run_rows()[0]["parameters"] == {"receipt": {"mediaItemVersionId": "miv_committed"}}
 
 
 def test_action_same_idempotency_key_concurrent_requests_replay_same_action_run(tmp_path: Path) -> None:
@@ -1591,6 +1737,15 @@ def test_action_repository_contract_persists_one_log_and_revert_cas(harness: Act
         action_run_id="arun_other",
         log_object_id="arun_other",
     )
+    other_action = replace(
+        entry,
+        log_entry_id="alog_second",
+        action_run_id="arun_second",
+        log_object_type_api_name="[LOG] shipOrder",
+        log_object_id="arun_second",
+        action_type_id="atype_ship",
+        action_type_api_name="shipOrder",
+    )
     with harness.transaction() as transaction:
         inserted = harness.repository.insert_action_log(
             transaction=transaction,
@@ -1603,6 +1758,7 @@ def test_action_repository_contract_persists_one_log_and_revert_cas(harness: Act
             objects=(object_link,),
         )
         harness.repository.insert_action_log(transaction=transaction, entry=other_tenant, objects=())
+        harness.repository.insert_action_log(transaction=transaction, entry=other_action, objects=())
         found = harness.repository.action_log_by_run_id(
             transaction=transaction,
             tenant_id="tenant-demo",
@@ -1619,6 +1775,36 @@ def test_action_repository_contract_persists_one_log_and_revert_cas(harness: Act
             before_created_at=None,
             before_log_id=None,
             limit=10,
+        )
+        filtered = harness.repository.list_action_logs(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            before_created_at=None,
+            before_log_id=None,
+            limit=10,
+            action_type_api_name="approveOrder",
+        )
+        queried = harness.repository.query_action_logs(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_type_api_name="approveOrder",
+            filter_ast={"op": "contains", "property": "parameters", "value": "approved"},
+            order_by=(
+                {"property": "createdAt", "direction": "desc"},
+                {"property": "actionRunId", "direction": "desc"},
+            ),
+            cursor=None,
+            search_text="approved",
+            limit=2,
+        )
+        aggregated = harness.repository.aggregate_action_logs(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_type_api_name="approveOrder",
+            filter_ast={"op": "eq", "property": "status", "value": "succeeded"},
+            group_by=("status",),
+            metrics=({"name": "runCount", "function": "count", "property": None},),
+            group_limit=10,
         )
         won = harness.repository.mark_action_log_reverted(
             transaction=transaction,
@@ -1637,7 +1823,10 @@ def test_action_repository_contract_persists_one_log_and_revert_cas(harness: Act
     assert duplicate is None
     assert found is not None and found["tenant_id"] == "tenant-demo"
     assert [item["object_edit_id"] for item in objects] == ["edit_1"]
-    assert [item["id"] for item in page] == ["alog_1"]
+    assert {item["id"] for item in page} == {"alog_1", "alog_second"}
+    assert [item["id"] for item in filtered] == ["alog_1"]
+    assert [item["id"] for item in queried] == ["alog_1"]
+    assert aggregated == [{"key": {"status": "succeeded"}, "metrics": {"runCount": 1}}]
     assert won is True
     assert lost is False
 

@@ -16,6 +16,11 @@ from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRow
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_branch_action_workflows import (
+    get_branch_action_type,
+    list_branch_action_types,
+    mutate_branch_action_type,
+)
 from foundry_lite.application.services.ontology_branch_payloads import (
     ActiveOntologySnapshot,
     active_ontology_snapshot,
@@ -136,6 +141,75 @@ class OntologyBranchService(CoreService):
         self.ontology_service.validate_yaml_text(yaml_text, ctx=ctx)
         return self._store_content(ctx, branch_id, yaml_text, expected_fingerprint)
 
+    def list_branch_action_types(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return list_branch_action_types(self, branch_id, ctx=ctx)
+
+    def get_branch_action_type(
+        self, branch_id: str, api_name: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return get_branch_action_type(self, branch_id, api_name, ctx=ctx)
+
+    def create_branch_action_type(
+        self,
+        branch_id: str,
+        *,
+        definition: Mapping[str, object],
+        expected_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return mutate_branch_action_type(
+            self,
+            branch_id,
+            api_name=None,
+            definition=definition,
+            expected_fingerprint=expected_fingerprint,
+            idempotency_key=idempotency_key,
+            operation="created",
+            ctx=ctx,
+        )
+
+    def update_branch_action_type(
+        self,
+        branch_id: str,
+        api_name: str,
+        *,
+        definition: Mapping[str, object],
+        expected_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return mutate_branch_action_type(
+            self,
+            branch_id,
+            api_name=api_name,
+            definition=definition,
+            expected_fingerprint=expected_fingerprint,
+            idempotency_key=idempotency_key,
+            operation="updated",
+            ctx=ctx,
+        )
+
+    def delete_branch_action_type(
+        self,
+        branch_id: str,
+        api_name: str,
+        *,
+        expected_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return mutate_branch_action_type(
+            self,
+            branch_id,
+            api_name=api_name,
+            definition=None,
+            expected_fingerprint=expected_fingerprint,
+            idempotency_key=idempotency_key,
+            operation="deleted",
+            ctx=ctx,
+        )
+
     def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         """Three-way resource diff (base vs branch vs current active) plus merge impact."""
         return diff_ontology_branch(self, branch_id, ctx=ctx)
@@ -203,6 +277,9 @@ class OntologyBranchService(CoreService):
         branch_id: str,
         yaml_text: str,
         expected_fingerprint: str,
+        *,
+        event: str = "updated",
+        extra: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         with self.engine.begin() as conn:
             before = self._require_branch_row(conn, ctx, branch_id)
@@ -221,7 +298,7 @@ class OntologyBranchService(CoreService):
                 raise ConflictDetected(
                     "ontology branch changed concurrently during update", details={"branch_id": branch_id}
                 )
-            self._audit_event(conn, ctx, "updated", after, before=before)
+            self._audit_event(conn, ctx, event, after, before=before, extra=extra)
             active_version_id = self._active_version_id(conn, ctx)
             return branch_payload(after, is_base_stale=self._is_base_stale(after, active_version_id))
 

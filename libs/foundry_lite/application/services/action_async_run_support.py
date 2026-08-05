@@ -53,6 +53,7 @@ def action_execution_snapshot(
             "applicationId": ctx.application_id,
             "clientId": ctx.client_id,
             "tokenScopes": list(ctx.token_scopes),
+            "userAttributes": dict(ctx.user_attributes),
         },
     }
 

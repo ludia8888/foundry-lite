@@ -54,7 +54,8 @@ def run_activity() -> None:
         dependencies=create_runtime_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
             storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT"),
-        )
+        ),
+        should_initialize_schema=False,
     )
     request = action_run_dispatch_request_from_payload(payload)
     result = foundry._services.action.distributed.drive(request, worker_id=worker_id)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
@@ -9,6 +11,7 @@ from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamPublishRequest
+from foundry_lite.application.ports.action_repository import ActionRunRecord
 from foundry_lite.application.ports.stream_adapter import StreamEvent
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.adapters import KafkaStreamAdapter, KafkaStreamAdapterConfig, KafkaStreamSubscription
@@ -47,6 +50,47 @@ def test_kafka_live_broker_event_archives_through_worker(tmp_path: Path) -> None
         assert preview[0]["event_id"] == f"{topic}:0:0"
         assert preview[0]["event_type"] == "shipment.updated"
         assert preview[0]["payload_json"] == '{"shipment_id":"S-LIVE-100","status":"IN_TRANSIT"}'
+    finally:
+        container.stop()
+
+
+def test_action_monitoring_alert_reaches_live_kafka_once(tmp_path: Path) -> None:
+    topic = f"foundry-lite-action-alert-{uuid4().hex}"
+    container = KafkaContainer().with_kraft()
+    container.start(timeout=90)
+    try:
+        adapter = KafkaStreamAdapter(
+            KafkaStreamAdapterConfig(
+                bootstrap_servers=container.get_bootstrap_server(),
+                consumer_group=f"foundry-lite-action-alert-{uuid4().hex}",
+                subscriptions=(KafkaStreamSubscription("action-alerts", topic),),
+                max_empty_polls=5,
+                producer_flush_timeout_seconds=10.0,
+            )
+        )
+        dependencies = replace(
+            create_local_core_dependencies(storage_root=tmp_path / "action-alert"),
+            stream_adapter=adapter,
+        )
+        foundry = FoundryLite(dependencies=dependencies)
+        ctx = demo_admin_context()
+        observed_at = datetime.now(UTC)
+        _insert_action_monitoring_runs(foundry, observed_at)
+
+        first = foundry._services.action.monitoring_alerts.publish(ctx=ctx, observed_at=observed_at)
+        replay = foundry._services.action.monitoring_alerts.publish(ctx=ctx, observed_at=observed_at)
+        delivered = foundry.operations.publish_pending_outbox(ctx=ctx, stream_name="action-alerts", limit=10)
+        events = adapter.read_events("action-alerts", limit=10)
+
+        assert first["active"] == 2
+        assert first["published"] == 2
+        assert replay["published"] == 0
+        assert delivered["published"] == 2
+        assert {event.event_type for event in events} == {"action.monitoring.alert.triggered"}
+        assert {event.payload["aggregateId"] for event in events} == {
+            "action-failure-rate",
+            "action-p95-duration",
+        }
     finally:
         container.stop()
 
@@ -253,6 +297,40 @@ def _publish_live_event(bootstrap_servers: str, topic: str) -> None:
             key="S-LIVE-100",
             payload={"shipment_id": "S-LIVE-100", "status": "IN_TRANSIT"},
         )
+    )
+
+
+def _insert_action_monitoring_runs(foundry: FoundryLite, observed_at: datetime) -> None:
+    created_at = observed_at.replace(minute=0, second=0, microsecond=0).isoformat()
+    completed_at = observed_at.replace(minute=0, second=12, microsecond=0).isoformat()
+    with foundry.engine.begin() as transaction:
+        for index in range(20):
+            status = "failed" if index < 2 else "succeeded"
+            foundry._services.action.log_revert.action_repository.insert_action_run(
+                transaction=transaction,
+                record=_action_monitoring_record(index, status, created_at, completed_at),
+            )
+
+
+def _action_monitoring_record(index: int, status: str, created_at: str, completed_at: str) -> ActionRunRecord:
+    return ActionRunRecord(
+        action_run_id=f"live-monitor-run-{index}",
+        tenant_id="tenant-demo",
+        action_type_id="live-monitor-action",
+        action_type_api_name="LiveMonitorAction",
+        actor_user_id="live-monitor-user",
+        target_object_type_id="live-monitor-object-type",
+        target_object_type_api_name="Order",
+        target_object_id=f"O-{index}",
+        expected_object_version=1,
+        parameters={},
+        status=status,
+        idempotency_key=f"live-monitor-{index}",
+        request_fingerprint=f"sha256:live-monitor-{index}",
+        result={} if status == "succeeded" else None,
+        error={"kind": "adapter_unavailable"} if status == "failed" else None,
+        created_at=created_at,
+        completed_at=completed_at,
     )
 
 

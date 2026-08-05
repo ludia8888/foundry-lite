@@ -119,6 +119,29 @@ def test_action_allowed_roles_reads_persisted_definition() -> None:
     assert action_allowed_roles({"permissions": {"requireApproval": True}}) is None
 
 
+def test_action_apply_roles_supersede_legacy_allowed_roles() -> None:
+    definition = action_type_definition(
+        {
+            "apiName": "ExpediteOrder",
+            "target": "Order",
+            "permissions": {
+                "allowedRoles": ["viewer"],
+                "viewRoles": ["viewer"],
+                "editRoles": ["data_engineer"],
+                "applyRoles": ["ops_manager"],
+            },
+        }
+    )
+
+    assert action_allowed_roles(definition) == ("ops_manager",)
+
+
+@pytest.mark.parametrize("field", ["viewRoles", "editRoles", "applyRoles"])
+def test_yaml_rejects_malformed_first_class_action_roles(field: str) -> None:
+    with pytest.raises(ValidationFailed, match=field):
+        action_type_definition({"apiName": "ExpediteOrder", "target": "Order", "permissions": {field: "ops_manager"}})
+
+
 def test_yaml_rejects_malformed_allowed_roles_at_ingestion() -> None:
     with pytest.raises(ValidationFailed, match="permissions.allowedRoles must be a list of strings"):
         action_type_definition(

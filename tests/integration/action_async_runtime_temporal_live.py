@@ -33,6 +33,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import Engine
 
 HELPER = Path(__file__).parent / "helpers" / "action_async_runtime_live_worker.py"
+REVERT_RACER = Path(__file__).parent / "helpers" / "action_revert_live_racer.py"
 CONTROL = Path(__file__).parents[2] / "apps" / "worker" / "foundry_lite_worker" / "action_control.py"
 TASK_QUEUE = "foundry-lite-action-runs-live"
 
@@ -101,7 +102,7 @@ def _run_scenarios(
     db_url: str,
     tmp_path: Path,
 ) -> None:
-    _prove_takeover(foundry, engine, versions["O-1"], processes, tmp_path)
+    _prove_takeover(foundry, engine, versions, processes, tmp_path)
     _prove_cancellation(foundry, engine, versions["O-2"], tmp_path)
     _prove_dispatch_recovery(foundry, engine, versions["O-3"], processes, db_url, tmp_path)
 
@@ -109,17 +110,26 @@ def _run_scenarios(
 def _prove_takeover(
     foundry: FoundryLite,
     engine: Engine,
-    version: int,
+    versions: dict[str, int],
     processes: dict[str, subprocess.Popen[bytes]],
     marker_dir: Path,
 ) -> None:
-    run = foundry.actions.start_run(
-        "ApproveOrderAsync",
+    run = foundry.actions.start_batch_run(
+        "ApproveOrdersBatchAsync",
         object_type="Order",
-        object_id="O-1",
-        expected_object_version=version,
-        params={"objectId": "O-1", "expectedVersion": version, "shouldBlock": True},
-        idempotency_key="live-action-takeover",
+        items=[
+            {
+                "objectId": object_id,
+                "expectedObjectVersion": versions[object_id],
+                "params": {
+                    "objectId": object_id,
+                    "expectedVersion": versions[object_id],
+                    "shouldBlock": True,
+                },
+            }
+            for object_id in ("O-1", "O-4")
+        ],
+        idempotency_key="live-action-batch-takeover",
         wait_seconds=0,
         ctx=demo_admin_context(),
     )
@@ -137,7 +147,73 @@ def _prove_takeover(
     attempts = cast(list[dict[str, object]], terminal["attempts"])
     assert [item["status"] for item in attempts] == ["lost", "succeeded"]
     assert [item["fencingToken"] for item in attempts] == [1, 2]
-    _assert_single_commit(foundry, engine, run_id, "O-1", expected_status="APPROVED")
+    _assert_batch_commit(foundry, engine, run_id, ("O-1", "O-4"))
+    _prove_concurrent_revert(foundry, engine, run_id, marker_dir)
+
+
+def _prove_concurrent_revert(foundry: FoundryLite, engine: Engine, run_id: str, marker_dir: Path) -> None:
+    barrier = marker_dir / f"{run_id}.revert-barrier"
+    result_paths = [marker_dir / f"{run_id}.revert-{index}.json" for index in range(2)]
+    racers: list[subprocess.Popen[bytes]] = []
+    for index, result_path in enumerate(result_paths):
+        ready = marker_dir / f"{run_id}.revert-{index}.ready"
+        racers.append(
+            _spawn_revert_racer(
+                engine.url.render_as_string(hide_password=False), run_id, index, ready, barrier, result_path
+            )
+        )
+        _wait_marker(ready, 20)
+    barrier.write_text("go", encoding="utf-8")
+    for process in racers:
+        process.wait(timeout=30)
+        assert process.returncode == 0, process.stderr.read().decode("utf-8", errors="replace")
+    results = [json.loads(path.read_text(encoding="utf-8")) for path in result_paths]
+    assert sorted(item["status"] for item in results) == ["rejected", "succeeded"]
+    winner = next(item for item in results if item["status"] == "succeeded")
+    winner_run_id = str(cast(dict[str, object], winner["result"])["actionRunId"])
+    _assert_revert_winner(foundry, engine, run_id, winner_run_id)
+
+
+def _spawn_revert_racer(
+    db_url: str, run_id: str, index: int, ready: Path, barrier: Path, result_path: Path
+) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(  # nosec B603 - fixed local test helper argv.
+        [
+            sys.executable,
+            str(REVERT_RACER),
+            db_url,
+            run_id,
+            f"live-action-revert-{index}",
+            str(ready),
+            str(barrier),
+            str(result_path),
+        ],
+        cwd=Path(__file__).parents[2],
+        env={**os.environ, "PYTHONPATH": ".:libs:apps/worker"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _assert_revert_winner(foundry: FoundryLite, engine: Engine, original_run_id: str, winner_run_id: str) -> None:
+    with engine.begin() as transaction:
+        original_log = (
+            transaction.execute(
+                select(db.action_log_entries).where(db.action_log_entries.c.action_run_id == original_run_id)
+            )
+            .mappings()
+            .one()
+        )
+        winner_logs = transaction.execute(
+            select(func.count())
+            .select_from(db.action_log_entries)
+            .where(db.action_log_entries.c.action_run_id == winner_run_id)
+        ).scalar_one()
+    assert original_log["revert_status"] == "reverted"
+    assert original_log["reverted_by_run_id"] == winner_run_id
+    assert int(winner_logs) == 1
+    objects = [foundry.objects.get("Order", object_id, ctx=demo_admin_context()) for object_id in ("O-1", "O-4")]
+    assert all(item["properties"]["status"] == "PENDING" for item in objects)
 
 
 def _prove_cancellation(foundry: FoundryLite, engine: Engine, version: int, marker_dir: Path) -> None:
@@ -229,14 +305,14 @@ def _configure_runtime(monkeypatch: pytest.MonkeyPatch, db_url: str, tmp_path: P
 def _prepare_catalog(foundry: FoundryLite, tmp_path: Path) -> dict[str, int]:
     ctx = demo_admin_context()
     csv_path = tmp_path / "live-orders.csv"
-    csv_path.write_text("order_id,status\nO-1,PENDING\nO-2,PENDING\nO-3,PENDING\n", encoding="utf-8")
+    csv_path.write_text("order_id,status\nO-1,PENDING\nO-2,PENDING\nO-3,PENDING\nO-4,PENDING\n", encoding="utf-8")
     foundry.datasets.ensure("clean.action_live_orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.upload_csv("clean.action_live_orders", str(csv_path), ctx=ctx)
     foundry.ontology.apply_text(yaml.safe_dump(_ontology_definition(), sort_keys=False), ctx=ctx)
     foundry.objects.reindex("Order", ctx=ctx)
     return {
         object_id: int(foundry.objects.get("Order", object_id, ctx=ctx)["objectVersion"])
-        for object_id in ("O-1", "O-2", "O-3")
+        for object_id in ("O-1", "O-2", "O-3", "O-4")
     }
 
 
@@ -288,7 +364,35 @@ def _ontology_definition() -> dict[str, object]:
                         },
                     ],
                 },
-            }
+            },
+            {
+                "apiName": "approveOrderBatchEdits",
+                "version": "1.0.0",
+                "runtime": "logic_dag",
+                "inputs": [
+                    {
+                        "apiName": "requests",
+                        "type": "array",
+                        "itemType": "struct",
+                        "required": True,
+                        "fields": parameters,
+                    }
+                ],
+                "output": {"type": "ontology_edit_batch"},
+                "permissions": {"allowedRoles": ["admin"]},
+                "definition": {
+                    "tools": [],
+                    "blocks": [
+                        {"blockId": "batch", "kind": "Input", "inputs": {"edits": []}},
+                        {
+                            "blockId": "output",
+                            "kind": "Output",
+                            "dependsOn": ["batch"],
+                            "inputs": {"fromBlock": "batch"},
+                        },
+                    ],
+                },
+            },
         ],
         "actionTypes": [
             {
@@ -300,7 +404,24 @@ def _ontology_definition() -> dict[str, object]:
                 "agentExecutionPolicy": "approval_required",
                 "permissions": {"allowedRoles": ["admin"]},
                 "function": {"apiName": "approveOrderEdits", "version": "1.0.0"},
-            }
+            },
+            {
+                "apiName": "ApproveOrdersBatchAsync",
+                "contractVersion": 3,
+                "target": "Order",
+                "parameters": parameters,
+                "riskLevel": "high",
+                "agentExecutionPolicy": "approval_required",
+                "permissions": {"allowedRoles": ["admin"]},
+                "revert": {"enabled": True},
+                "function": {
+                    "apiName": "approveOrderBatchEdits",
+                    "version": "1.0.0",
+                    "executionMode": "batched",
+                    "batchInputName": "requests",
+                    "maxBatchSize": 10_000,
+                },
+            },
         ],
     }
 
@@ -362,6 +483,27 @@ def _assert_single_commit(
         ).scalar_one()
     assert obj["properties"]["status"] == expected_status
     assert int(edits) == expected_edits
+
+
+def _assert_batch_commit(
+    foundry: FoundryLite,
+    engine: Engine,
+    run_id: str,
+    object_ids: tuple[str, ...],
+) -> None:
+    objects = [foundry.objects.get("Order", object_id, ctx=demo_admin_context()) for object_id in object_ids]
+    with engine.begin() as transaction:
+        edits = transaction.execute(
+            select(func.count()).select_from(db.object_edits).where(db.object_edits.c.action_run_id == run_id)
+        ).scalar_one()
+        logs = transaction.execute(
+            select(func.count())
+            .select_from(db.action_log_entries)
+            .where(db.action_log_entries.c.action_run_id == run_id)
+        ).scalar_one()
+    assert all(item["properties"]["status"] == "APPROVED" for item in objects)
+    assert int(edits) == len(object_ids)
+    assert int(logs) == 1
 
 
 def _wait_terminal(foundry: FoundryLite, run_id: str, timeout: float) -> dict[str, object]:

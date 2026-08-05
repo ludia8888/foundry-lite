@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, desc, insert, select
+from sqlalchemy import and_, delete, desc, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -20,6 +20,11 @@ from foundry_lite.application.ports.osdk_application_repository import (
     OsdkDeveloperConsoleIdempotencyRecord,
     OsdkDeveloperConsoleIdempotencyRow,
     OsdkLanguage,
+    OsdkMcpServerRecord,
+    OsdkMcpServerRow,
+    OsdkMcpSessionEventRow,
+    OsdkMcpSessionRecord,
+    OsdkMcpSessionRow,
     OsdkReleaseArtifactDownloadTokenRecord,
     OsdkReleaseArtifactDownloadTokenRow,
     OsdkReleaseArtifactRecord,
@@ -31,11 +36,21 @@ from foundry_lite.application.ports.osdk_application_repository import (
     OsdkSdkVersionRecord,
     OsdkSdkVersionRow,
 )
+from foundry_lite.application.ports.osdk_security_repository import (
+    OsdkClientSecretVersionRecord,
+    OsdkClientSecretVersionRow,
+    OsdkMcpToolActivationRecord,
+    OsdkMcpToolActivationRow,
+)
+from foundry_lite.application.ports.runtime_repository import RuntimeJsonObject
 from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.application.state_transitions import (
     OSDK_APPLICATION_CLIENT_ACTIVE,
     OSDK_APPLICATION_CLIENT_INACTIVE,
+    OSDK_CLIENT_SECRET_REVOKED,
+    OSDK_CLIENT_SECRET_ROTATED,
     OSDK_DOWNLOAD_TOKEN_USED,
+    OSDK_MCP_SESSION_TERMINATED,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
@@ -92,19 +107,26 @@ class SqlAlchemyOsdkApplicationRepository:
         return [cast(OsdkApplicationRow, dict(row)) for row in rows]
 
     def active_client(self, *, transaction: Any, tenant_id: str, client_id: str) -> OsdkApplicationClientRow | None:
-        row = (
-            transaction.execute(
-                select(db.osdk_application_clients).where(
-                    and_(
-                        db.osdk_application_clients.c.tenant_id == tenant_id,
-                        db.osdk_application_clients.c.client_id == client_id,
-                        db.osdk_application_clients.c.status == "active",
-                    )
-                )
+        return self._active_client(transaction, tenant_id, client_id, is_for_update=False)
+
+    def active_client_for_update(
+        self, *, transaction: Any, tenant_id: str, client_id: str
+    ) -> OsdkApplicationClientRow | None:
+        return self._active_client(transaction, tenant_id, client_id, is_for_update=True)
+
+    def _active_client(
+        self, transaction: Any, tenant_id: str, client_id: str, *, is_for_update: bool
+    ) -> OsdkApplicationClientRow | None:
+        statement = select(db.osdk_application_clients).where(
+            and_(
+                db.osdk_application_clients.c.tenant_id == tenant_id,
+                db.osdk_application_clients.c.client_id == client_id,
+                db.osdk_application_clients.c.status == "active",
             )
-            .mappings()
-            .first()
         )
+        if is_for_update:
+            statement = statement.with_for_update()
+        row = transaction.execute(statement).mappings().first()
         return cast(OsdkApplicationClientRow, dict(row)) if row else None
 
     def clients_for_application(
@@ -167,6 +189,140 @@ class SqlAlchemyOsdkApplicationRepository:
         )
         return cast(OsdkApplicationClientRow, dict(row)) if row else None
 
+    def activate_client_secret(
+        self, *, transaction: Any, record: OsdkClientSecretVersionRecord
+    ) -> OsdkClientSecretVersionRow:
+        client = self._client_by_row_id(
+            transaction,
+            record.tenant_id,
+            record.client_row_id,
+            is_for_update=True,
+        )
+        if client is None or client["app_id"] != record.app_id or client["client_id"] != record.client_id:
+            raise RuntimeError("OSDK client secret target could not be resolved")
+        current_secret_id = client.get("current_secret_id")
+        if isinstance(current_secret_id, str) and current_secret_id:
+            is_rotated = cas_status_update(
+                transaction,
+                db.osdk_client_secret_versions,
+                tenant_id=record.tenant_id,
+                row_id=current_secret_id,
+                transition=OSDK_CLIENT_SECRET_ROTATED,
+                values={"revoked_at": record.created_at},
+            )
+            if not is_rotated:
+                raise RuntimeError("current OSDK client secret changed during rotation")
+        values = _client_secret_values(record)
+        values.pop("tenant_id", None)
+        transaction.execute(insert(db.osdk_client_secret_versions).values(tenant_id=record.tenant_id, **values))
+        transaction.execute(
+            update(db.osdk_application_clients)
+            .where(
+                and_(
+                    db.osdk_application_clients.c.tenant_id == record.tenant_id,
+                    db.osdk_application_clients.c.id == record.client_row_id,
+                )
+            )
+            .values(current_secret_id=record.secret_id, updated_at=record.created_at)
+        )
+        row = self.current_client_secret(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            client_row_id=record.client_row_id,
+        )
+        if row is None:
+            raise RuntimeError("activated OSDK client secret could not be read back")
+        return row
+
+    def current_client_secret(
+        self, *, transaction: Any, tenant_id: str, client_row_id: str
+    ) -> OsdkClientSecretVersionRow | None:
+        client = self._client_by_row_id(transaction, tenant_id, client_row_id)
+        secret_id = client.get("current_secret_id") if client else None
+        if not isinstance(secret_id, str) or not secret_id:
+            return None
+        row = (
+            transaction.execute(
+                select(db.osdk_client_secret_versions).where(
+                    and_(
+                        db.osdk_client_secret_versions.c.tenant_id == tenant_id,
+                        db.osdk_client_secret_versions.c.id == secret_id,
+                        db.osdk_client_secret_versions.c.client_row_id == client_row_id,
+                        db.osdk_client_secret_versions.c.status == "active",
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OsdkClientSecretVersionRow, dict(row)) if row else None
+
+    def client_secret_versions(
+        self, *, transaction: Any, tenant_id: str, client_row_id: str
+    ) -> list[OsdkClientSecretVersionRow]:
+        rows = (
+            transaction.execute(
+                select(db.osdk_client_secret_versions)
+                .where(
+                    and_(
+                        db.osdk_client_secret_versions.c.tenant_id == tenant_id,
+                        db.osdk_client_secret_versions.c.client_row_id == client_row_id,
+                    )
+                )
+                .order_by(desc(db.osdk_client_secret_versions.c.created_at), desc(db.osdk_client_secret_versions.c.id))
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(OsdkClientSecretVersionRow, dict(row)) for row in rows]
+
+    def revoke_current_client_secret(
+        self, *, transaction: Any, tenant_id: str, client_row_id: str, revoked_at: str
+    ) -> OsdkClientSecretVersionRow | None:
+        self._client_by_row_id(transaction, tenant_id, client_row_id, is_for_update=True)
+        current = self.current_client_secret(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            client_row_id=client_row_id,
+        )
+        if current is None:
+            return None
+        is_revoked = cas_status_update(
+            transaction,
+            db.osdk_client_secret_versions,
+            tenant_id=tenant_id,
+            row_id=current["id"],
+            transition=OSDK_CLIENT_SECRET_REVOKED,
+            values={"revoked_at": revoked_at},
+        )
+        if not is_revoked:
+            return None
+        transaction.execute(
+            update(db.osdk_application_clients)
+            .where(
+                and_(
+                    db.osdk_application_clients.c.tenant_id == tenant_id,
+                    db.osdk_application_clients.c.id == client_row_id,
+                    db.osdk_application_clients.c.current_secret_id == current["id"],
+                )
+            )
+            .values(current_secret_id=None, updated_at=revoked_at)
+        )
+        return {**current, "status": "revoked", "revoked_at": revoked_at}
+
+    def mark_client_secret_used(self, *, transaction: Any, tenant_id: str, secret_id: str, used_at: str) -> None:
+        transaction.execute(
+            update(db.osdk_client_secret_versions)
+            .where(
+                and_(
+                    db.osdk_client_secret_versions.c.tenant_id == tenant_id,
+                    db.osdk_client_secret_versions.c.id == secret_id,
+                    db.osdk_client_secret_versions.c.status == "active",
+                )
+            )
+            .values(last_used_at=used_at)
+        )
+
     def replace_resources(
         self,
         *,
@@ -208,6 +364,232 @@ class SqlAlchemyOsdkApplicationRepository:
             .all()
         )
         return [cast(OsdkApplicationResourceRow, dict(row)) for row in rows]
+
+    def upsert_mcp_server(self, *, transaction: Any, record: OsdkMcpServerRecord) -> OsdkMcpServerRow:
+        values = _mcp_server_values(record)
+        updates = {
+            "status": record.status,
+            "description_markdown": record.description_markdown,
+            "allowed_origins": list(record.allowed_origins),
+            "updated_by_user_id": record.updated_by_user_id,
+            "updated_at": record.updated_at,
+        }
+        statement: Any
+        if transaction.dialect.name == "postgresql":
+            statement = (
+                postgres_insert(db.osdk_mcp_servers)
+                .values(**values)
+                .on_conflict_do_update(index_elements=("tenant_id", "app_id"), set_=updates)
+            )
+        elif transaction.dialect.name == "sqlite":
+            statement = (
+                sqlite_insert(db.osdk_mcp_servers)
+                .values(**values)
+                .on_conflict_do_update(index_elements=("tenant_id", "app_id"), set_=updates)
+            )
+        else:
+            statement = insert(db.osdk_mcp_servers).values(**values)
+        transaction.execute(statement)
+        row = self.mcp_server_for_application(transaction=transaction, tenant_id=record.tenant_id, app_id=record.app_id)
+        if row is None:
+            raise RuntimeError("upserted OSDK MCP server could not be read back")
+        return row
+
+    def mcp_server_for_application(self, *, transaction: Any, tenant_id: str, app_id: str) -> OsdkMcpServerRow | None:
+        row = (
+            transaction.execute(
+                select(db.osdk_mcp_servers).where(
+                    and_(db.osdk_mcp_servers.c.tenant_id == tenant_id, db.osdk_mcp_servers.c.app_id == app_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OsdkMcpServerRow, dict(row)) if row else None
+
+    def list_mcp_servers(self, *, transaction: Any, tenant_id: str) -> list[OsdkMcpServerRow]:
+        rows = (
+            transaction.execute(
+                select(db.osdk_mcp_servers)
+                .where(db.osdk_mcp_servers.c.tenant_id == tenant_id)
+                .order_by(desc(db.osdk_mcp_servers.c.updated_at), db.osdk_mcp_servers.c.app_id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(OsdkMcpServerRow, dict(row)) for row in rows]
+
+    def touch_mcp_server_activity(self, *, transaction: Any, tenant_id: str, app_id: str, observed_at: str) -> None:
+        transaction.execute(
+            update(db.osdk_mcp_servers)
+            .where(and_(db.osdk_mcp_servers.c.tenant_id == tenant_id, db.osdk_mcp_servers.c.app_id == app_id))
+            .values(last_activity_at=observed_at)
+        )
+
+    def insert_mcp_session_or_get_existing(
+        self, *, transaction: Any, record: OsdkMcpSessionRecord
+    ) -> OsdkMcpSessionRow | None:
+        values = _mcp_session_values(record)
+        statement: Any
+        if transaction.dialect.name == "postgresql":
+            statement = (
+                postgres_insert(db.osdk_mcp_sessions).values(**values).on_conflict_do_nothing(index_elements=("id",))
+            )
+        elif transaction.dialect.name == "sqlite":
+            statement = (
+                sqlite_insert(db.osdk_mcp_sessions).values(**values).on_conflict_do_nothing(index_elements=("id",))
+            )
+        else:
+            statement = insert(db.osdk_mcp_sessions).values(**values)
+        result = transaction.execute(statement.returning(db.osdk_mcp_sessions.c.id)).scalar_one_or_none()
+        if result == record.session_id:
+            return None
+        return self.mcp_session_by_id(transaction=transaction, tenant_id=record.tenant_id, session_id=record.session_id)
+
+    def mcp_session_by_id(self, *, transaction: Any, tenant_id: str, session_id: str) -> OsdkMcpSessionRow | None:
+        row = (
+            transaction.execute(
+                select(db.osdk_mcp_sessions).where(
+                    and_(db.osdk_mcp_sessions.c.tenant_id == tenant_id, db.osdk_mcp_sessions.c.id == session_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OsdkMcpSessionRow, dict(row)) if row else None
+
+    def append_mcp_session_event(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        session_id: str,
+        event_type: str,
+        payload: RuntimeJsonObject,
+        created_at: str,
+    ) -> OsdkMcpSessionEventRow | None:
+        sequence = transaction.execute(
+            update(db.osdk_mcp_sessions)
+            .where(
+                and_(
+                    db.osdk_mcp_sessions.c.tenant_id == tenant_id,
+                    db.osdk_mcp_sessions.c.id == session_id,
+                    db.osdk_mcp_sessions.c.status == "active",
+                )
+            )
+            .values(
+                last_sequence=db.osdk_mcp_sessions.c.last_sequence + 1,
+                last_seen_at=created_at,
+            )
+            .returning(db.osdk_mcp_sessions.c.last_sequence)
+        ).scalar_one_or_none()
+        if sequence is None:
+            return None
+        values = {
+            "id": f"{session_id}:{sequence}",
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+            "sequence": sequence,
+            "event_type": event_type,
+            "payload_json": payload,
+            "created_at": created_at,
+        }
+        transaction.execute(
+            insert(db.osdk_mcp_session_events).values(
+                tenant_id=tenant_id,
+                id=values["id"],
+                session_id=session_id,
+                sequence=sequence,
+                event_type=event_type,
+                payload_json=payload,
+                created_at=created_at,
+            )
+        )
+        return cast(OsdkMcpSessionEventRow, values)
+
+    def mcp_session_events_after(
+        self, *, transaction: Any, tenant_id: str, session_id: str, after_sequence: int
+    ) -> list[OsdkMcpSessionEventRow]:
+        rows = (
+            transaction.execute(
+                select(db.osdk_mcp_session_events)
+                .where(
+                    and_(
+                        db.osdk_mcp_session_events.c.tenant_id == tenant_id,
+                        db.osdk_mcp_session_events.c.session_id == session_id,
+                        db.osdk_mcp_session_events.c.sequence > after_sequence,
+                    )
+                )
+                .order_by(db.osdk_mcp_session_events.c.sequence)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(OsdkMcpSessionEventRow, dict(row)) for row in rows]
+
+    def terminate_mcp_session(
+        self, *, transaction: Any, tenant_id: str, session_id: str, terminated_at: str
+    ) -> OsdkMcpSessionRow | None:
+        cas_status_update(
+            transaction,
+            db.osdk_mcp_sessions,
+            tenant_id=tenant_id,
+            row_id=session_id,
+            transition=OSDK_MCP_SESSION_TERMINATED,
+            values={"terminated_at": terminated_at, "last_seen_at": terminated_at},
+        )
+        return self.mcp_session_by_id(transaction=transaction, tenant_id=tenant_id, session_id=session_id)
+
+    def activate_mcp_tool(self, *, transaction: Any, record: OsdkMcpToolActivationRecord) -> bool:
+        values = _mcp_tool_activation_values(record)
+        conflict = ("tenant_id", "app_id", "session_id", "client_id", "actor_user_id", "tool_id")
+        statement: Any
+        if transaction.dialect.name == "postgresql":
+            statement = (
+                postgres_insert(db.osdk_mcp_tool_activations)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=conflict)
+            )
+        elif transaction.dialect.name == "sqlite":
+            statement = (
+                sqlite_insert(db.osdk_mcp_tool_activations)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=conflict)
+            )
+        else:
+            statement = insert(db.osdk_mcp_tool_activations).values(**values)
+        return (
+            transaction.execute(statement.returning(db.osdk_mcp_tool_activations.c.id)).scalar_one_or_none() is not None
+        )
+
+    def mcp_tool_activations(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        app_id: str,
+        session_id: str,
+        client_id: str,
+        actor_user_id: str,
+    ) -> list[OsdkMcpToolActivationRow]:
+        rows = (
+            transaction.execute(
+                select(db.osdk_mcp_tool_activations)
+                .where(
+                    and_(
+                        db.osdk_mcp_tool_activations.c.tenant_id == tenant_id,
+                        db.osdk_mcp_tool_activations.c.app_id == app_id,
+                        db.osdk_mcp_tool_activations.c.session_id == session_id,
+                        db.osdk_mcp_tool_activations.c.client_id == client_id,
+                        db.osdk_mcp_tool_activations.c.actor_user_id == actor_user_id,
+                    )
+                )
+                .order_by(db.osdk_mcp_tool_activations.c.tool_id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(OsdkMcpToolActivationRow, dict(row)) for row in rows]
 
     def insert_sdk_version_or_get_existing(
         self, *, transaction: Any, record: OsdkSdkVersionRecord
@@ -498,6 +880,25 @@ class SqlAlchemyOsdkApplicationRepository:
             raise RuntimeError("inserted OSDK developer console idempotency record could not be read back")
         return row
 
+    def _client_by_row_id(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        client_row_id: str,
+        *,
+        is_for_update: bool = False,
+    ) -> OsdkApplicationClientRow | None:
+        statement = select(db.osdk_application_clients).where(
+            and_(
+                db.osdk_application_clients.c.tenant_id == tenant_id,
+                db.osdk_application_clients.c.id == client_row_id,
+            )
+        )
+        if is_for_update:
+            statement = statement.with_for_update()
+        row = transaction.execute(statement).mappings().first()
+        return cast(OsdkApplicationClientRow, dict(row)) if row else None
+
     def _application_by_create_key(
         self, transaction: Any, tenant_id: str, idempotency_key: str
     ) -> OsdkApplicationRow | None:
@@ -614,6 +1015,24 @@ def _client_values(record: OsdkApplicationClientRecord) -> dict[str, object]:
     }
 
 
+def _client_secret_values(record: OsdkClientSecretVersionRecord) -> dict[str, object]:
+    return {
+        "id": record.secret_id,
+        "tenant_id": record.tenant_id,
+        "app_id": record.app_id,
+        "client_row_id": record.client_row_id,
+        "client_id": record.client_id,
+        "vault_secret_name": record.vault_secret_name,
+        "vault_secret_version": record.vault_secret_version,
+        "status": record.status,
+        "created_by_user_id": record.created_by_user_id,
+        "rotation_reason": record.rotation_reason,
+        "created_at": record.created_at,
+        "revoked_at": None,
+        "last_used_at": None,
+    }
+
+
 def _resource_values(record: OsdkApplicationResourceRecord) -> dict[str, object]:
     return {
         "id": record.resource_id,
@@ -623,6 +1042,50 @@ def _resource_values(record: OsdkApplicationResourceRecord) -> dict[str, object]
         "resource_api_name": record.resource_api_name,
         "scopes": list(record.scopes),
         "created_at": record.created_at,
+    }
+
+
+def _mcp_server_values(record: OsdkMcpServerRecord) -> dict[str, object]:
+    return {
+        "id": record.server_id,
+        "tenant_id": record.tenant_id,
+        "app_id": record.app_id,
+        "status": record.status,
+        "description_markdown": record.description_markdown,
+        "allowed_origins": list(record.allowed_origins),
+        "last_activity_at": record.last_activity_at,
+        "updated_by_user_id": record.updated_by_user_id,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def _mcp_session_values(record: OsdkMcpSessionRecord) -> dict[str, object]:
+    return {
+        "id": record.session_id,
+        "tenant_id": record.tenant_id,
+        "app_id": record.app_id,
+        "client_id": record.client_id,
+        "actor_user_id": record.actor_user_id,
+        "status": record.status,
+        "last_sequence": 0,
+        "created_at": record.created_at,
+        "last_seen_at": record.last_seen_at,
+        "terminated_at": None,
+    }
+
+
+def _mcp_tool_activation_values(record: OsdkMcpToolActivationRecord) -> dict[str, object]:
+    return {
+        "id": record.activation_id,
+        "tenant_id": record.tenant_id,
+        "app_id": record.app_id,
+        "session_id": record.session_id,
+        "client_id": record.client_id,
+        "actor_user_id": record.actor_user_id,
+        "tool_id": record.tool_id,
+        "query_hash": record.query_hash,
+        "activated_at": record.activated_at,
     }
 
 

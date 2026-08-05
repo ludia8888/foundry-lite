@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from foundry_lite.application.action_types import (
     ActionCacheRefreshHint,
+    ActionCriteriaEvaluation,
     ActionEditSummary,
     ActionValidationIssue,
     ActionValidationParameterResult,
@@ -13,7 +14,9 @@ from foundry_lite.application.action_types import (
     ActionValidationTargetResult,
 )
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow
-from foundry_lite.application.safe_expression import validate_action_request
+from foundry_lite.application.safe_expression import resolve_action_request_parameters, validate_action_request
+from foundry_lite.domain.action_runtime.action_condition_explanation import explain_action_condition
+from foundry_lite.domain.action_runtime.action_conditions import StaticActionConditionContext
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound
 
@@ -24,9 +27,20 @@ def action_validation_response(
     expected_object_version: int,
     params: Mapping[str, object],
     ctx: RequestContext | None = None,
+    *,
+    supplemental_error: Exception | None = None,
+    linked_object_properties: Mapping[str, object] | None = None,
 ) -> ActionValidationResponse:
     target = _target_validation(action_type, record, expected_object_version)
-    request_error = _request_validation_error(action_type, record, expected_object_version, params, ctx)
+    request_error = _request_validation_error(
+        action_type,
+        record,
+        expected_object_version,
+        params,
+        ctx,
+        linked_object_properties or {},
+    )
+    request_error = request_error or supplemental_error
     parameter_results = _parameter_results(action_type, params, request_error)
     submission_criteria = _submission_criteria(request_error)
     is_valid = target["result"] == "VALID" and _parameters_valid(parameter_results) and not submission_criteria
@@ -36,7 +50,57 @@ def action_validation_response(
         "target": target,
         "parameters": parameter_results,
         "submissionCriteria": submission_criteria,
+        "submissionCriteriaEvaluation": _criteria_evaluation(
+            action_type,
+            record,
+            expected_object_version,
+            params,
+            ctx,
+            linked_object_properties or {},
+        ),
     }
+
+
+def _criteria_evaluation(
+    action_type: ActionTypeRow,
+    record: ObjectRecordRow | None,
+    expected_object_version: int,
+    params: Mapping[str, object],
+    ctx: RequestContext | None,
+    linked_object_properties: Mapping[str, object],
+) -> ActionCriteriaEvaluation | None:
+    criteria = _mapping(_mapping(action_type.get("definition")).get("submissionCriteria"))
+    if not criteria:
+        return None
+    if record is None or record["object_version"] != expected_object_version:
+        return {"status": "NOT_EVALUATED", "reason": "target_unavailable_or_stale", "tree": None}
+    effective_params = _effective_criteria_parameters(action_type, record, params, ctx)
+    if effective_params is None:
+        return {"status": "NOT_EVALUATED", "reason": "parameters_invalid", "tree": None}
+    request_context = ctx or RequestContext()
+    condition_context = StaticActionConditionContext(
+        parameters=effective_params,
+        object_properties=_mapping(record.get("properties")),
+        actor_user_id=request_context.actor_user_id,
+        actor_groups=request_context.roles,
+        actor_attributes=request_context.user_attributes,
+        linked_object_properties=linked_object_properties,
+    )
+    tree = explain_action_condition(criteria, condition_context)
+    return {"status": "PASSED" if tree["isSatisfied"] else "FAILED", "reason": None, "tree": tree}
+
+
+def _effective_criteria_parameters(
+    action_type: ActionTypeRow,
+    record: ObjectRecordRow,
+    params: Mapping[str, object],
+    ctx: RequestContext | None,
+) -> Mapping[str, object] | None:
+    try:
+        resolution = resolve_action_request_parameters(action_type, record, params, ctx)
+    except FoundryLiteError:
+        return None
+    return resolution.values if resolution is not None else params
 
 
 def action_edit_summary(
@@ -120,10 +184,17 @@ def _request_validation_error(
     expected_object_version: int,
     params: Mapping[str, object],
     ctx: RequestContext | None,
+    linked_object_properties: Mapping[str, object],
 ) -> Exception | None:
     if record is None or record["object_version"] != expected_object_version:
         return None
-    return validate_action_request(action_type, record, params, ctx)
+    return validate_action_request(
+        action_type,
+        record,
+        params,
+        ctx,
+        linked_object_properties=linked_object_properties,
+    )
 
 
 def _parameter_results(

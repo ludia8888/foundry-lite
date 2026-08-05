@@ -16,7 +16,13 @@ import os
 from pathlib import Path
 
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import ActionRunRecord, ActionWritebackRecord, DeadLetterRecord, ObjectRecordInsert
+from foundry_lite.application.ports import (
+    ActionRunRecord,
+    ActionWritebackRecord,
+    DeadLetterRecord,
+    ObjectRecordInsert,
+)
+from foundry_lite.application.ports.action_repository import ObjectCreateWrite
 from foundry_lite.application.ports.external_writeback_adapter import (
     ExternalWritebackPayload,
     ExternalWriteTarget,
@@ -164,6 +170,32 @@ def seed_stale_conflict_order():
                 updated_at=now,
             ),
         )
+
+def seed_mcp_approval_order():
+    properties = {
+        "orderId": "O-3999",
+        "customerId": "C-101",
+        "status": "REVIEW",
+        "amount": 640.0,
+        "margin": 72.0,
+        "riskScore": 0.45,
+    }
+    now = _now()
+    with dependencies.engine.begin() as transaction:
+        object_type = core._services.ontology.entrypoint._active_object_type(transaction, ctx, "Order")
+        created = dependencies.action_repository.create_object_record(
+            transaction=transaction,
+            record=ObjectCreateWrite(
+                object_record_id=_new_id("obj"),
+                tenant_id=ctx.tenant_id,
+                object_type_id=object_type["id"],
+                object_type_api_name="Order",
+                object_id="O-3999",
+                properties=properties,
+                created_at=now,
+            ),
+        )
+        assert created
 
 def seed_action_writeback_reconciliation():
     action_run_id = "action_run_web_reconcile_o1003"
@@ -357,6 +389,7 @@ seed_record_dlq("dlqr_web_retry", "shipment_cdc_events:0:31", "payload-hash-web-
 seed_record_dlq("dlqr_web_discard", "shipment_cdc_events:0:32", "payload-hash-web-discard")
 seed_isolated_margin_order()
 seed_stale_conflict_order()
+seed_mcp_approval_order()
 seed_action_writeback_reconciliation()
 seed_action_writeback_approval_release()
 citation_source = seed_pdf_citation_source()

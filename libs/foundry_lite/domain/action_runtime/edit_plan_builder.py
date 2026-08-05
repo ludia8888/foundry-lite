@@ -22,6 +22,7 @@ from foundry_lite.domain.action_runtime.action_ir import (
     DeleteObjectRule,
     ModifyObjectRule,
     PropertyAssignment,
+    ResolvedInterfaceLinkDeleteRule,
 )
 from foundry_lite.domain.action_runtime.edit_plan import (
     EditPlan,
@@ -56,6 +57,13 @@ class PlanResolutionContext(Protocol):
     def resolve_existing_object_set(self, object_type: str, expression: ValueExpression) -> tuple[ObjectRef, ...]: ...
 
     def resolve_link_endpoint(self, link_type: str, role: str, expression: ValueExpression) -> str: ...
+
+    def resolve_interface_link_deletes(
+        self,
+        link_types: tuple[str, ...],
+        source: ValueExpression,
+        target: ValueExpression,
+    ) -> tuple[tuple[str, str, str], ...]: ...
 
     def generate_object_id(self, rule_id: str) -> str: ...
 
@@ -106,6 +114,8 @@ def _apply_rule(rule: ActionRule, context: PlanResolutionContext, acc: _PlanAccu
         _plan_delete(rule, context, acc)
     elif isinstance(rule, CreateLinkRule | DeleteLinkRule):
         _plan_link(rule, context, acc)
+    elif isinstance(rule, ResolvedInterfaceLinkDeleteRule):
+        _plan_interface_link_deletes(rule, context, acc)
     else:  # FunctionEditRule — the only remaining member of the closed rule union
         raise ValidationFailed(
             "function-backed actions are planned by the function edit adapter, not the rule planner",
@@ -198,6 +208,15 @@ def _plan_link(rule: CreateLinkRule | DeleteLinkRule, context: PlanResolutionCon
         acc.link_creates.append(LinkCreate(key, rule.rule_id, rule.link_type, source, target))
     else:
         acc.link_deletes.append(LinkDelete(key, rule.rule_id, rule.link_type, source, target))
+
+
+def _plan_interface_link_deletes(
+    rule: ResolvedInterfaceLinkDeleteRule, context: PlanResolutionContext, acc: _PlanAccumulator
+) -> None:
+    endpoints = context.resolve_interface_link_deletes(rule.concrete_link_types, rule.source, rule.target)
+    for link_type, source, target in endpoints:
+        key = context.operation_key(rule.rule_id, f"{link_type}:{source}->{target}")
+        acc.link_deletes.append(LinkDelete(key, rule.rule_id, link_type, source, target))
 
 
 def _resolve_endpoint(

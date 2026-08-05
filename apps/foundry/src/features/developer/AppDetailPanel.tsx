@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { AppOverviewTab } from "./AppOverviewTab";
 import { ClientsTab } from "./ClientsTab";
+import { McpServerTab } from "./McpServerTab";
 import { OAuthDemoTab } from "./OAuthDemoTab";
 import { SdkVersionsTab } from "./SdkVersionsTab";
 import { statusIntent } from "./developer-model";
@@ -16,11 +17,12 @@ interface AppDetailPanelProps {
   appId: string;
 }
 
-type DetailTab = "overview" | "clients" | "sdk" | "oauth";
+type DetailTab = "overview" | "clients" | "mcp" | "sdk" | "oauth";
 
 const DETAIL_TABS: readonly { id: DetailTab; label: string }[] = [
   { id: "overview", label: "개요 · 리소스" },
   { id: "clients", label: "클라이언트" },
+  { id: "mcp", label: "Ontology MCP · Hub" },
   { id: "sdk", label: "SDK 버전" },
   { id: "oauth", label: "OAuth 데모" },
 ];
@@ -94,6 +96,7 @@ export function AppDetailPanel({ appId }: AppDetailPanelProps) {
               />
             ) : null}
             {activeTab === "sdk" ? <SdkVersionsTab appId={appId} /> : null}
+            {activeTab === "mcp" ? <McpServerTab appId={appId} /> : null}
             {activeTab === "oauth" ? (
               <OAuthDemoTab clients={detail.clients} />
             ) : null}

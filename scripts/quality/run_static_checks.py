@@ -161,7 +161,7 @@ HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ),
 )
 
-# The PR profile must fit inside the five-minute workflow budget, including a
+# The PR profile must fit inside the budgeted PR workflow window, including a
 # cold dependency restore. Full Semgrep/pip-audit/gitleaks, product test
 # bundles, and broad complexity/documentation coverage remain mandatory on
 # main/release/nightly. Pull requests get Bandit, both type checkers, Ruff,

@@ -49,6 +49,7 @@ from foundry_lite_api.routers import (
     object_sets,
     objects,
     ontology,
+    ontology_mcp,
     operations,
     pipelines,
     resources,
@@ -370,6 +371,7 @@ for resource_router in (
     actions.router,
     functions.router,
     builder_mcp.router,
+    ontology_mcp.router,
 ):
     app.include_router(resource_router)
 

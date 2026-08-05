@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from foundry_lite.application.services.aip.fde_catalog import FDE_MODES
 from foundry_lite.application.services.aip.fde_mcp_service import FdeMcpToolCall
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
 
 from foundry_lite_api import runtime
@@ -44,12 +45,23 @@ async def builder_mcp_post(application_id: str, request: Request) -> Response:
 async def builder_mcp_get(application_id: str, request: Request) -> StreamingResponse:
     try:
         _require_origin(request)
-        runtime.foundry.aip.fde_mcp_tools(application_id, ctx=_ctx(request))
+        session_id = _session_id(application_id, request)
+        discovery_mode = request.query_params.get("discoveryMode", "eager")
+        tools = runtime.foundry.aip.fde_mcp_tools(
+            application_id,
+            session_id=session_id,
+            discovery_mode=discovery_mode,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
-    session_id = _session_id(application_id, request)
+    activated_tool_count = tools.get("activatedToolCount")
     return StreamingResponse(
-        _ready_events(application_id, session_id),
+        _ready_events(
+            application_id,
+            session_id,
+            is_list_changed=isinstance(activated_tool_count, int) and activated_tool_count > 0,
+        ),
         media_type="text/event-stream",
         headers={"Mcp-Session-Id": session_id, "Cache-Control": "no-cache"},
     )
@@ -85,9 +97,9 @@ def builder_mcp_authorization_server(request: Request) -> dict[str, object]:
         "token_endpoint": f"{base}/api/auth/osdk/oauth/token",
         "revocation_endpoint": f"{base}/api/auth/osdk/oauth/revoke",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": ["authorization_code", "client_credentials", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
     }
 
 
@@ -99,14 +111,23 @@ def _dispatch(
     _require_json_rpc(payload)
     method = payload.get("method")
     session_id = _session_id(application_id, request)
+    ctx = _ctx(request)
     if method == "initialize":
+        runtime.foundry.aip.fde_mcp_tools(application_id, ctx=ctx)
         return _initialize_result(), session_id
     if method == "notifications/initialized":
+        runtime.foundry.aip.fde_mcp_tools(application_id, ctx=ctx)
         return {}, session_id
     if method == "tools/list":
-        return runtime.foundry.aip.fde_mcp_tools(application_id, ctx=_ctx(request)), session_id
+        params = _mapping(payload.get("params", {}), "params")
+        return runtime.foundry.aip.fde_mcp_tools(
+            application_id,
+            session_id=session_id,
+            discovery_mode=_optional_text(params.get("discoveryMode")) or "eager",
+            ctx=ctx,
+        ), session_id
     if method == "tools/call":
-        return _call_tool(application_id, session_id, request, payload), session_id
+        return _call_tool(application_id, session_id, request, payload, ctx), session_id
     raise ValidationFailed("unsupported Builder MCP JSON-RPC method", details={"method": method})
 
 
@@ -115,6 +136,7 @@ def _call_tool(
     session_id: str,
     request: Request,
     payload: Mapping[str, object],
+    ctx: RequestContext,
 ) -> Mapping[str, object]:
     params = _mapping(payload.get("params"), "params")
     arguments = _mapping(params.get("arguments"), "params.arguments")
@@ -132,22 +154,23 @@ def _call_tool(
         arguments=tool_arguments,
         confirmed_tool_id=request.headers.get("X-FDE-Confirm-Tool"),
     )
-    return runtime.foundry.aip.run_fde_mcp_tool(call, ctx=_ctx(request))
+    return runtime.foundry.aip.run_fde_mcp_tool(call, ctx=ctx)
 
 
 def _initialize_result() -> dict[str, object]:
     return {
         "protocolVersion": _PROTOCOL_VERSION,
-        "capabilities": {"tools": {"listChanged": False}},
+        "capabilities": {"tools": {"listChanged": True}},
         "serverInfo": {"name": "foundry-lite-builder-mcp", "version": "1.0.0"},
         "instructions": (
-            "Use explicit workspaceRef values. Mutations require an out-of-band X-FDE-Confirm-Tool header. "
+            "Use lazy discovery with search_tools or eager tools/list fallback and explicit workspaceRef values. "
+            "Mutations require an out-of-band X-FDE-Confirm-Tool header. "
             "Approval, merge, deploy, and activation tools are never exposed."
         ),
     }
 
 
-async def _ready_events(application_id: str, session_id: str) -> AsyncIterator[str]:
+async def _ready_events(application_id: str, session_id: str, *, is_list_changed: bool) -> AsyncIterator[str]:
     data = json.dumps(
         {
             "jsonrpc": "2.0",
@@ -157,6 +180,9 @@ async def _ready_events(application_id: str, session_id: str) -> AsyncIterator[s
         sort_keys=True,
     )
     yield f"id: {session_id}:1\nevent: message\ndata: {data}\n\n"
+    if is_list_changed:
+        changed = json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}, sort_keys=True)
+        yield f"id: {session_id}:2\nevent: message\ndata: {changed}\n\n"
     yield ": heartbeat\n\n"
 
 
@@ -198,6 +224,10 @@ def _text(value: Mapping[str, object], key: str) -> str:
     if not isinstance(item, str) or not item.strip():
         raise ValidationFailed(f"Builder MCP {key} is required")
     return item.strip()
+
+
+def _optional_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _rpc_error(rpc_id: object, exc: FoundryLiteError) -> dict[str, object]:

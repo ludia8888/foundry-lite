@@ -2,6 +2,9 @@
 
 from foundry_lite.application.action_types import ActionApplyCommand, ActionExecutionPlanResponse
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
+from foundry_lite.application.ports.action_notification_recipient_directory import (
+    ActionNotificationRecipientDirectory,
+)
 from foundry_lite.application.services.action_protocols import (
     ActionObjectRecordLookup,
     ActionOsdkScopeBoundary,
@@ -18,6 +21,7 @@ __all__ = [
     "ActionDefinitionV3",
     "ActionExecutionPlanResponse",
     "ActionObjectRecordLookup",
+    "ActionNotificationRecipientDirectory",
     "ActionOsdkScopeBoundary",
     "ActionRuntimeBoundary",
     "ActionTypeRow",

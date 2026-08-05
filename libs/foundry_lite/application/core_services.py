@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TypedDict
 
-from foundry_lite.application.core_service_groups import aip_service_items, source_service_items
+from foundry_lite.application.core_service_groups import SharedCoreServices, aip_service_items, source_service_items
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.model_gateway_bridge import GovernedSemanticModelBridge
 from foundry_lite.application.services.action_effect_delivery_service import ActionEffectDeliveryService
@@ -23,6 +22,7 @@ from foundry_lite.application.services.aip.runtime_services import (
     BuilderRuntimeService,
     FdeApplicationToolService,
     FdeContextService,
+    FdeDataConnectionToolService,
     FdeOntologyToolService,
     FdePilotService,
     FdePlatformToolService,
@@ -43,7 +43,11 @@ from foundry_lite.application.services.ontology_search import OntologySearchServ
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.ontology_services import OntologyServices
 from foundry_lite.application.services.osdk_application_service import OsdkApplicationService
-from foundry_lite.application.services.osdk_application_services import OsdkApplicationServices
+from foundry_lite.application.services.osdk_application_services import (
+    OsdkAccessSessionService,
+    OsdkApplicationServices,
+)
+from foundry_lite.application.services.osdk_oauth_client_credentials_service import OsdkOAuthClientCredentialsService
 from foundry_lite.application.services.osdk_oauth_session_service import OsdkOAuthSessionService
 from foundry_lite.application.services.pipeline_services import PipelineServices
 from foundry_lite.application.services.runtime_bundle import (
@@ -83,6 +87,7 @@ __all__ = [
     "ErasureService",
     "EvalService",
     "FunctionExecutionService",
+    "FdeDataConnectionToolService",
     "InsightReviewService",
     "DatasetServices",
     "IcebergMaintenanceService",
@@ -119,33 +124,12 @@ __all__ = [
 ]
 
 
-class _SharedCoreServices(TypedDict):
-    backup_restore: BackupRestoreServices
-    dataset: DatasetServices
-    fde_application_tools: FdeApplicationToolService
-    fde_context: FdeContextService
-    fde_ontology_tools: FdeOntologyToolService
-    fde_pilot: FdePilotService
-    fde_platform_tools: FdePlatformToolService
-    fde_runtime: FdeRuntimeService
-    iceberg_maintenance: IcebergMaintenanceService
-    insight_review: InsightReviewService
-    media: MediaServices
-    object_store: ObjectServices
-    source_management: SourceManagementService
-    source_connection_test: SourceConnectionTestService
-    source_lifecycle: SourceLifecycleService
-    source_cdc_object_index: SourceCdcObjectIndexService
-    source_scheduler: SourceSchedulerService
-
-
 @dataclass(frozen=True)
 class CoreServices:
     """Constructor-injected application service graph.
 
-    ``FoundryLite`` delegates to this graph. Each service is a concrete
-    object with only the dependencies it declares and explicit collaborator
-    service attributes, replacing the previous facade-level MRO.
+    ``FoundryLite`` delegates to this graph. Each concrete service declares
+    only its infrastructure dependencies and explicit collaborators.
     """
 
     action: ActionServices
@@ -170,6 +154,7 @@ class CoreServices:
     fde_ontology_tools: FdeOntologyToolService
     fde_application_tools: FdeApplicationToolService
     fde_context: FdeContextService
+    fde_data_connection_tools: FdeDataConnectionToolService
     fde_pilot: FdePilotService
     fde_platform_tools: FdePlatformToolService
     fde_runtime: FdeRuntimeService
@@ -188,6 +173,8 @@ class CoreServices:
     ontology: OntologyServices
     ontology_search: OntologySearchService
     osdk_applications: OsdkApplicationServices
+    osdk_access_sessions: OsdkAccessSessionService
+    osdk_oauth_client_credentials: OsdkOAuthClientCredentialsService
     osdk_oauth_sessions: OsdkOAuthSessionService
     pipelines: PipelineServices
     outbox_publisher: OutboxPublisherService
@@ -213,12 +200,13 @@ def _new_core_services(dependencies: CoreDependencies) -> CoreServices:
     return _compose_core_services(dependencies, shared, model_gateway, pipeline_dependencies)
 
 
-def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices:
+def _shared_core_services(dependencies: CoreDependencies) -> SharedCoreServices:
     return {
         "backup_restore": BackupRestoreServices.create(dependencies),
         "dataset": DatasetServices.create(dependencies),
         "fde_application_tools": build_service(FdeApplicationToolService, dependencies),
         "fde_context": build_service(FdeContextService, dependencies),
+        "fde_data_connection_tools": build_service(FdeDataConnectionToolService, dependencies),
         "fde_ontology_tools": build_service(FdeOntologyToolService, dependencies),
         "fde_pilot": build_service(FdePilotService, dependencies),
         "fde_platform_tools": build_service(FdePlatformToolService, dependencies),
@@ -236,7 +224,7 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
 
 
 # fmt: off
-def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices, model_gateway: ModelGatewayService, pipeline_dependencies: CoreDependencies) -> CoreServices:  # noqa: E501
+def _compose_core_services(dependencies: CoreDependencies, shared: SharedCoreServices, model_gateway: ModelGatewayService, pipeline_dependencies: CoreDependencies) -> CoreServices:  # noqa: E501
     return CoreServices(
         action=ActionServices.create(dependencies),
         action_effects=build_service(ActionEffectDeliveryService, dependencies),
@@ -255,7 +243,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         erasure=build_service(ErasureService, dependencies), evals=build_service(EvalService, dependencies),
         fde_ontology_tools=shared["fde_ontology_tools"], fde_pilot=shared["fde_pilot"],
         fde_application_tools=shared["fde_application_tools"], fde_context=shared["fde_context"],
-        fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],
+        fde_data_connection_tools=shared["fde_data_connection_tools"], fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],  # noqa: E501
         function_execution=build_service(FunctionExecutionService, dependencies),
         iceberg_maintenance=shared["iceberg_maintenance"],
         materialization=build_service(MaterializationService, dependencies),
@@ -266,8 +254,8 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         visual_builder=build_service(VisualBuilderService, dependencies),
         ontology=OntologyServices.create(dependencies),
         ontology_search=build_service(OntologySearchService, dependencies),
-        osdk_applications=OsdkApplicationServices.create(dependencies),
-        osdk_oauth_sessions=build_service(OsdkOAuthSessionService, dependencies),
+        osdk_applications=OsdkApplicationServices.create(dependencies), osdk_access_sessions=build_service(OsdkAccessSessionService, dependencies),  # noqa: E501
+        osdk_oauth_client_credentials=build_service(OsdkOAuthClientCredentialsService, dependencies), osdk_oauth_sessions=build_service(OsdkOAuthSessionService, dependencies),  # noqa: E501
         pipelines=PipelineServices.create(pipeline_dependencies),
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
@@ -277,8 +265,6 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies), )
 # fmt: on
-
-
 def _pipeline_dependencies(
     dependencies: CoreDependencies,
     model_gateway: ModelGatewayService,
@@ -328,6 +314,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         *services.ontology.items(),
         services.ontology_search,
         *services.osdk_applications.items(),
+        services.osdk_oauth_client_credentials,
         services.osdk_oauth_sessions,
         *services.pipelines.items(),
         services.outbox_publisher,
@@ -346,7 +333,6 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         **_media_collaborator_map(services),
         **_data_collaborator_map(services),
         **_object_collaborator_map(services),
-        **_operations_collaborator_map(services),
     }
 
 
@@ -365,7 +351,11 @@ def _action_aip_collaborator_map(services: CoreServices) -> dict[str, CoreServic
         "action_branch_service": services.action.branch,
         "action_definition_service": services.action.definition,
         "action_effect_delivery_service": services.action_effects,
+        "action_effect_operator_service": services.action.effect_operations,
+        "action_notification_policy_service": services.action.notification_policies,
         "action_log_revert_service": services.action.log_revert,
+        "action_media_service": services.action.media,
+        "action_media_runtime_service": services.action.media_runtime,
         "action_planning_service": services.action.planning,
         "action_service": services.action.entrypoint,
         "action_validation_service": services.action.validation,
@@ -378,6 +368,7 @@ def _action_aip_collaborator_map(services: CoreServices) -> dict[str, CoreServic
         "fde_ontology_tool_service": services.fde_ontology_tools,
         "fde_application_tool_service": services.fde_application_tools,
         "fde_context_service": services.fde_context,
+        "fde_data_connection_tool_service": services.fde_data_connection_tools,
         "fde_pilot_service": services.fde_pilot,
         "fde_platform_tool_service": services.fde_platform_tools,
     }
@@ -403,8 +394,12 @@ def _platform_collaborator_map(services: CoreServices) -> dict[str, CoreService]
         "logic_runtime_service": services.logic_runtime,
         "model_gateway_service": services.model_gateway,
         "prompt_artifact_service": services.prompt_artifact,
+        "outbox_publisher_service": services.outbox_publisher,
+        "record_dlq_service": services.record_dlq,
+        "runtime_service": services.runtime,
         "tool_broker_service": services.tool_broker,
         "visual_builder_service": services.visual_builder,
+        "workflow_orchestration_service": services.workflow,
     }
 
 
@@ -484,14 +479,6 @@ def _object_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "osdk_application_scope_service": services.osdk_applications.scope,
         "osdk_application_service": services.osdk_applications.entrypoint,
         "osdk_application_sdk_service": services.osdk_applications.sdk,
+        "osdk_mcp_server_service": services.osdk_applications.mcp,
         "osdk_oauth_session_service": services.osdk_oauth_sessions,
-    }
-
-
-def _operations_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
-    return {
-        "outbox_publisher_service": services.outbox_publisher,
-        "record_dlq_service": services.record_dlq,
-        "runtime_service": services.runtime,
-        "workflow_orchestration_service": services.workflow,
     }

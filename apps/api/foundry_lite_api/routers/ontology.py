@@ -19,6 +19,8 @@ from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import (
     JsonObject,
     OntologyApplyRequest,
+    OntologyBranchActionTypeDeleteRequest,
+    OntologyBranchActionTypeRequest,
     OntologyBranchCreateRequest,
     OntologyBranchProposeRequest,
     OntologyBranchRebaseRequest,
@@ -267,6 +269,82 @@ def list_ontology_branches(
 def get_ontology_branch(request: Request, branch_id: str) -> JsonObject:
     try:
         return runtime.foundry.ontology.get_branch(branch_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/branches/{branch_id}/action-types")
+def list_ontology_branch_action_types(request: Request, branch_id: str) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.list_branch_action_types(branch_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/branches/{branch_id}/action-types/{action_api_name}")
+def get_ontology_branch_action_type(request: Request, branch_id: str, action_api_name: str) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.get_branch_action_type(branch_id, action_api_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/branches/{branch_id}/action-types")
+def create_ontology_branch_action_type(
+    request: Request,
+    branch_id: str,
+    payload: OntologyBranchActionTypeRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.create_branch_action_type(
+            branch_id,
+            definition=payload.definition,
+            expected_fingerprint=payload.expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.put("/api/ontology/branches/{branch_id}/action-types/{action_api_name}")
+def update_ontology_branch_action_type(
+    request: Request,
+    branch_id: str,
+    action_api_name: str,
+    payload: OntologyBranchActionTypeRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.update_branch_action_type(
+            branch_id,
+            action_api_name,
+            definition=payload.definition,
+            expected_fingerprint=payload.expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.delete("/api/ontology/branches/{branch_id}/action-types/{action_api_name}")
+def delete_ontology_branch_action_type(
+    request: Request,
+    branch_id: str,
+    action_api_name: str,
+    payload: OntologyBranchActionTypeDeleteRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.delete_branch_action_type(
+            branch_id,
+            action_api_name,
+            expected_fingerprint=payload.expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

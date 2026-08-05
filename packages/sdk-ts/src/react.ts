@@ -1657,10 +1657,13 @@ export type FoundryLiteActionParameterInputKind =
   | "json"
   | "date"
   | "datetime"
-  | "select";
+  | "select"
+  | "media"
+  | "attachment";
 
 export type FoundryLiteActionParameterField = {
   name: string;
+  parameterPath: string;
   label: string;
   description: string | null;
   dataType: string;
@@ -1671,8 +1674,23 @@ export type FoundryLiteActionParameterField = {
   hasServerDefault: boolean;
   matchedOverride: number | null;
   options: unknown[];
+  schema: Record<string, unknown>;
   value: unknown;
   hasValue: boolean;
+  constraintError: string | null;
+};
+
+export type FoundryLiteActionFormSection = {
+  id: string;
+  title: string;
+  description: string | null;
+  columns: 1 | 2;
+  isCollapsible: boolean;
+  isInitiallyCollapsed: boolean;
+  isVisible: boolean;
+  visibleWhen: Record<string, unknown> | null;
+  parameterNames: string[];
+  fields: FoundryLiteActionParameterField[];
 };
 
 export type FoundryLiteActionFormView = {
@@ -1685,15 +1703,19 @@ export type FoundryLiteActionFormView = {
   params: Record<string, unknown>;
   idempotencyKey: string | null;
   generatedActionType: OsdkActionType | null;
+  runtimeActionType: OsdkActionType | null;
   isGeneratedActionTypeAvailable: boolean;
   isActionEnabled: boolean;
   isTargetObjectTypeMatched: boolean;
   parameterFields: FoundryLiteActionParameterField[];
+  parameterSections: FoundryLiteActionFormSection[];
   requiredParameterNames: string[];
   missingParameterNames: string[];
+  invalidParameterNames: string[];
   missingFields: string[];
   hasRequiredParameters: boolean;
   hasAllRequiredParameters: boolean;
+  hasValidParameters: boolean;
   hasIdempotencyKey: boolean;
   canBuildPayload: boolean;
   canSubmitAction: boolean;
@@ -1798,19 +1820,29 @@ export function foundryLiteActionFormView(
     selection.expectedObjectVersion ?? readFoundryLiteActionTargetObjectVersion(targetObject);
   const targetObjectType = actionView?.targetObjectApiName ?? null;
   const targetInstanceType = readFoundryLiteActionTargetObjectType(targetObject);
+  const runtimeActionType = foundryLiteRuntimeActionType(actionView);
   const isTargetObjectTypeMatched = Boolean(
-    !targetObjectType || !targetInstanceType || targetObjectType === targetInstanceType,
+    runtimeActionType?.targetKind === "interface" ||
+      !targetObjectType ||
+      !targetInstanceType ||
+      targetObjectType === targetInstanceType,
   );
   const params = selection.params ?? {};
   const idempotencyKey = selection.idempotencyKey ?? null;
   const parameterFields = actionView
     ? foundryLiteActionParameterFields(actionView.action.parameterSchema, params)
     : [];
+  const parameterSections = actionView
+    ? foundryLiteActionParameterSections(actionView.action.parameterSchema, parameterFields)
+    : [];
   const requiredParameterNames = parameterFields
     .filter((field) => field.isRequired)
     .map((field) => field.name);
   const missingParameterNames = parameterFields
     .filter((field) => field.isRequired && !field.hasValue)
+    .map((field) => field.name);
+  const invalidParameterNames = parameterFields
+    .filter((field) => field.constraintError !== null)
     .map((field) => field.name);
   const missingFields = foundryLiteActionFormMissingFields(
     actionView,
@@ -1823,6 +1855,7 @@ export function foundryLiteActionFormView(
   const disabledReason = foundryLiteActionFormDisabledReason(
     actionView,
     missingFields,
+    invalidParameterNames,
     isTargetObjectTypeMatched,
   );
   const canBuildPayload =
@@ -1832,6 +1865,9 @@ export function foundryLiteActionFormView(
         objectId: targetObjectId,
         expectedObjectVersion,
         params,
+        ...(runtimeActionType?.targetKind === "interface" && targetInstanceType
+          ? { objectType: targetInstanceType }
+          : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as OsdkActionPayload<OsdkActionType>)
     : null;
@@ -1845,15 +1881,19 @@ export function foundryLiteActionFormView(
     params,
     idempotencyKey,
     generatedActionType: actionView?.generatedActionType ?? null,
+    runtimeActionType,
     isGeneratedActionTypeAvailable: actionView?.isGeneratedActionTypeAvailable ?? false,
     isActionEnabled: actionView?.isEnabled ?? false,
     isTargetObjectTypeMatched,
     parameterFields,
+    parameterSections,
     requiredParameterNames,
     missingParameterNames,
+    invalidParameterNames,
     missingFields,
     hasRequiredParameters: requiredParameterNames.length > 0,
     hasAllRequiredParameters: missingParameterNames.length === 0,
+    hasValidParameters: invalidParameterNames.length === 0,
     hasIdempotencyKey: idempotencyKey !== null && idempotencyKey.length > 0,
     canBuildPayload,
     canSubmitAction: payload !== null,
@@ -1878,11 +1918,11 @@ export function foundryLiteActionFormSubmitPayload(
 export function foundryLiteActionFormSubmitRequest(
   view: FoundryLiteActionFormView,
 ): FoundryLiteActionFormSubmitRequest {
-  if (!view.generatedActionType) {
+  if (!view.runtimeActionType) {
     throw new FoundryLiteApiError(
       0,
-      "UNKNOWN_OSDK_ACTION",
-      view.disabledReason ?? "Selected action is not available in the generated OSDK surface.",
+      "UNKNOWN_ACTION",
+      view.disabledReason ?? "Selected action is not available in the active ontology catalog.",
       { actionApiName: view.actionApiName, missingFields: view.missingFields },
       null,
       false,
@@ -1898,7 +1938,7 @@ export function foundryLiteActionFormSubmitRequest(
       false,
     );
   }
-  return { actionType: view.generatedActionType, payload: view.payload };
+  return { actionType: view.runtimeActionType, payload: view.payload };
 }
 
 export function useFoundryLiteActionForm(
@@ -6916,7 +6956,9 @@ function foundryLiteActionParameterFields(
       parameterConfig,
       requiredNames.has(name),
       resolvedValues,
+      foundryLiteParameterConstraints(fieldRecord),
     );
+    const effectiveSchema = foundryLiteEffectiveParameterSchema(fieldRecord, effectiveConfig.constraints);
     const dataType = foundryLiteActionParameterDataType(fieldRecord, parameterConfig);
     const submittedValue = params[name];
     const defaultValue = foundryLiteActionParameterDefaultValue(effectiveConfig.defaultValue, resolvedValues);
@@ -6924,21 +6966,86 @@ function foundryLiteActionParameterFields(
     if (value !== undefined) resolvedValues[name] = value;
     return {
       name,
+      parameterPath: name,
       label: foundryLiteActionParameterLabel(name, fieldRecord),
       description: foundryLiteActionParameterDescription(fieldRecord),
       dataType,
-      inputKind: foundryLiteActionParameterInputKind(dataType, fieldRecord),
+      inputKind: foundryLiteActionParameterInputKind(dataType, effectiveSchema),
       isRequired: effectiveConfig.isRequired,
       isVisible: effectiveConfig.isVisible,
       isEditable: effectiveConfig.isEditable,
       hasServerDefault: effectiveConfig.defaultValue !== null,
       matchedOverride: effectiveConfig.matchedOverride,
-      options: Array.isArray(fieldRecord.enum) ? fieldRecord.enum : [],
+      options: Array.isArray(effectiveSchema.enum) ? effectiveSchema.enum : [],
+      schema: effectiveSchema,
       value,
       hasValue:
         foundryLiteActionParameterHasValue(value) || effectiveConfig.defaultValue !== null,
+      constraintError: foundryLiteActionParameterConstraintError(name, value, effectiveSchema),
     };
   });
+}
+
+function foundryLiteActionParameterSections(
+  schema: Record<string, unknown>,
+  fields: FoundryLiteActionParameterField[],
+): FoundryLiteActionFormSection[] {
+  const layout = isFoundryLiteRecord(schema["x-foundry-form-layout"])
+    ? schema["x-foundry-form-layout"]
+    : {};
+  const rawSections = Array.isArray(layout.sections) ? layout.sections : [];
+  const fieldsByName = new Map(fields.map((field) => [field.name, field]));
+  const values = Object.fromEntries(fields.filter((field) => field.hasValue).map((field) => [field.name, field.value]));
+  const assigned = new Set<string>();
+  const sections = rawSections.map((raw, index) => {
+    const section = isFoundryLiteRecord(raw) ? raw : {};
+    const names = Array.isArray(section.parameterNames)
+      ? section.parameterNames.filter((name): name is string => typeof name === "string")
+      : [];
+    const sectionFields = names.flatMap((name) => {
+      const field = fieldsByName.get(name);
+      if (!field || assigned.has(name)) return [];
+      assigned.add(name);
+      return [field];
+    });
+    return foundryLiteActionFormSection(section, index, names, sectionFields, values);
+  });
+  const remaining = fields.filter((field) => !assigned.has(field.name));
+  if (remaining.length > 0 || sections.length === 0) {
+    sections.push(
+      foundryLiteActionFormSection(
+        {},
+        sections.length,
+        remaining.map((field) => field.name),
+        remaining,
+        values,
+      ),
+    );
+  }
+  return sections;
+}
+
+function foundryLiteActionFormSection(
+  section: Record<string, unknown>,
+  index: number,
+  parameterNames: string[],
+  fields: FoundryLiteActionParameterField[],
+  values: Record<string, unknown>,
+): FoundryLiteActionFormSection {
+  const columns = section.columns === 2 ? 2 : 1;
+  const visibleWhen = isFoundryLiteRecord(section.visibleWhen) ? section.visibleWhen : null;
+  return {
+    id: typeof section.id === "string" && section.id ? section.id : `parameters-${index + 1}`,
+    title: typeof section.title === "string" && section.title ? section.title : "Parameters",
+    description: typeof section.description === "string" ? section.description : null,
+    columns,
+    isCollapsible: section.isCollapsible === true,
+    isInitiallyCollapsed: section.isInitiallyCollapsed === true,
+    isVisible: visibleWhen === null || foundryLiteActionConditionMatches(visibleWhen, values),
+    visibleWhen,
+    parameterNames,
+    fields,
+  };
 }
 
 type FoundryLiteEffectiveParameterConfig = {
@@ -6946,6 +7053,7 @@ type FoundryLiteEffectiveParameterConfig = {
   isVisible: boolean;
   isEditable: boolean;
   defaultValue: Record<string, unknown> | null;
+  constraints: Record<string, unknown>;
   matchedOverride: number | null;
 };
 
@@ -6953,12 +7061,14 @@ function foundryLiteEffectiveParameterConfig(
   config: Record<string, unknown>,
   schemaRequired: boolean,
   values: Record<string, unknown>,
+  schemaConstraints: Record<string, unknown>,
 ): FoundryLiteEffectiveParameterConfig {
   const result: FoundryLiteEffectiveParameterConfig = {
     isRequired: typeof config.required === "boolean" ? config.required : schemaRequired,
     isVisible: true,
     isEditable: true,
     defaultValue: isFoundryLiteRecord(config.default) ? config.default : null,
+    constraints: isFoundryLiteRecord(config.constraints) ? config.constraints : schemaConstraints,
     matchedOverride: null,
   };
   const overrides = Array.isArray(config.overrides) ? config.overrides : [];
@@ -6970,10 +7080,56 @@ function foundryLiteEffectiveParameterConfig(
     if (typeof next.visible === "boolean") result.isVisible = next.visible;
     if (typeof next.editable === "boolean") result.isEditable = next.editable;
     if (isFoundryLiteRecord(next.default)) result.defaultValue = next.default;
+    if (isFoundryLiteRecord(next.constraints)) result.constraints = next.constraints;
     result.matchedOverride = index;
     return true;
   });
   return result;
+}
+
+const FOUNDRY_LITE_PARAMETER_CONSTRAINT_KEYS = [
+  "enum", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems",
+] as const;
+
+function foundryLiteParameterConstraints(schema: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    FOUNDRY_LITE_PARAMETER_CONSTRAINT_KEYS.flatMap((key) =>
+      Object.prototype.hasOwnProperty.call(schema, key) ? [[key, schema[key]]] : [],
+    ),
+  );
+}
+
+function foundryLiteEffectiveParameterSchema(
+  schema: Record<string, unknown>,
+  constraints: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = { ...schema };
+  for (const key of FOUNDRY_LITE_PARAMETER_CONSTRAINT_KEYS) delete result[key];
+  return { ...result, ...constraints };
+}
+
+function foundryLiteActionParameterConstraintError(
+  name: string,
+  value: unknown,
+  constraints: Record<string, unknown>,
+): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (Array.isArray(constraints.enum) && !constraints.enum.some((item) => Object.is(item, value))) {
+    return `${name}: enum`;
+  }
+  if (typeof value === "string") {
+    if (typeof constraints.minLength === "number" && value.length < constraints.minLength) return `${name}: minLength`;
+    if (typeof constraints.maxLength === "number" && value.length > constraints.maxLength) return `${name}: maxLength`;
+  }
+  if (typeof value === "number") {
+    if (typeof constraints.minimum === "number" && value < constraints.minimum) return `${name}: minimum`;
+    if (typeof constraints.maximum === "number" && value > constraints.maximum) return `${name}: maximum`;
+  }
+  if (Array.isArray(value)) {
+    if (typeof constraints.minItems === "number" && value.length < constraints.minItems) return `${name}: minItems`;
+    if (typeof constraints.maxItems === "number" && value.length > constraints.maxItems) return `${name}: maxItems`;
+  }
+  return null;
 }
 
 function foundryLiteActionConditionMatches(
@@ -7067,6 +7223,8 @@ function foundryLiteActionParameterInputKind(
   if (Array.isArray(schema.enum)) return "select";
   if (dataType === "date") return "date";
   if (dataType === "timestamp") return "datetime";
+  if (dataType === "media") return "media";
+  if (dataType === "attachment") return "attachment";
   if (["float", "integer", "long"].includes(dataType)) return "number";
   if (dataType.includes("boolean")) return "checkbox";
   if (dataType.includes("object") || dataType.includes("array") || dataType === "unknown") return "json";
@@ -7131,18 +7289,33 @@ function foundryLiteActionFormMissingFields(
 function foundryLiteActionFormDisabledReason(
   actionView: FoundryLiteOntologyActionView | null | undefined,
   missingFields: string[],
+  invalidParameterNames: string[],
   isTargetObjectTypeMatched: boolean,
 ): string | null {
   if (!actionView) return "Select an action before building an action form.";
   if (!actionView.isEnabled) return "Selected action is disabled in the active ontology.";
-  if (!actionView.isGeneratedActionTypeAvailable) {
-    return "Regenerate the SDK before submitting this action through the static OSDK surface.";
-  }
   if (!isTargetObjectTypeMatched) {
     return "Selected object type does not match this action target.";
   }
   if (missingFields.length > 0) return `Action form is missing ${missingFields.join(", ")}.`;
+  if (invalidParameterNames.length > 0) {
+    return `Action form has invalid parameters ${invalidParameterNames.join(", ")}.`;
+  }
   return null;
+}
+
+function foundryLiteRuntimeActionType(
+  actionView: FoundryLiteOntologyActionView | null | undefined,
+): OsdkActionType | null {
+  if (!actionView) return null;
+  if (actionView.generatedActionType) return actionView.generatedActionType;
+  const targetKind = actionView.action.definition.targetKind === "interface" ? "interface" : "object";
+  return {
+    kind: "action",
+    apiName: actionView.apiName,
+    targetObjectType: actionView.targetObjectApiName,
+    targetKind,
+  };
 }
 
 function foundryLiteAdminLaunchLabel(actionKind: AdminCapabilityActionKind): string {

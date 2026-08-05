@@ -63,15 +63,20 @@ def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTyp
         "displayName": row["display_name"],
         "primaryKey": row["primary_key_property"],
         "backing": dict(row["backing"]),
-        "properties": [_property_definition(prop, property_datasources.get(prop["api_name"])) for prop in properties],
+        "properties": [
+            _property_definition(
+                prop,
+                property_datasources.get(prop["api_name"]),
+                _persisted_media_property(row, prop["api_name"]),
+            )
+            for prop in properties
+        ],
     }
     if row["description"] is not None:
         definition["description"] = row["description"]
     title_property = row["config"].get("titleProperty")
     if isinstance(title_property, str):
         definition["titleProperty"] = title_property
-    # Materialization declarations must survive rollback: the restored version
-    # replays through the same YAML-shaped import path as a fresh apply.
     materialization = row["config"].get("materialization")
     if isinstance(materialization, Mapping):
         definition["materialization"] = dict(materialization)
@@ -89,7 +94,11 @@ def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTyp
     return definition
 
 
-def _property_definition(row: PropertyTypeRow, datasource: str | None = None) -> JsonObject:
+def _property_definition(
+    row: PropertyTypeRow,
+    datasource: str | None = None,
+    media_config: Mapping[str, object] | None = None,
+) -> JsonObject:
     definition: JsonObject = {
         "apiName": row["api_name"],
         "displayName": row["display_name"],
@@ -109,6 +118,10 @@ def _property_definition(row: PropertyTypeRow, datasource: str | None = None) ->
         definition["derivation"] = dict(row["derivation"])
     if datasource is not None and row["source"] == "dataset":
         definition["datasource"] = datasource
+    if media_config is not None:
+        definition["mediaSet"] = media_config["mediaSet"]
+        if row["data_type"] == "attachment":
+            definition["allowMultiple"] = media_config.get("allowMultiple") is True
     return definition
 
 
@@ -117,6 +130,14 @@ def _persisted_property_datasources(row: ObjectTypeRow) -> dict[str, str]:
     if not isinstance(declared, Mapping):
         return {}
     return {str(key): str(value) for key, value in declared.items() if isinstance(value, str)}
+
+
+def _persisted_media_property(row: ObjectTypeRow, property_name: str) -> Mapping[str, object] | None:
+    declared = row["config"].get("mediaProperties")
+    if not isinstance(declared, Mapping):
+        return None
+    value = declared.get(property_name)
+    return value if isinstance(value, Mapping) else None
 
 
 def _link_type_definition(row: LinkTypeRow) -> JsonObject:

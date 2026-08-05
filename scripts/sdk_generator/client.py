@@ -332,6 +332,23 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "      deactivateClient(appId: string, clientRowId: string, options: { idempotencyKey: string }): "
             "Promise<Record<string, unknown>>;"
         ),
+        (
+            "      rotateClientSecret(appId: string, clientRowId: string, payload: OsdkClientSecretRotateRequest, "
+            "options: { idempotencyKey: string }): Promise<Record<string, unknown>>;"
+        ),
+        (
+            "      revokeClientSecret(appId: string, clientRowId: string, options: { idempotencyKey: string }): "
+            "Promise<Record<string, unknown>>;"
+        ),
+        "      listClientSecretVersions(appId: string, clientRowId: string): Promise<Array<Record<string, unknown>>>;",
+        "    };",
+        "    mcpServers: {",
+        (
+            "      configure(appId: string, payload: OsdkMcpServerConfigureRequest, "
+            "options: { idempotencyKey: string }): Promise<Record<string, unknown>>;"
+        ),
+        "      get(appId: string): Promise<Record<string, unknown>>;",
+        "      list(): Promise<Array<Record<string, unknown>>>;",
         "    };",
         "    sdkVersions: {",
         (
@@ -409,6 +426,23 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "options: { idempotencyKey: string }): Promise<OntologyBranchPayload>;"
         ),
         "      abandon(branchId: string): Promise<OntologyBranchPayload>;",
+        "      actionTypes: {",
+        "        list(branchId: string): Promise<OntologyBranchActionTypeListResult>;",
+        "        get(branchId: string, actionApiName: string): Promise<OntologyBranchActionType>;",
+        (
+            "        create(branchId: string, payload: OntologyBranchActionTypeRequest, "
+            "options: { idempotencyKey: string }): Promise<OntologyBranchActionTypeMutationResult>;"
+        ),
+        (
+            "        update(branchId: string, actionApiName: string, payload: OntologyBranchActionTypeRequest, "
+            "options: { idempotencyKey: string }): Promise<OntologyBranchActionTypeMutationResult>;"
+        ),
+        (
+            "        delete(branchId: string, actionApiName: string, "
+            "payload: OntologyBranchActionTypeDeleteRequest, options: { idempotencyKey: string }): "
+            "Promise<OntologyBranchActionTypeMutationResult>;"
+        ),
+        "      };",
         "    };",
         "  };",
         "  insights: {",
@@ -463,16 +497,65 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
             "    get(actionApiName: string): Promise<ActionCatalogItem>;",
             "    schema(actionApiName: string): Promise<Record<string, unknown>>;",
+            ("    validate(actionApiName: string, payload: ActionPlanRequest): Promise<ActionValidationResponse>;"),
+            (
+                "    apply(actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string }): Promise<ActionApplyResponse>;"
+            ),
+            (
+                "    uploadParameter(actionApiName: string, parameterName: string, "
+                "payload: ActionMediaUploadRequest): Promise<ActionMediaUploadResult>;"
+            ),
             "    plan(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
             "    dryRun(actionApiName: string, payload: ActionPlanRequest): Promise<ActionExecutionPlanResponse>;",
             "    logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
+            "    notificationPolicies: {",
+            ("      list(options?: { cursor?: string; limit?: number }): Promise<ActionNotificationPolicyPage>;"),
+            "      get(policyName: string): Promise<ActionNotificationPolicy>;",
+            (
+                "      create(payload: ActionNotificationPolicyCreateRequest, "
+                "options: { idempotencyKey: string }): Promise<ActionNotificationPolicy>;"
+            ),
+            (
+                "      update(policyName: string, payload: ActionNotificationPolicyUpdateRequest, "
+                "options: { idempotencyKey: string }): Promise<ActionNotificationPolicy>;"
+            ),
+            (
+                "      disable(policyName: string, payload: ActionNotificationPolicyDisableRequest, "
+                "options: { idempotencyKey: string }): Promise<ActionNotificationPolicy>;"
+            ),
+            "    };",
+            "    effects: {",
+            (
+                "      list(options?: { status?: ActionEffectReceipt['status']; cursor?: string; limit?: number }): "
+                "Promise<ActionEffectReceiptPage>;"
+            ),
+            "      get(receiptId: string): Promise<ActionEffectReceipt>;",
+            (
+                "      cancel(receiptId: string, payload: ActionEffectCancelRequest | undefined, "
+                "options: { idempotencyKey: string }): Promise<ActionEffectReceipt>;"
+            ),
+            ("      retry(receiptId: string, options: { idempotencyKey: string }): Promise<ActionEffectReceipt>;"),
+            (
+                "      reconcile(receiptId: string, payload: ActionEffectReconcileRequest, "
+                "options: { idempotencyKey: string }): Promise<ActionEffectReceipt>;"
+            ),
+            "    };",
             "    branches: {",
             "      diff(branchId: string): Promise<Record<string, unknown>>;",
             ("      object(branchId: string, objectType: string, objectId: string): Promise<Record<string, unknown>>;"),
+            (
+                "      link(branchId: string, linkType: string, fromObjectId: string, toObjectId: string): "
+                "Promise<Record<string, unknown>>;"
+            ),
             "    };",
             "    runs: {",
             (
                 "      start(actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }): Promise<ActionRun>;"
+            ),
+            (
+                "      startBatch(actionApiName: string, payload: ActionFunctionBatchRunRequest, "
                 "options: { idempotencyKey: string; waitSeconds?: number }): Promise<ActionRun>;"
             ),
             "      list(filters?: { cursor?: string; limit?: number }): Promise<ActionRunListResult>;",
@@ -500,6 +583,10 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 f"      plan(payload: {validate_payload_type}): Promise<ActionExecutionPlanResponse>;",
                 f"      dryRun(payload: {validate_payload_type}): Promise<ActionExecutionPlanResponse>;",
                 f"      apply(payload: {action_def.payload_type}): Promise<ActionApplyResponse>;",
+                (
+                    "      uploadParameter(parameterName: string, payload: ActionMediaUploadRequest): "
+                    "Promise<ActionMediaUploadResult>;"
+                ),
                 (
                     f"      applyBatch(payload: {batch_payload_type}, options: {{ idempotencyKey: string }}): "
                     "Promise<ActionBatchApplyResponse>;"
@@ -2895,6 +2982,64 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "              },",
         "            },",
         "          ),",
+        "        rotateClientSecret: (",
+        "          appId: string,",
+        "          clientRowId: string,",
+        "          payload: OsdkClientSecretRotateRequest,",
+        "          clientRequestOptions: { idempotencyKey: string },",
+        "        ) => request<Record<string, unknown>>(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/` +",
+        "            `${encodeURIComponent(clientRowId)}/secrets/rotate`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json", "Idempotency-Key": requireIdempotencyKey(',
+        (
+            "              clientRequestOptions?.idempotencyKey, "
+            '"developerConsole.osdkApplications.rotateClientSecret") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "        revokeClientSecret: (",
+        "          appId: string,",
+        "          clientRowId: string,",
+        "          clientRequestOptions: { idempotencyKey: string },",
+        "        ) => request<Record<string, unknown>>(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/` +",
+        "            `${encodeURIComponent(clientRowId)}/secrets/revoke`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Idempotency-Key": requireIdempotencyKey(',
+        (
+            "              clientRequestOptions?.idempotencyKey, "
+            '"developerConsole.osdkApplications.revokeClientSecret") },'
+        ),
+        "          },",
+        "        ),",
+        "        listClientSecretVersions: (appId: string, clientRowId: string) =>",
+        "          request<Array<Record<string, unknown>>>(",
+        "            `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/` +",
+        "              `${encodeURIComponent(clientRowId)}/secrets`,",
+        "          ),",
+        "      },",
+        "      mcpServers: {",
+        "        configure: (",
+        "          appId: string,",
+        "          payload: OsdkMcpServerConfigureRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) => request<Record<string, unknown>>(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/mcp-server`,",
+        "          {",
+        '            method: "PUT",',
+        '            headers: { "Content-Type": "application/json", "Idempotency-Key": requireIdempotencyKey(',
+        '              options?.idempotencyKey, "developerConsole.mcpServers.configure") },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "        get: (appId: string) => request<Record<string, unknown>>(",
+        "          `/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/mcp-server`,",
+        "        ),",
+        "        list: () => request<Array<Record<string, unknown>>>(`/api/developer-console/mcp-servers`),",
         "      },",
         "      sdkVersions: {",
         "        create: (",
@@ -3176,6 +3321,69 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "            `/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`,",
         '            { method: "POST" },',
         "          ),",
+        "        actionTypes: {",
+        "          list: (branchId: string) =>",
+        (
+            "            request<OntologyBranchActionTypeListResult>(`/api/ontology/branches/"
+            "${encodeURIComponent(branchId)}/action-types`),"
+        ),
+        "          get: (branchId: string, actionApiName: string) =>",
+        (
+            "            request<OntologyBranchActionType>(`/api/ontology/branches/"
+            "${encodeURIComponent(branchId)}/action-types/${encodeURIComponent(actionApiName)}`),"
+        ),
+        (
+            "          create: (branchId: string, payload: OntologyBranchActionTypeRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "            request<OntologyBranchActionTypeMutationResult>(",
+        "              `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types`,",
+        "              {",
+        '                method: "POST",',
+        (
+            '                headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.actionTypes.create") },'
+        ),
+        "                body: JSON.stringify(payload),",
+        "              },",
+        "            ),",
+        (
+            "          update: (branchId: string, actionApiName: string, payload: OntologyBranchActionTypeRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "            request<OntologyBranchActionTypeMutationResult>(",
+        (
+            "              `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types/"
+            "${encodeURIComponent(actionApiName)}`,"
+        ),
+        "              {",
+        '                method: "PUT",',
+        (
+            '                headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.actionTypes.update") },'
+        ),
+        "                body: JSON.stringify(payload),",
+        "              },",
+        "            ),",
+        (
+            "          delete: (branchId: string, actionApiName: string, "
+            "payload: OntologyBranchActionTypeDeleteRequest, options: { idempotencyKey: string }) =>"
+        ),
+        "            request<OntologyBranchActionTypeMutationResult>(",
+        (
+            "              `/api/ontology/branches/${encodeURIComponent(branchId)}/action-types/"
+            "${encodeURIComponent(actionApiName)}`,"
+        ),
+        "              {",
+        '                method: "DELETE",',
+        (
+            '                headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.actionTypes.delete") },'
+        ),
+        "                body: JSON.stringify(payload),",
+        "              },",
+        "            ),",
+        "        },",
         "      },",
         "    },",
         "    insights: {",
@@ -3296,6 +3504,45 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "        request<ActionCatalogItem>(`/api/actions/${encodeURIComponent(actionApiName)}`),",
             "      schema: (actionApiName: string) =>",
             "        request<Record<string, unknown>>(`/api/actions/${encodeURIComponent(actionApiName)}/schema`),",
+            "      validate: (actionApiName: string, payload: ActionPlanRequest) =>",
+            (
+                "        request<ActionValidationResponse>("
+                "`/api/actions/${encodeURIComponent(actionApiName)}/validate`, {"
+            ),
+            '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
+            "        }),",
+            (
+                "      apply: (actionApiName: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string }) =>"
+            ),
+            ("        request<ActionApplyResponse>(`/api/actions/${encodeURIComponent(actionApiName)}/apply`, {"),
+            '          method: "POST",',
+            "          headers: {",
+            '            "Content-Type": "application/json",',
+            ('            "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.apply"),'),
+            "          },",
+            "          body: JSON.stringify(payload),",
+            "        }),",
+            (
+                "      uploadParameter: (actionApiName: string, parameterName: string, "
+                "payload: ActionMediaUploadRequest) => {"
+            ),
+            "        const form = new FormData();",
+            "        form.append('objectType', payload.objectType);",
+            "        form.append('objectId', payload.objectId);",
+            "        form.append('file', payload.file, payload.fileName ?? 'upload.bin');",
+            "        if (payload.suppliedMimeType) form.append('suppliedMimeType', payload.suppliedMimeType);",
+            "        if (payload.format) form.append('format', payload.format);",
+            "        return request<ActionMediaUploadResult>(",
+            (
+                "          `/api/actions/${encodeURIComponent(actionApiName)}/parameters/"
+                "${encodeURIComponent(parameterName)}/uploads`,"
+            ),
+            "          { method: 'POST', headers: { 'Idempotency-Key': requireIdempotencyKey(",
+            "            payload.idempotencyKey, 'actions.uploadParameter',",
+            "          ) }, body: form },",
+            "        );",
+            "      },",
             "      plan: (actionApiName: string, payload: ActionPlanRequest) =>",
             "        request<ActionExecutionPlanResponse>(`/api/actions/${encodeURIComponent(actionApiName)}/plan`, {",
             '          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
@@ -3314,6 +3561,100 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "        const suffix = query.size > 0 ? `?${query.toString()}` : '';",
             "        return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
             "      },",
+            "      notificationPolicies: {",
+            "        list: (options: { cursor?: string; limit?: number } = {}) => {",
+            "          const query = new URLSearchParams();",
+            "          if (options.cursor) query.set('cursor', options.cursor);",
+            "          if (options.limit !== undefined) query.set('limit', String(options.limit));",
+            "          const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            ("          return request<ActionNotificationPolicyPage>(`/api/actions/notification-policies${suffix}`);"),
+            "        },",
+            "        get: (policyName: string) => request<ActionNotificationPolicy>(",
+            "          `/api/actions/notification-policies/${encodeURIComponent(policyName)}` ,",
+            "        ),",
+            (
+                "        create: (payload: ActionNotificationPolicyCreateRequest, "
+                "options: { idempotencyKey: string }) => request<ActionNotificationPolicy>("
+            ),
+            "          `/api/actions/notification-policies`,",
+            "          { method: 'POST', headers: { 'Content-Type': 'application/json',",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(options?.idempotencyKey, "
+                "'actions.notificationPolicies.create'), }, body: JSON.stringify(payload) },"
+            ),
+            "        ),",
+            (
+                "        update: (policyName: string, payload: ActionNotificationPolicyUpdateRequest, "
+                "options: { idempotencyKey: string }) => request<ActionNotificationPolicy>("
+            ),
+            "          `/api/actions/notification-policies/${encodeURIComponent(policyName)}` ,",
+            "          { method: 'PUT', headers: { 'Content-Type': 'application/json',",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(options?.idempotencyKey, "
+                "'actions.notificationPolicies.update'), }, body: JSON.stringify(payload) },"
+            ),
+            "        ),",
+            (
+                "        disable: (policyName: string, payload: ActionNotificationPolicyDisableRequest, "
+                "options: { idempotencyKey: string }) => request<ActionNotificationPolicy>("
+            ),
+            "          `/api/actions/notification-policies/${encodeURIComponent(policyName)}` ,",
+            "          { method: 'DELETE', headers: { 'Content-Type': 'application/json',",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(options?.idempotencyKey, "
+                "'actions.notificationPolicies.disable'), }, body: JSON.stringify(payload) },"
+            ),
+            "        ),",
+            "      },",
+            "      effects: {",
+            (
+                "        list: (options: { status?: ActionEffectReceipt['status']; cursor?: string; "
+                "limit?: number } = {}) => {"
+            ),
+            "          const query = new URLSearchParams();",
+            "          if (options.status) query.set('status', options.status);",
+            "          if (options.cursor) query.set('cursor', options.cursor);",
+            "          if (options.limit !== undefined) query.set('limit', String(options.limit));",
+            "          const suffix = query.size > 0 ? `?${query.toString()}` : '';",
+            "          return request<ActionEffectReceiptPage>(`/api/actions/effects${suffix}`);",
+            "        },",
+            "        get: (receiptId: string) => request<ActionEffectReceipt>(",
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}` ,",
+            "        ),",
+            (
+                "        cancel: (receiptId: string, payload: ActionEffectCancelRequest | undefined, "
+                "options: { idempotencyKey: string }) => request<ActionEffectReceipt>("
+            ),
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}/cancel`,",
+            "          { method: 'POST', headers: { 'Content-Type': 'application/json',",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(options?.idempotencyKey, "
+                "'actions.effects.cancel'), }, body: JSON.stringify(payload ?? {}) },"
+            ),
+            "        ),",
+            (
+                "        retry: (receiptId: string, options: { idempotencyKey: string }) => "
+                "request<ActionEffectReceipt>("
+            ),
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}/retry`,",
+            "          { method: 'POST', headers: {",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(options?.idempotencyKey, "
+                "'actions.effects.retry'), } },"
+            ),
+            "        ),",
+            (
+                "        reconcile: (receiptId: string, payload: ActionEffectReconcileRequest, "
+                "options: { idempotencyKey: string }) => request<ActionEffectReceipt>("
+            ),
+            "          `/api/actions/effects/${encodeURIComponent(receiptId)}/reconcile`,",
+            "          { method: 'POST', headers: { 'Content-Type': 'application/json',",
+            (
+                "            'Idempotency-Key': requireIdempotencyKey(options?.idempotencyKey, "
+                "'actions.effects.reconcile'), }, body: JSON.stringify(payload) },"
+            ),
+            "        ),",
+            "      },",
             "      branches: {",
             "        diff: (branchId: string) =>",
             (
@@ -3325,6 +3666,12 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
                 "          request<Record<string, unknown>>(`/api/actions/branches/"
                 "${encodeURIComponent(branchId)}/objects/${encodeURIComponent(objectType)}/"
                 "${encodeURIComponent(objectId)}`),"
+            ),
+            "        link: (branchId: string, linkType: string, fromObjectId: string, toObjectId: string) =>",
+            (
+                "          request<Record<string, unknown>>(`/api/actions/branches/"
+                "${encodeURIComponent(branchId)}/links/${encodeURIComponent(linkType)}/"
+                "${encodeURIComponent(fromObjectId)}/${encodeURIComponent(toObjectId)}`),"
             ),
             "      },",
             "      runs: {",
@@ -3340,6 +3687,24 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "            headers: {",
             '              "Content-Type": "application/json",',
             '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "actions.runs.start"),',
+            "            },",
+            "            body: JSON.stringify(payload),",
+            "          }),",
+            (
+                "        startBatch: (actionApiName: string, payload: ActionFunctionBatchRunRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }) =>"
+            ),
+            (
+                "          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/batch-runs` + "
+                "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+            ),
+            '            method: "POST",',
+            "            headers: {",
+            '              "Content-Type": "application/json",',
+            (
+                '              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, '
+                '"actions.runs.startBatch"),'
+            ),
             "            },",
             "            body: JSON.stringify(payload),",
             "          }),",
@@ -4055,7 +4420,7 @@ def _ts_object_client_lines(objects: Sequence[ObjectClientSurface]) -> list[str]
 def _ts_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]:
     lines: list[str] = []
     for action_def in actions:
-        target = json.dumps(action_def.target)
+        target = "payload.objectType" if action_def.target_kind == "interface" else json.dumps(action_def.target)
         action_name = json.dumps(action_def.api_name)
         batch_operation_name = json.dumps(f"{action_def.api_name}.applyBatch")
         validate_payload_type = action_def.payload_type.replace("ApplyRequest", "ValidateRequest")
@@ -4063,6 +4428,22 @@ def _ts_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]
         lines.extend(
             [
                 f"      {action_def.api_name}: {{",
+                "        uploadParameter: (parameterName: string, payload: ActionMediaUploadRequest) => {",
+                "          const form = new FormData();",
+                f"          form.append('objectType', {target});",
+                "          form.append('objectId', payload.objectId);",
+                "          form.append('file', payload.file, payload.fileName ?? 'upload.bin');",
+                "          if (payload.suppliedMimeType) form.append('suppliedMimeType', payload.suppliedMimeType);",
+                "          if (payload.format) form.append('format', payload.format);",
+                f"          return request<ActionMediaUploadResult>(`/api/actions/{action_def.api_name}/parameters/"
+                + "${encodeURIComponent(parameterName)}/uploads`, {",
+                "            method: 'POST',",
+                "            headers: { 'Idempotency-Key': requireIdempotencyKey(",
+                f"              payload.idempotencyKey, '{action_def.api_name}.uploadParameter',",
+                "            ) },",
+                "            body: form,",
+                "          });",
+                "        },",
                 f"        validate: (payload: {validate_payload_type}) =>",
                 f"          request<ActionValidationResponse>(`/api/actions/{action_def.api_name}/validate`, {{",
                 '            method: "POST",',

@@ -17,6 +17,8 @@ from foundry_lite_api.schemas import (
     OsdkApplicationResourceRequest,
     OsdkApplicationResourcesUpdateRequest,
     OsdkArtifactDownloadTokenRequest,
+    OsdkClientSecretRotateRequest,
+    OsdkMcpServerConfigureRequest,
     OsdkSdkCompatibilityWindowCreateRequest,
     OsdkSdkVersionCreateRequest,
 )
@@ -65,6 +67,51 @@ def list_osdk_applications(request: Request) -> list[JsonObject]:
 def get_osdk_application(request: Request, app_id: str) -> JsonObject:
     try:
         return cast(JsonObject, runtime.foundry.developer_console.get_osdk_application(app_id, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.put("/api/developer-console/osdk-applications/{app_id}/mcp-server")
+def configure_ontology_mcp_server(
+    request: Request,
+    app_id: str,
+    payload: OsdkMcpServerConfigureRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.developer_console.configure_ontology_mcp_server(
+                app_id,
+                status=payload.status,
+                description_markdown=payload.description_markdown,
+                allowed_origins=payload.allowed_origins,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/developer-console/osdk-applications/{app_id}/mcp-server")
+def get_ontology_mcp_server(request: Request, app_id: str) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.developer_console.get_ontology_mcp_server(app_id, ctx=_ctx(request)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/developer-console/mcp-servers")
+def list_ontology_mcp_hub(request: Request) -> list[JsonObject]:
+    try:
+        return [
+            cast(JsonObject, item)
+            for item in runtime.foundry.developer_console.list_ontology_mcp_hub(ctx=_ctx(request))
+        ]
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -122,6 +169,63 @@ def list_osdk_application_clients(request: Request, app_id: str) -> list[JsonObj
             cast(JsonObject, item)
             for item in runtime.foundry.developer_console.list_osdk_application_clients(app_id, ctx=_ctx(request))
         ]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/secrets")
+def list_osdk_application_client_secrets(request: Request, app_id: str, client_row_id: str) -> list[JsonObject]:
+    try:
+        return [
+            cast(JsonObject, item)
+            for item in runtime.foundry.developer_console.list_osdk_application_client_secret_versions(
+                app_id, client_row_id, ctx=_ctx(request)
+            )
+        ]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/secrets/rotate")
+def rotate_osdk_application_client_secret(
+    request: Request,
+    app_id: str,
+    client_row_id: str,
+    payload: OsdkClientSecretRotateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.developer_console.rotate_osdk_application_client_secret(
+                app_id,
+                client_row_id,
+                reason=payload.reason,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/secrets/revoke")
+def revoke_osdk_application_client_secret(
+    request: Request,
+    app_id: str,
+    client_row_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.developer_console.revoke_osdk_application_client_secret(
+                app_id,
+                client_row_id,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

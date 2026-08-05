@@ -215,6 +215,26 @@ media_reference_bindings = Table(
 )
 
 
+media_attachment_associations = Table(
+    "media_attachment_associations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("media_item_version_id", String, nullable=False),
+    Column("holder_type", String, nullable=False),
+    Column("holder_id", String, nullable=False),
+    Column("first_action_run_id", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "media_item_version_id",
+        "holder_type",
+        "holder_id",
+        name="uq_media_attachment_lifetime_holder",
+    ),
+)
+
+
 media_processing_runs = Table(
     "media_processing_runs",
     metadata,

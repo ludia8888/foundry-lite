@@ -23,6 +23,9 @@ from foundry_lite.domain.action_runtime.edit_plan import (
 )
 from foundry_lite.domain.errors import ValidationFailed
 
+ONTOLOGY_EDIT_BATCH_EDIT_LIMIT = 10_000
+ONTOLOGY_EDIT_BATCH_OBJECT_TYPE_LIMIT = 50
+
 
 @dataclass(frozen=True, slots=True)
 class OntologyEditBatch:
@@ -37,10 +40,28 @@ class OntologyEditBatch:
         edits = tuple(_mapping(item, "edits") for item in _sequence(payload.get("edits"), "edits"))
         if not edits:
             raise ValidationFailed("ontology edit batch must contain at least one edit")
-        return cls(
+        batch = cls(
             edits=edits,
             read_set_versions=_read_set(payload.get("readSetVersions", {})),
             provenance=_optional_mapping(payload.get("provenance"), "provenance"),
+        )
+        _require_edit_limits(batch.edits)
+        return batch
+
+    @classmethod
+    def combine(cls, batches: Sequence[OntologyEditBatch]) -> OntologyEditBatch:
+        """Combine compute-only results; the caller still performs one atomic commit."""
+        if not batches:
+            raise ValidationFailed("at least one ontology edit batch is required")
+        edits = tuple(edit for batch in batches for edit in batch.edits)
+        read_set: dict[str, int] = {}
+        for batch in batches:
+            _merge_read_set(read_set, batch.read_set_versions)
+        _require_edit_limits(edits)
+        return cls(
+            edits=edits,
+            read_set_versions=read_set,
+            provenance={"invocations": [dict(batch.provenance) for batch in batches]},
         )
 
     def to_edit_plan(self, *, operation_prefix: str) -> EditPlan:
@@ -161,6 +182,34 @@ def _read_set(raw: object) -> dict[str, int]:
             raise ValidationFailed("read set versions must be non-negative integers", details={"key": key})
         result[str(key)] = value
     return result
+
+
+def _merge_read_set(target: dict[str, int], source: Mapping[str, int]) -> None:
+    for key, version in source.items():
+        existing = target.get(key)
+        if existing is not None and existing != version:
+            raise ValidationFailed(
+                "ontology edit batches disagree on a read-set version",
+                details={"object": key, "firstVersion": existing, "nextVersion": version},
+            )
+        target[key] = version
+
+
+def _require_edit_limits(edits: Sequence[Mapping[str, object]]) -> None:
+    if len(edits) > ONTOLOGY_EDIT_BATCH_EDIT_LIMIT:
+        raise ValidationFailed(
+            "ontology edit batch edit limit exceeded",
+            details={"editCount": len(edits), "editLimit": ONTOLOGY_EDIT_BATCH_EDIT_LIMIT},
+        )
+    object_types = {str(edit["objectType"]) for edit in edits if isinstance(edit.get("objectType"), str)}
+    if len(object_types) > ONTOLOGY_EDIT_BATCH_OBJECT_TYPE_LIMIT:
+        raise ValidationFailed(
+            "ontology edit batch object type limit exceeded",
+            details={
+                "objectTypeCount": len(object_types),
+                "objectTypeLimit": ONTOLOGY_EDIT_BATCH_OBJECT_TYPE_LIMIT,
+            },
+        )
 
 
 def _required_version(edit: Mapping[str, object]) -> int:

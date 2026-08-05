@@ -23,26 +23,34 @@ from foundry_lite.application.services.action_apply_contracts import (
     TransactionContext,
     ValidationFailed,
 )
+from foundry_lite.application.services.action_apply_planning_contracts import (
+    ActionCriteriaCommitVerifier,
+    ResolvedLinkedCriteria,
+    canonical_action_contract,
+    compile_action_definition,
+    resolve_linked_condition_context,
+    with_criteria_expectations,
+)
 from foundry_lite.application.services.action_apply_support import (
     _new_id,
     _now,
     action_command,
     action_failure_transition,
     action_replay_response,
+    action_request_error,
     action_target_record_error,
     audit_idempotency_conflict,
+    interface_create_target_record,
     require_action_permission,
     require_action_target_api_name,
     require_action_target_read,
     require_action_write_open,
     require_failure_injection_for_command,
     resolved_action_command,
-    segment_mutation_denied_error,
-    stable_parameter_id_generator,
-    validate_action_request,
     visible_record,
 )
 from foundry_lite.application.services.action_external_apply import ExternalActionApply
+from foundry_lite.application.services.action_media_runtime_service import ActionMediaRuntimeService
 from foundry_lite.application.services.action_plan_authorization import resolve_authorized_action_edit_plan
 from foundry_lite.application.services.action_v2_commit import (
     ActionV2Committer,
@@ -61,11 +69,10 @@ from foundry_lite.application.services.ontology_lookup_service import OntologyLo
 
 
 class ActionApplyService(CoreService):
-    """Apply actions with idempotency, optimistic concurrency, audit, and writeback."""
-
-    required_dependencies = ("engine", "policy", "action_repository")
+    required_dependencies = ("engine", "policy", "action_repository", "object_read_repository")
     required_collaborators = (
         "action_writeback_service",
+        "action_media_runtime_service",
         "object_index_record_mutation_service",
         "object_records_service",
         "ontology_lookup_service",
@@ -74,6 +81,7 @@ class ActionApplyService(CoreService):
         "runtime_service",
     )
     action_writeback_service: ActionWritebackService
+    action_media_runtime_service: ActionMediaRuntimeService
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_lookup_service: OntologyLookupService
@@ -100,7 +108,7 @@ class ActionApplyService(CoreService):
         ctx = ctx or RequestContext()
         if not idempotency_key:
             raise ValidationFailed("idempotency key is required")
-        command = self._action_command_from_request(
+        command = action_command(
             action_api_name,
             object_type,
             object_id,
@@ -121,34 +129,6 @@ class ActionApplyService(CoreService):
         if outcome.response is None:
             raise InvariantViolation("action did not produce a response")
         return outcome.response
-
-    def _action_command_from_request(
-        self,
-        action_api_name: str,
-        object_type: str,
-        object_id: str,
-        expected_object_version: int,
-        params: Mapping[str, object],
-        idempotency_key: str,
-        simulate_writeback_failure: bool,
-        simulate_writeback_retryable: bool,
-        simulate_writeback_outcome_unknown: bool,
-        simulate_writeback_compensation_required: bool,
-        external_writeback_uri: str | None,
-    ) -> ActionApplyCommand:
-        return action_command(
-            action_api_name,
-            object_type,
-            object_id,
-            expected_object_version,
-            params,
-            idempotency_key,
-            simulate_writeback_failure,
-            simulate_writeback_retryable,
-            simulate_writeback_outcome_unknown,
-            simulate_writeback_compensation_required,
-            external_writeback_uri,
-        )
 
     def _authorize_action_apply(self, ctx: RequestContext, command: ActionApplyCommand) -> None:
         require_failure_injection_for_command(self.engine, self.runtime_service, ctx, command)
@@ -192,7 +172,6 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
         action_run_id: str,
     ) -> ActionApplyOutcome:
-        """No external side effect: insert, validate, mutate, and commit atomically in one transaction."""
         action_type_for_failure: ActionTypeRow | None = None
         try:
             with self.engine.begin() as conn:
@@ -220,12 +199,22 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
     ) -> ObjectRecordRow | None:
         record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
-        # A target hidden by row policies becomes NotFound (record=None path) so restricted
-        # users cannot act on rows they cannot see.
         target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
         record = visible_record(record, target_type, ctx.roles)
-        if record is not None and (error := action_target_record_error(action_type, record)) is not None:
-            raise error
+        if record is None:
+            contract = canonical_action_contract(action_type["definition"])
+            record = interface_create_target_record(
+                contract,
+                compile_action_definition(action_type["definition"]),
+                target_type,
+                command.object_id,
+                command.expected_object_version,
+                ctx.tenant_id,
+            )
+        if record is not None:
+            record_type = self.ontology_lookup_service._object_type_by_id_or_none(conn, ctx, record["object_type_id"])
+            if (error := action_target_record_error(action_type, record, record_type)) is not None:
+                raise error
         return record
 
     def _replay_or_none(
@@ -272,7 +261,10 @@ class ActionApplyService(CoreService):
         command: ActionApplyCommand,
         record: ObjectRecordRow | None,
     ) -> ActionApplyOutcome:
-        deferred_error = self._action_request_error(ctx, action_type, record, command)
+        criteria = self._criteria_context(conn, ctx, action_type, record)
+        deferred_error = action_request_error(
+            self.policy, ctx, action_type, record, command, linked_object_properties=criteria.values
+        )
         if deferred_error is not None:
             self._fail_action_run(conn, ctx, action_run_id, deferred_error)
             return ActionApplyOutcome(deferred_error=deferred_error)
@@ -283,13 +275,53 @@ class ActionApplyService(CoreService):
             return ActionApplyOutcome(deferred_error=error)
         if record is None:
             raise InvariantViolation("action target record disappeared before commit")
-        effective_command = self._resolved_command(ctx, action_type, record, command)
         try:
-            plan = self._authorized_edit_plan(conn, ctx, action_type, effective_command)
-        except (PermissionDenied, ValidationFailed) as authorization_error:
+            contract = canonical_action_contract(action_type["definition"])
+            effective_command = resolved_action_command(ctx, action_type, record, command)
+            effective_command = self.action_media_runtime_service.resolve_command(
+                conn, ctx, contract, effective_command
+            )
+            self._persist_resolved_parameters(conn, ctx, action_run_id, effective_command)
+            plan = self._authorized_edit_plan(conn, ctx, action_type, effective_command, criteria)
+        except (ConflictDetected, NotFound, PermissionDenied, ValidationFailed) as authorization_error:
             self._fail_action_run(conn, ctx, action_run_id, authorization_error)
             return ActionApplyOutcome(deferred_error=authorization_error)
-        return self._writeback_and_commit(conn, ctx, action_type, action_run_id, effective_command, record, plan)
+        outcome = self._writeback_and_commit(conn, ctx, action_type, action_run_id, effective_command, record, plan)
+        self.action_media_runtime_service.bind_plan_references(conn, ctx, action_run_id, plan)
+        return outcome
+
+    def _criteria_context(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow | None,
+    ) -> ResolvedLinkedCriteria:
+        return resolve_linked_condition_context(
+            conn,
+            ctx,
+            self.policy,
+            self.object_read_repository,
+            self.ontology_lookup_service,
+            self.osdk_application_service,
+            action_type,
+            record,
+        )
+
+    def _persist_resolved_parameters(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        command: ActionApplyCommand,
+    ) -> None:
+        if not self.action_repository.update_action_run_parameters(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            action_run_id=action_run_id,
+            parameters=command.params,
+        ):
+            raise ConflictDetected("action run changed before media parameters were resolved")
 
     def _authorized_edit_plan(
         self,
@@ -297,10 +329,15 @@ class ActionApplyService(CoreService):
         ctx: RequestContext,
         action_type: ActionTypeRow,
         command: ActionApplyCommand,
+        criteria: ResolvedLinkedCriteria | None = None,
     ) -> EditPlan:
-        return resolve_authorized_action_edit_plan(
+        if criteria is None:
+            record = self._visible_target_record(conn, ctx, action_type, command)
+            criteria = self._criteria_context(conn, ctx, action_type, record)
+        plan = resolve_authorized_action_edit_plan(
             conn, ctx, self.policy, self.object_records_service, self.ontology_lookup_service, action_type, command
         )
+        return with_criteria_expectations(plan, criteria.expectations)
 
     def _writeback_and_commit(
         self,
@@ -313,6 +350,7 @@ class ActionApplyService(CoreService):
         plan: EditPlan,
     ) -> ActionApplyOutcome:
         """Local (no external side effect): record the writeback then commit ``received -> succeeded``."""
+        self._verify_plan_criteria(conn, ctx, plan)
         self.action_writeback_service.writeback_recorder().record(
             conn,
             ctx,
@@ -323,9 +361,6 @@ class ActionApplyService(CoreService):
             response={"status_code": 200},
         )
         if uses_action_rules_v2(action_type):
-            # Row/segment visibility is enforced as each existing object resolves (the
-            # resolution context hides forbidden rows as NotFound), and the whole plan
-            # commits in this transaction so any conflict rolls it all back.
             response = self._v2_committer().commit(conn, ctx, action_type, action_run_id, command, plan=plan)
         else:
             response = self._mutation_unit_of_work().commit(
@@ -338,6 +373,11 @@ class ActionApplyService(CoreService):
                 idempotency_key=command.idempotency_key,
             )
         return ActionApplyOutcome(response=response)
+
+    def _verify_plan_criteria(self, conn: TransactionContext, ctx: RequestContext, plan: EditPlan) -> None:
+        ActionCriteriaCommitVerifier(
+            self.policy, self.object_read_repository, self.ontology_lookup_service, self.osdk_application_service
+        ).verify(conn, ctx, plan)
 
     def _v2_committer(self) -> ActionV2Committer:
         return ActionV2Committer(
@@ -418,45 +458,6 @@ class ActionApplyService(CoreService):
         )
         audit_idempotency_conflict(self.runtime_service, conn, ctx, existing, request_fingerprint)
         return ActionApplyOutcome(deferred_error=error)
-
-    def _action_request_error(
-        self,
-        ctx: RequestContext,
-        action_type: ActionTypeRow,
-        record: ObjectRecordRow | None,
-        command: ActionApplyCommand,
-    ) -> Exception | None:
-        if record is None:
-            return NotFound("target object not found")
-        # A caller who cannot view a mutated property's datasource segment may
-        # not edit through it (checked before request validation so the denial
-        # never leaks precondition/parameter detail).
-        if (segment_error := segment_mutation_denied_error(self.policy, ctx, action_type)) is not None:
-            return segment_error
-        if record["object_version"] != command.expected_object_version:
-            return ConflictDetected(
-                "object version conflict",
-                details={
-                    "currentObjectVersion": record["object_version"],
-                    "expectedObjectVersion": command.expected_object_version,
-                },
-            )
-        return validate_action_request(
-            action_type,
-            record,
-            command.params,
-            ctx,
-            generate_id=stable_parameter_id_generator(command.idempotency_key),
-        )
-
-    def _resolved_command(
-        self,
-        ctx: RequestContext,
-        action_type: ActionTypeRow,
-        record: ObjectRecordRow,
-        command: ActionApplyCommand,
-    ) -> ActionApplyCommand:
-        return resolved_action_command(ctx, action_type, record, command)
 
     def _fail_action_run(
         self,

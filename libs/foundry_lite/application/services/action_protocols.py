@@ -8,6 +8,7 @@ from typing import Protocol
 from foundry_lite.application.ports import (
     ActionTypeRow,
     InterfaceTypeRow,
+    LinkTypeRow,
     ObjectRecordRow,
     ObjectTypeRow,
     OntologyVersionRow,
@@ -16,7 +17,12 @@ from foundry_lite.application.ports import (
     RuntimeRunType,
     TransactionContext,
 )
+from foundry_lite.application.ports.action_branch_repository import ActionBranchRepository as ActionBranchRepository
 from foundry_lite.application.ports.action_repository import ActionErrorPayload, ObjectProperties
+from foundry_lite.application.ports.ontology_branch_repository import (
+    OntologyBranchRepository as OntologyBranchRepository,
+)
+from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRow as OntologyBranchRow
 from foundry_lite.domain.context import RequestContext
 
 
@@ -55,6 +61,13 @@ class ActionOntologyLookup(Protocol):
         ontology_version_id: str,
     ) -> Sequence[InterfaceTypeRow]: ...
 
+    def _link_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[LinkTypeRow]: ...
+
     def _active_action_type(
         self,
         conn: TransactionContext,
@@ -75,6 +88,20 @@ class ActionOntologyLookup(Protocol):
         ctx: RequestContext,
         api_name: str,
     ) -> ObjectTypeRow: ...
+
+    def _object_type_by_id_or_none(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_id: str,
+    ) -> ObjectTypeRow | None: ...
+
+    def link_type(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        api_name: str,
+    ) -> LinkTypeRow: ...
 
 
 class ActionRuntimeBoundary(Protocol):

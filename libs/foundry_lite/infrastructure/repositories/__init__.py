@@ -2,6 +2,9 @@
 
 from foundry_lite.infrastructure.repositories.action_branch_repository import SqlAlchemyActionBranchRepository
 from foundry_lite.infrastructure.repositories.action_execution_repository import SqlAlchemyActionExecutionRepository
+from foundry_lite.infrastructure.repositories.action_notification_policy_repository import (
+    SqlAlchemyActionNotificationPolicyRepository,
+)
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
 from foundry_lite.infrastructure.repositories.ai_eval_repository import SqlAlchemyAiEvalRepository
 from foundry_lite.infrastructure.repositories.ai_run_repository import SqlAlchemyAiRunRepository
@@ -56,6 +59,7 @@ __all__ = [
     "SqlAlchemyActionExecutionRepository",
     "SqlAlchemyActionBranchRepository",
     "SqlAlchemyActionRepository",
+    "SqlAlchemyActionNotificationPolicyRepository",
     "SqlAlchemyAiEvalRepository",
     "SqlAlchemyAiRunRepository",
     "SqlAlchemyDatasetQualityRepository",

@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     ActionMutationDefinition,
     ActionTypeRow,
     ObjectRecordRow,
+    ObjectTypeRow,
     StatusTransition,
     TransactionContext,
 )
@@ -374,17 +375,30 @@ def require_action_target_api_name(action_type: ActionTypeRow, requested_object_
     )
 
 
-def action_target_record_error(action_type: ActionTypeRow, record: ObjectRecordRow) -> InvariantViolation | None:
+def action_target_record_error(
+    action_type: ActionTypeRow,
+    record: ObjectRecordRow,
+    resolved_record_type: ObjectTypeRow | None = None,
+) -> InvariantViolation | None:
     if action_type.get("target_kind", "object") == "interface":
         return None
     expected_object_type_id = str(action_type["target_object_type_id"])
     if str(record["object_type_id"]) == expected_object_type_id:
+        return None
+    expected_api_name = str(action_type["target_api_name"])
+    if (
+        resolved_record_type is not None
+        and resolved_record_type["api_name"] == expected_api_name
+        and record["object_type_api_name"] == expected_api_name
+    ):
         return None
     return InvariantViolation(
         "action target record object type invariant violated",
         details={
             "expectedObjectTypeId": expected_object_type_id,
             "recordObjectTypeId": str(record["object_type_id"]),
+            "expectedObjectType": expected_api_name,
+            "recordObjectType": record["object_type_api_name"],
         },
     )
 

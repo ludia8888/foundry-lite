@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, NotRequired, Protocol, TypedDict
 
+from foundry_lite.application.ports.osdk_security_repository import OsdkSecurityRepository
 from foundry_lite.application.ports.runtime_repository import RuntimeJsonObject
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
@@ -36,6 +37,7 @@ class OsdkApplicationClientRow(TypedDict):
     allowed_scopes: NotRequired[list[str] | None]
     access_token_ttl_seconds: NotRequired[int | None]
     refresh_token_ttl_seconds: NotRequired[int | None]
+    current_secret_id: NotRequired[str | None]
     created_at: str
     updated_at: NotRequired[str | None]
 
@@ -47,6 +49,42 @@ class OsdkApplicationResourceRow(TypedDict):
     resource_type: OsdkResourceType
     resource_api_name: str
     scopes: list[str]
+    created_at: str
+
+
+class OsdkMcpServerRow(TypedDict):
+    id: str
+    tenant_id: str
+    app_id: str
+    status: str
+    description_markdown: str
+    allowed_origins: list[str]
+    last_activity_at: str | None
+    updated_by_user_id: str
+    created_at: str
+    updated_at: str
+
+
+class OsdkMcpSessionRow(TypedDict):
+    id: str
+    tenant_id: str
+    app_id: str
+    client_id: str
+    actor_user_id: str
+    status: str
+    last_sequence: int
+    created_at: str
+    last_seen_at: str
+    terminated_at: str | None
+
+
+class OsdkMcpSessionEventRow(TypedDict):
+    id: str
+    tenant_id: str
+    session_id: str
+    sequence: int
+    event_type: str
+    payload_json: RuntimeJsonObject
     created_at: str
 
 
@@ -179,6 +217,32 @@ class OsdkApplicationResourceRecord:
 
 
 @dataclass(frozen=True)
+class OsdkMcpServerRecord:
+    server_id: str
+    tenant_id: str
+    app_id: str
+    status: str
+    description_markdown: str
+    allowed_origins: tuple[str, ...]
+    last_activity_at: str | None
+    updated_by_user_id: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class OsdkMcpSessionRecord:
+    session_id: str
+    tenant_id: str
+    app_id: str
+    client_id: str
+    actor_user_id: str
+    status: str
+    created_at: str
+    last_seen_at: str
+
+
+@dataclass(frozen=True)
 class OsdkSdkVersionRecord:
     sdk_version_id: str
     tenant_id: str
@@ -260,7 +324,7 @@ class OsdkDeveloperConsoleIdempotencyRecord:
     created_at: str
 
 
-class OsdkApplicationRepository(Protocol):
+class OsdkApplicationRepository(OsdkSecurityRepository, Protocol):
     """Durable Developer Console-lite app and SDK-release registry."""
 
     def insert_application_or_get_existing(
@@ -278,6 +342,10 @@ class OsdkApplicationRepository(Protocol):
     def list_applications(self, *, transaction: TransactionContext, tenant_id: str) -> list[OsdkApplicationRow]: ...
 
     def active_client(
+        self, *, transaction: TransactionContext, tenant_id: str, client_id: str
+    ) -> OsdkApplicationClientRow | None: ...
+
+    def active_client_for_update(
         self, *, transaction: TransactionContext, tenant_id: str, client_id: str
     ) -> OsdkApplicationClientRow | None: ...
 
@@ -311,6 +379,47 @@ class OsdkApplicationRepository(Protocol):
     def resources_for_application(
         self, *, transaction: TransactionContext, tenant_id: str, app_id: str
     ) -> list[OsdkApplicationResourceRow]: ...
+
+    def upsert_mcp_server(
+        self, *, transaction: TransactionContext, record: OsdkMcpServerRecord
+    ) -> OsdkMcpServerRow: ...
+
+    def mcp_server_for_application(
+        self, *, transaction: TransactionContext, tenant_id: str, app_id: str
+    ) -> OsdkMcpServerRow | None: ...
+
+    def list_mcp_servers(self, *, transaction: TransactionContext, tenant_id: str) -> list[OsdkMcpServerRow]: ...
+
+    def touch_mcp_server_activity(
+        self, *, transaction: TransactionContext, tenant_id: str, app_id: str, observed_at: str
+    ) -> None: ...
+
+    def insert_mcp_session_or_get_existing(
+        self, *, transaction: TransactionContext, record: OsdkMcpSessionRecord
+    ) -> OsdkMcpSessionRow | None: ...
+
+    def mcp_session_by_id(
+        self, *, transaction: TransactionContext, tenant_id: str, session_id: str
+    ) -> OsdkMcpSessionRow | None: ...
+
+    def append_mcp_session_event(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        session_id: str,
+        event_type: str,
+        payload: RuntimeJsonObject,
+        created_at: str,
+    ) -> OsdkMcpSessionEventRow | None: ...
+
+    def mcp_session_events_after(
+        self, *, transaction: TransactionContext, tenant_id: str, session_id: str, after_sequence: int
+    ) -> list[OsdkMcpSessionEventRow]: ...
+
+    def terminate_mcp_session(
+        self, *, transaction: TransactionContext, tenant_id: str, session_id: str, terminated_at: str
+    ) -> OsdkMcpSessionRow | None: ...
 
     def insert_sdk_version_or_get_existing(
         self, *, transaction: TransactionContext, record: OsdkSdkVersionRecord

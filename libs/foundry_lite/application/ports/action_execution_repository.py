@@ -8,6 +8,8 @@ from foundry_lite.application.action_async_execution_types import (
     ActionAsyncRunRecord,
     ActionAsyncRunRow,
     ActionEffectClaim,
+    ActionEffectOperationRecord,
+    ActionEffectOperationRow,
     ActionEffectReceiptRecord,
     ActionEffectReceiptRow,
     ActionRunEventRecord,
@@ -71,6 +73,21 @@ class ActionExecutionRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, run_id: str
     ) -> list[ActionEffectReceiptRow]: ...
 
+    def effect_receipt_by_id(
+        self, *, transaction: TransactionContext, tenant_id: str, receipt_id: str
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def list_effect_receipts(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        status: str | None,
+        before_created_at: str | None,
+        before_receipt_id: str | None,
+        limit: int,
+    ) -> list[ActionEffectReceiptRow]: ...
+
     def pending_effect_receipts(
         self, *, transaction: TransactionContext, tenant_id: str, limit: int, due_at: str
     ) -> list[ActionEffectReceiptRow]: ...
@@ -80,6 +97,58 @@ class ActionExecutionRepository(Protocol):
     def claim_effect_receipt(
         self, *, transaction: TransactionContext, claim: ActionEffectClaim
     ) -> ActionEffectReceiptRow | None: ...
+
+    def start_effect_dispatch(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        receipt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        started_at: str,
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def request_effect_cancel(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        receipt_id: str,
+        reason: str | None,
+        requested_at: str,
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def retry_effect_receipt(
+        self, *, transaction: TransactionContext, tenant_id: str, receipt_id: str, requested_at: str
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def reconcile_effect_receipt(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        receipt_id: str,
+        resolution: str,
+        evidence: JsonObject,
+        actor_user_id: str,
+        reconciled_at: str,
+    ) -> ActionEffectReceiptRow | None: ...
+
+    def effect_operation_by_idempotency(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        actor_user_id: str,
+        operation: str,
+        idempotency_key: str,
+    ) -> ActionEffectOperationRow | None: ...
+
+    def insert_effect_operation_or_existing(
+        self, *, transaction: TransactionContext, record: ActionEffectOperationRecord
+    ) -> ActionEffectOperationRow | None: ...
 
     def complete_effect_receipt(
         self,

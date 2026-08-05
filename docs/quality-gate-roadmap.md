@@ -161,7 +161,7 @@
 
 | #    | 조항                                      | 게이트                          | 정량                    | 상태 |
 | ---- | ----------------------------------------- | ------------------------------- | ----------------------- | ---- |
-| 55.1 | PR required check wall time              | `quality-pr-fast`               | workflow timeout 5분    | ✅   |
+| 55.1 | PR required check wall time              | `quality-pr-fast`               | workflow timeout 9분    | ✅   |
 | 56   | skip/flaky/xfail 우회 금지                | `check_no_test_bypasses`        | 0                       | ✅   |
 | 57   | private test reference 부채               | `check_private_test_references` | 0                       | ✅   |
 
@@ -654,8 +654,8 @@ capability가 단순 타입·문서가 아니라 실제 실행 경로에 연결�
 이 gate는 `runtime-full`/release ratchet에 연결되고 PR coverage lane의 전체 pytest에서도 다시
 실행된다. 현재 `action-ir-v2`, `edit-plan-engine`, `multi-object-link-atomic-commit`만 current다.
 function-backed action, full parameter/form/criteria, side effect, Ontology-queryable action log,
-revert, branch/interface action, complete SDK/UI/MCP는 이 gate가 증명하지 않으며 matrix에
-partial/foundation/missing으로 남긴다.
+revert, branch/interface action, complete SDK/UI/MCP는 이 v2 gate가 증명하지 않는다. 각 capability의
+현재 상태는 전용 runtime/live/browser gate와 matrix evidence로만 승격한다.
 
 ### Tier G14F — Action Contract v3 planning and approval evidence (🟡 bounded slice 2026-08-03)
 
@@ -665,27 +665,75 @@ partial/foundation/missing으로 남긴다.
 submission criteria, immutable fingerprint/plan hash, before/after diff, 구조적 위험도 하한,
 edit별 object/link/property 권한, AIP proposal의 plan/Action/object-version 고정, 승인 직전 drift
 재검증, catalog/schema/plan/dry-run API와 생성 SDK를 포함한다. 직접 `apply`도 같은 resolved-plan
-권한 검사를 다시 수행하므로 plan endpoint를 건너뛰어 권한을 우회할 수 없다.
+권한 검사를 다시 수행하므로 plan endpoint를 건너뛰어 권한을 우회할 수 없다. 같은 gate의
+Action file-scanner contract는 attachment/media를 staging하기 전에 검사하고, 감염 input은 저장 없이
+redacted deny audit만 남기며, protected runtime이 ClamAV 이외 profile을 거절하는지 검증한다.
 
 이 증거는 18개 축 전체 current 증거와 구분한다. Temporal durable Action run과 function-backed
 `OntologyEditBatch`는 `quality:action-runtime-async` 및 실제 PostgreSQL+Temporal 복수 worker의
 `quality:action-types-palantir-live`로 active-covered가 되었다. `quality:action-side-effects`는
 v3 effect의 inline URI 차단, 등록 connector/OSDK scope, before-effect 영수증 선기록과
-ambiguous 무재호출, after-effect outbox/receipt 원자 생성, retry/DLQ, lease takeover/fencing,
+ambiguous 무재호출, typed response field→rule assignment와 타입 불일치 commit 차단, after-effect outbox/receipt 원자 생성, retry/DLQ, lease takeover/fencing,
 실제 HTTP POST idempotency/SSRF 차단, PostgreSQL tenant RLS를 검증한다. `quality:action-log-revert`는
 성공한 제출당 정규 로그 하나, 모든 object/link edit 연결, 원 실행자·최신 편집·object version·link
 상태 재검증, object/link 전체 원자 복구, revert 자체의 새 run/log/audit/outbox, 외부효과 보존,
-SQLite/PostgreSQL repository 계약, RLS, API와 생성 TS/browser SDK를 검증한다. 이 bounded proof는
-Ontology object query/aggregation과 timeline UI, 실제 동시 revert 경합, 전체 브라우저 여정을
-아직 증명하지 않는다. `quality:action-branch-interface`는 interface target을 concrete implementer로
-해석하고 shared-property/OCC/권한을 재검증하는 경로, branch object overlay의 main 격리, base+overlay
-합성 조회와 drift diff, 동일 요청 replay, SQLite/PostgreSQL concurrent CAS, API와 생성 TS/browser SDK를
-검증한다. 이는 interface link constraint, branch link overlay, branch-only Action definition 실행,
-non-production effect opt-in과 전체 브라우저 journey까지 증명하지 않으므로 관련 matrix는 partial이다.
-남은 범위는 실제 두 worker effect-delivery takeover, effect response-to-rule value, Builder 전체 화면,
-Python OSDK, Ontology MCP OAuth/transport 및 해당
-화면의 브라우저 proof이며, 이 증거가
-추가되기 전에는 관련 matrix 항목을 `current`로 승격하지 않는다.
+SQLite/PostgreSQL repository 계약, RLS, API와 생성 TS/browser SDK를 검증한다. Python OSDK의
+catalog/schema/plan/dry-run/branch/durable-run/log/revert 경로는 `quality:action-types-palantir`가,
+실행 이력·SSE fallback·takeover/fencing·receipt·cancel·30일 failure taxonomy/alert monitoring·log·revert 브라우저 경로는
+`quality:action-types-palantir-ui`가 검증한다. `quality:action-log-revert`는 virtual `[LOG] <Action>`의
+Ontology catalog/get/filter/search/signed-cursor query/aggregation과 OSDK app-scope denial까지 검증한다.
+`quality:action-runtime-async`는 typed adapter failure의 안전한 retry 분류와 Action control worker의 tenant별
+alert evaluation까지 검증한다. `quality:action-monitoring-live`는 활성 경보가 정책·UTC hour 단위 idempotency로
+outbox에 한 번만 쌓이고 실제 Kafka broker에 전달되는지 검증한다. 따라서 durable Action run state machine 축은
+PostgreSQL+Temporal 복수 worker, browser runtime, external alert transport 증거를 모두 가진 `current`다.
+Function-backed Action 축도 이제 전용 증거를 모두 가진 `current`다. canonical contract는 function
+execution mode를 `per_request` 또는 `batched`로 고정하고 activation 때 pinned function input과 Action
+parameter를 type-check한다. `quality:action-runtime-async`는 순차 per-request 호출, list-of-struct 단일 호출,
+batched 단건의 one-item list 변환, 전체 OCC rollback, 최대 20/10,000 request 및 10,000 edit/50 object-type
+한도를 검증한다. `quality:action-types-palantir-ui`는 Builder mode/input/limit authoring을,
+`quality:sdk-generated`와 request-contract는 TypeScript/Python 및 `actions.runs.startBatch(...)`를 검증한다.
+실제 PostgreSQL+Temporal live gate는 batched function activity를 소유한 worker를 종료한 뒤 새 worker가
+fencing token 2로 takeover하여 두 객체를 한 번만 commit하는지 확인한다.
+이 bounded proof는 DB-native 5,000행 초과 log query/aggregation과 Action Log edited-object→Object Explorer deep link까지 포함하며, virtual Ontology edited-object link type,
+generic Workshop timeline, 실제 동시 revert 경합을 아직 증명하지 않는다. `quality:action-branch-interface`는 interface target을 concrete implementer로
+해석하고 shared-property/OCC/권한을 재검증하는 경로, version-zero concrete create, typed reference,
+interface link constraint의 target/cardinality/required conformance, create exactly-one/delete-all 해석, branch object/link overlay의
+main 격리, base+overlay 합성 조회와 drift diff, 동일 요청 replay, SQLite/PostgreSQL concurrent CAS, API와 생성
+TS/browser SDK를 검증한다. Action Builder browser proof는 Interface create/link-constraint canonical serialization과
+object Action의 branch 저장→proposal→독립 승인→activation→SDK 재생성 없는 동적 실행→log→revert를 검증한다.
+같은 UI gate의 Ontology MCP browser scenario는 외부 MCP가 만든 고위험 Action proposal을 Approvals에서
+application/client/scope, plan hash, Action/object version, risk와 함께 검토하고, 사람이 assign/approve/execute한 뒤
+MCP가 동일한 `action_run_id`와 terminal 상태를 다시 읽는 경로를 검증한다.
+다만 Interface의 전체 proposal-to-execution, non-production effect opt-in, dedicated overlay-data diff와 현재
+환경의 live PostgreSQL 경합을 증명하지 못했으므로 관련 matrix는 partial이다.
+`quality:ontology-mcp`는 consumer Streamable HTTP endpoint가 app-granted object/action/function만
+결정적으로 투영하는지, Authorization Code + PKCE와 Client Credentials service principal이
+principal/token/application/resource 권한 교집합을 유지하는지, low-risk autonomous Action만 durable
+run으로 보내는지, 그 밖의 Action은 immutable plan/version/evidence를 가진 AIP review 한 건으로 보내는지
+검증한다. 같은 JSON-RPC 호출은 동일 run/review를 replay하고, 같은 좌표의 다른 payload는 충돌한다.
+Developer Console enablement와 visual MCP Hub, 앱별 Origin allowlist, version-pinned query-function schema,
+HTTP 권한 경계를 재사용하는 stdio proxy, DB session/event sequence, `Last-Event-ID` resume와 DELETE 후
+session 재사용 차단도 검증한다. 표준 form OAuth, read-only approval status, 사람 승인 후 원래
+application/client/scope 재검증, 철회된 scope의 실행 차단, 승인 Action run 조회도 같은 gate가 검증한다.
+서비스 클라이언트의 one-time secret 발급, local encrypted vault version 좌표만 DB에 저장하는 회전,
+replay 시 raw secret 비노출, 이전·폐기 secret의 신규 token 발급 거절, 안전한 이력 API와 Developer Console
+브라우저 흐름도 검증한다. 회전·폐기·client deactivate가 이미 발급된 durable access session도 즉시
+철회하고 모든 MCP 요청이 online session을 교차검증하며, client-credential 발급은 row lock으로 rotation
+race를 차단한다. 이 backend gate와 `quality:action-types-palantir-ui`의 MCP approval scenario는 browser 승인
+추적까지 증명한다. `quality:ontology-mcp-live`는 공식 Python MCP `ClientSession`이 별도
+Uvicorn 프로세스의 Streamable HTTP endpoint에 접속하여 실제 PostgreSQL 객체 조회와
+고위험 Action의 `approval_required` 분기까지 검증한다. 다만 hosted ChatGPT SaaS tenant와
+production cloud secret manager/KMS는 아직 별도 운영 증거다.
+`quality:action-notification-policies`는 no-code UI와 API/TypeScript/Python SDK가 사용하는 durable tenant policy registry의
+create/update/disable, durable idempotency replay, config-fingerprint CAS, audit/outbox, disabled-policy fail-closed runtime 해석을 검증한다.
+`quality:action-notification-policies-live`는 PostgreSQL concurrent create 단일 승자와 policy/idempotency table의 tenant RLS를 release lane에서 검증한다.
+`quality:action-effect-operations`는 effect queue 조회, 취소, 동일 idempotency key 수동 재시도, 구조화된 provider 근거 조정과 API/SDK/UI 계약을 검증한다.
+`quality:action-effect-operations-live`는 실제 PostgreSQL과 별도 worker 프로세스에서 dispatch 전후로 소유 worker를 강제 종료한다. dispatch 전 lease는 두 번째 worker가 fencing token을 올려 인계하고 provider를 정확히 한 번 호출하며, dispatch 후 응답 기록 전에 죽은 경우는 provider를 다시 호출하지 않고 `outcome_unknown`으로 격리한다.
+Action 정의에는 임의 recipient 목록 대신 등록된 `notification-policy:<name>` 참조만 저장되며, 실행 시점의 active policy와 recipient별 object/row 접근권한을 다시 계산한다.
+After-commit effect 축은 concurrent unordered fan-out과 pre-edit notification template/fingerprint/version 증거까지 닫혀 `current`다.
+남은 범위는 live ClamAV, 위 Ontology MCP 미완성 경계이며, static generated Python Action type package는 `quality:sdk-generated`가 drift/mypy/Pyright로 강제하고,
+이 증거가 추가되기 전에는 관련 matrix 항목을
+`current`로 승격하지 않는다.
 
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
@@ -2318,7 +2366,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 284개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 308개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key
@@ -2430,7 +2478,7 @@ recovery dashboard, alert timeline, workflow cancel/reconcile executor는 후속
 - 약화의 부작용을 보완하는 다른 게이트가 있는지 명시.
 - 예: `check_service_method_conflicts` 삭제 시 — 명시적 collaborator 호출이 도입돼 글로벌 메서드 이름 충돌이 더 이상 문제 아님. `check_service_call_graph`가 보완.
 
-### 5.1 5분 PR 병합 경로와 전체 증거 분리
+### 5.1 예산제 PR 병합 경로와 전체 증거 분리
 
 2026-08-04 이전에는 모든 PR이 전체 branch coverage, 전체 runtime proof, 전체 Playwright,
 fresh CodeQL DB를 기다려 required check가 약 40분까지 늘어났다. 이 검사는 강하지만 작은 문서나
@@ -2442,14 +2490,21 @@ diff secret/위험 코드 검사, Ruff·mypy·pyright·Bandit·아키텍처/스�
 request contract를 병렬 실행한다. 새 Python source가 직접 또는 변경된 테스트와 연결되지 않으면
 fail-closed하고, 변경된 fast test는 모두 실행하되 source-name 자동 연관 테스트는 전체 선택이 32개 파일을
 넘지 않게 제한한다. `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
-남긴다. GitHub job 자체가 5분 timeout이고 내부 검사 budget은 210초다.
+남긴다. GitHub job 자체가 9분 timeout이고 내부 검사 budget은 420초다.
+
+budget은 2026-08-05에 210초에서 420초로 올렸다. PR이 작다는 전제 위에 세운 값이었는데,
+385파일 변경에서 직접 연관 테스트만 4-vCPU 러너 기준 약 336초가 필요했고 같은 커밋을 두 번
+돌렸을 때 러너 편차가 그 값을 3분의 1만큼 움직였다. budget을 증거를 줄이는 손잡이로 쓰지
+않으려면 예산 쪽에 여유를 두는 편이 맞다. 초과가 나면 테스트를 빼기 전에 lane 분류
+(`_is_fast_test_path`)가 맞는지부터 본다 — live-infra 테스트가 fast lane에 새는 것이
+실제로 발견된 첫 원인이었다.
 
 이것은 전체 증거의 삭제가 아니라 실행 시점의 변경이다. 전체 coverage/runtime/E2E와
 gitleaks/Semgrep/pip-audit/full CodeQL은 main push에서 실행되고, flaky x7과 full runtime rehearsal은
 nightly, live/performance/release evidence는 tag 또는 수동 release gate에서 계속 강제된다. PR의
 CodeQL required-check 이름은 호환을 위해 유지하지만 실제 PR 단계는 고신뢰 diff security guard이며,
 로그가 full CodeQL이 main에서 이어진다는 경계를 명시한다. 부작용은 "merge 전에 전체 suite를
-완주하지 않는다"는 점이고, 보완은 직접 테스트 fail-closed, 5분 gate artifact, main full gate,
+완주하지 않는다"는 점이고, 보완은 직접 테스트 fail-closed, 예산제 gate artifact, main full gate,
 nightly/release gate의 네 겹 계약이다.
 
 ## 6. Operational Evidence And Diagnostics
@@ -2463,9 +2518,9 @@ README를 다시 만들지 않는다. 비개발자식으로 말하면,
 | 실행 위치       | 명령/잡             | 역할                                                                                         |
 | --------------- | ------------------- | -------------------------------------------------------------------------------------------- |
 | 로컬             | `pnpm ci:gate`      | 정적 불변식과 Tach impact-scoped pytest를 실행해 빠른 피드백을 준다.                         |
-| 로컬             | `pnpm ci:gate:pr`   | origin/main 대비 GitHub 5분 PR gate를 재현한다.                                              |
+| 로컬             | `pnpm ci:gate:pr`   | origin/main 대비 GitHub 예산제 PR gate를 재현한다.                                           |
 | 로컬             | `pnpm ci:gate:all`  | 전체 release evidence를 직렬로 리허설한다.                                                   |
-| GitHub PR        | `quality-pr-fast`   | diff security, focused static/test/type contracts를 5분 안에 required evidence로 만든다.     |
+| GitHub PR        | `quality-pr-fast`   | diff security, focused static/test/type contracts를 420초 예산 안에 required evidence로 만든다. |
 | GitHub main push | `quality-static`    | 전체 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate를 실행한다.                     |
 | GitHub main push | `quality-coverage`  | 전체 pytest branch coverage, tier/public API coverage를 확인한다.                            |
 | GitHub main push | `quality-runtime`   | demo, OpenLineage, audit/outbox, data correctness, trace, diagnostics를 확인한다.            |

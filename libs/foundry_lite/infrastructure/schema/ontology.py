@@ -154,3 +154,26 @@ Index(
     ontology_branches.c.tenant_id,
     ontology_branches.c.name,
 )
+
+
+ontology_branch_action_idempotency_records = Table(
+    "ontology_branch_action_idempotency_records",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("branch_id", String, nullable=False),
+    Column("operation", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("request_fingerprint", String, nullable=False),
+    Column("response_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "actor_user_id",
+        "branch_id",
+        "operation",
+        "idempotency_key",
+        name="uq_ontology_branch_action_idempotency",
+    ),
+)

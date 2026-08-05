@@ -11,13 +11,17 @@ number exactly once), tenant scoping, and keyset list pagination.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Barrier
 from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports.ontology_branch_repository import (
+    OntologyBranchActionIdempotencyRecord,
+    OntologyBranchActionIdempotencyRow,
     OntologyBranchRebase,
     OntologyBranchRecord,
     OntologyBranchRepository,
@@ -51,6 +55,9 @@ class OntologyBranchHarness(Protocol):
 @dataclass
 class FakeOntologyBranchRepository:
     rows: dict[str, OntologyBranchRow] = field(default_factory=dict)
+    action_idempotency_rows: dict[tuple[str, str, str, str, str], OntologyBranchActionIdempotencyRow] = field(
+        default_factory=dict
+    )
 
     def insert_branch_if_name_free(self, *, transaction: Any, record: OntologyBranchRecord) -> OntologyBranchRow | None:
         del transaction
@@ -210,6 +217,40 @@ class FakeOntologyBranchRepository:
             mutable.update(merged_version_number=merged_version_number)
         return transition_updated(transition)
 
+    def action_idempotency_record(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        actor_user_id: str,
+        branch_id: str,
+        operation: str,
+        idempotency_key: str,
+    ) -> OntologyBranchActionIdempotencyRow | None:
+        del transaction
+        row = self.action_idempotency_rows.get((tenant_id, actor_user_id, branch_id, operation, idempotency_key))
+        return cast(OntologyBranchActionIdempotencyRow, dict(row)) if row is not None else None
+
+    def insert_action_idempotency_or_existing(
+        self,
+        *,
+        transaction: Any,
+        record: OntologyBranchActionIdempotencyRecord,
+    ) -> OntologyBranchActionIdempotencyRow | None:
+        del transaction
+        key = (
+            record.tenant_id,
+            record.actor_user_id,
+            record.branch_id,
+            record.operation,
+            record.idempotency_key,
+        )
+        existing = self.action_idempotency_rows.get(key)
+        if existing is not None:
+            return cast(OntologyBranchActionIdempotencyRow, dict(existing))
+        self.action_idempotency_rows[key] = _idempotency_row(record)
+        return None
+
 
 @dataclass
 class FakeOntologyBranchHarness:
@@ -264,6 +305,43 @@ def _record(
         created_by="user-creator",
         created_at=created_at,
         updated_at=created_at,
+    )
+
+
+def _idempotency_record(
+    record_id: str,
+    *,
+    tenant_id: str = _TENANT,
+    actor_user_id: str = "user-creator",
+    branch_id: str = "br-1",
+    operation: str = "created:SetOrderStatus",
+    idempotency_key: str = "action-key",
+    request_fingerprint: str = "sha256:request",
+) -> OntologyBranchActionIdempotencyRecord:
+    return OntologyBranchActionIdempotencyRecord(
+        record_id=record_id,
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        branch_id=branch_id,
+        operation=operation,
+        idempotency_key=idempotency_key,
+        request_fingerprint=request_fingerprint,
+        response_json={"branch": {"id": branch_id}, "isReplay": False},
+        created_at="2026-08-04T00:00:00Z",
+    )
+
+
+def _idempotency_row(record: OntologyBranchActionIdempotencyRecord) -> OntologyBranchActionIdempotencyRow:
+    return OntologyBranchActionIdempotencyRow(
+        id=record.record_id,
+        tenant_id=record.tenant_id,
+        actor_user_id=record.actor_user_id,
+        branch_id=record.branch_id,
+        operation=record.operation,
+        idempotency_key=record.idempotency_key,
+        request_fingerprint=record.request_fingerprint,
+        response_json=record.response_json,
+        created_at=record.created_at,
     )
 
 
@@ -333,6 +411,40 @@ def test_content_update_is_fingerprint_and_open_status_gated(harness: OntologyBr
     assert updated is not None and updated["content_fingerprint"] == "sha256:v2"
     assert stale is None
     assert after_abandon is None
+
+
+def test_action_mutation_idempotency_is_actor_branch_and_request_scoped(
+    harness: OntologyBranchHarness,
+) -> None:
+    first_record = _idempotency_record("idem-1")
+    with harness.transaction() as txn:
+        first = harness.repository.insert_action_idempotency_or_existing(transaction=txn, record=first_record)
+        duplicate = harness.repository.insert_action_idempotency_or_existing(
+            transaction=txn,
+            record=_idempotency_record("idem-2", request_fingerprint="sha256:different"),
+        )
+        read = harness.repository.action_idempotency_record(
+            transaction=txn,
+            tenant_id=_TENANT,
+            actor_user_id="user-creator",
+            branch_id="br-1",
+            operation="created:SetOrderStatus",
+            idempotency_key="action-key",
+        )
+        other_actor = harness.repository.insert_action_idempotency_or_existing(
+            transaction=txn,
+            record=_idempotency_record("idem-3", actor_user_id="user-other"),
+        )
+        other_branch = harness.repository.insert_action_idempotency_or_existing(
+            transaction=txn,
+            record=_idempotency_record("idem-4", branch_id="br-2"),
+        )
+
+    assert first is None
+    assert duplicate is not None and duplicate["id"] == "idem-1"
+    assert read is not None and read["request_fingerprint"] == "sha256:request"
+    assert other_actor is None
+    assert other_branch is None
 
 
 def test_rebase_swaps_base_and_content_atomically(harness: OntologyBranchHarness) -> None:
@@ -471,14 +583,45 @@ def _assert_round_trip(engine: Engine) -> None:
             updated_at="2026-07-03T01:00:00Z",
         )
         row = repository.branch_by_id(transaction=txn, tenant_id=_TENANT, branch_id="br-pg")
+        idempotency_inserted = repository.insert_action_idempotency_or_existing(
+            transaction=txn,
+            record=_idempotency_record("idem-pg", branch_id="br-pg"),
+        )
+        idempotency_replay = repository.insert_action_idempotency_or_existing(
+            transaction=txn,
+            record=_idempotency_record("idem-pg-loser", branch_id="br-pg", request_fingerprint="sha256:other"),
+        )
     assert inserted is not None
     assert duplicate is None
     assert merged.updated
     assert row is not None
     assert row["status"] == "merged"
     assert row["merged_version_number"] == 3
+    assert idempotency_inserted is None
+    assert idempotency_replay is not None and idempotency_replay["id"] == "idem-pg"
 
 
 @skip_if_no_postgres
 def test_ontology_branch_round_trip_postgres(postgres_fixture: PostgresFixture) -> None:
     _assert_round_trip(postgres_fixture.engine)
+
+
+@skip_if_no_postgres
+def test_action_idempotency_postgres_concurrent_insert_has_one_winner(
+    postgres_fixture: PostgresFixture,
+) -> None:
+    barrier = Barrier(2)
+
+    def insert(index: int) -> bool:
+        repository = SqlAlchemyOntologyBranchRepository(postgres_fixture.engine)
+        barrier.wait()
+        with postgres_fixture.engine.begin() as txn:
+            existing = repository.insert_action_idempotency_or_existing(
+                transaction=txn,
+                record=_idempotency_record(f"idem-race-{index}", branch_id="br-race"),
+            )
+        return existing is None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        winners = list(pool.map(insert, (1, 2)))
+    assert winners.count(True) == 1

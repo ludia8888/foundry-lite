@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from foundry_lite.domain.action_runtime.ontology_edit_batch import OntologyEditBatch
@@ -24,6 +24,7 @@ class ActionFunctionExecutionRequest:
     function_version: str
     inputs: Mapping[str, object]
     effect_outputs: Mapping[str, object]
+    user_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)

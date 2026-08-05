@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Protocol
 
 from foundry_lite.application.ports import OsdkResourceOperation, OsdkResourceType
+from foundry_lite.application.ports.action_notification_recipient_directory import (
+    ActionNotificationRecipientDirectory,
+)
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
 from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3
@@ -32,6 +35,7 @@ def authorize_action_effects(
     policy: PolicyService,
     scope: EffectScopeBoundary,
     repository: ConnectorRegistryRepository,
+    notification_directory: ActionNotificationRecipientDirectory,
     contract: ActionDefinitionV3,
 ) -> None:
     """Require actor, application, connector, and target permissions for every effect."""
@@ -44,7 +48,7 @@ def authorize_action_effects(
         if effect.kind in {"webhook", "connector_command"}:
             _require_connector_target(transaction, ctx, scope, repository, effect.target_ref)
         else:
-            _require_governed_stream_target(effect.kind, effect.target_ref)
+            _require_governed_stream_target(effect.kind, effect.target_ref, ctx.tenant_id, notification_directory)
 
 
 def _require_connector_target(
@@ -82,11 +86,21 @@ def _connector_parts(target_ref: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def _require_governed_stream_target(kind: str, target_ref: str) -> None:
+def _require_governed_stream_target(
+    kind: str,
+    target_ref: str,
+    tenant_id: str,
+    notification_directory: ActionNotificationRecipientDirectory,
+) -> None:
     prefixes = {"event": "topic:", "notification": "notification-policy:", "schedule_build": "schedule:"}
     expected = prefixes.get(kind)
     if expected is None or not target_ref.startswith(expected):
         raise ValidationFailed(
             "Action effect targetRef is not valid for its effect kind",
             details={"kind": kind, "targetRef": target_ref},
+        )
+    if kind == "notification" and notification_directory.policy_for(tenant_id=tenant_id, target_ref=target_ref) is None:
+        raise ValidationFailed(
+            "Action notification targetRef is not a registered recipient policy",
+            details={"targetRef": target_ref},
         )

@@ -1,6 +1,7 @@
 """Resolution helpers used by the Action planning orchestration service."""
 
 from foundry_lite.application.safe_expression import validate_action_request
+from foundry_lite.application.services.action_contract_access import authorized_action_contract
 from foundry_lite.application.services.action_helpers import (
     action_command,
     action_request_fingerprint,
@@ -24,6 +25,7 @@ from foundry_lite.domain.action_runtime.edit_plan_builder import build_edit_plan
 __all__ = [
     "LivePlanResolutionContext",
     "action_command",
+    "authorized_action_contract",
     "action_request_fingerprint",
     "action_target_record_error",
     "authorize_action_edit_plan",

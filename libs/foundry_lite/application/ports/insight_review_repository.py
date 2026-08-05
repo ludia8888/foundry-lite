@@ -98,6 +98,16 @@ class InsightReviewRepository(Protocol):
         """Return one tenant-scoped insight review."""
         ...
 
+    def review_by_create_idempotency_key(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> InsightReviewRow | None:
+        """Return one tenant-scoped review by its create idempotency coordinate."""
+        ...
+
     def review_by_execution_idempotency_key(
         self,
         *,

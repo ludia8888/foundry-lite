@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -20,6 +21,8 @@ class RequestContext:
     application_id: str | None = None
     client_id: str | None = None
     token_scopes: tuple[str, ...] = ()
+    oauth_session_id: str | None = None
+    user_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
 
     def has_role(self, role: str) -> bool:
         return role in self.roles

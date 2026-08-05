@@ -48,7 +48,7 @@ pnpm web:static
 pnpm ci:gate
 ```
 
-GitHub의 5분 PR 병합 게이트를 로컬에서 재현하려면 `pnpm ci:gate:pr`을 사용합니다.
+GitHub의 예산제 PR 병합 게이트를 로컬에서 재현하려면 `pnpm ci:gate:pr`을 사용합니다.
 전체 coverage/runtime/browser/CodeQL 증거는 main, nightly, release lane에서 이어집니다.
 
 로컬에서 release lane을 더 넓게 확인하려면 아래를 사용합니다.
@@ -98,8 +98,11 @@ flowchart LR
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight, artifact receipt, historical artifact dataset-head execution, and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| AI FDE | 9개 permission-scoped mode, lazy tool search, structured plan/clarification, explicit multi-resource context, branch-first Ontology/Pipeline authoring, Builder MCP OAuth, Pilot app generation, durable AI Operations ledger | `foundry.aip.run_fde_payload`, `/api/aip/fde/*`, `/mcp/builder/*`, `client.aip.fde`, `client.aip.pilot` |
-| Frontend SDK | 284 frontend route surface request contracts, 28 SDK helper contracts, 78 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| AI FDE | 9개 permission-scoped mode, 68개 server-owned tool(43개 Palantir 공식 exact-name native + 25개 Foundry-lite branch/test/proposal/Pilot), lazy tool search, structured plan/clarification, explicit multi-resource context, branch-first Ontology/Pipeline authoring, Builder MCP OAuth, Pilot app generation, durable AI Operations ledger | `foundry.aip.run_fde_payload`, `/api/aip/fde/*`, `/mcp/builder/*`, `mcp:builder:stdio`, `client.aip.fde`, `client.aip.pilot` |
+| Action Builder | open Ontology branch 안에서만 ActionDefinitionV3 생성·수정·삭제, typed parameter/default, first-match override, nested criteria, ordered object/link rules, version-pinned function, registered before/after effect, 위험·agent policy, Action Log/revert policy, canonical fingerprint/inline eligibility, durable replay와 audit/outbox 원자성. 브라우저에서 branch 저장→proposal→독립 검토자 승인→activation까지 연결 | Foundry Actions `Action Builder`, `/api/ontology/branches/{branch_id}/action-types`, `client.ontology.branches.actionTypes` |
+| Action runtime + Python OSDK | 새로 활성화한 Action을 SDK 재생성 없이 동적 schema로 즉시 실행하고 sync/async를 하나의 run 이력으로 조회. SSE 재연결/snapshot fallback, step·attempt·worker·fencing·retry/takeover, effect receipt, 취소, p95/failure/backlog, Action Log·edited objects·revert UI; attachment/media는 staging 전 malware scan, 운영 ClamAV 강제, retention·권한 상속·lifetime holder 증거를 적용. Python은 catalog/schema/plan/dry-run/apply/branch/run/events/cancel/log/revert와 fingerprint-pinned `TypedDict` 패키지 제공 | Foundry Actions `실행·로그`, `foundry_lite.osdk.OsdkActionInvoker`, `packages/sdk-python`, `quality:action-types-palantir-ui` |
+| Consumer Ontology MCP | app에 허용된 object/action/function만 MCP tool로 투영, Authorization Code + PKCE와 Client Credentials service principal, one-time client secret 발급·회전·폐기, native structured content, typed query-function schema, low-risk autonomous durable run, medium/high immutable AIP approval proposal, Developer Console 발행/MCP Hub 화면, app Origin 제한, durable session/SSE resume, stdio HTTP proxy, 공식 MCP SDK+별도 Uvicorn+PostgreSQL live client proof | `/mcp/ontology/{application_id}`, `developerConsole.mcpServers.*`, `developerConsole.osdkApplications.*ClientSecret*`, `mcp:ontology:stdio`, `quality:ontology-mcp`, `quality:ontology-mcp-live` |
+| Frontend SDK | 308 frontend route surface request contracts, 28 SDK helper contracts, 91 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -110,7 +113,7 @@ flowchart LR
 | Kubernetes/Helm, one-click production deploy, managed cloud operations | 로컬/CI proof와 adapter profile은 있지만 운영 패키징은 별도 작업입니다. |
 | full visual product UI | Foundry SPA는 핵심 route와 여러 실제 업무 흐름을 E2E로 검증하지만, production-grade 운영자용 SPA 전체가 완성됐다는 뜻은 아닙니다. |
 | Pipeline Builder의 cluster 운영 패키징과 아직 foundation인 output plane | Temporal 분산 DAG, browser 실행 이력/SSE/retry/takeover/cancel/partial evidence, no-commit preview, Dataset·Media Set 다중 output commit은 current입니다. Kubernetes/Helm/HPA/PDB, multi-region Temporal 운영, Virtual Table·Ontology serving output, hot-stream DAG 엔진과 data/logic trigger DSL은 아직 future입니다. |
-| full Palantir Action Types parity | Action IR v2, EditPlan, multi-object/link atomic commit은 current입니다. Function-backed edit, 전체 typed parameter/form/criteria, governed side effect, Ontology-queryable action log, revert, branch/interface action, 완전한 SDK/UI/MCP 배포는 `docs/action-types-parity-matrix.json` 기준 partial/foundation/missing입니다. |
+| full Palantir Action Types + consumer Ontology MCP parity | Action v3, EditPlan, multi-object/link atomic commit, Function-backed Action, governed effect, 12/18 capability axes, advanced Builder, Python/TypeScript OSDK, runtime UI와 consumer Ontology MCP는 실제 제품 경로에 있습니다. PostgreSQL+Temporal two-worker gate는 kill/takeover·취소·dispatch 복구·exact-one commit을, `quality:ontology-mcp-live`는 공식 MCP `ClientSession`+별도 Uvicorn+PostgreSQL에서 object 조회와 고위험 Action 승인 분기를 증명합니다. 다만 hosted ChatGPT SaaS tenant, production cloud KMS, live ClamAV, virtual Ontology log link·Workshop timeline, effect/revert/branch 전용 multi-process race는 남았습니다. 자세한 경계는 [Action Types 비교표](docs/action-types-parity-matrix.json)와 [Agent-Native Operations PRD](docs/palantir-action-mcp-prd-ko.md)를 따릅니다. |
 | S62 visual dataset browser/preview grid/version pin/lineage graph UX | Datasets 화면의 catalog 선택, preview grid, manifest/schema evidence, version tab, quality tab, lineage handoff는 `tests/e2e-foundry/datasets-explorer-flow.spec.ts`로 current입니다. 대용량/다중 데이터셋 비교, Dataset 화면 안의 완전한 interactive lineage graph, production-scale browser UX는 future입니다. |
 | S63 evidence panel UI, S63 action execution orchestration | Approvals 화면의 Insight action queue, evidence panel, assign/approve/reject, AIP-approved `executeApprovedAction` 실행 흐름은 `tests/e2e-foundry/aip-approval-flow.spec.ts`로 current입니다. model diff UI, approval-policy builder, autonomous orchestration, full managed review workspace는 future입니다. |
 | vendor-specific SAP/NetSuite/OAuth connectors | Generic REST, webhook, CDC proof는 있지만 production vendor-specific packaged connector 범위는 future입니다. |
@@ -172,6 +175,7 @@ foundry.demo
 | `apps/worker/foundry_lite_worker` | stream archive and outbox publisher worker entrypoints |
 | `apps/web` | static web shell and browser SDK bundle |
 | `packages/sdk-ts/src/generated.ts` | generated TypeScript SDK |
+| `packages/sdk-python/src/foundry_lite_sdk` | fingerprint-pinned generated Python Action OSDK package |
 | `packages/sdk-ts/src/screen-recipes.ts` | screen-level SDK recipes |
 | `tests` | unit, contract, smoke, integration, SDK request-contract, E2E proof |
 
@@ -227,7 +231,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 284개 frontend route surface는 모두 `named-sdk-only` 정책이며, 9개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback, MCP transport, OAuth discovery처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 308개 frontend route surface는 모두 `named-sdk-only` 정책이며, 13개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback, MCP transport, OAuth discovery처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 
@@ -277,7 +281,7 @@ pnpm worker:pipeline-control
 | `pnpm dev` | FastAPI app을 로컬에서 실행합니다. |
 | `pnpm web:static` | static web shell을 4173 포트에서 서빙합니다. |
 | `pnpm ci:gate` | 빠른 local static plus impact gate입니다. |
-| `pnpm ci:gate:pr` | diff security, 직접 연관 테스트, focused static/type 검사를 5분 budget으로 실행합니다. |
+| `pnpm ci:gate:pr` | diff security, 직접 연관 테스트, focused static/type 검사를 420초 budget으로 실행합니다. |
 | `pnpm ci:gate:all` | 로컬에서 release lane을 직렬로 넓게 확인합니다. |
 | `pnpm --silent quality:media-active-covered` | Media/Content Plane active-covered proof를 확인합니다. |
 | `pnpm --silent quality:operations-recovery` | Operations/Recovery backend/API/SDK slice를 확인합니다. |
@@ -308,6 +312,7 @@ pnpm worker:pipeline-control
 | [docs/implementation-status.md](docs/implementation-status.md) | 현재 코드가 실제로 보장하는 current, partial, future 경계를 가장 자세히 설명하는 상태 원본입니다. |
 | [docs/sprint-evidence-ledger.md](docs/sprint-evidence-ledger.md) | 어떤 claim이 어떤 테스트, gate, script, artifact로 증명되는지 기록하는 evidence 장부입니다. |
 | [foundry_lite_development_plan_ko_sprintified.md](foundry_lite_development_plan_ko_sprintified.md) | 제품 목표와 장기 아키텍처 방향을 설명하는 큰 설계 원본입니다. |
+| [docs/palantir-action-mcp-prd-ko.md](docs/palantir-action-mcp-prd-ko.md) | Palantir 공개 문서에서 도출한 Action Types, AI FDE, Builder MCP, Ontology MCP, Pilot 통합 제품 요구사항과 완료 기준입니다. 현재 구현 증거가 아니라 목표 PRD입니다. |
 | [foundry_lite_sprint_breakdown_ko.md](foundry_lite_sprint_breakdown_ko.md) | 스프린트별 목표, acceptance, Done/Partial/Future 상태를 관리하는 계획표입니다. |
 | [docs/data-platform-expansion-sprint-plan-ko.md](docs/data-platform-expansion-sprint-plan-ko.md) | S46 이후 데이터 플랫폼 확장 계획과 sprint-by-sprint 체크리스트를 담은 상세 roadmap입니다. |
 | [docs/quality-gate-roadmap.md](docs/quality-gate-roadmap.md) | 품질 게이트가 왜 있고 어떤 위험을 막는지, release/runtime lane에서 어떻게 운영되는지 설명합니다. |

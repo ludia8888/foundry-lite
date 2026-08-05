@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from foundry_lite.application.services.action_attempt_heartbeat import ActionAttemptHeartbeat
+from foundry_lite.application.services.action_criteria_resolution import (
+    with_criteria_expectations as with_criteria_expectations,
+)
 from foundry_lite.application.services.action_distributed_contracts import (
     ActionAsyncRunRow,
     ActionDefinitionV3,
@@ -30,15 +36,23 @@ from foundry_lite.application.services.action_distributed_contracts import (
     TransactionContext,
     TransactionManager,
     action_contract_fingerprint,
-    compile_action_contract,
+    compile_action_contract_snapshot,
 )
 from foundry_lite.application.services.action_distributed_run_evidence import (
     action_function_output,
     append_action_attempt_event,
 )
 from foundry_lite.application.services.action_edit_plan_committer import ActionEditPlanCommitter
+from foundry_lite.application.services.action_function_batch import stored_action_function_batch_items
 from foundry_lite.application.state_transitions import ACTION_RUN_COMMIT_PENDING
-from foundry_lite.domain.action_runtime.action_execution_plan import edit_plan_from_manifest, seal_action_execution_plan
+from foundry_lite.domain.action_runtime.action_execution_plan import (
+    criteria_read_expectations_from_manifest as criteria_read_expectations_from_manifest,
+)
+from foundry_lite.domain.action_runtime.action_execution_plan import (
+    edit_plan_from_manifest,
+    seal_action_execution_plan,
+)
+from foundry_lite.domain.action_runtime.ontology_edit_batch import OntologyEditBatch
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +67,15 @@ class ActionStepLeaseLost(ActionRunRetryableFailure):
     """Stop a stale worker before it can write a result."""
 
 
+def action_attempt_heartbeat(
+    engine: TransactionManager,
+    repository: ActionExecutionRepository,
+    attempt: ActionStepAttemptRow,
+) -> ActionAttemptHeartbeat:
+    """Create the fenced heartbeat controller for a claimed step attempt."""
+    return ActionAttemptHeartbeat(engine, repository, attempt)
+
+
 def action_worker_context(row: ActionAsyncRunRow) -> RequestContext:
     snapshot = _mapping(row["execution_plan"], "executionPlan")
     principal = _mapping(snapshot.get("principal"), "principal")
@@ -64,6 +87,7 @@ def action_worker_context(row: ActionAsyncRunRow) -> RequestContext:
         application_id=_optional_text(principal.get("applicationId")),
         client_id=_optional_text(principal.get("clientId")),
         token_scopes=_strings(principal.get("tokenScopes")),
+        user_attributes=_mapping(principal.get("userAttributes"), "userAttributes"),
     )
 
 
@@ -91,7 +115,7 @@ def action_attempt_claim(
 
 def stored_action_contract(row: ActionAsyncRunRow) -> ActionDefinitionV3:
     snapshot = _mapping(row["execution_plan"], "executionPlan")
-    return compile_action_contract(_mapping(snapshot.get("contract"), "contract"))
+    return compile_action_contract_snapshot(_mapping(snapshot.get("contract"), "contract"))
 
 
 def action_function_request(
@@ -117,6 +141,85 @@ def action_function_request(
         function_version=contract.function.version,
         inputs=dict(row["parameters"]),
         effect_outputs=dict(effect_outputs or {}),
+        user_attributes=ctx.user_attributes,
+    )
+
+
+def action_function_requests(
+    row: ActionAsyncRunRow,
+    ctx: RequestContext,
+    effect_outputs: Mapping[str, object] | None = None,
+) -> tuple[ActionFunctionExecutionRequest, ...]:
+    """Build one request per invocation, or one list-of-struct request for batch mode."""
+    snapshot = _mapping(row["execution_plan"], "executionPlan")
+    items = stored_action_function_batch_items(snapshot)
+    contract = stored_action_contract(row)
+    function = contract.function
+    if function is None:
+        raise InvariantViolation("stored Action function run has no function")
+    if not items:
+        if function.execution_mode == "batched":
+            if function.batch_input_name is None:
+                raise InvariantViolation("batched Action function has no batch input name")
+            single_inputs = {function.batch_input_name: [dict(row["parameters"])]}
+            return (_action_function_request(row, ctx, single_inputs, effect_outputs, index=0),)
+        return (action_function_request(row, ctx, effect_outputs),)
+    parameters = tuple(dict(_mapping(item.get("parameters"), "parameters")) for item in items)
+    if function.execution_mode == "batched":
+        if function.batch_input_name is None:
+            raise InvariantViolation("batched Action function has no batch input name")
+        invocation_inputs: Sequence[Mapping[str, object]] = ({function.batch_input_name: list(parameters)},)
+    else:
+        invocation_inputs = parameters
+    return tuple(
+        _action_function_request(row, ctx, values, effect_outputs, index=index)
+        for index, values in enumerate(invocation_inputs)
+    )
+
+
+def combine_action_function_results(
+    results: Sequence[ActionFunctionExecutionResult],
+) -> ActionFunctionExecutionResult:
+    if not results:
+        raise InvariantViolation("Action function execution produced no result")
+    if len(results) == 1:
+        return results[0]
+    edit_batch = OntologyEditBatch.combine(tuple(result.edit_batch for result in results))
+    hashes = [result.result_hash for result in results]
+    encoded = json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()
+    result_hash = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    return ActionFunctionExecutionResult(
+        edit_batch=edit_batch,
+        external_execution_id=f"action-function-batch:{result_hash.removeprefix('sha256:')[:24]}",
+        result_hash=result_hash,
+        provenance={"executionMode": "per_request", "invocations": [dict(item.provenance) for item in results]},
+    )
+
+
+def _action_function_request(
+    row: ActionAsyncRunRow,
+    ctx: RequestContext,
+    inputs: Mapping[str, object],
+    effect_outputs: Mapping[str, object] | None,
+    *,
+    index: int,
+) -> ActionFunctionExecutionRequest:
+    request = action_function_request(row, ctx, effect_outputs)
+    return ActionFunctionExecutionRequest(
+        tenant_id=request.tenant_id,
+        run_id=f"{request.run_id}:invocation:{index}",
+        request_id=request.request_id,
+        actor_user_id=request.actor_user_id,
+        roles=request.roles,
+        token_scopes=request.token_scopes,
+        application_id=request.application_id,
+        client_id=request.client_id,
+        ontology_version_id=request.ontology_version_id,
+        function_api_name=request.function_api_name,
+        function_version=request.function_version,
+        inputs=dict(inputs),
+        effect_outputs=request.effect_outputs,
+        user_attributes=request.user_attributes,
     )
 
 

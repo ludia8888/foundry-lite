@@ -954,7 +954,7 @@ def test_github_ci_uses_budgeted_pr_gate_and_full_post_merge_lanes() -> None:
 
     pr_job = workflow.split("quality_pr:", maxsplit=1)[1].split("quality_static:", maxsplit=1)[0]
     assert "name: quality-pr-fast" in pr_job
-    assert "timeout-minutes: 5" in pr_job
+    assert "timeout-minutes: 9" in pr_job
     assert "scripts/quality/pr_fast_gate.py plan" in pr_job
     assert "run: bash scripts/ci_gate.sh pr" in pr_job
     assert "tesseract" not in pr_job

@@ -4,6 +4,7 @@ from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.infrastructure.auth.local import (
     HEADER_ROLES_KEY,
     HEADER_TENANT_KEY,
+    HEADER_USER_ATTRIBUTES_KEY,
     HEADER_USER_KEY,
     DemoAuthProvider,
     HeaderTrustAuthProvider,
@@ -19,6 +20,7 @@ from foundry_lite.infrastructure.auth.oidc import (
     OIDC_ROLES_CLAIM_ENV,
     OIDC_SERVICE_ACCOUNT_CLAIM_ENV,
     OIDC_TENANT_CLAIM_ENV,
+    OIDC_USER_ATTRIBUTES_CLAIM_ENV,
     JwtOidcAuthConfig,
     JwtOidcAuthProvider,
 )
@@ -40,6 +42,7 @@ __all__ = [
     "HEADER_ROLES_KEY",
     "HEADER_TENANT_KEY",
     "HEADER_USER_KEY",
+    "HEADER_USER_ATTRIBUTES_KEY",
     "RUNTIME_PROFILE_ENV",
     "AuthProfileConfigurationError",
     "AuthProvider",
@@ -56,6 +59,7 @@ __all__ = [
     "OIDC_ROLES_CLAIM_ENV",
     "OIDC_SERVICE_ACCOUNT_CLAIM_ENV",
     "OIDC_TENANT_CLAIM_ENV",
+    "OIDC_USER_ATTRIBUTES_CLAIM_ENV",
     "auth_provider_for_profile",
     "auth_provider_from_env",
 ]

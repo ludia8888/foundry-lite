@@ -71,7 +71,7 @@ OSDK_PACKAGE_MANIFEST: OsdkPackageManifest = {
     "generator_version": "0.1.0",
     "ontology_scope": "supply-chain-demo",
     "ontology_source": "examples/supply-chain-demo/ontology/order-customer.yaml",
-    "ontology_fingerprint": "13b1f74e129614c3",
+    "ontology_fingerprint": "16d0f0b5844eab24",
     "object_api_names": ("Order", "Customer"),
     "action_api_names": ("ApproveOrder",),
     "link_api_names": ("OrderCustomer",),

@@ -22,6 +22,7 @@ from foundry_lite.application.facades import (
     MaterializationRunner,
     MediaWorkspace,
     ObjectStore,
+    OntologyMcpGateway,
     OntologyRegistry,
     OperationsConsole,
     PipelineWorkspace,
@@ -76,13 +77,14 @@ class FoundryLite:
     workflow. Lifecycle (bootstrap/reset) stays on this root.
     """
 
-    def __init__(self, *, dependencies: CoreDependencies) -> None:
+    def __init__(self, *, dependencies: CoreDependencies, should_initialize_schema: bool = True) -> None:
         self._attach_dependencies(dependencies)
         services = CoreServices.create(dependencies)
         self._services = services
         self._attach_facades(services)
         self._bind_local_workflow_drivers(dependencies, services)
-        self._initialize_schema_for_unprotected_profile()
+        if should_initialize_schema:
+            self._initialize_schema_for_unprotected_profile()
         self.bootstrap()
 
     def _initialize_schema_for_unprotected_profile(self) -> None:
@@ -148,10 +150,18 @@ class FoundryLite:
         self.pipelines = PipelineWorkspace(services.pipelines.entrypoint)
         self.resources = ResourceWorkspace(services.resources)
         self.ontology = _ontology_registry(services)
-        self.objects = ObjectStore(services.object_store, services.ontology_search)
-        self.actions = ActionGateway(services.action.entrypoint)
+        self.objects = ObjectStore(
+            services.object_store,
+            services.ontology_search,
+            services.action.log_ontology,
+        )
+        self.actions = ActionGateway(
+            services.action.entrypoint,
+            services.action.notification_policies,
+            services.action.effect_operations,
+        )
         self.functions = FunctionGateway(services.function_execution)
-        self.auth = AuthGateway(services.osdk_oauth_sessions)
+        self.auth = AuthGateway(services.osdk_oauth_sessions, services.osdk_oauth_client_credentials)
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
@@ -161,6 +171,14 @@ class FoundryLite:
         self.developer_console = DeveloperConsole(services.osdk_applications.entrypoint)
 
     def _attach_aip_facades(self, services: CoreServices) -> None:
+        self.ontology_mcp = OntologyMcpGateway(
+            applications=services.osdk_applications.entrypoint,
+            objects=self.objects,
+            actions=self.actions,
+            functions=self.functions,
+            approvals=services.action_proposal,
+            access_sessions=services.osdk_access_sessions,
+        )
         fde_mcp = FdeMcpGateway(
             engine=self.engine,
             policy=self.policy,
@@ -168,6 +186,8 @@ class FoundryLite:
             context_validator=services.fde_context,
             platform_executor=services.fde_platform_tools,
             application_reader=services.osdk_applications.entrypoint,
+            application_repository=self.osdk_application_repository,
+            access_session_validator=services.osdk_access_sessions,
         )
         self.aip = AipWorkspace(
             services.agent_runtime,
@@ -240,6 +260,7 @@ class FoundryLite:
             application_id=request.application_id,
             client_id=request.client_id,
             token_scopes=request.token_scopes,
+            user_attributes=request.user_attributes,
         )
         result = services.function_execution.execute_pinned_function(
             request.function_api_name,

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from foundry_lite.application.action_types import ActionEditSummary, ActionValidationResponse
+from foundry_lite.application.action_types import (
+    ActionEditSummary,
+    ActionExecutionPlanResponse,
+    ActionValidationResponse,
+)
 from foundry_lite.application.osdk import (
     ApproveOrder,
     Customer,
@@ -34,6 +38,7 @@ from foundry_lite.application.osdk_manifest import (
 __all__ = [
     "ApproveOrder",
     "ActionEditSummary",
+    "ActionExecutionPlanResponse",
     "ActionValidationResponse",
     "Customer",
     "CustomerOrder",

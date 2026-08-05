@@ -8,11 +8,17 @@ from foundry_lite.application.ports import (
     OsdkApplicationRepository,
     OsdkApplicationResourceRecord,
     OsdkDeveloperConsoleIdempotencyRecord,
+    OsdkMcpServerRecord,
+    OsdkMcpSessionRecord,
     OsdkReleaseArtifactDownloadTokenRecord,
     OsdkReleaseArtifactRecord,
     OsdkSdkCompatibilityWindowRecord,
     OsdkSdkReleaseChannelRecord,
     OsdkSdkVersionRecord,
+)
+from foundry_lite.application.ports.osdk_security_repository import (
+    OsdkClientSecretVersionRecord,
+    OsdkMcpToolActivationRecord,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyOsdkApplicationRepository
@@ -30,6 +36,89 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
         assert repository.insert_client_or_get_existing(transaction=conn, record=_client()) is None
         client_duplicate = repository.insert_client_or_get_existing(transaction=conn, record=_client())
         repository.replace_resources(transaction=conn, tenant_id="tenant-a", app_id="app-1", resources=(_resource(),))
+        mcp_server = repository.upsert_mcp_server(transaction=conn, record=_mcp_server("enabled"))
+        updated_mcp_server = repository.upsert_mcp_server(transaction=conn, record=_mcp_server("disabled"))
+        assert repository.insert_mcp_session_or_get_existing(transaction=conn, record=_mcp_session()) is None
+        session_duplicate = repository.insert_mcp_session_or_get_existing(transaction=conn, record=_mcp_session())
+        first_event = repository.append_mcp_session_event(
+            transaction=conn,
+            tenant_id="tenant-a",
+            session_id="ontology-mcp-session-1",
+            event_type="session.ready",
+            payload={"applicationId": "app-1"},
+            created_at="2026-07-01T00:09:00+00:00",
+        )
+        second_event = repository.append_mcp_session_event(
+            transaction=conn,
+            tenant_id="tenant-a",
+            session_id="ontology-mcp-session-1",
+            event_type="tool.completed",
+            payload={"toolName": "object.Order.get"},
+            created_at="2026-07-01T00:10:00+00:00",
+        )
+        session_events = repository.mcp_session_events_after(
+            transaction=conn, tenant_id="tenant-a", session_id="ontology-mcp-session-1", after_sequence=1
+        )
+        terminated_session = repository.terminate_mcp_session(
+            transaction=conn,
+            tenant_id="tenant-a",
+            session_id="ontology-mcp-session-1",
+            terminated_at="2026-07-01T00:11:00+00:00",
+        )
+        assert repository.activate_mcp_tool(transaction=conn, record=_mcp_tool_activation()) is True
+        assert repository.activate_mcp_tool(transaction=conn, record=_mcp_tool_activation()) is False
+        mcp_tool_activations = repository.mcp_tool_activations(
+            transaction=conn,
+            tenant_id="tenant-a",
+            app_id="app-1",
+            session_id="ontology-mcp-session-1",
+            client_id="orders-web",
+            actor_user_id="user-a",
+        )
+        other_actor_activations = repository.mcp_tool_activations(
+            transaction=conn,
+            tenant_id="tenant-a",
+            app_id="app-1",
+            session_id="ontology-mcp-session-1",
+            client_id="orders-web",
+            actor_user_id="user-b",
+        )
+        first_client_secret = repository.activate_client_secret(
+            transaction=conn,
+            record=_client_secret("secret-1", "sha256:first", "2026-07-01T00:09:40+00:00"),
+        )
+        second_client_secret = repository.activate_client_secret(
+            transaction=conn,
+            record=_client_secret("secret-2", "sha256:second", "2026-07-01T00:09:50+00:00"),
+        )
+        repository.mark_client_secret_used(
+            transaction=conn,
+            tenant_id="tenant-a",
+            secret_id="secret-2",
+            used_at="2026-07-01T00:09:55+00:00",
+        )
+        current_client_secret = repository.current_client_secret(
+            transaction=conn,
+            tenant_id="tenant-a",
+            client_row_id="client-row-1",
+        )
+        client_secret_versions = repository.client_secret_versions(
+            transaction=conn,
+            tenant_id="tenant-a",
+            client_row_id="client-row-1",
+        )
+        revoked_client_secret = repository.revoke_current_client_secret(
+            transaction=conn,
+            tenant_id="tenant-a",
+            client_row_id="client-row-1",
+            revoked_at="2026-07-01T00:10:00+00:00",
+        )
+        repository.touch_mcp_server_activity(
+            transaction=conn,
+            tenant_id="tenant-a",
+            app_id="app-1",
+            observed_at="2026-07-01T00:12:00+00:00",
+        )
         assert repository.insert_sdk_version_or_get_existing(transaction=conn, record=_sdk_version()) is None
         sdk_duplicate = repository.insert_sdk_version_or_get_existing(transaction=conn, record=_sdk_version())
         artifact = repository.insert_release_artifact(transaction=conn, record=_artifact())
@@ -63,6 +152,10 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
             updated_at="2026-07-01T00:11:00+00:00",
         )
         resources = repository.resources_for_application(transaction=conn, tenant_id="tenant-a", app_id="app-1")
+        fetched_mcp_server = repository.mcp_server_for_application(
+            transaction=conn, tenant_id="tenant-a", app_id="app-1"
+        )
+        mcp_servers = repository.list_mcp_servers(transaction=conn, tenant_id="tenant-a")
         version = repository.sdk_version_by_id(transaction=conn, tenant_id="tenant-a", version_id="sdk-1")
         versions = repository.sdk_versions_for_application(transaction=conn, tenant_id="tenant-a", app_id="app-1")
         artifact_by_id = repository.release_artifact_by_id(
@@ -96,6 +189,23 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
     assert len(clients) == 1
     assert updated_client is not None and updated_client["status"] == "inactive"
     assert resources[0]["scopes"] == ["osdk:object:Order:read"]
+    assert mcp_server["status"] == "enabled"
+    assert updated_mcp_server["id"] == "mcp-server-1"
+    assert fetched_mcp_server is not None and fetched_mcp_server["status"] == "disabled"
+    assert fetched_mcp_server["last_activity_at"] == "2026-07-01T00:12:00+00:00"
+    assert [row["id"] for row in mcp_servers] == ["mcp-server-1"]
+    assert session_duplicate is not None and session_duplicate["status"] == "active"
+    assert first_event is not None and first_event["sequence"] == 1
+    assert second_event is not None and second_event["sequence"] == 2
+    assert [event["event_type"] for event in session_events] == ["tool.completed"]
+    assert terminated_session is not None and terminated_session["status"] == "terminated"
+    assert [row["tool_id"] for row in mcp_tool_activations] == ["platform.docs.search"]
+    assert other_actor_activations == []
+    assert first_client_secret["status"] == "active"
+    assert second_client_secret["status"] == "active"
+    assert current_client_secret is not None and current_client_secret["last_used_at"] == "2026-07-01T00:09:55+00:00"
+    assert [row["status"] for row in client_secret_versions] == ["active", "rotated"]
+    assert revoked_client_secret is not None and revoked_client_secret["status"] == "revoked"
     assert version is not None and version["version"] == "1.0.0"
     assert [row["id"] for row in versions] == ["sdk-1"]
     assert artifact_by_id is not None
@@ -150,6 +260,64 @@ def _resource() -> OsdkApplicationResourceRecord:
         resource_api_name="Order",
         scopes=("osdk:object:Order:read",),
         created_at="2026-07-01T00:00:00+00:00",
+    )
+
+
+def _mcp_server(status: str) -> OsdkMcpServerRecord:
+    return OsdkMcpServerRecord(
+        server_id="mcp-server-1",
+        tenant_id="tenant-a",
+        app_id="app-1",
+        status=status,
+        description_markdown="Orders agent MCP server",
+        allowed_origins=("https://chat.example.test",),
+        last_activity_at=None,
+        updated_by_user_id="user-a",
+        created_at="2026-07-01T00:00:00+00:00",
+        updated_at="2026-07-01T00:08:00+00:00",
+    )
+
+
+def _mcp_session() -> OsdkMcpSessionRecord:
+    return OsdkMcpSessionRecord(
+        session_id="ontology-mcp-session-1",
+        tenant_id="tenant-a",
+        app_id="app-1",
+        client_id="orders-web",
+        actor_user_id="user-a",
+        status="active",
+        created_at="2026-07-01T00:08:00+00:00",
+        last_seen_at="2026-07-01T00:08:00+00:00",
+    )
+
+
+def _mcp_tool_activation() -> OsdkMcpToolActivationRecord:
+    return OsdkMcpToolActivationRecord(
+        activation_id="mcp-tool-activation-1",
+        tenant_id="tenant-a",
+        app_id="app-1",
+        session_id="ontology-mcp-session-1",
+        client_id="orders-web",
+        actor_user_id="user-a",
+        tool_id="platform.docs.search",
+        query_hash="sha256:query",
+        activated_at="2026-07-01T00:09:30+00:00",
+    )
+
+
+def _client_secret(secret_id: str, version: str, created_at: str) -> OsdkClientSecretVersionRecord:
+    return OsdkClientSecretVersionRecord(
+        secret_id=secret_id,
+        tenant_id="tenant-a",
+        app_id="app-1",
+        client_row_id="client-row-1",
+        client_id="orders-web",
+        vault_secret_name="osdk_client_credentials/tenant-a/orders-web",
+        vault_secret_version=version,
+        status="active",
+        created_by_user_id="user-a",
+        rotation_reason="scheduled rotation",
+        created_at=created_at,
     )
 
 

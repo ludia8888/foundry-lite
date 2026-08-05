@@ -13,7 +13,14 @@ from foundry_lite.application.action_log_types import (
     ActionLogObjectRow,
     ObjectRestoreWrite,
 )
-from foundry_lite.application.ports.object_read_repository import ObjectLinkRow, ObjectRecordRow
+from foundry_lite.application.ports.object_read_repository import (
+    ObjectAggregationGroup,
+    ObjectAggregationMetric,
+    ObjectLinkRow,
+    ObjectOrderBy,
+    ObjectQueryCursor,
+    ObjectRecordRow,
+)
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 ActionParameters = Mapping[str, object]
@@ -284,6 +291,17 @@ class ActionRepository(Protocol):
         """CAS an action run across a status transition (``completed_at`` is ``None`` for a non-terminal move)."""
         ...
 
+    def update_action_run_parameters(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        action_run_id: str,
+        parameters: ActionParameters,
+    ) -> bool:
+        """Replace untrusted received parameters with server-resolved canonical values."""
+        ...
+
     def action_run_usage(
         self,
         *,
@@ -401,14 +419,49 @@ class ActionRepository(Protocol):
         before_created_at: str | None,
         before_log_id: str | None,
         limit: int,
+        action_type_api_name: str | None = None,
     ) -> list[ActionLogEntryRow]:
         """Return a stable newest-first cursor page of Action logs."""
         ...
 
+    def query_action_logs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        action_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: ObjectQueryCursor | None,
+        search_text: str | None,
+        limit: int,
+    ) -> list[ActionLogEntryRow]:
+        """Return one SQL-filtered, keyset-paginated Action Log page plus lookahead."""
+        ...
+
+    def aggregate_action_logs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        action_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        group_by: Sequence[str],
+        metrics: Sequence[ObjectAggregationMetric],
+        group_limit: int,
+    ) -> list[ObjectAggregationGroup]:
+        """Aggregate Action Log scalar properties in the database."""
+        ...
+
     def action_runs_for_monitoring(
-        self, *, transaction: TransactionContext, tenant_id: str, limit: int
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        created_at_from: str,
+        limit: int,
     ) -> list[ActionRunRow]:
-        """Return a bounded newest-first run window for runtime health metrics."""
+        """Return a bounded newest-first UTC run window for runtime health metrics."""
         ...
 
     def mark_action_log_reverted(

@@ -1682,6 +1682,33 @@ def test_action_rejects_corrupt_target_record_type_before_action_run(foundry: Fo
     assert _rows_for_key(runs, "outboxEvents", idempotency_key) == []
 
 
+def test_action_accepts_record_indexed_by_compatible_prior_ontology_type(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    ontology_text = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    versioned_ontology = tmp_path / "order-customer-v2.yaml"
+    versioned_ontology.write_text(
+        ontology_text.replace("displayName: Order\n", "displayName: Order v2\n", 1),
+        encoding="utf-8",
+    )
+
+    foundry.ontology.apply(str(versioned_ontology), ctx=ctx)
+    result = foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Compatible schema activation"},
+        idempotency_key="compatible-prior-ontology-type",
+        ctx=ctx,
+    )
+
+    assert result["status"] == "succeeded"
+
+
 def _prepare_demo_with_ontology(foundry: FoundryLite, ontology_path: Path) -> RequestContext:
     ctx = demo_admin_context()
     foundry.demo.seed_files()

@@ -15,7 +15,7 @@ usage() {
 Usage: bash scripts/ci_gate.sh [pr|local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]
 
 Gate modes keep local feedback fast while preserving full release evidence:
-  pr       five-minute PR lane: diff security, focused invariants, directly
+  pr       budgeted PR lane: diff security, focused invariants, directly
            related tests, and affected frontend/SDK type contracts in parallel
   local    default developer gate: full static invariants plus Tach impact tests
   all      full serial rehearsal of the parallel CI lanes
@@ -289,7 +289,17 @@ run_runtime_full_gate() {
 
   run_runtime_step "Action Types v2 IR and atomic edit-plan ratchet" pnpm --silent quality:action-types-v2
 
+  run_runtime_step "Consumer Ontology MCP OAuth, app restriction, and Action approval ratchet" pnpm --silent quality:ontology-mcp
+
+  run_runtime_step "Consumer Ontology MCP official-client PostgreSQL ratchet" pnpm --silent quality:ontology-mcp-live
+
   run_runtime_step "Action Types two-worker Temporal fault ratchet" pnpm --silent quality:action-types-palantir-live
+
+  run_runtime_step "Action notification policy PostgreSQL and RLS ratchet" pnpm --silent quality:action-notification-policies-live
+
+  run_runtime_step "Action effect two-worker takeover ratchet" pnpm --silent quality:action-effect-operations-live
+
+  run_runtime_step "Action monitoring live Kafka alert ratchet" pnpm --silent quality:action-monitoring-live
 
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
 

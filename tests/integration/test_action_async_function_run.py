@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from threading import Event
+from threading import Barrier, Event
 from typing import cast
 
 import yaml
@@ -13,9 +13,16 @@ from foundry_lite.application.ports.action_effect_executor import (
     ActionEffectPermanentError,
     ActionEffectTransientError,
 )
-from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.application.ports.action_notification_recipient_directory import (
+    ActionNotificationPolicy,
+    ActionNotificationRecipient,
+)
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.action_effect_executor import AllowlistedActionEffectExecutor
+from foundry_lite.infrastructure.adapters.action_notification_recipient_directory import (
+    ConfiguredActionNotificationRecipientDirectory,
+)
 from sqlalchemy import update
 
 
@@ -132,6 +139,108 @@ def _effect_definition(expected_version: int) -> dict[str, object]:
         },
     ]
     return definition
+
+
+def _webhook_rule_definition() -> dict[str, object]:
+    definition = _definition(1)
+    action = cast(list[dict[str, object]], definition["actionTypes"])[0]
+    action.pop("function")
+    action["apiName"] = "ApplyWebhookDecision"
+    action["rules"] = [
+        {
+            "kind": "modifyObject",
+            "ruleId": "apply-decision",
+            "objectType": "Order",
+            "target": {"kind": "parameter", "parameter": "__target__"},
+            "assignments": [
+                {
+                    "property": "status",
+                    "value": {"kind": "webhookResponse", "field": "approvalStatus"},
+                }
+            ],
+        }
+    ]
+    action["effects"] = [
+        {
+            "effectId": "decision",
+            "kind": "webhook",
+            "phase": "before_commit",
+            "targetRef": "connector:erp/orders",
+            "responseFields": {"approvalStatus": "string"},
+        }
+    ]
+    return definition
+
+
+def _notification_definition() -> dict[str, object]:
+    definition = _definition(1)
+    action = cast(list[dict[str, object]], definition["actionTypes"])[0]
+    action["apiName"] = "ApproveOrderWithNotification"
+    action["effects"] = [
+        {
+            "effectId": "notify-operations",
+            "kind": "notification",
+            "phase": "after_commit",
+            "targetRef": "notification-policy:operations",
+        }
+    ]
+    return definition
+
+
+def _parallel_after_effect_definition() -> dict[str, object]:
+    definition = _definition(1)
+    action = cast(list[dict[str, object]], definition["actionTypes"])[0]
+    action["apiName"] = "ApproveOrderWithParallelEffects"
+    action["effects"] = [
+        {
+            "effectId": "notify-operations",
+            "kind": "event",
+            "phase": "after_commit",
+            "targetRef": "topic:operations",
+        },
+        {
+            "effectId": "notify-finance",
+            "kind": "event",
+            "phase": "after_commit",
+            "targetRef": "topic:finance",
+        },
+    ]
+    return definition
+
+
+def test_durable_start_uses_action_declared_roles_instead_of_admin_only_fallback(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    definition = _definition(1)
+    function = cast(list[dict[str, object]], definition["functionTypes"])[0]
+    action = cast(list[dict[str, object]], definition["actionTypes"])[0]
+    function["permissions"] = {"allowedRoles": ["data_engineer"]}
+    action["permissions"] = {"allowedRoles": ["data_engineer"]}
+    version = _prepare(foundry, tmp_path, definition)
+    engineer = RequestContext(
+        tenant_id="tenant-demo",
+        actor_user_id="durable-action-engineer",
+        request_id="durable-action-engineer-request",
+        roles=("data_engineer",),
+    )
+    foundry._services.action.distributed.action_function_executor.register_driver(
+        lambda _request: {"output": _edit_batch(version), "logicRunId": "engineer-function-run"}
+    )
+
+    run = foundry.actions.start_run(
+        "ApproveOrderAsync",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="durable-engineer-1",
+        wait_seconds=5,
+        ctx=engineer,
+    )
+
+    assert run["status"] == "succeeded"
+    assert foundry.actions.list_runs(ctx=engineer)["items"][0]["actionRunId"] == run["actionRunId"]
 
 
 def _register_effect_connector(foundry: FoundryLite) -> None:
@@ -375,6 +484,302 @@ def test_governed_before_and_after_effects_keep_commit_and_receipts_separate(
     assert delivered_result["succeeded"] == 1
     assert calls == ["erp-write", "order-event"]
     assert [effect["status"] for effect in refreshed["effects"]] == ["succeeded", "succeeded"]
+
+
+def test_after_commit_effects_fan_out_concurrently_without_definition_ordering(
+    foundry: FoundryLite, tmp_path: Path
+) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _parallel_after_effect_definition())
+    foundry._services.action.distributed.action_function_executor.register_driver(
+        lambda _request: {"output": _edit_batch(version), "logicRunId": "parallel-effect-function"}
+    )
+    barrier = Barrier(2, timeout=3)
+    calls: list[str] = []
+
+    def delivered(request) -> ActionEffectExecutionResult:
+        calls.append(request.effect.effect_id)
+        barrier.wait()
+        return ActionEffectExecutionResult("delivered", request.effect.effect_id, {"status": 202}, {})
+
+    adapter = AllowlistedActionEffectExecutor()
+    adapter.register_target("topic:operations", delivered, allowed_kinds=frozenset({"event"}))
+    adapter.register_target("topic:finance", delivered, allowed_kinds=frozenset({"event"}))
+    foundry._services.action_effects.action_effect_executor = adapter
+    run = foundry.actions.start_run(
+        "ApproveOrderWithParallelEffects",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="parallel-effects-one",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    delivered_result = foundry._services.action_effects.deliver_all(
+        worker_id="parallel-effect-worker",
+        concurrency=2,
+    )
+    refreshed = foundry.actions.get_run(str(run["actionRunId"]), ctx=ctx)
+
+    assert delivered_result["succeeded"] == 2
+    assert set(calls) == {"notify-operations", "notify-finance"}
+    assert {effect["status"] for effect in refreshed["effects"]} == {"succeeded"}
+
+
+def test_notification_best_effort_filters_each_recipient_by_current_object_access(
+    foundry: FoundryLite, tmp_path: Path
+) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _notification_definition())
+    foundry._services.action.distributed.action_function_executor.register_driver(
+        lambda _request: {"output": _edit_batch(version), "logicRunId": "notification-function"}
+    )
+    foundry._services.action_effects.action_notification_recipient_directory = (
+        ConfiguredActionNotificationRecipientDirectory(
+            {
+                ctx.tenant_id: {
+                    "notification-policy:operations": ActionNotificationPolicy(
+                        "notification-policy:operations",
+                        "best_effort",
+                        (
+                            ActionNotificationRecipient("reader", ("viewer",)),
+                            ActionNotificationRecipient("blocked", ("connector_ingest",)),
+                        ),
+                    )
+                }
+            }
+        )
+    )
+    adapter = AllowlistedActionEffectExecutor()
+    delivered_payloads: list[dict[str, object]] = []
+
+    def delivered(request) -> ActionEffectExecutionResult:
+        delivered_payloads.append(dict(request.effect.payload))
+        return ActionEffectExecutionResult("delivered", "notification:1", {"status": 202}, {})
+
+    adapter.register_target(
+        "notification-policy:operations",
+        delivered,
+        allowed_kinds=frozenset({"notification"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+    run = foundry.actions.start_run(
+        "ApproveOrderWithNotification",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="notification-access-filter-1",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    result = foundry._services.action_effects.deliver_all(worker_id="notification-filter-worker")
+    refreshed = foundry.actions.get_run(str(run["actionRunId"]), ctx=ctx)
+    authorization = refreshed["effects"][0]["response"]["recipientAuthorization"]
+
+    assert result["succeeded"] == 1
+    assert delivered_payloads == [{"recipients": [{"userId": "reader"}]}]
+    assert authorization["requestedCount"] == 2
+    assert authorization["authorizedCount"] == 1
+    assert authorization["deniedCount"] == 1
+    assert authorization["deniedRecipientHashes"][0].startswith("sha256:")
+    assert "blocked" not in str(authorization)
+
+
+def test_notification_payload_is_frozen_from_pre_edit_object_values(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    definition = _notification_definition()
+    action = cast(list[dict[str, object]], definition["actionTypes"])[0]
+    effects = cast(list[dict[str, object]], action["effects"])
+    effects[0]["payload"] = {
+        "title": "Order was {{object.status}}",
+        "actor": "{{actor.userId}}",
+        "runId": "{{action.runId}}",
+    }
+    version = _prepare(foundry, tmp_path, definition)
+    foundry._services.action.distributed.action_function_executor.register_driver(
+        lambda _request: {"output": _edit_batch(version), "logicRunId": "pre-edit-notification-function"}
+    )
+    foundry._services.action_effects.action_notification_recipient_directory = (
+        ConfiguredActionNotificationRecipientDirectory(
+            {
+                ctx.tenant_id: {
+                    "notification-policy:operations": ActionNotificationPolicy(
+                        "notification-policy:operations",
+                        "strict",
+                        (ActionNotificationRecipient("reader", ("viewer",)),),
+                    )
+                }
+            }
+        )
+    )
+    delivered_payloads: list[dict[str, object]] = []
+
+    def delivered(request) -> ActionEffectExecutionResult:
+        delivered_payloads.append(dict(request.effect.payload))
+        return ActionEffectExecutionResult("delivered", "notification:pre-edit", {"status": 202}, {})
+
+    adapter = AllowlistedActionEffectExecutor()
+    adapter.register_target(
+        "notification-policy:operations",
+        delivered,
+        allowed_kinds=frozenset({"notification"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+    run = foundry.actions.start_run(
+        "ApproveOrderWithNotification",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="notification-pre-edit-one",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    foundry._services.action_effects.deliver_all(worker_id="notification-pre-edit-worker")
+    refreshed = foundry.actions.get_run(str(run["actionRunId"]), ctx=ctx)
+    rendering = refreshed["effects"][0]["notificationRendering"]
+
+    assert foundry.objects.get("Order", "O-1", ctx=ctx)["properties"]["status"] == "APPROVED"
+    assert delivered_payloads == [
+        {
+            "title": "Order was PENDING",
+            "actor": ctx.actor_user_id,
+            "runId": run["actionRunId"],
+            "recipients": [{"userId": "reader"}],
+        }
+    ]
+    assert rendering["phase"] == "pre_commit"
+    assert rendering["sourceObjectVersion"] == version
+    assert str(rendering["templateFingerprint"]).startswith("sha256:")
+
+
+def test_notification_strict_policy_sends_to_nobody_when_one_recipient_is_denied(
+    foundry: FoundryLite, tmp_path: Path
+) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _notification_definition())
+    foundry._services.action.distributed.action_function_executor.register_driver(
+        lambda _request: {"output": _edit_batch(version), "logicRunId": "strict-notification-function"}
+    )
+    foundry._services.action_effects.action_notification_recipient_directory = (
+        ConfiguredActionNotificationRecipientDirectory(
+            {
+                ctx.tenant_id: {
+                    "notification-policy:operations": ActionNotificationPolicy(
+                        "notification-policy:operations",
+                        "strict",
+                        (
+                            ActionNotificationRecipient("reader", ("viewer",)),
+                            ActionNotificationRecipient("blocked", ("connector_ingest",)),
+                        ),
+                    )
+                }
+            }
+        )
+    )
+    adapter = AllowlistedActionEffectExecutor()
+    calls = 0
+
+    def delivered(_request) -> ActionEffectExecutionResult:
+        nonlocal calls
+        calls += 1
+        return ActionEffectExecutionResult("delivered", "notification:never", {}, {})
+
+    adapter.register_target(
+        "notification-policy:operations",
+        delivered,
+        allowed_kinds=frozenset({"notification"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+    run = foundry.actions.start_run(
+        "ApproveOrderWithNotification",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="notification-access-strict-1",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    result = foundry._services.action_effects.deliver_all(worker_id="notification-strict-worker")
+    refreshed = foundry.actions.get_run(str(run["actionRunId"]), ctx=ctx)
+
+    assert result["dead_letter"] == 1
+    assert calls == 0
+    assert refreshed["status"] == "succeeded"
+    assert refreshed["effects"][0]["status"] == "dead_letter"
+
+
+def test_typed_before_effect_response_resolves_a_rule_plan_after_delivery(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _webhook_rule_definition())
+    _register_effect_connector(foundry)
+    adapter = AllowlistedActionEffectExecutor()
+    adapter.register_target(
+        "connector:erp/orders",
+        lambda _request: ActionEffectExecutionResult(
+            "delivered",
+            "decision-1",
+            {"approvalStatus": "APPROVED"},
+            {},
+        ),
+        allowed_kinds=frozenset({"webhook"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+
+    run = foundry.actions.start_run(
+        "ApplyWebhookDecision",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="typed-webhook-rule-one",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    assert run["status"] == "succeeded"
+    assert run["effects"][0]["response"]["approvalStatus"] == "APPROVED"
+    assert foundry.objects.get("Order", "O-1", ctx=ctx)["properties"]["status"] == "APPROVED"
+
+
+def test_wrong_typed_before_effect_response_never_commits(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _webhook_rule_definition())
+    _register_effect_connector(foundry)
+    adapter = AllowlistedActionEffectExecutor()
+    adapter.register_target(
+        "connector:erp/orders",
+        lambda _request: ActionEffectExecutionResult(
+            "delivered",
+            "decision-invalid",
+            {"approvalStatus": 42},
+            {},
+        ),
+        allowed_kinds=frozenset({"webhook"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+
+    run = foundry.actions.start_run(
+        "ApplyWebhookDecision",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="typed-webhook-rule-invalid",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    assert run["status"] == "outcome_unknown"
+    assert run["effects"][0]["status"] == "outcome_unknown"
+    assert foundry.objects.get("Order", "O-1", ctx=ctx)["properties"]["status"] == "PENDING"
 
 
 def test_ambiguous_before_effect_never_commits_or_replays_provider_call(foundry: FoundryLite, tmp_path: Path) -> None:

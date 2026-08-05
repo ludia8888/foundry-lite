@@ -26,6 +26,7 @@ from foundry_lite.application.ports.action_run_orchestrator import (
     ActionRunRetryableFailure,
 )
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
+from foundry_lite.application.services.action_edit_plan_results import ActionEditPlanResult
 from foundry_lite.application.services.action_protocols import (
     ActionObjectIndexer,
     ActionObjectRecordLookup,
@@ -37,6 +38,7 @@ from foundry_lite.domain.action_runtime.action_contract import (
     ActionDefinitionV3,
     action_contract_fingerprint,
     compile_action_contract,
+    compile_action_contract_snapshot,
 )
 from foundry_lite.domain.action_runtime.edit_plan import EditPlan
 from foundry_lite.domain.context import RequestContext
@@ -47,6 +49,7 @@ __all__ = [
     "ActionAsyncRunRecord",
     "ActionDefinitionV3",
     "ActionExecutionRepository",
+    "ActionEditPlanResult",
     "ActionFunctionExecutionResult",
     "ActionFunctionExecutionRequest",
     "ActionFunctionExecutor",
@@ -74,4 +77,5 @@ __all__ = [
     "StatusTransition",
     "action_contract_fingerprint",
     "compile_action_contract",
+    "compile_action_contract_snapshot",
 ]

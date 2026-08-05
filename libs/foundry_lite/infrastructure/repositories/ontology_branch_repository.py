@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import and_, desc, insert, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.ontology_branch_repository import (
+    OntologyBranchActionIdempotencyRecord,
+    OntologyBranchActionIdempotencyRow,
     OntologyBranchRebase,
     OntologyBranchRecord,
     OntologyBranchRow,
@@ -231,3 +235,82 @@ class SqlAlchemyOntologyBranchRepository:
             transition=transition,
             values=values,
         )
+
+    def action_idempotency_record(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        actor_user_id: str,
+        branch_id: str,
+        operation: str,
+        idempotency_key: str,
+    ) -> OntologyBranchActionIdempotencyRow | None:
+        table = db.ontology_branch_action_idempotency_records
+        row = (
+            transaction.execute(
+                select(table).where(
+                    and_(
+                        table.c.tenant_id == tenant_id,
+                        table.c.actor_user_id == actor_user_id,
+                        table.c.branch_id == branch_id,
+                        table.c.operation == operation,
+                        table.c.idempotency_key == idempotency_key,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OntologyBranchActionIdempotencyRow, dict(row)) if row is not None else None
+
+    def insert_action_idempotency_or_existing(
+        self,
+        *,
+        transaction: Any,
+        record: OntologyBranchActionIdempotencyRecord,
+    ) -> OntologyBranchActionIdempotencyRow | None:
+        inserted_id = transaction.execute(
+            _insert_action_idempotency_or_ignore(transaction, _action_idempotency_values(record))
+        ).scalar_one_or_none()
+        if inserted_id == record.record_id:
+            return None
+        return self.action_idempotency_record(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            actor_user_id=record.actor_user_id,
+            branch_id=record.branch_id,
+            operation=record.operation,
+            idempotency_key=record.idempotency_key,
+        )
+
+
+def _insert_action_idempotency_or_ignore(transaction: Any, values: dict[str, object]) -> Any:
+    table = db.ontology_branch_action_idempotency_records
+    conflict = ("tenant_id", "actor_user_id", "branch_id", "operation", "idempotency_key")
+    if transaction.dialect.name == "postgresql":
+        return (
+            postgres_insert(table)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=conflict)
+            .returning(table.c.id)
+        )
+    if transaction.dialect.name == "sqlite":
+        return (
+            sqlite_insert(table).values(**values).on_conflict_do_nothing(index_elements=conflict).returning(table.c.id)
+        )
+    return insert(table).values(**values).returning(table.c.id)
+
+
+def _action_idempotency_values(record: OntologyBranchActionIdempotencyRecord) -> dict[str, object]:
+    return {
+        "id": record.record_id,
+        "tenant_id": record.tenant_id,
+        "actor_user_id": record.actor_user_id,
+        "branch_id": record.branch_id,
+        "operation": record.operation,
+        "idempotency_key": record.idempotency_key,
+        "request_fingerprint": record.request_fingerprint,
+        "response_json": record.response_json,
+        "created_at": record.created_at,
+    }

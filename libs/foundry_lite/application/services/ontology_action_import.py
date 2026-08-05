@@ -11,8 +11,8 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
-    action_parameter_schema,
     action_type_definition,
+    action_type_parameter_schema,
     mapping_sequence,
     optional_str,
     required_str,
@@ -43,8 +43,8 @@ def _insert_action_type(
 ) -> None:
     target = required_str(item, "target")
     target_kind = optional_str(item, "targetKind", "object") or "object"
-    parameters = mapping_sequence(item, "parameters")
-    parameter_schema: ActionParameterSchema = action_parameter_schema(parameters)
+    parameter_schema: ActionParameterSchema = action_type_parameter_schema(item)
+    persisted_definition = action_type_definition(item)
     api_name = required_str(item, "apiName")
     repository.insert_action_type(
         transaction=conn,
@@ -60,7 +60,7 @@ def _insert_action_type(
             ),
             target_api_name=target,
             parameter_schema=parameter_schema,
-            definition=action_type_definition(item),
+            definition=persisted_definition,
             enabled=True,
         ),
     )

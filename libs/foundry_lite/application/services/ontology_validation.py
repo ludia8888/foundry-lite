@@ -56,7 +56,7 @@ PROPERTY_DATA_TYPES = frozenset({"boolean", "float", "integer", "string"})
 # Object properties may additionally hold an immutable media reference (doc §1.6): the
 # Ontology pins a media_item_version via a media_reference property, never a media-backed
 # object. Action *parameters* stay scalar — media is bound via an explicit edit, not a param.
-OBJECT_PROPERTY_DATA_TYPES = PROPERTY_DATA_TYPES | frozenset({"media_reference"})
+OBJECT_PROPERTY_DATA_TYPES = PROPERTY_DATA_TYPES | frozenset({"media_reference", "attachment"})
 PROPERTY_SOURCES = frozenset({"dataset", "edit_layer"})
 PROPERTY_EDIT_POLICIES = frozenset({"conflict_requires_review", "edit_only", "edit_wins", "source_wins"})
 PROPERTY_CLASSIFICATIONS = frozenset({"finance", "pii", "public"})
@@ -98,7 +98,11 @@ def validate_persisted_link(
     """Validate a persisted link type against object references and keys."""
     if link["from_api_name"] not in object_by_api or link["to_api_name"] not in object_by_api:
         raise ValidationFailed("link object type missing", details={"linkType": link["api_name"]})
-    missing_keys = [key for key in (link["backing"]["fromKey"], link["backing"]["toKey"]) if key not in columns]
+    from_key = link["backing"].get("fromKey")
+    to_key = link["backing"].get("toKey")
+    if not isinstance(from_key, str) or not isinstance(to_key, str):
+        raise ValidationFailed("link backing keys missing", details={"linkType": link["api_name"]})
+    missing_keys = [key for key in (from_key, to_key) if key not in columns]
     if missing_keys:
         raise ValidationFailed(
             "link backing key missing",
@@ -363,8 +367,8 @@ def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable
         edit_default = "edit_only" if source == "edit_layer" else "source_wins"
         prop_type = required_str(prop, "type")
         _require_allowed(prop_type, OBJECT_PROPERTY_DATA_TYPES, "property type", details)
-        if prop_type == "media_reference":
-            _validate_media_reference_property(prop, source, details)
+        if prop_type in {"media_reference", "attachment"}:
+            _validate_media_property(prop, source, details, prop_type)
         _require_allowed_optional(source, PROPERTY_SOURCES, "property source", details)
         _require_allowed_optional(
             optional_str(prop, "editPolicy", edit_default),
@@ -380,17 +384,24 @@ def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable
         )
 
 
-def _validate_media_reference_property(prop: YamlObject, source: str | None, details: Mapping[str, object]) -> None:
-    """A media_reference property pins an edit-layer media set binding (doc §1.6)."""
+def _validate_media_property(
+    prop: YamlObject,
+    source: str | None,
+    details: Mapping[str, object],
+    property_type: str,
+) -> None:
+    """Media and attachment properties pin edit-layer immutable versions."""
     if source == "dataset":
-        raise ValidationFailed("media_reference property must be edit-layer, not dataset-backed", details=dict(details))
+        raise ValidationFailed("media properties must be edit-layer, not dataset-backed", details=dict(details))
     media_set = required_str(prop, "mediaSet")
     parts = media_set.split(".")
     if len(parts) != 2 or not all(parts):
         raise ValidationFailed(
-            "media_reference property requires a 'mediaSet' of the form 'namespace.name'",
+            "media property requires a 'mediaSet' of the form 'namespace.name'",
             details={**details, "mediaSet": media_set},
         )
+    if property_type == "attachment":
+        optional_bool(prop, "allowMultiple", False)
 
 
 def _validate_yaml_action_mutations(
@@ -441,8 +452,13 @@ def _validate_yaml_link(
     if from_api not in object_defs or to_api not in object_defs:
         raise ValidationFailed("link references unknown object type", details=dict(link_def))
     backing = link_type_backing(link_def)
-    columns = set(dataset_columns_for_ref(conn, ctx, backing["dataset"]))
-    missing_keys = [key for key in (backing["fromKey"], backing["toKey"]) if key not in columns]
+    dataset_ref = backing.get("dataset")
+    from_key = backing.get("fromKey")
+    to_key = backing.get("toKey")
+    if not isinstance(dataset_ref, str) or not isinstance(from_key, str) or not isinstance(to_key, str):
+        raise ValidationFailed("link backing is incomplete", details={"linkType": required_str(link_def, "apiName")})
+    columns = set(dataset_columns_for_ref(conn, ctx, dataset_ref))
+    missing_keys = [key for key in (from_key, to_key) if key not in columns]
     if missing_keys:
         raise ValidationFailed(
             "link backing key missing",

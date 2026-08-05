@@ -451,6 +451,69 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "ontology.branches.actionTypes.list",
+      "route": "GET /api/ontology/branches/{branch_id}/action-types",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.actionTypes.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch Action Type list returns canonical v3 contracts, deterministic parameter schemas, form layout, inline eligibility, and the branch fingerprint without exposing active Ontology mutations.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.actionTypes.get",
+      "route": "GET /api/ontology/branches/{branch_id}/action-types/{action_api_name}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.actionTypes.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch Action Type detail projects the stored definition and the server-compiled contract, JSON Schema, fingerprint, and inline eligibility from one source of truth.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.actionTypes.create",
+      "route": "POST /api/ontology/branches/{branch_id}/action-types",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.actionTypes.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Branch Action Type create requires Idempotency-Key and expectedFingerprint, validates the full candidate ontology, writes only the branch working copy, and replays identical content without another audit mutation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.actionTypes.update",
+      "route": "PUT /api/ontology/branches/{branch_id}/action-types/{action_api_name}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.actionTypes.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Branch Action Type update requires path-definition identity, Idempotency-Key, full-candidate validation, and expectedFingerprint CAS before replacing the branch resource.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.actionTypes.delete",
+      "route": "DELETE /api/ontology/branches/{branch_id}/action-types/{action_api_name}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.actionTypes.delete",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Branch Action Type delete requires Idempotency-Key and expectedFingerprint, removes only the branch resource, and replays a completed deletion without modifying active Ontology state.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.builder.validate",
       "route": "POST /api/aip/builder/validate",
       "productArea": "aip-builder",
@@ -1871,6 +1934,43 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "developerConsole.mcpServers.configure",
+      "route": "PUT /api/developer-console/osdk-applications/{app_id}/mcp-server",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.mcpServers.configure",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology MCP publication configuration requires Idempotency-Key and stays disabled until an operator stores an enabled state, Markdown tool description, and application Origin allowlist; replay returns the same durable row and every change is audited.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.mcpServers.get",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/mcp-server",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.mcpServers.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The application MCP configuration read shows publication state, description, allowed browser Origins, update actor, and activity evidence without any OAuth secret material.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.mcpServers.list",
+      "route": "GET /api/developer-console/mcp-servers",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.mcpServers.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The tenant MCP Hub lists each configured server with application identity, endpoint, resource count, auth modes, allowlisted Origins, status, and last-activity placeholder.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "developerConsole.sdkVersions.create",
       "route": "POST /api/developer-console/osdk-applications/{app_id}/sdk-versions",
       "productArea": "developer-console",
@@ -2279,6 +2379,44 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Developer Console client deactivation requires Idempotency-Key, fail-closes new OAuth authorization for that client, and leaves audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.rotateClientSecret",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/secrets/rotate",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.rotateClientSecret",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Developer Console requires Idempotency-Key, rotates one confidential-client credential, returns the raw value once, persists only version metadata, rotates the prior version, and records tenant-scoped audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.revokeClientSecret",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/secrets/revoke",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.revokeClientSecret",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Developer Console requires Idempotency-Key, revokes the current confidential-client credential so it cannot mint another token, and records the revocation without exposing secret material.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.listClientSecretVersions",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/secrets",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.listClientSecretVersions",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Developer Console returns active, rotated, and revoked secret-version metadata plus last-use timestamps without returning a credential value.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -3238,6 +3376,19 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "actions.uploadParameter",
+      "route": "POST /api/actions/{action_type}/parameters/{parameter_name}/uploads",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.uploadParameter",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Action media and attachment parameters require Idempotency-Key and upload through the generated multipart SDK, enforce the declared Media Set and file policy, retain immutable scan evidence, and return a provisional reference that only the Action committer may bind.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "actions.plan",
       "route": "POST /api/actions/{action_type}/plan",
       "productArea": "action-workspace",
@@ -3295,6 +3446,19 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "The Idempotency-Key scoped API persists the immutable plan and queued run before Temporal dispatch; the SDK returns orchestration, step, attempt, and fencing evidence without exposing lease tokens.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.runs.startBatch",
+      "route": "POST /api/actions/{action_type}/batch-runs",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.runs.startBatch",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "The generated SDK submits a bounded Function-backed Action batch with one Idempotency-Key; the worker either executes each request sequentially or invokes a list-of-struct function once, then commits every returned Ontology edit atomically.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -3408,6 +3572,124 @@
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.branches.link",
+      "route": "GET /api/actions/branches/{branch_id}/links/{link_type}/{from_object_id}/{to_object_id}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.branches.link",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch link reads compose main link identity with the tenant-scoped create/delete overlay, surface link-version drift, and never write the active Ontology link plane.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.notificationPolicies.list",
+      "route": "GET /api/actions/notification-policies",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.notificationPolicies.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The no-code Builder lists tenant-scoped durable notification recipient policies without exposing them through an Action definition.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.notificationPolicies.create",
+      "route": "POST /api/actions/notification-policies",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.notificationPolicies.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Policy creation requires Idempotency-Key, is audited and tenant-scoped; Action definitions retain only the registered target reference.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.notificationPolicies.get",
+      "route": "GET /api/actions/notification-policies/{policy_name}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.notificationPolicies.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Policy detail exposes delivery mode, active version and config fingerprint for governed editing.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.notificationPolicies.update",
+      "route": "PUT /api/actions/notification-policies/{policy_name}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.notificationPolicies.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Policy updates require Idempotency-Key and use config-fingerprint CAS so concurrent no-code edits cannot silently overwrite recipients or delivery mode.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.notificationPolicies.disable",
+      "route": "DELETE /api/actions/notification-policies/{policy_name}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.notificationPolicies.disable",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Policy disable requires Idempotency-Key and is a recoverable soft transition; delivery resolves the current DB policy and fails closed after disable.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.effects.list",
+      "route": "GET /api/actions/effects",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.effects.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The operator queue lists tenant-scoped effect receipts by durable status with keyset pagination and no lease-token exposure.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.effects.get",
+      "route": "GET /api/actions/effects/{receipt_id}",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.effects.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Receipt detail exposes attempts, worker/fence, dispatch boundary, cancellation race and structured reconciliation evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.effects.cancel",
+      "route": "POST /api/actions/effects/{receipt_id}/cancel",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.effects.cancel",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Idempotency-Key makes cancellation replay-safe; cancellation atomically fences undispatched work, while after dispatch starts it records an honest best-effort race instead of claiming the remote side effect was undone.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.effects.retry",
+      "route": "POST /api/actions/effects/{receipt_id}/retry",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.effects.retry",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Idempotency-Key makes the operator mutation replay-safe; only after-commit dead-letter receipts receive one explicit retry budget and reuse the original stable provider idempotency coordinate.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.effects.reconcile",
+      "route": "POST /api/actions/effects/{receipt_id}/reconcile",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.effects.reconcile",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Idempotency-Key makes reconciliation replay-safe; an outcome-unknown receipt closes only from structured provider evidence, with confirmed delivery becoming succeeded and confirmed non-delivery becoming retry-eligible dead letter.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
       "proofClass": "sdk-request-contract"
     }
   ],
@@ -3733,6 +4015,26 @@
       "route": "GET /.well-known/oauth-protected-resource/mcp/builder/{application_id}",
       "accessClass": "oauth-discovery",
       "reason": "OAuth protected-resource metadata is consumed by MCP clients during standards-based authorization discovery."
+    },
+    {
+      "route": "POST /mcp/ontology/{application_id}",
+      "accessClass": "external-mcp-json-rpc",
+      "reason": "Consumer Ontology MCP JSON-RPC is consumed by OAuth-authorized external agents and must not be wrapped as a normal product REST SDK call."
+    },
+    {
+      "route": "GET /mcp/ontology/{application_id}",
+      "accessClass": "external-mcp-stream",
+      "reason": "Consumer Ontology MCP Streamable HTTP reconnect and server events follow the MCP transport contract rather than the product REST SDK."
+    },
+    {
+      "route": "DELETE /mcp/ontology/{application_id}",
+      "accessClass": "external-mcp-session",
+      "reason": "Consumer Ontology MCP session termination is an external protocol operation rather than a browser product control."
+    },
+    {
+      "route": "GET /.well-known/oauth-protected-resource/mcp/ontology/{application_id}",
+      "accessClass": "oauth-discovery",
+      "reason": "Consumer Ontology MCP OAuth protected-resource metadata is discovered directly by external MCP clients."
     },
     {
       "route": "GET /.well-known/oauth-authorization-server",

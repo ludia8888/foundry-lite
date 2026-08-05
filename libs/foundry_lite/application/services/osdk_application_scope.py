@@ -128,6 +128,22 @@ class OsdkApplicationScopeService(CoreService):
         if not _scope_allowed(expected_scope, ctx.token_scopes, resources) and not has_deprecated_grant:
             _raise_scope_denied(expected_scope, resource_type, resource_api_name)
 
+    def runtime_resource_grants(self, ctx: RequestContext, *, application_id: str) -> list[OsdkApplicationResourceRow]:
+        """Return active app/client grants for OSDK and MCP runtime schema projection."""
+        if ctx.application_id != application_id or not ctx.client_id or not ctx.token_scopes:
+            raise PermissionDenied("OSDK runtime requires an OAuth application, client, and resource scopes")
+        with self.engine.begin() as conn:
+            app = self._require_active_application(conn, ctx)
+            app_id = cast(str, app["id"])
+            self._require_active_client(conn, ctx, app_id)
+            return list(
+                self.osdk_application_repository.resources_for_application(
+                    transaction=conn,
+                    tenant_id=ctx.tenant_id,
+                    app_id=app_id,
+                )
+            )
+
     def _application_bundle(self, conn: TransactionContext, ctx: RequestContext, app_id: str) -> OsdkApplicationBundle:
         app = self._require_application(conn, ctx, app_id)
         clients = self.osdk_application_repository.clients_for_application(

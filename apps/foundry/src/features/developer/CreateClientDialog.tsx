@@ -52,6 +52,7 @@ export function CreateClientDialog({
   const client = useFoundryLiteClient();
   const [clientId, setClientId] = useState("");
   const [redirectUris, setRedirectUris] = useState("");
+  const [clientKind, setClientKind] = useState<"pkce" | "service">("pkce");
   const [selectedScopes, setSelectedScopes] = useState<Set<string>>(new Set());
   const [lastKey, setLastKey] = useState<string | null>(null);
 
@@ -75,16 +76,29 @@ export function CreateClientDialog({
       redirects: string[];
       scopes: string[];
       key: string;
-    }) =>
-      client.developerConsole.osdkApplications.createClient(
+    }) => {
+      const isServiceClient = clientKind === "service";
+      return client.developerConsole.osdkApplications.createClient(
         appId,
         {
           clientId: payloadClientId,
-          redirectUris: redirects,
+          redirectUris: isServiceClient ? [] : redirects,
           allowedScopes: scopes,
         },
         { idempotencyKey: key },
-      ),
+      ).then(async (created) => {
+        if (!isServiceClient) return created;
+        const rowId = typeof created.id === "string" ? created.id : "";
+        if (!rowId) throw new Error("생성된 confidential client id를 확인할 수 없습니다.");
+        const secret = await client.developerConsole.osdkApplications.rotateClientSecret(
+          appId,
+          rowId,
+          { reason: "Initial confidential client credential" },
+          { idempotencyKey: idempotencyKey("osdk_client_secret_initial", rowId) },
+        );
+        return { ...created, clientSecret: secret.clientSecret };
+      });
+    },
     {
       lockKey: ({ payloadClientId }) =>
         `developer:client:create:${payloadClientId}`,
@@ -94,6 +108,7 @@ export function CreateClientDialog({
   const reset = () => {
     setClientId("");
     setRedirectUris("");
+    setClientKind("pkce");
     setSelectedScopes(new Set());
     setLastKey(null);
   };
@@ -147,6 +162,33 @@ export function CreateClientDialog({
             />
           </div>
           <div className="space-y-1">
+            <Label className="section-label">인증 방식</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setClientKind("pkce")}
+                className={cn(
+                  "rounded border p-2 text-left text-xs",
+                  clientKind === "pkce" ? "border-primary bg-primary/10" : "border-border",
+                )}
+              >
+                <span className="block font-medium">사용자 앱 · PKCE</span>
+                <span className="text-[10px] text-muted-foreground">사용자가 로그인하는 웹·모바일 앱</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setClientKind("service")}
+                className={cn(
+                  "rounded border p-2 text-left text-xs",
+                  clientKind === "service" ? "border-primary bg-primary/10" : "border-border",
+                )}
+              >
+                <span className="block font-medium">서비스 · Client Secret</span>
+                <span className="text-[10px] text-muted-foreground">서버·에이전트용 confidential client</span>
+              </button>
+            </div>
+          </div>
+          {clientKind === "pkce" ? <div className="space-y-1">
             <Label htmlFor="client-redirects" className="section-label">
               redirect URIs
             </Label>
@@ -160,7 +202,11 @@ export function CreateClientDialog({
             <p className="text-[11px] text-muted-foreground">
               쉼표 또는 줄바꿈으로 여러 개 입력.
             </p>
-          </div>
+          </div> : (
+            <p className="rounded border border-warning/40 bg-warning/5 px-2 py-2 text-[11px] text-muted-foreground">
+              생성 직후 Client Secret이 한 번만 표시됩니다. 이후에는 교체하거나 폐기할 수 있지만 다시 조회할 수 없습니다.
+            </p>
+          )}
           <div className="space-y-1.5">
             <Label className="section-label">허용 scope</Label>
             {availableScopes.length === 0 ? (

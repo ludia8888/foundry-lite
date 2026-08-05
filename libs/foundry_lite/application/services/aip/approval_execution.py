@@ -9,9 +9,8 @@ traffic gate.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol, cast
+from typing import cast
 
-from foundry_lite.application.action_types import ActionExecutionPlanResponse
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.primitives import _now
@@ -31,6 +30,24 @@ from foundry_lite.application.services.aip.approval_execution_payloads import (
     tool_call_rows,
     validate_request,
 )
+from foundry_lite.application.services.aip.approval_execution_protocols import (
+    ActionPlanner as _ActionPlanner,
+)
+from foundry_lite.application.services.aip.approval_execution_protocols import (
+    ActionRunner as _ActionRunner,
+)
+from foundry_lite.application.services.aip.approval_execution_protocols import (
+    ObjectRecordLookup as _ObjectRecordLookup,
+)
+from foundry_lite.application.services.aip.approval_execution_protocols import (
+    OntologyLookup as _OntologyLookup,
+)
+from foundry_lite.application.services.aip.approval_execution_protocols import (
+    OsdkApplicationBoundary as _OsdkApplicationBoundary,
+)
+from foundry_lite.application.services.aip.approval_execution_protocols import (
+    RuntimeBoundary as _RuntimeBoundary,
+)
 from foundry_lite.application.services.aip.approval_execution_types import (
     ApprovalExecutionError,
     ApprovalExecutionRequest,
@@ -38,108 +55,17 @@ from foundry_lite.application.services.aip.approval_execution_types import (
     JsonObject,
     PreparedExecution,
 )
+from foundry_lite.application.services.aip.external_mcp_approval import (
+    external_mcp_execution_context,
+    is_external_mcp_execution,
+    require_external_mcp_fingerprint,
+)
 from foundry_lite.application.services.aip.source_permissions import source_permission_for_type
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import review_payload
+from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
-
-
-class _ActionRunner(Protocol):
-    def apply_action(
-        self,
-        action_api_name: str,
-        *,
-        object_type: str,
-        object_id: str,
-        expected_object_version: int,
-        params: Mapping[str, object],
-        idempotency_key: str,
-        ctx: RequestContext | None = None,
-    ) -> Mapping[str, object]: ...
-
-
-class _ActionPlanner(Protocol):
-    def plan_action(
-        self,
-        action_api_name: str,
-        *,
-        object_type: str,
-        object_id: str,
-        expected_object_version: int,
-        params: Mapping[str, object],
-        ctx: RequestContext | None = None,
-        is_dry_run: bool = False,
-    ) -> ActionExecutionPlanResponse: ...
-
-
-class _OntologyLookup(Protocol):
-    def _active_action_type(
-        self, transaction: TransactionContext, ctx: RequestContext, action_api_name: str
-    ) -> Mapping[str, object]: ...
-
-
-class _ObjectRecordLookup(Protocol):
-    def _object_record(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type_api_name: str,
-        object_id: str,
-        object_type_id: str | None = None,
-    ) -> Mapping[str, object] | None: ...
-
-
-class _RuntimeBoundary(Protocol):
-    def _require_write_traffic_open(
-        self,
-        ctx: RequestContext,
-        *,
-        operation: str,
-        resource_type: str,
-        resource_id: str,
-    ) -> None: ...
-
-    def _run_relation(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        *,
-        source_run_type: str,
-        source_run_id: str,
-        target_run_type: str,
-        target_run_id: str,
-        relation: str,
-        resource_type: str,
-        resource_id: str,
-        metadata: Mapping[str, object] | None = None,
-    ) -> bool: ...
-
-    def _audit(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        *,
-        event_type: str,
-        resource_type: str,
-        resource_id: str | None,
-        action: str,
-        decision: str = "allow",
-        policy_decision: Mapping[str, object] | None = None,
-        before_ref: Mapping[str, object] | None = None,
-        after_ref: Mapping[str, object] | None = None,
-        correlation_id: str | None = None,
-    ) -> None: ...
-
-    def _error_payload(
-        self,
-        exc: Exception,
-        ctx: RequestContext | None = None,
-        *,
-        run_id: str | None = None,
-        correlation_id: str | None = None,
-        adapter: str | None = None,
-    ) -> Mapping[str, object]: ...
 
 
 class ApprovalExecutionService(CoreService):
@@ -151,12 +77,14 @@ class ApprovalExecutionService(CoreService):
         "action_service",
         "ontology_service",
         "object_records_service",
+        "osdk_application_service",
         "runtime_service",
     )
     action_planning_service: _ActionPlanner
     action_service: _ActionRunner
     object_records_service: _ObjectRecordLookup
     ontology_service: _OntologyLookup
+    osdk_application_service: _OsdkApplicationBoundary
     runtime_service: _RuntimeBoundary
 
     def execute(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> ApprovalExecutionResult:
@@ -167,6 +95,7 @@ class ApprovalExecutionService(CoreService):
         if existing is not None:
             return existing
         prepared = self._prepare_execution(ctx, request)
+        execution_ctx = external_mcp_execution_context(ctx, prepared)
         try:
             response = self.action_service.apply_action(
                 prepared.action_type,
@@ -175,12 +104,12 @@ class ApprovalExecutionService(CoreService):
                 expected_object_version=prepared.expected_object_version,
                 params=prepared.parameters,
                 idempotency_key=prepared.proposal_fingerprint,
-                ctx=ctx,
+                ctx=execution_ctx,
             )
         except Exception as exc:
-            self._mark_failed(ctx, prepared.review_id, exc)
+            self._mark_failed(execution_ctx, prepared.review_id, exc)
             raise
-        return self._finish_execution(ctx, prepared, response)
+        return self._finish_execution(execution_ctx, prepared, response)
 
     def _existing_executed_result(
         self, ctx: RequestContext, request: ApprovalExecutionRequest
@@ -226,9 +155,16 @@ class ApprovalExecutionService(CoreService):
         *,
         skip_target_record: bool,
     ) -> None:
-        self._require_action_permission(ctx, prepared.action_type)
-        self._require_write_open(ctx, prepared.review_id)
-        self._require_evidence_access(ctx, evidence_refs(proposal))
+        execution_ctx = external_mcp_execution_context(ctx, prepared)
+        refs = evidence_refs(proposal)
+        self._require_action_permission(execution_ctx, prepared.action_type)
+        self._require_write_open(execution_ctx, prepared.review_id)
+        self._require_evidence_access(execution_ctx, refs)
+        if is_external_mcp_execution(prepared):
+            self._recheck_external_mcp_proposal(
+                transaction, execution_ctx, prepared, proposal, refs, skip_target_record
+            )
+            return
         ledger = self._ledger(transaction, ctx, prepared.originating_ai_run_id)
         require_originating_tool_call(prepared, tool_call_rows(ledger))
         action = self._action_type(transaction, ctx, prepared)
@@ -237,6 +173,27 @@ class ApprovalExecutionService(CoreService):
             self._require_plan_current(ctx, prepared, action)
         require_not_expired(proposal)
         require_recomputed_fingerprint(prepared, evidence_refs(proposal), cast(JsonObject, ledger["run"]))
+
+    def _recheck_external_mcp_proposal(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        prepared: PreparedExecution,
+        proposal: Mapping[str, object],
+        refs: Sequence[JsonObject],
+        skip_target_record: bool,
+    ) -> None:
+        application_id = required_text(proposal, "applicationId")
+        self.osdk_application_service.require_mcp_enabled(ctx, application_id)
+        self.osdk_application_service.require_resource_scope(
+            ctx, resource_type="action", resource_api_name=prepared.action_type, operation="execute"
+        )
+        action = self._action_type(transaction, ctx, prepared)
+        if not skip_target_record:
+            self._target_record(transaction, ctx, action, prepared)
+            self._require_plan_current(ctx, prepared, action)
+        require_not_expired(proposal)
+        require_external_mcp_fingerprint(prepared, refs)
 
     def _require_plan_current(
         self,
@@ -355,15 +312,16 @@ class ApprovalExecutionService(CoreService):
         self,
         transaction: TransactionContext,
         ctx: RequestContext,
-        action: Mapping[str, object],
+        _action: Mapping[str, object],
         prepared: PreparedExecution,
     ) -> Mapping[str, object]:
+        object_type = self.ontology_service._active_object_type(transaction, ctx, prepared.target_object_type)
         record = self.object_records_service._object_record(
             transaction,
             ctx,
             prepared.target_object_type,
             prepared.target_object_id,
-            required_text(action, "target_object_type_id"),
+            record_scope_object_type_id(object_type),
         )
         if record is None:
             raise ApprovalExecutionError("target_not_found", "approved proposal target object was not found")
@@ -441,7 +399,7 @@ class ApprovalExecutionService(CoreService):
         prepared: PreparedExecution,
         action_run_id: str,
     ) -> None:
-        if prepared.originating_tool_call_id is None:
+        if prepared.originating_tool_call_id is None or is_external_mcp_execution(prepared):
             return
         linked = self.ai_run_repository.link_tool_call_to_action_run(
             transaction=transaction,

@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import RuntimeJsonObject
+from foundry_lite.application.services.osdk_oauth_client_credentials_service import (
+    OsdkOAuthClientCredentialsService,
+)
 from foundry_lite.application.services.osdk_oauth_session_service import OsdkOAuthSessionService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
@@ -14,8 +17,13 @@ from foundry_lite.observability.tracing import trace_public_methods
 class AuthGateway:
     """Auth facade for local OSDK OAuth/session lifecycle."""
 
-    def __init__(self, osdk_oauth_sessions: OsdkOAuthSessionService) -> None:
+    def __init__(
+        self,
+        osdk_oauth_sessions: OsdkOAuthSessionService,
+        osdk_oauth_client_credentials: OsdkOAuthClientCredentialsService,
+    ) -> None:
         self._osdk_oauth_sessions = osdk_oauth_sessions
+        self._osdk_oauth_client_credentials = osdk_oauth_client_credentials
 
     def osdk_oauth_authorize(
         self,
@@ -57,6 +65,21 @@ class AuthGateway:
 
     def osdk_oauth_refresh(self, *, refresh_token: str, ctx: RequestContext | None = None) -> RuntimeJsonObject:
         return self._osdk_oauth_sessions.refresh_access_token(ctx=ctx, refresh_token=refresh_token)
+
+    def osdk_oauth_client_credentials(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        scopes: Sequence[str] = (),
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject:
+        return self._osdk_oauth_client_credentials.exchange(
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=scopes,
+            ctx=ctx,
+        )
 
     def osdk_oauth_revoke(self, *, refresh_token: str, ctx: RequestContext | None = None) -> RuntimeJsonObject:
         return self._osdk_oauth_sessions.revoke(ctx=ctx, refresh_token=refresh_token)

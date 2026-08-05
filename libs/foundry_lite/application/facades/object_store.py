@@ -17,9 +17,11 @@ from foundry_lite.application.ports import (
     OntologyObjectReindexResult,
     RuntimeJsonObject,
 )
+from foundry_lite.application.services.action_log_ontology_service import ActionLogOntologyService
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_search import OntologySearchService, UnifiedSearchHit
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.observability.tracing import trace_public_methods
 
 
@@ -27,9 +29,15 @@ from foundry_lite.observability.tracing import trace_public_methods
 class ObjectStore:
     """Object bounded context: read, query, link, set, index, and search ontology objects."""
 
-    def __init__(self, objects: ObjectServices, ontology_search: OntologySearchService) -> None:
+    def __init__(
+        self,
+        objects: ObjectServices,
+        ontology_search: OntologySearchService,
+        action_logs: ActionLogOntologyService,
+    ) -> None:
         self._objects = objects
         self._ontology_search = ontology_search
+        self._action_logs = action_logs
 
     def unified_search(
         self,
@@ -114,6 +122,8 @@ class ObjectStore:
         ctx: RequestContext | None = None,
         include_explain: bool = False,
     ) -> ObjectPayload:
+        if self._action_logs.handles(object_type_api_name):
+            return self._action_logs.get_object(object_type_api_name, object_id, ctx=ctx)
         return self._objects.query.get_object(
             object_type_api_name,
             object_id,
@@ -133,6 +143,18 @@ class ObjectStore:
         search_text: str | None = None,
         semantic_text: str | None = None,
     ) -> ObjectQueryResult:
+        if self._action_logs.handles(object_type_api_name):
+            if semantic_text is not None:
+                raise ValidationFailed("Action Log objects do not support semantic search")
+            return self._action_logs.query_objects(
+                object_type_api_name,
+                ctx=ctx,
+                filter_ast=filter_ast,
+                order_by=order_by,
+                limit=limit,
+                cursor=cursor,
+                search_text=search_text,
+            )
         return self._objects.query.query_objects(
             object_type_api_name,
             ctx=ctx,
@@ -172,6 +194,14 @@ class ObjectStore:
         select: Sequence[Mapping[str, object]] | None = None,
     ) -> ObjectAggregationResult:
         """Server-side aggregation (count/sum/avg/min/max, exact groupBy) under query authorization."""
+        if self._action_logs.handles(object_type_api_name):
+            return self._action_logs.aggregate_objects(
+                object_type_api_name,
+                ctx=ctx,
+                filter_ast=filter_ast,
+                group_by=group_by,
+                select=select,
+            )
         return self._objects.query.aggregate_objects(
             object_type_api_name,
             ctx=ctx,

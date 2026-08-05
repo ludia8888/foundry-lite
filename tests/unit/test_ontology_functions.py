@@ -102,6 +102,7 @@ def _function(**overrides: object) -> dict[str, object]:
     function: dict[str, object] = {
         "apiName": "orderRiskSummary",
         "displayName": "Order risk summary",
+        "version": "v1",
         "runtime": "logic_dag",
         "inputs": [{"apiName": "objectId", "type": "string", "required": True}],
         "output": {"type": "string"},
@@ -121,6 +122,27 @@ def _definition(functions: list[dict[str, object]] | None = None) -> dict[str, o
 
 def _yaml_text(definition: dict[str, object]) -> str:
     return yaml.safe_dump(definition, sort_keys=False)
+
+
+def test_function_definition_preserves_typed_list_of_struct_batch_input() -> None:
+    function = _function(
+        inputs=[
+            {
+                "apiName": "requests",
+                "type": "array",
+                "itemType": "struct",
+                "required": True,
+                "fields": [
+                    {"apiName": "objectId", "type": "string", "required": True},
+                    {"apiName": "priority", "type": "integer", "required": False},
+                ],
+            }
+        ]
+    )
+
+    normalized = normalized_function_definition(function)
+
+    assert normalized["inputs"] == function["inputs"]
 
 
 def _prepare_datasets(foundry: FoundryLite, tmp_path: Path) -> RequestContext:
@@ -182,6 +204,7 @@ def test_apply_publishes_function_types_in_catalog(foundry: FoundryLite, tmp_pat
         {
             "apiName": "orderRiskSummary",
             "displayName": "Order risk summary",
+            "version": "v1",
             "runtime": "logic_dag",
             "inputs": [{"apiName": "objectId", "type": "string", "required": True}],
             "output": {"type": "string"},
@@ -290,6 +313,7 @@ def test_rollback_round_trip_preserves_function_types(foundry: FoundryLite, tmp_
     catalog = foundry.ontology.catalog(ctx=admin)
     assert [item["apiName"] for item in catalog["functionTypes"]] == ["orderRiskSummary"]
     assert catalog["functionTypes"][0]["allowedRoles"] == ["ops_manager"]
+    assert catalog["functionTypes"][0]["version"] == "v1"
     # Replaying the restored version against itself is change-free: persisted
     # normalization is idempotent, so no spurious definition-change warnings.
     revalidated = foundry.ontology.validate(_yaml_text(_definition()), ctx=admin)

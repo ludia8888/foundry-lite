@@ -12,6 +12,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from foundry_lite.application.action_types import ActionExecutionPlanResponse
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
@@ -19,10 +20,17 @@ from foundry_lite.application.ports.ai_run_repository import AiLedgerRow
 from foundry_lite.application.services.action_plan_payloads import action_plan_object_versions
 from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_protocols import ActionOntologyLookup
+from foundry_lite.application.services.aip.action_proposal_external import (
+    external_mcp_proposal,
+    external_mcp_replay,
+    external_mcp_result,
+    external_mcp_status,
+)
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import InsightReviewProposalFields
 from foundry_lite.application.services.insight_review_service import InsightReviewService
 from foundry_lite.application.services.object_store.records import ObjectRecordsService
+from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
@@ -126,6 +134,44 @@ class ActionProposalService(CoreService):
             action_proposal=proposal,
         )
 
+    def propose_external_mcp(
+        self,
+        ctx: RequestContext,
+        *,
+        application_id: str,
+        session_id: str,
+        json_rpc_id: str,
+        action_type: str,
+        target_object_type: str,
+        target_object_id: str,
+        expected_object_version: int,
+        parameters: Mapping[str, object],
+        execution_plan: ActionExecutionPlanResponse,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        target = (target_object_type, target_object_id, expected_object_version)
+        request = _external_mcp_request(application_id, session_id, json_rpc_id, action_type, *target, parameters)
+        self._require_policy(ctx, request)
+        evidence_refs = _external_mcp_evidence(ctx, request, application_id, session_id, json_rpc_id)
+        fingerprint = _external_mcp_fingerprint(request, execution_plan, evidence_refs, application_id)
+        existing = self.insight_review_service.replay_created_review(idempotency_key, ctx=ctx)
+        if existing is not None:
+            return external_mcp_replay(existing, execution_plan, fingerprint)
+        proposal = external_mcp_proposal(
+            _action_proposal_payload(request, evidence_refs, fingerprint, execution_plan),
+            application_id,
+            ctx.client_id,
+            ctx.token_scopes,
+        )
+        review = self._create_review(
+            ctx, request, evidence_refs, fingerprint, proposal, idempotency_key=idempotency_key
+        )
+        return external_mcp_result(proposal, review, execution_plan, fingerprint, request.expires_at)
+
+    def external_mcp_status(self, ctx: RequestContext, *, application_id: str, review_id: str) -> dict[str, object]:
+        review = self.insight_review_service.review_detail(review_id, ctx=ctx)
+        return external_mcp_status(review, application_id, ctx.actor_user_id)
+
     def _execution_plan(
         self,
         ctx: RequestContext,
@@ -152,13 +198,14 @@ class ActionProposalService(CoreService):
         evidence_refs: Sequence[JsonObject],
         fingerprint: str,
         proposal: Mapping[str, object],
+        idempotency_key: str | None = None,
     ) -> Mapping[str, object]:
         review = self.insight_review_service.create_review(
             claim_id=str(proposal["proposalId"]),
             claim_text=request.claim_text,
             evidence_object_ids=_evidence_object_ids(evidence_refs),
             evidence_refs=evidence_refs,
-            idempotency_key=fingerprint,
+            idempotency_key=idempotency_key or fingerprint,
             ctx=ctx,
             priority=request.priority,
             assignee_user_id=request.assignee_user_id,
@@ -198,11 +245,16 @@ class ActionProposalService(CoreService):
         self,
         transaction: TransactionContext,
         ctx: RequestContext,
-        action: ActionTypeRow,
+        _action: ActionTypeRow,
         request: ActionProposalRequest,
     ) -> ObjectRecordRow:
+        object_type = self.ontology_service._active_object_type(transaction, ctx, request.target_object_type)
         record = self.object_records_service._object_record(
-            transaction, ctx, request.target_object_type, request.target_object_id, action["target_object_type_id"]
+            transaction,
+            ctx,
+            request.target_object_type,
+            request.target_object_id,
+            record_scope_object_type_id(object_type),
         )
         if record is None:
             raise ActionProposalError("target_not_found", "proposal target object was not found")
@@ -322,6 +374,85 @@ def _action_proposal_payload(
         "policyVersion": request.policy_version,
         "expiresAt": request.expires_at,
     }
+
+
+def _external_mcp_request(
+    application_id: str,
+    session_id: str,
+    json_rpc_id: str,
+    action_type: str,
+    target_object_type: str,
+    target_object_id: str,
+    expected_object_version: int,
+    parameters: Mapping[str, object],
+) -> ActionProposalRequest:
+    call_id = f"{application_id}:{session_id}:{json_rpc_id}"
+    expires_at = (datetime.now(UTC) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    return ActionProposalRequest(
+        originating_ai_run_id=f"ontology-mcp:{application_id}:{session_id}",
+        originating_tool_call_id=call_id,
+        action_type=action_type,
+        target_object_type=target_object_type,
+        target_object_id=target_object_id,
+        expected_object_version=expected_object_version,
+        parameters=parameters,
+        evidence_context_ids=(call_id,),
+        agent_allowed_actions=(action_type,),
+        policy_version="ontology-mcp-v1",
+        expires_at=expires_at,
+        claim_text=f"Ontology MCP requests governed execution of {action_type}.",
+    )
+
+
+def _external_mcp_evidence(
+    ctx: RequestContext,
+    request: ActionProposalRequest,
+    application_id: str,
+    session_id: str,
+    json_rpc_id: str,
+) -> list[dict[str, object]]:
+    source_id = f"{application_id}:{session_id}:{json_rpc_id}"
+    content_hash = _hash_json(
+        {
+            "actionType": request.action_type,
+            "targetObjectType": request.target_object_type,
+            "targetObjectId": request.target_object_id,
+            "expectedObjectVersion": request.expected_object_version,
+            "parameters": dict(request.parameters),
+        }
+    )
+    return [
+        {
+            "contextId": source_id,
+            "contextItemId": f"ontology-mcp-call:{source_id}",
+            "sourceResourceType": "ontology_mcp_call",
+            "sourceResourceId": source_id,
+            "sourceVersion": "2025-06-18",
+            "contentHash": content_hash,
+            "securityPartition": ctx.tenant_id,
+        }
+    ]
+
+
+def _external_mcp_fingerprint(
+    request: ActionProposalRequest,
+    plan: ActionExecutionPlanResponse,
+    evidence_refs: Sequence[JsonObject],
+    application_id: str,
+) -> str:
+    return compute_action_proposal_fingerprint(
+        action_type=request.action_type,
+        target_object_type=request.target_object_type,
+        target_object_id=request.target_object_id,
+        expected_object_version=request.expected_object_version,
+        parameters=request.parameters,
+        evidence_refs=evidence_refs,
+        agent_version_id=f"ontology-mcp:{application_id}:2025-06-18",
+        policy_version=request.policy_version,
+        plan_hash=plan["planHash"],
+        action_version=plan["ontologyVersionId"],
+        object_versions=action_plan_object_versions(plan),
+    )
 
 
 def _evidence_object_ids(evidence_refs: Sequence[JsonObject]) -> list[str]:

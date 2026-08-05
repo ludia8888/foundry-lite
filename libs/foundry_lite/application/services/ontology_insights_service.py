@@ -255,7 +255,7 @@ class OntologyInsightsService(CoreService):
     ) -> OntologyResourceDependentsResult:
         row = self._active_link_type(conn, ctx, api_name)
         result = base_dependents_result("link_type", api_name)
-        result["backingDatasetRef"] = row["backing"]["dataset"]
+        result["backingDatasetRef"] = row["backing"].get("dataset")
         result["fromObjectType"] = row["from_api_name"]
         result["toObjectType"] = row["to_api_name"]
         result["osdkApplications"] = self._osdk_dependents(conn, ctx, resource_type="link", api_name=api_name)

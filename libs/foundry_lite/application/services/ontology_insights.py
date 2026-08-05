@@ -86,7 +86,7 @@ class DependentLinkType(TypedDict):
     fromObjectType: str
     toObjectType: str
     cardinality: str
-    backingDatasetRef: str
+    backingDatasetRef: str | None
 
 
 class DependentOsdkApplication(TypedDict):
@@ -188,7 +188,7 @@ def dependent_link_payload(row: LinkTypeRow) -> DependentLinkType:
         "fromObjectType": row["from_api_name"],
         "toObjectType": row["to_api_name"],
         "cardinality": row["cardinality"],
-        "backingDatasetRef": row["backing"]["dataset"],
+        "backingDatasetRef": row["backing"].get("dataset"),
     }
 
 

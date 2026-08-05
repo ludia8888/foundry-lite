@@ -59,6 +59,9 @@ def test_postgres_rls_hides_action_execution_ledger_between_tenants(postgres_fix
         db.action_step_attempts,
         db.action_run_events,
         db.action_effect_receipts,
+        db.action_effect_operation_requests,
+        db.action_notification_policies,
+        db.action_notification_policy_idempotency_records,
         db.action_log_entries,
         db.action_log_objects,
         db.action_branch_objects,
@@ -240,6 +243,27 @@ def _seed_action_execution_rows(engine: Engine) -> None:
             [_action_effect_row("demo", "tenant-demo"), _action_effect_row("other", "tenant-other")],
         )
         conn.execute(
+            insert(db.action_effect_operation_requests),
+            [
+                _action_effect_operation_row("demo", "tenant-demo"),
+                _action_effect_operation_row("other", "tenant-other"),
+            ],
+        )
+        conn.execute(
+            insert(db.action_notification_policies),
+            [
+                _action_notification_policy_row("demo", "tenant-demo"),
+                _action_notification_policy_row("other", "tenant-other"),
+            ],
+        )
+        conn.execute(
+            insert(db.action_notification_policy_idempotency_records),
+            [
+                _action_notification_policy_idempotency_row("demo", "tenant-demo"),
+                _action_notification_policy_idempotency_row("other", "tenant-other"),
+            ],
+        )
+        conn.execute(
             insert(db.action_log_entries),
             [_action_log_row("demo", "tenant-demo"), _action_log_row("other", "tenant-other")],
         )
@@ -343,6 +367,52 @@ def _action_effect_row(suffix: str, tenant_id: str) -> dict[str, object]:
         "request": {},
         "created_at": "2026-08-03T00:00:00Z",
         "updated_at": "2026-08-03T00:00:00Z",
+    }
+
+
+def _action_notification_policy_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_notification_policies-{suffix}",
+        "tenant_id": tenant_id,
+        "policy_name": f"operations-{suffix}",
+        "target_ref": f"notification-policy:operations-{suffix}",
+        "display_name": "Operations",
+        "delivery_mode": "strict",
+        "recipients": [{"userId": f"user-{suffix}", "roles": ["admin"]}],
+        "status": "active",
+        "version": 1,
+        "config_fingerprint": f"sha256:policy-{suffix}",
+        "created_by_user_id": f"user-{suffix}",
+        "updated_by_user_id": f"user-{suffix}",
+        "created_at": "2026-08-05T00:00:00Z",
+        "updated_at": "2026-08-05T00:00:00Z",
+    }
+
+
+def _action_effect_operation_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_effect_operation_requests-{suffix}",
+        "tenant_id": tenant_id,
+        "actor_user_id": f"operator-{suffix}",
+        "receipt_id": f"action_effect_receipts-{suffix}",
+        "operation": "cancel",
+        "idempotency_key": f"effect-operation-{suffix}",
+        "request_fingerprint": f"sha256:effect-operation-{suffix}",
+        "response_json": {"receiptId": f"action_effect_receipts-{suffix}"},
+        "created_at": "2026-08-05T00:00:00Z",
+    }
+
+
+def _action_notification_policy_idempotency_row(suffix: str, tenant_id: str) -> dict[str, object]:
+    return {
+        "id": f"action_notification_policy_idempotency_records-{suffix}",
+        "tenant_id": tenant_id,
+        "actor_user_id": f"user-{suffix}",
+        "operation": f"create:operations-{suffix}",
+        "idempotency_key": f"policy-key-{suffix}",
+        "request_fingerprint": f"sha256:request-{suffix}",
+        "response_json": {"policyName": f"operations-{suffix}"},
+        "created_at": "2026-08-05T00:00:00Z",
     }
 
 

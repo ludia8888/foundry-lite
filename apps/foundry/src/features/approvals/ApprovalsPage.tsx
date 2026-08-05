@@ -6,6 +6,7 @@ import {
 } from "@foundry-lite/sdk/react";
 import { ClipboardCheck, MousePointerClick } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 
 import { EmptyState } from "@/components/shared/EmptyState";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -39,9 +40,15 @@ const CURRENT_USER_ID = "web-demo-operator";
  * 리뷰 큐로 통합한다. 큐에서 assign/decide/execute, 상세에서 diff + evidence.
  */
 export default function ApprovalsPage() {
-  const [source, setSource] = useState<ApprovalSource>("insights");
-  const [intent, setIntent] = useState<ApprovalIntent>("pending");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const requestedSource = approvalSourceFromQuery(searchParams.get("source"));
+  const [source, setSource] = useState<ApprovalSource>(requestedSource);
+  const [intent, setIntent] = useState<ApprovalIntent>(
+    searchParams.get("proposalId") ? "all" : "pending",
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(
+    searchParams.get("proposalId"),
+  );
 
   const insights = useFoundryLiteProvidedInsightReviewQueue({
     limit: 100,
@@ -202,4 +209,9 @@ export default function ApprovalsPage() {
       </div>
     </div>
   );
+}
+
+function approvalSourceFromQuery(value: string | null): ApprovalSource {
+  if (value === "ontology" || value === "pipelines") return value;
+  return "insights";
 }

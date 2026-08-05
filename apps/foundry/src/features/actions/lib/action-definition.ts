@@ -29,7 +29,9 @@ export type ActionSideEffect = {
 };
 
 export type ActionDefinitionView = {
-  allowedRoles: string[];
+  viewRoles: string[];
+  editRoles: string[];
+  applyRoles: string[];
   preconditions: ActionPrecondition[];
   mutations: ActionMutation[];
   writebacks: ActionWriteback[];
@@ -64,9 +66,12 @@ export function actionDefinitionView(
 ): ActionDefinitionView {
   const definition = readDefinition(actionView);
   const permissions = asRecord(definition.permissions);
-  const allowedRoles = asArray(permissions?.allowedRoles)
+  const roleValues = (value: unknown) => asArray(value)
     .map((role) => readString(role))
     .filter((role): role is string => role !== null);
+  const viewRoles = roleValues(permissions?.viewRoles);
+  const editRoles = roleValues(permissions?.editRoles);
+  const applyRoles = roleValues(permissions?.applyRoles ?? permissions?.allowedRoles);
 
   const preconditions = asArray(definition.preconditions)
     .map((raw) => asRecord(raw))
@@ -103,7 +108,9 @@ export function actionDefinitionView(
     }));
 
   return {
-    allowedRoles,
+    viewRoles,
+    editRoles,
+    applyRoles,
     preconditions,
     mutations,
     writebacks,

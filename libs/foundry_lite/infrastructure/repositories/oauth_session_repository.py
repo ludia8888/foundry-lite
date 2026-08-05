@@ -120,6 +120,27 @@ class SqlAlchemyOAuthSessionRepository:
             values={"revoked_at": revoked_at},
         )
 
+    def revoke_active_sessions_for_client(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        app_id: str,
+        client_id: str,
+        revoked_at: str,
+    ) -> int:
+        return cas_status_update_many(
+            transaction,
+            db.osdk_oauth_sessions,
+            tenant_id=tenant_id,
+            transition=OSDK_OAUTH_SESSION_REVOKED,
+            values={"revoked_at": revoked_at},
+            conditions=(
+                db.osdk_oauth_sessions.c.app_id == app_id,
+                db.osdk_oauth_sessions.c.client_id == client_id,
+            ),
+        )
+
     def compromise_refresh_token_family(
         self,
         *,

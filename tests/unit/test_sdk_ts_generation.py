@@ -449,7 +449,10 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["ontology"] == {
         "_self": ["catalog", "validate", "apply", "rollback"],
-        "branches": ["create", "list", "get", "update", "diff", "rebase", "propose", "abandon"],
+        "branches": {
+            "_self": ["create", "list", "get", "update", "diff", "rebase", "propose", "abandon"],
+            "actionTypes": ["list", "get", "create", "update", "delete"],
+        },
         "proposals": ["submit", "list", "get", "update", "assign", "decide", "execute", "withdraw"],
         "resources": ["usage", "dependents"],
     }
@@ -490,7 +493,11 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
             "listClients",
             "updateClient",
             "deactivateClient",
+            "rotateClientSecret",
+            "revokeClientSecret",
+            "listClientSecretVersions",
         ],
+        "mcpServers": ["configure", "get", "list"],
         "sdkVersions": [
             "create",
             "list",
@@ -507,10 +514,22 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
     assert ts_surface["actions"] == {
-        "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
-        "branches": ["diff", "object"],
-        "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
-        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
+        "_self": [
+            "list",
+            "get",
+            "schema",
+            "validate",
+            "apply",
+            "plan",
+            "dryRun",
+            "logs",
+            "uploadParameter",
+        ],
+        "branches": ["diff", "object", "link"],
+        "notificationPolicies": ["list", "get", "create", "update", "disable"],
+        "effects": ["list", "get", "cancel", "retry", "reconcile"],
+        "runs": ["start", "startBatch", "list", "get", "events", "cancel", "revertEligibility", "revert"],
+        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch", "uploadParameter"],
     }
     assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
@@ -601,16 +620,10 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "execute",
         "withdraw",
     ]
-    assert surface["ontology"]["branches"] == [
-        "create",
-        "list",
-        "get",
-        "update",
-        "diff",
-        "rebase",
-        "propose",
-        "abandon",
-    ]
+    assert surface["ontology"]["branches"] == {
+        "_self": ["create", "list", "get", "update", "diff", "rebase", "propose", "abandon"],
+        "actionTypes": ["list", "get", "create", "update", "delete"],
+    }
     assert surface["ontology"]["resources"] == ["usage", "dependents"]
     assert surface["resources"] == {
         "projects": ["list", "create", "get", "listGrants", "upsertGrant"],
@@ -623,10 +636,22 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
     assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
     assert surface["actions"] == {
-        "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
-        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch"],
-        "branches": ["diff", "object"],
-        "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
+        "_self": [
+            "list",
+            "get",
+            "schema",
+            "validate",
+            "apply",
+            "plan",
+            "dryRun",
+            "logs",
+            "uploadParameter",
+        ],
+        "ApproveOrder": ["apply", "validate", "plan", "dryRun", "applyBatch", "uploadParameter"],
+        "branches": ["diff", "object", "link"],
+        "notificationPolicies": ["list", "get", "create", "update", "disable"],
+        "effects": ["list", "get", "cancel", "retry", "reconcile"],
+        "runs": ["start", "startBatch", "list", "get", "events", "cancel", "revertEligibility", "revert"],
     }
     assert "export type ActionEffectReceipt" in generated
     assert "effects: ActionEffectReceipt[];" in generated
@@ -676,15 +701,20 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "export type ActionLogListResult = {",
         "logs(options?: { cursor?: string; limit?: number }): Promise<ActionLogListResult>;",
         "object(branchId: string, objectType: string, objectId: string): Promise<Record<string, unknown>>;",
+        "link: (branchId: string, linkType: string, fromObjectId: string, toObjectId: string) =>",
         "branchId?: string;",
         "revertEligibility(runId: string): Promise<ActionRevertEligibility>;",
         "revert(runId: string, options: { idempotencyKey: string }): Promise<ActionRevertResult>;",
+        "export type ActionFunctionBatchRunRequest = {",
+        "startBatch(actionApiName: string, payload: ActionFunctionBatchRunRequest,",
+        'requireIdempotencyKey(options?.idempotencyKey, "actions.runs.startBatch")',
         "list(options?: { cursor?: string; limit?: number }): Promise<ActionCatalogPage>;",
         "get(actionApiName: string): Promise<ActionCatalogItem>;",
         "schema(actionApiName: string): Promise<Record<string, unknown>>;",
         "return request<ActionCatalogPage>(`/api/actions${suffix}`);",
         "return request<ActionLogListResult>(`/api/actions/logs${suffix}`);",
         "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
+        "${encodeURIComponent(branchId)}/links/${encodeURIComponent(linkType)}/",
         'requireIdempotencyKey(options?.idempotencyKey, "actions.runs.revert")',
         "query(interfaceType: string, payload?: InterfaceQueryRequest)",
         "query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
@@ -724,15 +754,27 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "`/api/ontology/branches/${encodeURIComponent(branchId)}/propose`",
         'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose")',
         "`/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`",
+        "actionTypes: {",
+        "list: (branchId) => request(",
+        'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.create")',
+        'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.update")',
+        'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.delete")',
         "`/api/objects/${encodeURIComponent(objectType)}/aggregate`",
         "aggregate: (payload) => request(`/api/objects/Order/aggregate`, {",
         "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",
         "return request(`/api/actions${suffix}`);",
         "get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`)",
+        "`/api/actions/${encodeURIComponent(actionApiName)}/validate`",
+        "`/api/actions/${encodeURIComponent(actionApiName)}/apply`",
+        'requireIdempotencyKey(applyOptions?.idempotencyKey, "actions.apply")',
         "return request(`/api/actions/logs${suffix}`);",
         "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
+        "${encodeURIComponent(branchId)}/links/${encodeURIComponent(linkType)}/",
         "revertEligibility: (runId) =>",
         'requireIdempotencyKey(revertOptions?.idempotencyKey, "actions.runs.revert")',
+        "startBatch: (actionApiName, payload, runOptions) => request(",
+        "${encodeURIComponent(actionApiName)}/batch-runs",
+        'runOptions?.idempotencyKey, "actions.runs.startBatch"',
         'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
         "`/api/interfaces/${encodeURIComponent(interfaceType)}/query`",
         "query: (payload = {}) => request(`/api/interfaces/Asset/query`, {",
@@ -944,13 +986,18 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "objectSet.fetchPage(fetchOptions)" in react_helpers
     assert "export type FoundryLiteActionFormView" in react_helpers
     assert "export type FoundryLiteActionParameterField" in react_helpers
+    assert "export type FoundryLiteActionFormSection" in react_helpers
     assert "export type FoundryLiteActionFormState" in react_helpers
     assert "export type FoundryLiteActionFormSubmitRequest" in react_helpers
     assert "export function foundryLiteActionFormView" in react_helpers
     assert "export function useFoundryLiteActionForm" in react_helpers
     assert "export function useFoundryLiteProvidedActionForm" in react_helpers
     assert "export function foundryLiteActionFormSubmitRequest" in react_helpers
+    assert "runtimeActionType: OsdkActionType | null" in react_helpers
+    assert "foundryLiteRuntimeActionType(actionView)" in react_helpers
     assert "parameterFields" in react_helpers
+    assert "parameterSections" in react_helpers
+    assert 'schema["x-foundry-form-layout"]' in react_helpers
     assert "matchedOverride" in react_helpers
     assert "isVisible" in react_helpers
     assert "isEditable" in react_helpers
@@ -1372,6 +1419,8 @@ def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:
     ontology_path = tmp_path / "ontology.yaml"
     ts_output = tmp_path / "generated.ts"
     web_output = tmp_path / "generated-sdk.js"
+    python_output = tmp_path / "generated.py"
+    python_init_output = tmp_path / "__init__.py"
     ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
 
     ontology_path.write_text(ontology_text, encoding="utf-8")
@@ -1380,6 +1429,8 @@ def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:
             ontology_path=ontology_path,
             ts_output=ts_output,
             web_output=web_output,
+            python_output=python_output,
+            python_init_output=python_init_output,
             should_check=False,
         )
         == 0
@@ -1391,6 +1442,8 @@ def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:
             ontology_path=ontology_path,
             ts_output=ts_output,
             web_output=web_output,
+            python_output=python_output,
+            python_init_output=python_init_output,
             should_check=True,
         )
         == 1
@@ -1403,10 +1456,88 @@ def test_generated_sdk_files_match_active_ontology() -> None:
             ontology_path=sdk.DEFAULT_ONTOLOGY,
             ts_output=sdk.DEFAULT_TS_OUTPUT,
             web_output=sdk.DEFAULT_WEB_OUTPUT,
+            python_output=sdk.DEFAULT_PYTHON_OUTPUT,
+            python_init_output=sdk.DEFAULT_PYTHON_INIT_OUTPUT,
             should_check=True,
         )
         == 0
     )
+
+
+def test_python_sdk_generator_emits_typed_action_and_matches_active_ontology() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_python(ontology)
+    generated_init = sdk.render_python_init(ontology)
+
+    assert "class ApproveOrderParams(TypedDict):" in generated
+    assert "reason: str" in generated
+    assert "ApproveOrder: GeneratedActionType[ApproveOrderParams]" in generated
+    assert 'target_kind="object"' in generated
+    assert f'ONTOLOGY_CONTRACT_FINGERPRINT = "{contract_fingerprint(ontology)}"' in generated
+    assert "from foundry_lite_sdk.generated import (" in generated_init
+    assert "    ApproveOrder," in generated_init
+    compile(generated, str(sdk.DEFAULT_PYTHON_OUTPUT), "exec")
+
+
+def test_action_parameter_types_and_interface_target_are_generated_for_both_osdks(tmp_path: Path) -> None:
+    ontology_path = tmp_path / "typed-actions.yaml"
+    ontology_path.write_text(
+        """
+interfaces:
+  - apiName: Asset
+    properties:
+      - {apiName: assetId, type: string}
+objectTypes:
+  - apiName: Order
+    implements: [Asset]
+    properties:
+      - {apiName: assetId, type: string, nullable: false}
+linkTypes: []
+functionTypes: []
+actionTypes:
+  - apiName: UpdateAsset
+    target: {kind: interface, apiName: Asset}
+    parameters:
+      - {apiName: enabled, type: boolean, required: true}
+      - {apiName: count, type: long, required: true}
+      - {apiName: amount, type: decimal, required: true}
+      - {apiName: serviceDate, type: date, required: false}
+      - {apiName: observedAt, type: timestamp, required: false}
+      - {apiName: owner, type: object, required: false}
+      - {apiName: assets, type: objectSet, itemType: interface, required: false}
+      - apiName: guest
+        type: struct
+        required: true
+        fields:
+          - {apiName: name, type: string, required: true}
+          - apiName: contact
+            type: struct
+            required: false
+            fields:
+              - {apiName: phone, type: string, required: true}
+""".strip(),
+        encoding="utf-8",
+    )
+    ontology = sdk.load_ontology(ontology_path)
+
+    generated_ts = sdk.render_typescript(ontology)
+    generated_python = sdk.render_python(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+
+    assert "export type UpdateAssetGuestContactStruct" in generated_ts
+    assert "assets?: ReadonlyArray<string | ObjectReference>;" in generated_ts
+    assert "objectType: string;" in _type_block(generated_ts, "UpdateAssetValidateRequest")
+    assert 'targetKind: "interface"' in generated_ts
+    assert "updateAsset: OsdkBoundAction<typeof UpdateAsset>" in generated_ts
+    assert "target: { objectType: payload.objectType" in generated_ts
+    assert "target: { objectType: payload.objectType" in browser_sdk
+    assert "class UpdateAssetGuestContactStruct(TypedDict):" in generated_python
+    assert "amount: Decimal" in generated_python
+    assert "serviceDate: NotRequired[date]" in generated_python
+    assert "observedAt: NotRequired[datetime]" in generated_python
+    assert "assets: NotRequired[Sequence[str | OntologyObjectReference]]" in generated_python
+    assert 'target_kind="interface"' in generated_python
+    compile(generated_python, str(tmp_path / "generated.py"), "exec")
 
 
 def test_sdk_generator_emits_interface_constants() -> None:

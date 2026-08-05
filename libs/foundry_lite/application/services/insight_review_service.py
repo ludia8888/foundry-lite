@@ -100,6 +100,19 @@ class InsightReviewService(CoreService):
         with self.engine.begin() as conn:
             return review_payload(self._require_row(conn, ctx, review_id))
 
+    def replay_created_review(
+        self, idempotency_key: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object] | None:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "insight:create")
+        with self.engine.begin() as conn:
+            row = self.insight_review_repository.review_by_create_idempotency_key(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                idempotency_key=_required_idempotency_key(idempotency_key),
+            )
+        return review_payload(row) if row is not None else None
+
     def assign_review(
         self,
         review_id: str,

@@ -9,6 +9,38 @@ from collections.abc import Mapping
 from foundry_lite.application.action_log_types import ActionLogEntryRow, ActionLogObjectRow
 from foundry_lite.domain.errors import ValidationFailed
 
+ACTION_LOG_OBJECT_TYPE_PREFIX = "[LOG] "
+ACTION_LOG_EDITED_OBJECT_LINK_PREFIX = "[LOG LINK] "
+
+
+def action_log_object_type_api_name(action_api_name: str) -> str:
+    """Return the one-to-one Ontology Action Log object type name."""
+    return f"{ACTION_LOG_OBJECT_TYPE_PREFIX}{action_api_name}"
+
+
+def action_api_name_from_log_object_type(object_type_api_name: str) -> str | None:
+    """Resolve a virtual Action Log object type back to its Action API name."""
+    if not object_type_api_name.startswith(ACTION_LOG_OBJECT_TYPE_PREFIX):
+        return None
+    action_api_name = object_type_api_name.removeprefix(ACTION_LOG_OBJECT_TYPE_PREFIX).strip()
+    return action_api_name or None
+
+
+def action_log_edited_object_link_type_api_name(action_api_name: str, object_type_api_name: str) -> str:
+    """Return the virtual link from one Action Log type to one edited Object Type."""
+    return f"{ACTION_LOG_EDITED_OBJECT_LINK_PREFIX}{action_api_name}::{object_type_api_name}"
+
+
+def action_and_object_from_log_link(link_type_api_name: str) -> tuple[str, str] | None:
+    """Resolve a virtual Action Log link name into its action and object coordinates."""
+    if not link_type_api_name.startswith(ACTION_LOG_EDITED_OBJECT_LINK_PREFIX):
+        return None
+    coordinate = link_type_api_name.removeprefix(ACTION_LOG_EDITED_OBJECT_LINK_PREFIX)
+    action_api_name, separator, object_type_api_name = coordinate.partition("::")
+    if separator != "::" or not action_api_name.strip() or not object_type_api_name.strip():
+        return None
+    return action_api_name.strip(), object_type_api_name.strip()
+
 
 def action_log_payload(
     row: ActionLogEntryRow,

@@ -20,6 +20,7 @@ startup refuses them unless a strict profile is configured explicitly.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
@@ -42,6 +43,7 @@ __all__ = [
     "HEADER_SCOPES_KEY",
     "HEADER_TENANT_KEY",
     "HEADER_USER_KEY",
+    "HEADER_USER_ATTRIBUTES_KEY",
     "DemoAuthProvider",
     "HeaderTrustAuthProvider",
 ]
@@ -52,6 +54,7 @@ HEADER_ROLES_KEY = "x-roles"
 HEADER_APP_ID_KEY = "x-foundry-lite-app-id"
 HEADER_CLIENT_ID_KEY = "x-foundry-lite-client-id"
 HEADER_SCOPES_KEY = "x-foundry-lite-scopes"
+HEADER_USER_ATTRIBUTES_KEY = "x-user-attributes"
 
 _DEMO_USER_ID = "user-demo-admin"
 
@@ -72,6 +75,15 @@ def _split_scopes(value: str | None) -> tuple[str, ...]:
         return ()
     normalized = value.replace(",", " ")
     return tuple(scope.strip() for scope in normalized.split(" ") if scope.strip())
+
+
+def _user_attributes(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict) or not all(isinstance(key, str) and key for key in parsed):
+        raise ValueError("X-User-Attributes must be a JSON object with non-empty string keys")
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,7 @@ class HeaderTrustAuthProvider:
             application_id=headers.get(HEADER_APP_ID_KEY),
             client_id=headers.get(HEADER_CLIENT_ID_KEY),
             token_scopes=_split_scopes(headers.get(HEADER_SCOPES_KEY)),
+            user_attributes=_user_attributes(headers.get(HEADER_USER_ATTRIBUTES_KEY)),
         )
 
     def anonymous(self) -> Principal:

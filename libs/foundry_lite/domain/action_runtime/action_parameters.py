@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import cast
@@ -40,6 +40,7 @@ class ActionParameterContext:
     actor_groups: tuple[str, ...]
     now: datetime
     generate_id: Callable[[str], str]
+    actor_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
 
 
 def resolve_action_parameters(
@@ -69,6 +70,7 @@ def default_action_parameter_context(
     object_properties: Mapping[str, object],
     actor_user_id: str,
     actor_groups: tuple[str, ...],
+    actor_attributes: Mapping[str, object],
     generate_id: Callable[[str], str],
 ) -> ActionParameterContext:
     return ActionParameterContext(
@@ -76,6 +78,7 @@ def default_action_parameter_context(
         object_properties=object_properties,
         actor_user_id=actor_user_id,
         actor_groups=actor_groups,
+        actor_attributes=actor_attributes,
         now=datetime.now(UTC),
         generate_id=generate_id,
     )
@@ -120,6 +123,7 @@ def _condition_context(values: Mapping[str, object], context: ActionParameterCon
         object_properties=context.object_properties,
         actor_user_id=context.actor_user_id,
         actor_groups=context.actor_groups,
+        actor_attributes=context.actor_attributes,
     )
 
 
@@ -187,6 +191,8 @@ def _current_user_default(default: Mapping[str, object], context: ActionParamete
         return context.actor_user_id
     if attribute in {"group", "groups", "roles"}:
         return list(context.actor_groups)
+    if isinstance(attribute, str) and attribute.strip():
+        return context.actor_attributes.get(attribute)
     raise ValidationFailed("unsupported current-user default attribute", details={"attribute": attribute})
 
 
@@ -220,11 +226,126 @@ def _matches_parameter_type(parameter: ActionParameterV3, value: object) -> bool
         return _matches_scalar_type(data_type, value)
     if data_type in {"date", "timestamp"}:
         return _is_temporal(value, data_type)
-    if data_type in {"object", "interface", "media", "attachment"}:
-        return isinstance(value, str) and bool(value)
+    if data_type in {"object", "interface"}:
+        return _matches_object_reference(value)
+    if data_type in {"media", "attachment"}:
+        return _matches_media_reference(value, data_type)
     if data_type in {"objectSet", "array"}:
-        return isinstance(value, Sequence) and not isinstance(value, str | bytes)
-    return isinstance(value, Mapping)
+        return _matches_array_type(parameter, value)
+    return _matches_struct_type(parameter, value)
+
+
+def _matches_object_reference(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value)
+    if not isinstance(value, Mapping):
+        return False
+    reference = cast(Mapping[object, object], value)
+    object_type = reference.get("objectType")
+    object_id = reference.get("objectId")
+    return isinstance(object_type, str) and bool(object_type) and isinstance(object_id, str) and bool(object_id)
+
+
+def _matches_array_type(parameter: ActionParameterV3, value: object) -> bool:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return False
+    items = cast(Sequence[object], value)
+    item_type = parameter.metadata.get("itemType")
+    if not isinstance(item_type, str) or not item_type:
+        return False
+    metadata = {key: value for key, value in parameter.metadata.items() if key != "itemType"}
+    synthetic = ActionParameterV3("item", item_type, False, None, None, {}, metadata, ())
+    if not all(_matches_parameter_type(synthetic, item) for item in items):
+        return False
+    return parameter.data_type != "objectSet" or _has_unique_values(items)
+
+
+def _matches_struct_type(parameter: ActionParameterV3, value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    values = cast(Mapping[object, object], value)
+    fields = _struct_parameters(parameter)
+    if fields is None:
+        return False
+    if set(values) - {field.api_name for field in fields}:
+        return False
+    return all(_matches_struct_field(field, values) for field in fields)
+
+
+def _matches_media_reference(value: object, reference_kind: str) -> bool:
+    if isinstance(value, str):
+        return bool(value)
+    if not isinstance(value, Mapping):
+        return False
+    reference = cast(Mapping[object, object], value)
+    required_text = (
+        "mediaSetId",
+        "mediaItemId",
+        "mediaItemVersionId",
+        "logicalPath",
+        "contentHash",
+        "mimeType",
+        "classification",
+    )
+    if reference.get("referenceKind") != reference_kind:
+        return False
+    if not all(isinstance(reference.get(key), str) and reference.get(key) for key in required_text):
+        return False
+    byte_size = reference.get("byteSize")
+    return isinstance(byte_size, int) and not isinstance(byte_size, bool) and byte_size >= 0
+
+
+def _matches_struct_field(field: ActionParameterV3, value: Mapping[object, object]) -> bool:
+    if field.api_name not in value:
+        return not field.required
+    field_value = value[field.api_name]
+    return _matches_parameter_type(field, field_value) and _constraints_match(field, field_value)
+
+
+def _struct_parameters(parameter: ActionParameterV3) -> tuple[ActionParameterV3, ...] | None:
+    raw_fields = parameter.metadata.get("fields")
+    if not isinstance(raw_fields, Sequence) or isinstance(raw_fields, str | bytes) or not raw_fields:
+        return None
+    result: list[ActionParameterV3] = []
+    for raw in cast(Sequence[object], raw_fields):
+        if not isinstance(raw, Mapping):
+            return None
+        payload = cast(Mapping[str, object], raw)
+        data_type = payload.get("type")
+        api_name = payload.get("apiName")
+        if not isinstance(data_type, str) or not isinstance(api_name, str):
+            return None
+        result.append(_struct_parameter(payload, api_name, data_type))
+    return tuple(result)
+
+
+def _struct_parameter(payload: Mapping[str, object], api_name: str, data_type: str) -> ActionParameterV3:
+    metadata = {
+        key: value for key, value in payload.items() if key not in {"apiName", "type", "required", "constraints"}
+    }
+    constraints = payload.get("constraints")
+    return ActionParameterV3(
+        api_name,
+        data_type,
+        payload.get("required") is True,
+        None,
+        None,
+        cast(Mapping[str, object], constraints) if isinstance(constraints, Mapping) else {},
+        metadata,
+        (),
+    )
+
+
+def _constraints_match(parameter: ActionParameterV3, value: object) -> bool:
+    try:
+        _validate_constraints(parameter.api_name, value, parameter.constraints)
+    except ValidationFailed:
+        return False
+    return True
+
+
+def _has_unique_values(values: Sequence[object]) -> bool:
+    return all(value not in values[:index] for index, value in enumerate(values))
 
 
 def _matches_scalar_type(data_type: str, value: object) -> bool:

@@ -9,6 +9,8 @@ JsonObject = dict[str, object]
 
 
 class ActionAsyncRunRow(TypedDict):
+    """Persisted source-of-truth row for one durable Action execution."""
+
     id: str
     tenant_id: str
     action_type_id: str
@@ -45,6 +47,8 @@ class ActionAsyncRunRow(TypedDict):
 
 
 class ActionRunStepRow(TypedDict):
+    """Persisted logical step within an Action execution."""
+
     id: str
     tenant_id: str
     run_id: str
@@ -62,6 +66,8 @@ class ActionRunStepRow(TypedDict):
 
 
 class ActionStepAttemptRow(TypedDict):
+    """Leased and fenced worker attempt for one Action step."""
+
     id: str
     tenant_id: str
     step_id: str
@@ -83,6 +89,8 @@ class ActionStepAttemptRow(TypedDict):
 
 
 class ActionRunEventRow(TypedDict):
+    """Append-only sequenced lifecycle event for an Action run."""
+
     id: str
     tenant_id: str
     run_id: str
@@ -97,6 +105,8 @@ class ActionRunEventRow(TypedDict):
 
 
 class ActionEffectReceiptRow(TypedDict):
+    """Durable delivery and reconciliation evidence for one side effect."""
+
     id: str
     tenant_id: str
     action_run_id: str
@@ -113,6 +123,9 @@ class ActionEffectReceiptRow(TypedDict):
     lease_expires_at: str | None
     fencing_token: int
     heartbeat_at: str | None
+    dispatch_started_at: str | None
+    cancel_requested_at: str | None
+    cancel_reason: str | None
     request: JsonObject
     response: JsonObject | None
     error: JsonObject | None
@@ -122,10 +135,29 @@ class ActionEffectReceiptRow(TypedDict):
     created_at: str
     updated_at: str
     completed_at: str | None
+    reconciled_at: str | None
+    reconciled_by_user_id: str | None
+    reconciliation: JsonObject | None
+
+
+class ActionEffectOperationRow(TypedDict):
+    """Durable idempotency and operator-decision evidence for one effect mutation."""
+
+    id: str
+    tenant_id: str
+    actor_user_id: str
+    receipt_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    response_json: JsonObject
+    created_at: str
 
 
 @dataclass(frozen=True, slots=True)
 class ActionAsyncRunRecord:
+    """Immutable creation payload for a queued durable Action run."""
+
     run_id: str
     tenant_id: str
     action_type_id: str
@@ -146,6 +178,8 @@ class ActionAsyncRunRecord:
 
 @dataclass(frozen=True, slots=True)
 class ActionRunStepRecord:
+    """Immutable creation payload for a durable Action step."""
+
     step_id: str
     tenant_id: str
     run_id: str
@@ -157,6 +191,8 @@ class ActionRunStepRecord:
 
 @dataclass(frozen=True, slots=True)
 class ActionStepAttemptClaim:
+    """Worker lease request for a fenced Action step attempt."""
+
     tenant_id: str
     run_id: str
     step_key: str
@@ -170,6 +206,8 @@ class ActionStepAttemptClaim:
 
 @dataclass(frozen=True, slots=True)
 class ActionRunEventRecord:
+    """Append request for one durable Action run event."""
+
     event_id: str
     tenant_id: str
     run_id: str
@@ -184,6 +222,8 @@ class ActionRunEventRecord:
 
 @dataclass(frozen=True, slots=True)
 class ActionEffectReceiptRecord:
+    """Creation payload for a governed Action effect receipt."""
+
     receipt_id: str
     tenant_id: str
     action_run_id: str
@@ -200,6 +240,8 @@ class ActionEffectReceiptRecord:
 
 @dataclass(frozen=True, slots=True)
 class ActionEffectClaim:
+    """Worker lease request for effect delivery or reconciliation."""
+
     tenant_id: str
     receipt_id: str
     worker_id: str
@@ -207,3 +249,18 @@ class ActionEffectClaim:
     lease_expires_at: str
     claimed_at: str
     is_reconciliation: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ActionEffectOperationRecord:
+    """Immutable operator mutation evidence used for exact request replay."""
+
+    operation_id: str
+    tenant_id: str
+    actor_user_id: str
+    receipt_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    response_json: JsonObject
+    created_at: str

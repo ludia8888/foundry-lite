@@ -19,7 +19,8 @@ def run_control_loop(stop_event: Event | None = None) -> None:
         dependencies=create_runtime_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
             storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT"),
-        )
+        ),
+        should_initialize_schema=False,
     )
     interval = max(1.0, float(os.getenv("FOUNDRY_LITE_ACTION_CONTROL_INTERVAL_SECONDS", "5")))
     worker_id = os.getenv("FOUNDRY_LITE_WORKER_ID", "action-control")
@@ -29,6 +30,7 @@ def run_control_loop(stop_event: Event | None = None) -> None:
         try:
             foundry._services.action.async_run.recover_all_dispatches(limit=100)
             foundry._services.action.distributed.recover_all_cancellations(worker_id=worker_id, limit=100)
+            foundry._services.action.monitoring_alerts.publish_all(worker_id=worker_id)
         except Exception:  # noqa: BLE001 - a transient tick must not kill durable recovery
             _LOGGER.exception("action.control.tick_failed request_id=%s:tick:%s", worker_id, tick_number)
         requested_stop.wait(interval)

@@ -7,9 +7,14 @@ from types import SimpleNamespace
 import pytest
 from foundry_lite.application.dependencies import RuntimeProfile
 from foundry_lite.infrastructure import local_runtime as runtime
+from foundry_lite.infrastructure.action_runtime_dependencies import action_file_scanner_adapter
 from foundry_lite.infrastructure.adapters import (
     AnthropicLanguageModel,
     KafkaStreamAdapter,
+)
+from foundry_lite.infrastructure.adapters.action_file_scanner import (
+    ClamAvActionFileScanner,
+    LocalSignatureActionFileScanner,
 )
 from foundry_lite.infrastructure.adapters.container_trained_model_inference import (
     ContainerTrainedModelInferenceAdapter,
@@ -79,6 +84,20 @@ def test_runtime_adapter_profiles_reads_stream_override() -> None:
     assert profiles.stream == "kafka"
     assert profiles.language_model == "anthropic"
     assert profiles.dataset_storage == "local"
+    assert profiles.action_file_scanner == "local-signature"
+
+
+def test_action_file_scanner_profile_is_local_for_tests_and_clamav_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert isinstance(action_file_scanner_adapter("local-signature"), LocalSignatureActionFileScanner)
+    monkeypatch.setenv("FOUNDRY_LITE_CLAMAV_HOST", "clamav.internal")
+    scanner = action_file_scanner_adapter("clamav")
+    assert isinstance(scanner, ClamAvActionFileScanner)
+
+    monkeypatch.delenv("FOUNDRY_LITE_CLAMAV_HOST")
+    with pytest.raises(ValueError, match="CLAMAV_HOST"):
+        action_file_scanner_adapter("clamav")
 
 
 def test_kafka_stream_profile_uses_existing_kafka_adapter(

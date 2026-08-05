@@ -19,21 +19,21 @@ export function SubmissionCriteriaPanel({
         <span className="section-label">제출 기준 · 규칙</span>
       </div>
 
-      <div className="space-y-1">
-        <div className="text-[11px] font-medium text-muted-foreground">
-          허용 롤
-        </div>
-        {definition.allowedRoles.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {definition.allowedRoles.map((role) => (
-              <StatusPill key={role} intent="info">
-                {role}
-              </StatusPill>
-            ))}
+      <div className="grid gap-2 sm:grid-cols-3">
+        {[
+          ["조회", definition.viewRoles],
+          ["정의 편집", definition.editRoles],
+          ["실행", definition.applyRoles],
+        ].map(([label, roles]) => (
+          <div key={label as string} className="space-y-1 rounded border bg-muted/20 p-2">
+            <div className="text-[10px] font-medium text-muted-foreground">{label as string} 역할</div>
+            {(roles as string[]).length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {(roles as string[]).map((role) => <StatusPill key={role} intent="info">{role}</StatusPill>)}
+              </div>
+            ) : <div className="text-[10px] text-muted-foreground">기존 전역 정책</div>}
           </div>
-        ) : (
-          <div className="text-[11px] text-muted-foreground">제한 없음</div>
-        )}
+        ))}
       </div>
 
       <div className="space-y-1">

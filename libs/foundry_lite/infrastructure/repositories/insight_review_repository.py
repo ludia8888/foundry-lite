@@ -37,7 +37,11 @@ class SqlAlchemyInsightReviewRepository:
         inserted_id = transaction.execute(_insight_review_insert_or_ignore(transaction, record)).scalar_one_or_none()
         if inserted_id == record.review_id:
             return None
-        return self._review_by_create_key(transaction, record.tenant_id, record.created_idempotency_key)
+        return self.review_by_create_idempotency_key(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            idempotency_key=record.created_idempotency_key,
+        )
 
     def review_by_id(
         self,
@@ -50,6 +54,27 @@ class SqlAlchemyInsightReviewRepository:
             transaction.execute(
                 select(db.insight_reviews).where(
                     and_(db.insight_reviews.c.tenant_id == tenant_id, db.insight_reviews.c.id == review_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(InsightReviewRow, dict(row)) if row else None
+
+    def review_by_create_idempotency_key(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> InsightReviewRow | None:
+        row = (
+            transaction.execute(
+                select(db.insight_reviews).where(
+                    and_(
+                        db.insight_reviews.c.tenant_id == tenant_id,
+                        db.insight_reviews.c.created_idempotency_key == idempotency_key,
+                    )
                 )
             )
             .mappings()
@@ -369,26 +394,6 @@ class SqlAlchemyInsightReviewRepository:
         if updated.rowcount != 1:
             return None
         return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
-
-    def _review_by_create_key(
-        self,
-        transaction: Any,
-        tenant_id: str,
-        idempotency_key: str,
-    ) -> InsightReviewRow:
-        row = (
-            transaction.execute(
-                select(db.insight_reviews).where(
-                    and_(
-                        db.insight_reviews.c.tenant_id == tenant_id,
-                        db.insight_reviews.c.created_idempotency_key == idempotency_key,
-                    )
-                )
-            )
-            .mappings()
-            .one()
-        )
-        return cast(InsightReviewRow, dict(row))
 
 
 def _insight_review_values(record: InsightReviewRecord) -> dict[str, object]:

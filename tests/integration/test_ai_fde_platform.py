@@ -14,7 +14,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 FDE_USER = RequestContext(
     tenant_id="tenant-demo",
@@ -196,6 +196,70 @@ def test_builder_mcp_is_oauth_app_restricted_and_idempotent(foundry: Any, monkey
     assert replay.json()["result"]["aiRunId"] == first.json()["result"]["aiRunId"]
 
 
+def test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, "platform_qa")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    initialized = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+    )
+    session_id = initialized.headers["Mcp-Session-Id"]
+    session_headers = {**headers, "Mcp-Session-Id": session_id}
+    before = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {"discoveryMode": "lazy"}},
+    )
+    call = {
+        "jsonrpc": "2.0",
+        "id": "search-doc-tools",
+        "method": "tools/call",
+        "params": {
+            "name": "search_tools",
+            "arguments": {
+                "mode": "platform_qa",
+                "workspaceRef": "tenant:tenant-demo",
+                "arguments": {"query": "documentation search", "maxResults": 5},
+            },
+        },
+    }
+    searched = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=call)
+    replay = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=call)
+    after = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {"discoveryMode": "lazy"}},
+    )
+    new_session = client.post(
+        f"/mcp/builder/{app_id}",
+        headers={**headers, "X-Request-ID": "req-new-builder-session"},
+        json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {"discoveryMode": "lazy"}},
+    )
+    events = client.get(
+        f"/mcp/builder/{app_id}?discoveryMode=lazy",
+        headers=session_headers,
+    )
+
+    assert {tool["name"] for tool in before.json()["result"]["tools"]} == {"search_tools"}
+    activated = searched.json()["result"]["structuredContent"]["activatedTools"]
+    assert "platform.docs.search" in {tool["toolId"] for tool in activated}
+    assert "ontology.branch.apply_patch" not in {tool["toolId"] for tool in activated}
+    assert searched.json()["result"]["structuredContent"]["toolsListChanged"] is True
+    assert replay.json()["result"]["isReplayed"] is True
+    assert {tool["name"] for tool in after.json()["result"]["tools"]} == {
+        "get_custom_widget_documentation",
+        "get_documentation_summaries",
+        "get_ml_documentation",
+        "search_tools",
+        "search_foundry_documentation",
+        "platform.docs.search",
+    }
+    assert {tool["name"] for tool in new_session.json()["result"]["tools"]} == {"search_tools"}
+    assert "notifications/tools/list_changed" in events.text
+
+
 def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any, monkeypatch: Any) -> None:
     scope = "osdk:connector:fde_platform_qa:execute"
     application = foundry.developer_console.create_osdk_application(
@@ -254,6 +318,230 @@ def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any,
     names = {tool["name"] for tool in listed.json()["result"]["tools"]}
     assert "platform.docs.search" in names
     assert "ontology.branch.apply_patch" not in names
+
+
+def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk_services(
+    foundry: Any, monkeypatch: Any, tmp_path: Any
+) -> None:
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    governance_app, governance_headers = _builder_mcp_application(foundry, "governance")
+    created = _mcp_native_call(
+        client,
+        governance_app,
+        {**governance_headers, "X-FDE-Confirm-Tool": "create_foundry_project"},
+        "create-project",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Official MCP Project", "idempotencyKey": "official-mcp-project"},
+    )
+    project_id = created["project"]["id"]
+    searched = _mcp_native_call(
+        client,
+        governance_app,
+        governance_headers,
+        "search-project",
+        "governance",
+        "tenant:tenant-demo",
+        "search_foundry_projects",
+        {"query": "Official MCP"},
+    )
+    imports = _mcp_native_call(
+        client,
+        governance_app,
+        governance_headers,
+        "project-imports",
+        "governance",
+        f"project:{project_id}",
+        "get_project_imports",
+        {"projectId": project_id},
+    )
+    _seed_official_mcp_objects(foundry, tmp_path)
+    exploration_app, exploration_headers = _builder_mcp_application(
+        foundry,
+        "exploration",
+        additional_resources=(
+            {
+                "resourceType": "object",
+                "resourceApiName": "Order",
+                "scopes": ["osdk:object:Order:read"],
+            },
+        ),
+    )
+    queried = _mcp_native_call(
+        client,
+        exploration_app,
+        exploration_headers,
+        "query-orders",
+        "exploration",
+        "tenant:tenant-demo",
+        "query_ontology_objects",
+        {"objectType": "Order", "limit": 10},
+    )
+    aggregated = _mcp_native_call(
+        client,
+        exploration_app,
+        exploration_headers,
+        "aggregate-orders",
+        "exploration",
+        "tenant:tenant-demo",
+        "aggregate_ontology_objects",
+        {"objectType": "Order", "groupBy": ["status"], "select": [{"function": "count", "name": "orders"}]},
+    )
+    dataset_schema = _mcp_native_call(
+        client,
+        exploration_app,
+        exploration_headers,
+        "dataset-schema",
+        "exploration",
+        "dataset:clean.official_mcp_orders",
+        "get_foundry_dataset_schema",
+        {"datasetRef": "clean.official_mcp_orders"},
+    )
+    dataset_files = _mcp_native_call(
+        client,
+        exploration_app,
+        exploration_headers,
+        "dataset-files",
+        "exploration",
+        "dataset:clean.official_mcp_orders",
+        "list_dataset_files",
+        {"datasetRef": "clean.official_mcp_orders"},
+    )
+    dataset_stats = _mcp_native_call(
+        client,
+        exploration_app,
+        exploration_headers,
+        "dataset-stats",
+        "exploration",
+        "dataset:clean.official_mcp_orders",
+        "get_dataset_stats",
+        {"datasetRef": "clean.official_mcp_orders"},
+    )
+    lineage = _mcp_native_call(
+        client,
+        exploration_app,
+        exploration_headers,
+        "dataset-lineage",
+        "exploration",
+        "tenant:tenant-demo",
+        "get_resource_graph",
+        {"resourceId": dataset_schema["version"]["id"], "maxDepth": 3},
+    )
+    docs_app, docs_headers = _builder_mcp_application(foundry, "platform_qa")
+    summaries = _mcp_native_call(
+        client,
+        docs_app,
+        docs_headers,
+        "docs-summaries",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "get_documentation_summaries",
+        {},
+    )
+    page = _mcp_native_call(
+        client,
+        docs_app,
+        docs_headers,
+        "docs-page",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "load_foundry_documentation_page",
+        {"documentId": "action-types"},
+    )
+    sdk_apis = _mcp_native_call(
+        client,
+        docs_app,
+        docs_headers,
+        "platform-sdk-list",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "list_platform_sdk_apis",
+        {"product": "dataset", "maxResults": 10},
+    )
+    sdk_reference = _mcp_native_call(
+        client,
+        docs_app,
+        docs_headers,
+        "platform-sdk-reference",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "get_platform_sdk_api_reference",
+        {"apiId": "datasets.inspect"},
+    )
+    transform_docs = _mcp_native_call(
+        client,
+        docs_app,
+        docs_headers,
+        "transform-docs",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "get_python_transforms_documentation",
+        {"topic": "transactions"},
+    )
+    osdk_app, osdk_headers = _builder_mcp_application(foundry, "osdk_react")
+    definition = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "view-osdk",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "view_osdk_definition",
+        {},
+    )
+    osdk_context = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "osdk-context",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "get_ontology_sdk_context",
+        {"topic": "ObjectSet"},
+    )
+    generated = _mcp_native_call(
+        client,
+        osdk_app,
+        {**osdk_headers, "X-FDE-Confirm-Tool": "generate_new_ontology_sdk_version"},
+        "generate-osdk",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "generate_new_ontology_sdk_version",
+        {"language": "typescript", "idempotencyKey": "official-mcp-sdk-version"},
+    )
+    install = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "install-osdk",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "install_sdk_package",
+        {},
+    )
+
+    assert project_id in {item["id"] for item in searched["items"]}
+    assert imports == {"projectId": project_id, "items": [], "count": 0, "nextCursor": None}
+    assert [item["objectId"] for item in queried["items"]] == ["MCP-ORDER-1", "MCP-ORDER-2"]
+    assert aggregated["groups"][0]["metrics"]["orders"] == 2
+    assert dataset_schema["schema"]["columns"][0]["name"] == "order_id"
+    assert dataset_files["count"] == 1
+    assert dataset_files["isManifestBounded"] is True
+    assert dataset_stats["rowCount"] == 2
+    assert dataset_stats["fileCount"] == 1
+    assert lineage["rootResourceId"] == dataset_schema["version"]["id"]
+    assert lineage["maxDepth"] == 3
+    assert summaries["count"] >= 6
+    assert "Foundry-lite Action Types v3 parity matrix" in page["content"]
+    assert "datasets.inspect" in {item["id"] for item in sdk_apis["items"]}
+    assert sdk_reference["api"]["route"].endswith("/inspect")
+    assert transform_docs["isFoundryLiteDocumentation"] is True
+    assert definition["definition"]["application"]["id"] == osdk_app
+    assert osdk_context["contextType"] == "ontology_sdk"
+    assert generated["sdkVersion"]["language"] == "typescript"
+    assert install["sdkVersions"][0]["language"] == "typescript"
 
 
 def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(foundry: Any, monkeypatch: Any) -> None:
@@ -331,6 +619,262 @@ def test_builder_mcp_requires_out_of_band_confirmation_and_rejects_untrusted_ori
     assert len(foundry.ontology.branch_diff(str(branch["id"]), ctx=FDE_USER)["resources"]) == 1
 
 
+def test_official_palantir_ontology_tools_are_branch_only_and_confirmation_gated(
+    foundry: Any, monkeypatch: Any, tmp_path: Any
+) -> None:
+    csv_path = tmp_path / "official-mcp-restaurants.csv"
+    csv_path.write_text("id,name\nR-1,Seoul Table\n", encoding="utf-8")
+    foundry.datasets.ensure("clean.restaurants", primary_key=["id"], ctx=FDE_USER)
+    foundry.datasets.upload_csv("clean.restaurants", str(csv_path), ctx=FDE_USER)
+    foundry.ontology.apply_text("objectTypes: []\nactionTypes: []\nlinkTypes: []\n", ctx=FDE_USER)
+    branch = foundry.ontology.create_branch(
+        name="official-ontology-mcp",
+        idempotency_key="official-ontology-mcp-branch",
+        ctx=FDE_USER,
+    )
+    branch_id = str(branch["id"])
+    app_id, headers = _builder_mcp_application(foundry, "ontology_editing")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    definition = {
+        "apiName": "Restaurant",
+        "primaryKey": "id",
+        "backing": {"dataset": "clean.restaurants"},
+        "properties": [{"apiName": "id", "column": "id", "type": "string", "nullable": False}],
+    }
+    denied = _raw_mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "denied-create",
+        branch_id,
+        "create_or_update_foundry_object_type",
+        {"definition": definition, "changeSummary": "Add Restaurant"},
+    )
+    created = _mcp_native_call(
+        client,
+        app_id,
+        {**headers, "X-FDE-Confirm-Tool": "create_or_update_foundry_object_type"},
+        "approved-create",
+        "ontology_editing",
+        f"ontology-branch:{branch_id}",
+        "create_or_update_foundry_object_type",
+        {"definition": definition, "changeSummary": "Add Restaurant"},
+    )
+    viewed = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "view-object",
+        "ontology_editing",
+        f"ontology-branch:{branch_id}",
+        "view_foundry_object_type",
+        {"apiName": "Restaurant"},
+    )
+    searched = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "search-ontology",
+        "ontology_editing",
+        f"ontology-branch:{branch_id}",
+        "search_foundry_ontology",
+        {"query": "Restaurant"},
+    )
+    identity = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "ontology-rid",
+        "ontology_editing",
+        f"ontology-branch:{branch_id}",
+        "get_foundry_ontology_rid",
+        {},
+    )
+
+    assert denied["error"]["data"]["type"] == "PERMISSION_DENIED"
+    assert created["changeSummary"] == "Add Restaurant"
+    assert viewed["definition"]["apiName"] == "Restaurant"
+    assert searched["items"][0]["apiName"] == "Restaurant"
+    assert identity["branchId"] == branch_id
+    assert not _active_object_type_exists(foundry, "Restaurant")
+
+    deleted = _mcp_native_call(
+        client,
+        app_id,
+        {**headers, "X-FDE-Confirm-Tool": "delete_foundry_object_type"},
+        "delete-object",
+        "ontology_editing",
+        f"ontology-branch:{branch_id}",
+        "delete_foundry_object_type",
+        {"apiName": "Restaurant", "changeSummary": "Remove Restaurant"},
+    )
+    assert deleted["changeSummary"] == "Remove Restaurant"
+    assert foundry.ontology.branch_diff(branch_id, ctx=FDE_USER)["resources"] == []
+
+
+def test_official_palantir_data_connection_tools_use_native_governed_sources(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, "data_connection")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    rest_source = _mcp_native_call(
+        client,
+        app_id,
+        {**headers, "X-FDE-Confirm-Tool": "create_foundry_rest_api_data_source"},
+        "create-rest-source",
+        "data_connection",
+        "tenant:tenant-demo",
+        "create_foundry_rest_api_data_source",
+        {
+            "sourceName": "travel_api",
+            "displayName": "Travel API",
+            "baseUrl": "https://travel.example.test",
+            "auth": {"mode": "none"},
+            "resourceName": "restaurants",
+            "resourcePath": "/restaurants",
+            "datasetRef": "raw.travel_restaurants",
+            "primaryKey": ["id"],
+            "idempotencyKey": "official-rest-source",
+        },
+    )
+    policy = _mcp_native_call(
+        client,
+        app_id,
+        {**headers, "X-FDE-Confirm-Tool": "get_or_create_network_egress_policy"},
+        "create-egress-policy",
+        "data_connection",
+        "tenant:tenant-demo",
+        "get_or_create_network_egress_policy",
+        {
+            "policyName": "travel_api_egress",
+            "displayName": "Travel API egress",
+            "mode": "direct",
+            "allowedHosts": ["travel.example.test:443"],
+            "idempotencyKey": "official-egress-policy",
+        },
+    )
+    webhook = _mcp_native_call(
+        client,
+        app_id,
+        {**headers, "X-FDE-Confirm-Tool": "create_foundry_rest_api_data_source_webhook"},
+        "create-webhook",
+        "data_connection",
+        "tenant:tenant-demo",
+        "create_foundry_rest_api_data_source_webhook",
+        {
+            "sourceName": "travel_booking_events",
+            "displayName": "Travel booking events",
+            "datasetRef": "raw.travel_booking_events",
+            "connectorName": "travel_api",
+            "resourceName": "booking_events",
+            "signingSecretRef": "TRAVEL_BOOKING_WEBHOOK_SECRET",
+            "inboundUrl": "https://foundry-lite.example.test/hooks/travel",
+            "idempotencyKey": "official-webhook-source",
+        },
+    )
+    viewed = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "view-webhook",
+        "data_connection",
+        "source:travel_booking_events",
+        "view_foundry_rest_api_data_source_webhook",
+        {"sourceName": "travel_booking_events"},
+    )
+
+    assert rest_source["connection"]["connectorName"] == "travel_api"
+    assert rest_source["resource"]["datasetRef"] == "raw.travel_restaurants"
+    assert policy["allowedHosts"]["hosts"] == ["travel.example.test:443"]
+    assert webhook["source"]["kind"] == "webhook_listener"
+    assert viewed["kind"] == "webhook_listener"
+    assert viewed["configFingerprint"] == webhook["source"]["configFingerprint"]
+
+
+def _mcp_native_call(
+    client: TestClient,
+    app_id: str,
+    headers: dict[str, str],
+    rpc_id: str,
+    mode: str,
+    workspace_ref: str,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> dict[str, Any]:
+    response = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": {"mode": mode, "workspaceRef": workspace_ref, "arguments": arguments},
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "error" not in payload, payload
+    return dict(payload["result"]["structuredContent"])
+
+
+def _raw_mcp_native_call(
+    client: TestClient,
+    app_id: str,
+    headers: dict[str, str],
+    rpc_id: str,
+    branch_id: str,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> dict[str, Any]:
+    response = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": {
+                    "mode": "ontology_editing",
+                    "workspaceRef": f"ontology-branch:{branch_id}",
+                    "arguments": arguments,
+                },
+            },
+        },
+    )
+    assert response.status_code == 200
+    return dict(response.json())
+
+
+def _seed_official_mcp_objects(foundry: Any, tmp_path: Any) -> None:
+    csv_path = tmp_path / "official-mcp-orders.csv"
+    csv_path.write_text("order_id,status\nMCP-ORDER-1,PENDING\nMCP-ORDER-2,PENDING\n", encoding="utf-8")
+    foundry.datasets.ensure("clean.official_mcp_orders", primary_key=["order_id"], ctx=FDE_USER)
+    foundry.datasets.upload_csv("clean.official_mcp_orders", str(csv_path), ctx=FDE_USER)
+    foundry.ontology.apply_text(
+        """
+objectTypes:
+  - apiName: Order
+    primaryKey: orderId
+    backing:
+      dataset: clean.official_mcp_orders
+      mode: snapshot
+      primaryKeyColumns: [order_id]
+    properties:
+      - {apiName: orderId, column: order_id, type: string, nullable: false}
+      - {apiName: status, column: status, type: string}
+actionTypes: []
+linkTypes: []
+""",
+        ctx=FDE_USER,
+    )
+    foundry.objects.reindex("Order", ctx=FDE_USER)
+
+
 def _tool(name: str, arguments: dict[str, object]) -> ModelResponse:
     return ModelResponse(
         provider="fake",
@@ -355,6 +899,14 @@ def _tool_rows(foundry: Any, ai_run_id: str) -> list[dict[str, object]]:
         return [dict(row) for row in rows]
 
 
+def _active_object_type_exists(foundry: Any, api_name: str) -> bool:
+    with foundry.engine.begin() as transaction:
+        count = transaction.execute(
+            select(func.count()).select_from(db.object_types).where(db.object_types.c.api_name == api_name)
+        ).scalar_one()
+    return int(count) > 0
+
+
 def _api_headers() -> dict[str, str]:
     return {
         "X-Tenant-ID": "tenant-demo",
@@ -364,22 +916,31 @@ def _api_headers() -> dict[str, str]:
     }
 
 
-def _builder_mcp_application(foundry: Any, mode: str) -> tuple[str, dict[str, str]]:
+def _builder_mcp_application(
+    foundry: Any,
+    mode: str,
+    additional_resources: tuple[dict[str, object], ...] = (),
+) -> tuple[str, dict[str, str]]:
     scope = f"osdk:connector:fde_{mode}:execute"
+    extra_scopes = [str(item) for resource in additional_resources for item in resource.get("scopes", [])]
+    suffix = mode.replace("_", "-")
     application = foundry.developer_console.create_osdk_application(
-        app_api_name="FdeMcpWriter",
-        display_name="FDE MCP Writer",
-        client_id="client-fde-mcp-writer",
-        resources=[{"resourceType": "connector", "resourceApiName": f"fde_{mode}", "scopes": [scope]}],
-        idempotency_key="fde-mcp-writer-app",
+        app_api_name=f"FdeMcp{mode.title().replace('_', '')}",
+        display_name=f"FDE MCP {mode}",
+        client_id=f"client-fde-mcp-{suffix}",
+        resources=[
+            {"resourceType": "connector", "resourceApiName": f"fde_{mode}", "scopes": [scope]},
+            *additional_resources,
+        ],
+        idempotency_key=f"fde-mcp-{suffix}-app",
         ctx=FDE_USER,
     )
     app_id = str(application["application"]["id"])
     return app_id, {
         **_api_headers(),
         "X-Foundry-Lite-App-ID": app_id,
-        "X-Foundry-Lite-Client-ID": "client-fde-mcp-writer",
-        "X-Foundry-Lite-Scopes": scope,
+        "X-Foundry-Lite-Client-ID": f"client-fde-mcp-{suffix}",
+        "X-Foundry-Lite-Scopes": " ".join([scope, *extra_scopes]),
     }
 
 
