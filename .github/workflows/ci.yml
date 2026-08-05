@@ -163,7 +163,15 @@ jobs:
     # Coverage runs the full backend suite serially so layer coverage remains
     # trustworthy. Keep the timeout above observed PR runtime instead of
     # sharding this lane and weakening the per-layer signal.
-    timeout-minutes: 45
+    #
+    # 60 (was 45): the last completed run took 39m31s — 88% of a 45-minute cap — and the very
+    # next push timed out at exactly 45m18s. Runner speed on this repo swings by roughly a
+    # third (the PR lane reached 80% and then 61% of the same work in the same 205s on the same
+    # commit), so a 14% slow day was always going to breach 45. A timeout that fires on runner
+    # variance destroys the measurement it exists to protect: three consecutive main pushes
+    # produced no coverage number at all. Sharding would buy time but the comment above explains
+    # why it cannot — layer coverage is only trustworthy from a single process.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v6
