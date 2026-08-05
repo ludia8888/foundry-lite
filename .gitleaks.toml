@@ -12,7 +12,25 @@
 [extend]
 useDefault = true
 
-[allowlist]
+# A `*SecretRef` field holds a pointer into the secret vault, never a credential. That
+# separation is the point of the virtual-table connection design: the runtime resolves the
+# reference through the vault, and a test asserts the resolved URL never reaches an artifact ref
+# or a manifest. generic-api-key fires on the field name plus the entropy of the path itself.
+#
+# Scope is the value shape, not the file, so the surrounding test keeps being scanned. The
+# character class admits only pointer-shaped values -- no `:`, `@`, or whitespace, so a URL or a
+# `user:password` pair assigned to one of these fields is not allowlisted here. Note that this
+# is containment, not detection: gitleaks' default rules do not flag a bare connection string in
+# this position either way (verified against a `useDefault`-only config), so the narrow pattern
+# limits what this entry can hide rather than adding a check.
+[[allowlists]]
+description = "Vault pointers assigned to *SecretRef fields"
+regexTarget = "match"
+regexes = ['''[A-Za-z]*[Ss]ecretRef"\s*:\s*"[A-Za-z0-9][A-Za-z0-9._/-]*"''']
+
+# Plural `[[allowlists]]` throughout: gitleaks 8.30 refuses to load a config that mixes the
+# deprecated singular `[allowlist]` table with the plural form.
+[[allowlists]]
 description = "Foundry-lite documented false positives"
 paths = [
   # The development plan documents the Idempotency-Key HTTP header with an

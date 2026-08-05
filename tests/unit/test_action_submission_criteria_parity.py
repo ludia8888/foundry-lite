@@ -234,6 +234,22 @@ def test_an_invalid_regex_fails_loudly_instead_of_never_matching() -> None:
         _validate(criterion)
 
 
+def test_every_accepted_operator_is_dispatchable() -> None:
+    """The allowlist and the dispatch table are two lists that must not drift apart.
+
+    An operator in ``COMPARISON_OPERATORS`` but not in the table validates at authoring time and
+    then raises "unsupported" at evaluation -- a rule that looks accepted until the action runs.
+    ``exists`` is deliberately absent from the table: it is answered before a right-hand value is
+    resolved, because "is this property set" has nothing to compare against.
+    """
+    from foundry_lite.domain.action_runtime.action_conditions import (
+        _COMPARISONS,
+        COMPARISON_OPERATORS,
+    )
+
+    assert COMPARISON_OPERATORS == frozenset(_COMPARISONS) | {"exists"}
+
+
 # --- legacy dialect stays readable ---------------------------------------------------
 
 
