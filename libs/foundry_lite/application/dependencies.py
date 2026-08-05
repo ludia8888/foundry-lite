@@ -42,6 +42,7 @@ from foundry_lite.application.dependency_media import (
     MediaRepository,
     MediaStorageAdapter,
 )
+from foundry_lite.application.dependency_source import SourceDependencies
 from foundry_lite.application.ports import (
     AiEvalRepository,
     AiRunRepository,
@@ -94,6 +95,7 @@ from foundry_lite.application.ports.source_stream_adapter import SourceStreamAda
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
+from foundry_lite.application.ports.virtual_table import VirtualTableReader, VirtualTableRepository
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.runtime_profile import RuntimeProfile
@@ -153,16 +155,6 @@ class RuntimeDependencies:
     stream_adapter: StreamAdapter
     workflow_adapter: WorkflowAdapter
     backup_artifact_store: BackupArtifactStore
-
-
-@dataclass(frozen=True)
-class SourceDependencies:
-    connector_adapter: ConnectorAdapter
-    connector_registry_repository: ConnectorRegistryRepository
-    source_registry_repository: SourceRegistryRepository
-    source_management_repository: SourceManagementRepository
-    source_database_adapter: SourceDatabaseAdapter
-    source_stream_adapter: SourceStreamAdapter
 
 
 @dataclass(frozen=True, init=False)
@@ -484,6 +476,14 @@ class CoreDependencies(ActionDependencyAccessors):
     @property
     def source_database_adapter(self) -> SourceDatabaseAdapter:
         return self.source.source_database_adapter
+
+    @property
+    def virtual_table_repository(self) -> VirtualTableRepository:
+        return self.source.virtual_table_repository
+
+    @property
+    def virtual_table_reader(self) -> VirtualTableReader:
+        return self.source.virtual_table_reader
 
 
 _CORE_DEPENDENCY_BUNDLE_TYPES: dict[str, BundleFactory] = {

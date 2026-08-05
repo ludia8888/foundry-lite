@@ -303,7 +303,7 @@ _PIPELINE_NODE_DESCRIPTORS = (
         (_output("dataset", DATASET),),
         (_required_string("outputDatasetRef"),),
     ),
-    _planned_descriptor(
+    _graph_v2_descriptor(
         "source.virtual_table",
         PipelineNodeKind.SOURCE,
         (),

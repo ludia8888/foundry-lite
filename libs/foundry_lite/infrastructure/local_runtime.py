@@ -95,6 +95,7 @@ from foundry_lite.infrastructure.adapters import (
     PdfLayoutProcessorAdapter,
     PdfOcrProcessorAdapter,
     PdfTextProcessorAdapter,
+    PostgresVirtualTableReader,
     RepositoryModelMediaResolver,
     RestPullConnectorAdapter,
     S3DatasetStorageAdapter,
@@ -175,6 +176,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemySourceManagementRepository,
     SqlAlchemySourceRegistryRepository,
     SqlAlchemyTransformRepository,
+    SqlAlchemyVirtualTableRepository,
 )
 from foundry_lite.infrastructure.secrets import local_secret_vault_provider, secret_provider_from_env
 from foundry_lite.infrastructure.trained_model_runtime_adapters import (
@@ -545,6 +547,8 @@ def _create_core_dependencies(
             source_management_repository=SqlAlchemySourceManagementRepository(engine),
             source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
             source_stream_adapter=KafkaSourceStreamAdapter(),
+            virtual_table_repository=SqlAlchemyVirtualTableRepository(engine),
+            virtual_table_reader=PostgresVirtualTableReader(),
         ),
     )
 

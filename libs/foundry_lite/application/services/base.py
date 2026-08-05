@@ -18,6 +18,8 @@ from foundry_lite.application.pipeline_runtime_dependencies import (
     MediaProcessorRegistry,
     PipelineExecutionRepository,
     SemanticRowCacheRepository,
+    VirtualTableReader,
+    VirtualTableRepository,
 )
 from foundry_lite.application.ports import (
     ActionRepository,
@@ -264,6 +266,8 @@ class CoreService:
     trained_model_inference_port: TrainedModelInferencePort
     model_registry_repository: ModelRegistryRepository
     semantic_row_cache_repository: SemanticRowCacheRepository
+    virtual_table_repository: VirtualTableRepository
+    virtual_table_reader: VirtualTableReader
     context_provider: ContextProvider
     citation_source_verifier: CitationSourceVerifier
     prompt_artifact_store: object

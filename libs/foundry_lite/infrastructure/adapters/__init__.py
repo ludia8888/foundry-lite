@@ -55,6 +55,7 @@ from foundry_lite.infrastructure.adapters.pipeline_dag_orchestrator import (
     TemporalPipelineDagConfig,
     TemporalPipelineDagOrchestrator,
 )
+from foundry_lite.infrastructure.adapters.postgres_virtual_table import PostgresVirtualTableReader
 from foundry_lite.infrastructure.adapters.provider_compatible_language_model import ProviderCompatibleLanguageModel
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.s3_dataset_storage import (
@@ -89,6 +90,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 )
 
 __all__ = [
+    "PostgresVirtualTableReader",
     "DuckDBComputeAdapter",
     "ContainerCodeExecutionAdapter",
     "DebeziumPostgresSourceConfig",

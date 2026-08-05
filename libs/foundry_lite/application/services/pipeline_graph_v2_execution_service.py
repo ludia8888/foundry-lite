@@ -45,6 +45,9 @@ class PipelineGraphV2ExecutionService(CoreService):
         "governed_semantic_model_port",
         "trained_model_inference_port",
         "semantic_row_cache_repository",
+        "virtual_table_repository",
+        "virtual_table_reader",
+        "secret_vault",
     )
     required_collaborators = (
         "content_unit_chunking_service",
@@ -108,6 +111,9 @@ class PipelineGraphV2ExecutionService(CoreService):
             governed_semantic_model_port=self.governed_semantic_model_port,
             trained_model_inference_port=self.trained_model_inference_port,
             semantic_row_cache_repository=self.semantic_row_cache_repository,
+            virtual_table_repository=self.virtual_table_repository,
+            virtual_table_reader=self.virtual_table_reader,
+            secret_vault=self.secret_vault,
             content_unit_chunking_service=self.content_unit_chunking_service,
             dataset_ingest_service=self.dataset_ingest_service,
             dataset_registry_service=self.dataset_registry_service,
