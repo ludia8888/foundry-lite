@@ -170,6 +170,31 @@ def test_pr_plan_ranks_linked_tests_by_how_many_changed_sources_reach_them(monke
     assert plan.selected_tests == ("tests/unit/test_reservation_engine_reservation_pricing.py",)
 
 
+def test_quality_control_change_requests_the_node_runtime() -> None:
+    """A quality-control change must install Node even with no frontend file touched.
+
+    Changing `scripts/quality/**` pulls `tests/unit/test_quality_ci_workflows.py` into the
+    selection, and that test shells out to `node scripts/quality/run_ast_grep.cjs`. Before
+    this signal existed the job skipped `pnpm install` for backend-only PRs and the test died
+    on empty stdout instead of on anything it asserts.
+    """
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_should_install_node")
+
+    backend_only = gate.build_plan(("libs/foundry_lite/domain/action_runtime/action_presentation.py",))
+    quality_only = gate.build_plan(("scripts/quality/pr_fast_gate.py",))
+    frontend_only = gate.build_plan(("apps/foundry/src/App.tsx",))
+
+    assert backend_only.should_install_node is False
+    assert quality_only.should_install_node is True
+    assert frontend_only.should_install_node is True
+
+    # The workflow must gate its Node setup on this signal, not on frontend alone.
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    pr_job = workflow.split("quality_pr:", maxsplit=1)[1].split("quality_static:", maxsplit=1)[0]
+    assert "steps.scope.outputs.should_install_node == 'true'" in pr_job
+    assert "has_frontend == 'true' || steps.scope.outputs.has_sdk_contract" not in pr_job
+
+
 def test_pr_plan_keeps_live_infrastructure_tests_out_of_the_budgeted_lane() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_live_infra")
     live_infra_tests = (

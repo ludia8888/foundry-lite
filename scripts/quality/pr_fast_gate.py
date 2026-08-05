@@ -75,6 +75,7 @@ class PullRequestPlan:
     has_frontend: bool
     has_sdk_contract: bool
     is_docs_only: bool
+    should_install_node: bool = False
     dropped_linked_tests: tuple[str, ...] = ()
 
 
@@ -236,6 +237,22 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
         has_frontend=any(_is_frontend_path(path) for path in paths),
         has_sdk_contract=any(_needs_sdk_contract(path) for path in paths),
         is_docs_only=bool(paths) and all(_is_docs_path(path) for path in paths),
+        should_install_node=_should_install_node_runtime(paths),
+    )
+
+
+def _should_install_node_runtime(paths: tuple[str, ...]) -> bool:
+    """Whether this run executes anything that needs installed Node dependencies.
+
+    Frontend and SDK-contract checks obviously do. So does a quality-control change: it pulls
+    `tests/unit/test_quality_ci_workflows.py` into the selection, and that file shells out to
+    `node scripts/quality/run_ast_grep.cjs`. Without this the job skips `pnpm install` and the
+    test fails on empty stdout rather than on anything it is meant to assert.
+    """
+    return (
+        any(_is_frontend_path(path) for path in paths)
+        or any(_needs_sdk_contract(path) for path in paths)
+        or _quality_control_changed(paths)
     )
 
 
@@ -293,6 +310,7 @@ def _github_output(plan: PullRequestPlan, path: Path) -> None:
         "has_frontend": str(plan.has_frontend).lower(),
         "has_sdk_contract": str(plan.has_sdk_contract).lower(),
         "is_docs_only": str(plan.is_docs_only).lower(),
+        "should_install_node": str(plan.should_install_node).lower(),
     }
     with path.open("a", encoding="utf-8") as handle:
         for key, value in values.items():
