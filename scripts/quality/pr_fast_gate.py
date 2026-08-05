@@ -27,7 +27,7 @@ if _GIT_EXECUTABLE is None:
 GIT: str = _GIT_EXECUTABLE
 REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_fast_gate.json"
 SECURITY_REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_diff_security.json"
-DEFAULT_BUDGET_SECONDS = 210.0
+DEFAULT_BUDGET_SECONDS = 420.0
 MAX_SELECTED_TEST_FILES = 32
 GENERIC_MODULE_STEMS = {
     "__init__",

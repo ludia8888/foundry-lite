@@ -15,7 +15,7 @@ usage() {
 Usage: bash scripts/ci_gate.sh [pr|local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]
 
 Gate modes keep local feedback fast while preserving full release evidence:
-  pr       five-minute PR lane: diff security, focused invariants, directly
+  pr       budgeted PR lane: diff security, focused invariants, directly
            related tests, and affected frontend/SDK type contracts in parallel
   local    default developer gate: full static invariants plus Tach impact tests
   all      full serial rehearsal of the parallel CI lanes

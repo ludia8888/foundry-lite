@@ -48,7 +48,7 @@ pnpm web:static
 pnpm ci:gate
 ```
 
-GitHub의 5분 PR 병합 게이트를 로컬에서 재현하려면 `pnpm ci:gate:pr`을 사용합니다.
+GitHub의 예산제 PR 병합 게이트를 로컬에서 재현하려면 `pnpm ci:gate:pr`을 사용합니다.
 전체 coverage/runtime/browser/CodeQL 증거는 main, nightly, release lane에서 이어집니다.
 
 로컬에서 release lane을 더 넓게 확인하려면 아래를 사용합니다.
@@ -281,7 +281,7 @@ pnpm worker:pipeline-control
 | `pnpm dev` | FastAPI app을 로컬에서 실행합니다. |
 | `pnpm web:static` | static web shell을 4173 포트에서 서빙합니다. |
 | `pnpm ci:gate` | 빠른 local static plus impact gate입니다. |
-| `pnpm ci:gate:pr` | diff security, 직접 연관 테스트, focused static/type 검사를 5분 budget으로 실행합니다. |
+| `pnpm ci:gate:pr` | diff security, 직접 연관 테스트, focused static/type 검사를 420초 budget으로 실행합니다. |
 | `pnpm ci:gate:all` | 로컬에서 release lane을 직렬로 넓게 확인합니다. |
 | `pnpm --silent quality:media-active-covered` | Media/Content Plane active-covered proof를 확인합니다. |
 | `pnpm --silent quality:operations-recovery` | Operations/Recovery backend/API/SDK slice를 확인합니다. |

@@ -161,7 +161,7 @@
 
 | #    | 조항                                      | 게이트                          | 정량                    | 상태 |
 | ---- | ----------------------------------------- | ------------------------------- | ----------------------- | ---- |
-| 55.1 | PR required check wall time              | `quality-pr-fast`               | workflow timeout 5분    | ✅   |
+| 55.1 | PR required check wall time              | `quality-pr-fast`               | workflow timeout 9분    | ✅   |
 | 56   | skip/flaky/xfail 우회 금지                | `check_no_test_bypasses`        | 0                       | ✅   |
 | 57   | private test reference 부채               | `check_private_test_references` | 0                       | ✅   |
 
@@ -2478,7 +2478,7 @@ recovery dashboard, alert timeline, workflow cancel/reconcile executor는 후속
 - 약화의 부작용을 보완하는 다른 게이트가 있는지 명시.
 - 예: `check_service_method_conflicts` 삭제 시 — 명시적 collaborator 호출이 도입돼 글로벌 메서드 이름 충돌이 더 이상 문제 아님. `check_service_call_graph`가 보완.
 
-### 5.1 5분 PR 병합 경로와 전체 증거 분리
+### 5.1 예산제 PR 병합 경로와 전체 증거 분리
 
 2026-08-04 이전에는 모든 PR이 전체 branch coverage, 전체 runtime proof, 전체 Playwright,
 fresh CodeQL DB를 기다려 required check가 약 40분까지 늘어났다. 이 검사는 강하지만 작은 문서나
@@ -2490,14 +2490,21 @@ diff secret/위험 코드 검사, Ruff·mypy·pyright·Bandit·아키텍처/스�
 request contract를 병렬 실행한다. 새 Python source가 직접 또는 변경된 테스트와 연결되지 않으면
 fail-closed하고, 변경된 fast test는 모두 실행하되 source-name 자동 연관 테스트는 전체 선택이 32개 파일을
 넘지 않게 제한한다. `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
-남긴다. GitHub job 자체가 5분 timeout이고 내부 검사 budget은 210초다.
+남긴다. GitHub job 자체가 9분 timeout이고 내부 검사 budget은 420초다.
+
+budget은 2026-08-05에 210초에서 420초로 올렸다. PR이 작다는 전제 위에 세운 값이었는데,
+385파일 변경에서 직접 연관 테스트만 4-vCPU 러너 기준 약 336초가 필요했고 같은 커밋을 두 번
+돌렸을 때 러너 편차가 그 값을 3분의 1만큼 움직였다. budget을 증거를 줄이는 손잡이로 쓰지
+않으려면 예산 쪽에 여유를 두는 편이 맞다. 초과가 나면 테스트를 빼기 전에 lane 분류
+(`_is_fast_test_path`)가 맞는지부터 본다 — live-infra 테스트가 fast lane에 새는 것이
+실제로 발견된 첫 원인이었다.
 
 이것은 전체 증거의 삭제가 아니라 실행 시점의 변경이다. 전체 coverage/runtime/E2E와
 gitleaks/Semgrep/pip-audit/full CodeQL은 main push에서 실행되고, flaky x7과 full runtime rehearsal은
 nightly, live/performance/release evidence는 tag 또는 수동 release gate에서 계속 강제된다. PR의
 CodeQL required-check 이름은 호환을 위해 유지하지만 실제 PR 단계는 고신뢰 diff security guard이며,
 로그가 full CodeQL이 main에서 이어진다는 경계를 명시한다. 부작용은 "merge 전에 전체 suite를
-완주하지 않는다"는 점이고, 보완은 직접 테스트 fail-closed, 5분 gate artifact, main full gate,
+완주하지 않는다"는 점이고, 보완은 직접 테스트 fail-closed, 예산제 gate artifact, main full gate,
 nightly/release gate의 네 겹 계약이다.
 
 ## 6. Operational Evidence And Diagnostics
@@ -2511,9 +2518,9 @@ README를 다시 만들지 않는다. 비개발자식으로 말하면,
 | 실행 위치       | 명령/잡             | 역할                                                                                         |
 | --------------- | ------------------- | -------------------------------------------------------------------------------------------- |
 | 로컬             | `pnpm ci:gate`      | 정적 불변식과 Tach impact-scoped pytest를 실행해 빠른 피드백을 준다.                         |
-| 로컬             | `pnpm ci:gate:pr`   | origin/main 대비 GitHub 5분 PR gate를 재현한다.                                              |
+| 로컬             | `pnpm ci:gate:pr`   | origin/main 대비 GitHub 예산제 PR gate를 재현한다.                                           |
 | 로컬             | `pnpm ci:gate:all`  | 전체 release evidence를 직렬로 리허설한다.                                                   |
-| GitHub PR        | `quality-pr-fast`   | diff security, focused static/test/type contracts를 5분 안에 required evidence로 만든다.     |
+| GitHub PR        | `quality-pr-fast`   | diff security, focused static/test/type contracts를 420초 예산 안에 required evidence로 만든다. |
 | GitHub main push | `quality-static`    | 전체 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate를 실행한다.                     |
 | GitHub main push | `quality-coverage`  | 전체 pytest branch coverage, tier/public API coverage를 확인한다.                            |
 | GitHub main push | `quality-runtime`   | demo, OpenLineage, audit/outbox, data correctness, trace, diagnostics를 확인한다.            |
