@@ -141,6 +141,11 @@ class PipelinePlanCompiler:
             raise PipelineRuntimeUnavailable("pipeline runtime capability is not enabled", details=details)
 
 
+_CONTRACT_BEARING_SOURCES = frozenset(  # sources that must carry a contract in an executable plan
+    {"source.dataset", "source.geospatial", "source.media_set", "source.stream", "source.virtual_table"}
+)
+
+
 def compile_pipeline_plan(
     graph: Mapping[str, object],
     *,
@@ -334,12 +339,7 @@ def _selected_source_contracts(
     by_node = source_contracts_by_node(contracts)
     selected: list[PipelineSourceContract] = []
     for node in nodes:
-        if node.descriptor_id not in {
-            "source.dataset",
-            "source.media_set",
-            "source.stream",
-            "source.geospatial",
-        }:
+        if node.descriptor_id not in _CONTRACT_BEARING_SOURCES:
             continue
         contract = by_node.get(node.node_id)
         if contract is None and require_source_contracts:

@@ -26,6 +26,17 @@ from foundry_lite.application.services.pipeline_v2_runtime_trained_model import 
 from foundry_lite.domain.errors import InvariantViolation
 
 
+class PipelineV2VirtualTableSourceRuntime(Protocol):
+    """Live external-table source boundary. Separate from the structured runtime because it
+    reads a system we do not version — see PipelineSourceContract.is_live_source."""
+
+    def source_virtual_table(
+        self,
+        node: PipelineV2RuntimeNode,
+        contract: PipelineV2SourceContract,
+    ) -> PipelineV2RuntimeArtifact: ...
+
+
 class PipelineV2StructuredSourceRuntime(Protocol):
     """Exact committed Dataset, stream-checkpoint, and geospatial source boundary."""
 
@@ -56,6 +67,7 @@ class PipelineGraphV2RuntimeDispatcher:
         *,
         source_contracts: Mapping[str, PipelineV2SourceContract],
         dataset_sources: PipelineV2StructuredSourceRuntime,
+        virtual_tables: PipelineV2VirtualTableSourceRuntime,
         media: PipelineV2MediaRuntime,
         geospatial: PipelineV2GeospatialRuntime,
         rows: PipelineV2RowRuntime,
@@ -63,6 +75,7 @@ class PipelineGraphV2RuntimeDispatcher:
     ) -> None:
         self._source_contracts = source_contracts
         self._dataset_sources = dataset_sources
+        self._virtual_tables = virtual_tables
         self._media = media
         self._geospatial = geospatial
         self._rows = rows
@@ -79,6 +92,8 @@ class PipelineGraphV2RuntimeDispatcher:
                 node,
                 self._source_contract(node),
             )
+        if descriptor == "source.virtual_table":
+            return self._virtual_tables.source_virtual_table(node, self._source_contract(node))
         if descriptor == "source.media_set":
             return self._media.source_media(node, self._source_contract(node))
         if descriptor == "source.stream":

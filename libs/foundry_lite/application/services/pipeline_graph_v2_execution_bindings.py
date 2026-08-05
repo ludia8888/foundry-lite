@@ -6,7 +6,10 @@ from foundry_lite.application.pipeline_runtime_dependencies import (
     GovernedSemanticModelPort,
     MediaProcessorRegistry,
     PipelineExecutionRepository,
+    SecretVault,
     SemanticRowCacheRepository,
+    VirtualTableReader,
+    VirtualTableRepository,
 )
 from foundry_lite.application.ports import (
     DatasetRepository,
@@ -73,6 +76,9 @@ class PipelineGraphV2ExecutionBindings:
     governed_semantic_model_port: GovernedSemanticModelPort
     trained_model_inference_port: TrainedModelInferencePort
     semantic_row_cache_repository: SemanticRowCacheRepository
+    virtual_table_repository: VirtualTableRepository
+    virtual_table_reader: VirtualTableReader
+    secret_vault: SecretVault
     content_unit_chunking_service: PipelineV2ContentChunking
     dataset_ingest_service: PipelineV2DatasetIngest
     dataset_registry_service: PipelineV2DatasetRegistry

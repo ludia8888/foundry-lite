@@ -54,6 +54,13 @@ class PipelineSourceContract:
     version_pins: tuple[PipelineSourceVersionPin, ...]
     security_envelope: Mapping[str, object]
     access_evidence: Mapping[str, object]
+    # A live source is read at execution time from a system that does not issue versions we
+    # control — a virtual table pointing at an external database, for instance. Palantir states
+    # this plainly: "Virtual tables do not benefit from Foundry dataset capabilities such as
+    # dataset versioning or branching." So the plan records the absence rather than minting a
+    # synthetic pin, which would look reproducible to replay and late-data paths without being
+    # reproducible. A run that read a live source is marked, not silently equated with a pinned one.
+    is_live_source: bool = False
 
     def __post_init__(self) -> None:
         _require_text(self.node_id, "source node id")
@@ -61,7 +68,11 @@ class PipelineSourceContract:
         _require_text(self.resource_ref, "source resource ref")
         _require_text(self.source_id, "source id")
         _require_text(self.schema_hash, "source schema hash")
-        if not self.version_pins:
+        if self.is_live_source and self.version_pins:
+            raise ValidationFailed(
+                "a live pipeline source cannot carry version pins; the external system owns its own state"
+            )
+        if not self.is_live_source and not self.version_pins:
             raise ValidationFailed("pipeline source contract requires a committed version")
         object.__setattr__(self, "schema_contract", _freeze_object(self.schema_contract))
         object.__setattr__(self, "security_envelope", _freeze_object(self.security_envelope))
@@ -96,6 +107,9 @@ def pipeline_source_contract_payload(contract: PipelineSourceContract) -> JsonOb
         "schemaHash": contract.schema_hash,
         "schemaVersion": contract.schema_version,
         "versionPins": [_version_pin_payload(pin) for pin in contract.version_pins],
+        # Surfaced in the plan payload so a reader of the execution evidence can tell a
+        # reproducible run from one that read live external state.
+        "isLiveSource": contract.is_live_source,
         "securityEnvelope": thaw_source_value(contract.security_envelope),
         "accessEvidence": thaw_source_value(contract.access_evidence),
     }

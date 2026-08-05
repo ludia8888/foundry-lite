@@ -59,6 +59,9 @@ class PipelineV2SourceContract:
     version_pins: tuple[PipelineV2SourceVersion, ...]
     security_envelope: Mapping[str, object]
     access_evidence: Mapping[str, object]
+    # Carried from the plan so the runtime can refuse a source that claims both a pin and a
+    # live external system. See PipelineSourceContract.is_live_source.
+    is_live_source: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +312,7 @@ def _source_contract(row: Mapping[str, object]) -> PipelineV2SourceContract:
         version_pins=pins,
         security_envelope={str(key): value for key, value in envelope.items()},
         access_evidence={str(key): value for key, value in access.items()},
+        is_live_source=row.get("isLiveSource") is True,
     )
 
 
