@@ -74,10 +74,29 @@ ensure the objects receive regular updates from the source system."**
 → **요구사항:** 외부 writer가 계속 쓰는 소스에는 update detection이 필수다. 이것이 없으면 객체가
 조용히 낡는다.
 
-### 2.5 Palantir가 명시한 제약
+### 2.5 재현성 — 핀을 만들지 않고 없다고 말한다
+
+> "Virtual tables do not benefit from Foundry dataset capabilities such as **dataset versioning
+> or branching**."
+
+이것이 이 기능에서 가장 중요한 판단이다. Palantir는 virtual table을 transform 입력으로
+**허용하면서**, 버저닝이 없다는 사실을 문서에 명시한다. 없는 재현성을 합성 핀으로 흉내내지도
+않고, 그렇다고 파이프라인에서 배제하지도 않는다.
+
+관련 제약도 같은 맥락이다 — `@incremental`은 compute pushdown과 함께 쓸 수 없고
+("not currently supported when using compute pushdown"), 트랜잭션은 append-only다. 둘 다
+"이전 실행 상태와 비교"를 전제하는데 핀이 없으면 성립하지 않기 때문이다.
+
+→ **요구사항:** 실행 계획은 핀의 **부재를 기록**한다. 합성 핀은 replay·late-data 경로에
+재현 가능한 것처럼 보이면서 실제로는 재현 불가능하므로 더 나쁘다. 라이브 소스를 읽은 실행은
+표시되고, 핀이 있는 소스와 조용히 동일 취급되지 않는다.
+
+### 2.6 Palantir가 명시한 제약
 
 - **MDO 불가** — "only Foundry datasets or restricted views can be used for MDOs"
-- **incremental·branching 미지원** (dataset과 달리)
+- **버저닝·브랜칭 없음** (§2.5)
+- **incremental + compute pushdown 동시 사용 불가**
+- **append-only 트랜잭션**
 - **Ontology-as-Code / Marketplace 경로 미지원**
 - Palantir 자신의 권고: "virtual tables vs. sync ... depends on your architecture goals and the
   target workflow ... on a workflow-by-workflow basis"
@@ -105,9 +124,18 @@ ensure the objects receive regular updates from the source system."**
   응답에 `pushedDownPredicates` / `localPredicates`를 실어 무엇이 어디서 걸러졌는지 보이게 한다
 - 결과 상한을 강제한다. 원격 테이블이 크다는 이유로 무한 스캔이 되면 안 된다
 
-### R3 — 노드 승격 (V1)
+### R3 — 라이브 소스 계약 (V1)
+
+- `PipelineSourceContract.is_live_source`: 소스는 커밋된 버전에 핀되거나 라이브로 선언되거나
+  **둘 중 하나**다. 라이브 소스가 핀을 들고 있으면 검증 실패 — replay가 신뢰할 허구가 된다
+- 실행 계획 payload에 `isLiveSource`를 노출해 증거 독자가 재현 가능한 실행과 아닌 실행을
+  구분할 수 있게 한다
+- 기본값은 핀이다. 기존 계획의 보장은 그대로 유지된다
+
+### R3b — 노드 승격 (V1 잔여)
 
 - `source.virtual_table`을 `_planned_descriptor` → `_graph_v2_descriptor`로 올리고 executor 분기 추가
+- 이 노드는 `is_live_source=True` 계약을 발급한다
 - `output.virtual_table`은 **planned로 유지한다** — write-back은 이 범위 밖이다
 
 ### R4 — 온톨로지 백킹 (V2)
