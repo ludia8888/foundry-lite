@@ -8,8 +8,9 @@ The same AST is used by parameter overrides and submission criteria.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Protocol, cast
 
 from foundry_lite.domain.errors import ValidationFailed
@@ -196,26 +197,10 @@ def _evaluate_comparison(condition: Mapping[str, object], context: ActionConditi
 
 
 def _compare(operator: str, left: object, right: object) -> bool:
-    if operator == "eq":
-        return left == right
-    if operator == "neq":
-        return left != right
-    if operator in {"in", "notIn"}:
-        result = _contains(right, left)
-        return not result if operator == "notIn" else result
-    if operator in {"lt", "lte", "gt", "gte"}:
-        return _ordered_compare(operator, left, right)
-    if operator == "contains":
-        return _contains(left, right)
-    if operator == "startsWith":
-        return isinstance(left, str) and isinstance(right, str) and left.startswith(right)
-    if operator == "containsAny":
-        return _contains_any(left, right)
-    if operator == "matches":
-        return _matches(left, right)
-    if operator in {"eachIs", "eachIsNot"}:
-        return _each_is(operator, left, right)
-    raise ValidationFailed("unsupported action condition operator", details={"operator": operator})
+    comparison = _COMPARISONS.get(operator)
+    if comparison is None:
+        raise ValidationFailed("unsupported action condition operator", details={"operator": operator})
+    return comparison(left, right)
 
 
 def _contains_any(container: object, members: object) -> bool:
@@ -281,6 +266,29 @@ def _contains(container: object, member: object) -> bool:
     if isinstance(container, Mapping):
         return member in container
     return False
+
+
+# A table rather than an if/elif ladder. Palantir's submission-criteria operator set grows with
+# their releases, and a chain costs one branch per operator until the function trips the
+# complexity gate -- which is exactly how it broke when `matches`, `eachIs`, `eachIsNot`, and
+# `containsAny` landed. A row costs nothing. Keep in step with COMPARISON_OPERATORS; a test
+# pins the two together so an operator can never be accepted upfront and then be undispatchable.
+_COMPARISONS: Mapping[str, Callable[[object, object], bool]] = {
+    "eq": lambda left, right: left == right,
+    "neq": lambda left, right: left != right,
+    "in": lambda left, right: _contains(right, left),
+    "notIn": lambda left, right: not _contains(right, left),
+    "lt": partial(_ordered_compare, "lt"),
+    "lte": partial(_ordered_compare, "lte"),
+    "gt": partial(_ordered_compare, "gt"),
+    "gte": partial(_ordered_compare, "gte"),
+    "contains": _contains,
+    "containsAny": _contains_any,
+    "startsWith": lambda left, right: isinstance(left, str) and isinstance(right, str) and left.startswith(right),
+    "matches": _matches,
+    "eachIs": partial(_each_is, "eachIs"),
+    "eachIsNot": partial(_each_is, "eachIsNot"),
+}
 
 
 def _condition_value(raw: object, context: ActionConditionContext) -> object:
