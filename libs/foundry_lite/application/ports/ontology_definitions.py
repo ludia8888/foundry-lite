@@ -19,13 +19,15 @@ OntologyJsonObject = Mapping[str, object]
 class ObjectTypeBacking(TypedDict):
     """Dataset backing declaration for an ontology object type.
 
-    Either ``dataset`` (single-datasource, normalized internally to one
-    datasource named ``primary``) or ``datasources`` (column-wise
-    multi-datasource) is declared — never both.
+    Persisted object types declare either ``dataset`` (single-datasource,
+    normalized internally to ``primary``) or ``datasources`` (column-wise
+    multi-datasource), never both. Read-only virtual catalog projections may
+    instead use a named ``mode`` such as ``action_log`` plus ``actionType``.
     """
 
     dataset: NotRequired[str]
     mode: NotRequired[str]
+    actionType: NotRequired[str]
     primaryKeyColumns: NotRequired[Sequence[str]]
     cdc: NotRequired[ObjectTypeCdcBacking]
     datasources: NotRequired[Sequence[ObjectTypeDatasourceBacking]]
@@ -76,9 +78,11 @@ class PropertyDatasourceRow(TypedDict):
 class LinkTypeBacking(TypedDict):
     """Dataset backing declaration for an ontology link type."""
 
-    dataset: str
-    fromKey: str
-    toKey: str
+    dataset: NotRequired[str]
+    fromKey: NotRequired[str]
+    toKey: NotRequired[str]
+    mode: NotRequired[str]
+    actionType: NotRequired[str]
 
 
 class PropertyDerivation(TypedDict, total=False):
@@ -102,12 +106,24 @@ class InterfacePropertyDefinition(TypedDict):
     indexed: bool
 
 
+class InterfaceLinkConstraintDefinition(TypedDict):
+    """One interface relationship implemented by concrete ontology link types."""
+
+    apiName: str
+    displayName: str
+    targetKind: str
+    target: str
+    cardinality: str
+    required: bool
+
+
 class InterfaceTypeDefinition(TypedDict):
     """Interface definition payload persisted with an interface type."""
 
     apiName: str
     displayName: str
     properties: Sequence[InterfacePropertyDefinition]
+    linkConstraints: Sequence[InterfaceLinkConstraintDefinition]
 
 
 class FunctionInputDefinition(TypedDict):
@@ -143,12 +159,22 @@ class FunctionTypeDefinition(TypedDict):
     permissions: NotRequired[OntologyJsonObject]
 
 
-class ActionParameterSchema(TypedDict, total=False):
-    """JSON-schema subset used by action parameter validation."""
-
-    type: str
-    required: Sequence[str]
-    properties: OntologyJsonObject
+ActionParameterSchema = TypedDict(
+    "ActionParameterSchema",
+    {
+        "$schema": str,
+        "type": str,
+        "additionalProperties": bool,
+        "properties": OntologyJsonObject,
+        "required": Sequence[str],
+        "x-foundry-action": str,
+        "x-foundry-contract-fingerprint": str,
+        "x-foundry-form-layout": OntologyJsonObject,
+        "x-foundry-inline-eligibility": OntologyJsonObject,
+    },
+    total=False,
+)
+"""Canonical Action JSON Schema delivered without stripping Foundry extensions."""
 
 
 class ActionParameterDefinition(TypedDict):
@@ -165,6 +191,10 @@ class ActionParameterDefinition(TypedDict):
     interfaceType: NotRequired[str]
     itemType: NotRequired[str]
     fields: NotRequired[Sequence[OntologyJsonObject]]
+    mediaSet: NotRequired[str]
+    allowedMimeTypes: NotRequired[Sequence[str]]
+    maxBytes: NotRequired[int]
+    render: NotRequired[str]
 
 
 class RequiredActionMutationFields(TypedDict):
@@ -200,6 +230,7 @@ class ActionTypeDefinition(TypedDict, total=False):
     actionLog: OntologyJsonObject
     revert: OntologyJsonObject
     branchPolicy: OntologyJsonObject
+    formLayout: OntologyJsonObject
     mutations: Sequence[ActionMutationDefinition]
     # Native Action IR v2 rules (createObject/modifyObject(s)/createOrModifyObject/
     # deleteObject(s)/createLink/deleteLink/functionEdit). Presence of this key selects
@@ -264,6 +295,7 @@ class OntologyCatalogInterface(TypedDict):
     apiName: str
     displayName: str
     properties: Sequence[InterfacePropertyDefinition]
+    linkConstraints: Sequence[InterfaceLinkConstraintDefinition]
     implementedBy: Sequence[str]
 
 
@@ -272,6 +304,7 @@ class OntologyCatalogFunction(TypedDict):
 
     apiName: str
     displayName: str
+    version: str
     runtime: str
     inputs: Sequence[FunctionInputDefinition]
     output: FunctionOutputDefinition

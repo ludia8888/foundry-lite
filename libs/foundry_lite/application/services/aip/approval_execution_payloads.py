@@ -116,6 +116,10 @@ def prepared_execution(row: InsightReviewRow, proposal: Mapping[str, object]) ->
         expected_object_version=required_int(proposal, "expectedObjectVersion"),
         parameters=required_mapping(proposal, "parameters"),
         policy_version=policy_version,
+        source=optional_text(proposal, "source"),
+        application_id=optional_text(proposal, "applicationId"),
+        client_id=optional_text(proposal, "clientId"),
+        token_scopes=optional_text_sequence(proposal, "tokenScopes"),
         plan_hash=optional_text(proposal, "planHash"),
         action_version=optional_text(proposal, "actionVersion"),
         object_versions=optional_mapping(proposal, "objectVersions"),
@@ -236,6 +240,15 @@ def optional_mapping(payload: Mapping[str, object], key: str) -> JsonObject | No
     if not isinstance(value, Mapping):
         raise ApprovalExecutionError("invalid_proposal", f"proposal has invalid {key}")
     return value
+
+
+def optional_text_sequence(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
+    value = payload.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise ApprovalExecutionError("invalid_proposal", f"proposal has invalid {key}")
+    return tuple(value)
 
 
 def parse_instant(value: str) -> datetime:

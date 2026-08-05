@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from foundry_lite.application.ports.ai_run_repository import AiToolCallRecord
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.aip.fde_palantir_mcp_catalog import PALANTIR_MCP_ONTOLOGY_TOOL_IDS
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerResult, ToolSpec
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.ontology_branch_diff import (
@@ -19,7 +20,7 @@ from foundry_lite.application.services.ontology_branch_diff import (
 from foundry_lite.application.services.ontology_branch_service import OntologyBranchService
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import NotFound, ValidationFailed
 
 JsonObject = Mapping[str, object]
 _RESOURCE_KINDS = frozenset({"objectType", "linkType", "actionType", "interface", "functionType"})
@@ -62,6 +63,8 @@ class FdeOntologyToolService(CoreService):
         return _result(ctx, request, output)
 
     def _dispatch(self, ctx: RequestContext, request: FdeOntologyToolRequest) -> dict[str, object]:
+        if request.spec.tool_id in PALANTIR_MCP_ONTOLOGY_TOOL_IDS:
+            return self._official_dispatch(ctx, request)
         if request.spec.tool_id == "ontology.branch.inspect":
             return self._inspect(ctx, request.branch_id)
         if request.spec.tool_id == "ontology.branch.validate":
@@ -71,6 +74,77 @@ class FdeOntologyToolService(CoreService):
         if request.spec.tool_id == "ontology.branch.propose":
             return self._propose(ctx, request.branch_id, request.arguments)
         raise FdeOntologyToolError("unknown_fde_tool", f"unsupported AI FDE tool {request.spec.tool_id}")
+
+    def _official_dispatch(self, ctx: RequestContext, request: FdeOntologyToolRequest) -> dict[str, object]:
+        tool_id = request.spec.tool_id
+        if tool_id == "get_foundry_ontology_rid":
+            return self._official_identity(ctx, request.branch_id)
+        if tool_id in {"search_foundry_ontology", "search_foundry_functions"}:
+            return self._official_search(
+                ctx,
+                request.branch_id,
+                request.arguments,
+                is_function_only=tool_id.endswith("functions"),
+            )
+        if tool_id.startswith("view_foundry_"):
+            return self._official_view(ctx, request.branch_id, tool_id, request.arguments)
+        return self._official_mutation(ctx, request.branch_id, tool_id, request.arguments)
+
+    def _official_identity(self, ctx: RequestContext, branch_id: str) -> dict[str, object]:
+        branch = self.ontology_branch_service.get_branch(branch_id, ctx=ctx)
+        return {
+            "ontologyRid": f"ri.foundry-lite.ontology.{ctx.tenant_id}",
+            "branchRid": f"ri.foundry-lite.ontology-branch.{branch_id}",
+            "branchId": branch_id,
+            "baseVersionId": branch.get("baseVersionId"),
+            "baseVersionNumber": branch.get("baseVersionNumber"),
+            "contentFingerprint": branch.get("contentFingerprint"),
+            "isBaseStale": branch.get("baseStale"),
+        }
+
+    def _official_search(
+        self,
+        ctx: RequestContext,
+        branch_id: str,
+        arguments: JsonObject,
+        *,
+        is_function_only: bool,
+    ) -> dict[str, object]:
+        query = _required_text(arguments, "query")
+        resources = _branch_resources(self.ontology_branch_service.get_branch(branch_id, ctx=ctx))
+        matches = _search_resources(resources, query, _bounded_results(arguments.get("maxResults")), is_function_only)
+        return {"query": query, "items": matches, "count": len(matches), "branchId": branch_id}
+
+    def _official_view(
+        self, ctx: RequestContext, branch_id: str, tool_id: str, arguments: JsonObject
+    ) -> dict[str, object]:
+        api_name = _required_text(arguments, "apiName")
+        kind = _official_kind(tool_id)
+        definition = _branch_resources(self.ontology_branch_service.get_branch(branch_id, ctx=ctx)).get(
+            (kind, api_name)
+        )
+        if definition is None:
+            raise NotFound("Ontology branch resource not found", details={"kind": kind, "apiName": api_name})
+        return {"branchId": branch_id, "kind": kind, "apiName": api_name, "definition": definition}
+
+    def _official_mutation(
+        self, ctx: RequestContext, branch_id: str, tool_id: str, arguments: JsonObject
+    ) -> dict[str, object]:
+        kind = _official_kind(tool_id)
+        change_summary = _required_text(arguments, "changeSummary")
+        patch: dict[str, object]
+        if tool_id.startswith("delete_"):
+            patch = {
+                "upsertResources": [],
+                "deleteResources": [{"kind": kind, "apiName": _required_text(arguments, "apiName")}],
+            }
+        else:
+            definition = _required_mapping(arguments, "definition")
+            patch = {
+                "upsertResources": [{"kind": kind, "definition": definition}],
+                "deleteResources": [],
+            }
+        return self._apply_patch(ctx, branch_id, {**patch, "changeSummary": change_summary})
 
     def _inspect(self, ctx: RequestContext, branch_id: str) -> dict[str, object]:
         branch = self.ontology_branch_service.get_branch(branch_id, ctx=ctx)
@@ -127,6 +201,53 @@ def _require_approval(request: FdeOntologyToolRequest) -> None:
             "tool_approval_required",
             f"explicit user approval is required for {request.spec.tool_id} on branch {request.branch_id}",
         )
+
+
+def _branch_resources(branch: JsonObject) -> ResourceMap:
+    return parse_resource_map(_branch_yaml(branch))
+
+
+def _search_resources(
+    resources: ResourceMap,
+    query: str,
+    limit: int,
+    is_function_only: bool,
+) -> list[dict[str, object]]:
+    terms = tuple(term for term in query.lower().split() if term)
+    items: list[dict[str, object]] = []
+    for (kind, api_name), definition in sorted(resources.items()):
+        if is_function_only and kind != "functionType":
+            continue
+        text = f"{kind} {api_name} {definition.get('displayName', '')} {definition.get('description', '')}".lower()
+        if all(term in text for term in terms):
+            items.append({"kind": kind, "apiName": api_name, "definition": definition})
+    return items[:limit]
+
+
+def _official_kind(tool_id: str) -> str:
+    for fragment, kind in (
+        ("object_type", "objectType"),
+        ("link_type", "linkType"),
+        ("action_type", "actionType"),
+    ):
+        if fragment in tool_id:
+            return kind
+    raise FdeOntologyToolError("unknown_fde_tool", f"unsupported Ontology resource tool {tool_id}")
+
+
+def _bounded_results(value: object) -> int:
+    if value is None:
+        return 20
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > 50:
+        raise ValidationFailed("maxResults must be between 1 and 50")
+    return value
+
+
+def _required_mapping(value: JsonObject, key: str) -> dict[str, object]:
+    item = value.get(key)
+    if not isinstance(item, Mapping):
+        raise ValidationFailed(f"{key} must be an object", details={"field": key})
+    return _json_mapping(item)
 
 
 def _apply_upserts(resources: ResourceMap, value: object) -> None:

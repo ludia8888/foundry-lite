@@ -62,8 +62,12 @@ class ObjectLinkIndexingService(CoreService):
 
     def _source_link_key(self, link: LinkTypeRow, row: TabularRow) -> tuple[str, str, str] | None:
         """Return the (link_type, from, to) key for a source row, or None if incomplete."""
-        from_id = row.get(link["backing"]["fromKey"])
-        to_id = row.get(link["backing"]["toKey"])
+        from_key = link["backing"].get("fromKey")
+        to_key = link["backing"].get("toKey")
+        if not isinstance(from_key, str) or not isinstance(to_key, str):
+            return None
+        from_id = row.get(from_key)
+        to_id = row.get(to_key)
         if from_id in {None, ""} or to_id in {None, ""}:
             return None
         return link["id"], str(from_id), str(to_id)

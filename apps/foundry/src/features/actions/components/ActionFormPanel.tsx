@@ -8,10 +8,12 @@ import {
 } from "@foundry-lite/sdk";
 import {
   useFoundryLiteMutation,
+  useFoundryLiteClient,
   useFoundryLiteOsdkClient,
   useFoundryLiteProvidedActionForm,
   useFoundryLiteSession,
   type FoundryLiteOntologyActionView,
+  type FoundryLiteActionParameterField,
 } from "@foundry-lite/sdk/react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -24,13 +26,12 @@ import {
   staleObjectVersionDetails,
 } from "@/components/shared/StaleObjectVersionNotice";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 
 import {
   ActionRunEvidence,
   type ActionRunEvidenceData,
 } from "./ActionRunEvidence";
-import { ParameterInput } from "./ParameterInput";
+import { ActionParameterSection } from "./ActionParameterSection";
 import { ValidationResultPanel } from "./ValidationResultPanel";
 
 interface ActionFormPanelProps {
@@ -57,9 +58,6 @@ function resolveKoreanDisabledReason(
   if (!form.isActionEnabled) {
     return "이 액션은 활성 온톨로지에서 비활성화되어 있습니다.";
   }
-  if (!form.isGeneratedActionTypeAvailable) {
-    return "정적 OSDK로 실행하려면 SDK를 재생성해야 합니다.";
-  }
   if (!form.isTargetObjectTypeMatched) {
     return "선택한 객체 타입이 이 액션의 대상과 일치하지 않습니다.";
   }
@@ -84,6 +82,7 @@ export function ActionFormPanel({
     initialIdempotencyKey,
   });
   const osdk = useFoundryLiteOsdkClient();
+  const client = useFoundryLiteClient();
   const session = useFoundryLiteSession();
   const [validation, setValidation] = useState<ActionValidationResponse | null>(
     null,
@@ -100,15 +99,15 @@ export function ActionFormPanel({
   const [successRequestId, setSuccessRequestId] = useState<string | null>(null);
 
   const runValidate = useCallback(async () => {
-    const generated = form.generatedActionType as OsdkActionType | null;
-    if (!generated) return null;
+    const actionType = form.runtimeActionType as OsdkActionType | null;
+    if (!actionType) return null;
     const payload = {
       objectId: targetObject.objectId,
       expectedObjectVersion: targetObject.objectVersion,
       params: form.params,
     } as OsdkActionValidationPayload<OsdkActionType>;
-    return osdk(generated).validateAction(payload);
-  }, [form.generatedActionType, form.params, osdk, targetObject]);
+    return osdk(actionType).validateAction(payload);
+  }, [form.runtimeActionType, form.params, osdk, targetObject]);
 
   const validateMutation = useFoundryLiteMutation(runValidate, {
     onSuccess: (result) => {
@@ -120,6 +119,21 @@ export function ActionFormPanel({
   const issueIdempotencyKey = useCallback(
     () => createIdempotencyKey(actionView.apiName, targetObject.objectId),
     [actionView.apiName, targetObject.objectId],
+  );
+
+  const uploadParameter = useCallback(
+    async (field: FoundryLiteActionParameterField, file: File): Promise<unknown> => {
+      const result = await client.actions.uploadParameter(actionView.apiName, field.parameterPath, {
+        objectType: targetObject.objectType,
+        objectId: targetObject.objectId,
+        file,
+        fileName: file.name,
+        suppliedMimeType: file.type || undefined,
+        idempotencyKey: createIdempotencyKey(`${actionView.apiName}.${field.parameterPath}.upload`, targetObject.objectId),
+      });
+      return result.reference;
+    },
+    [actionView.apiName, client.actions, targetObject.objectId, targetObject.objectType],
   );
 
   const applyMutation = useFoundryLiteMutation(
@@ -156,9 +170,10 @@ export function ActionFormPanel({
   const buildSubmitRequest = (
     submitIdempotencyKey: string,
   ): PinnedActionRequest | null => {
-    const actionType = form.generatedActionType as OsdkActionType | null;
+    const actionType = form.runtimeActionType as OsdkActionType | null;
     if (
       !actionType ||
+      !form.payload ||
       form.targetObjectId === null ||
       form.expectedObjectVersion === null
     ) {
@@ -169,9 +184,7 @@ export function ActionFormPanel({
       idempotencyKey: submitIdempotencyKey,
       expectedObjectVersion: form.expectedObjectVersion,
       payload: {
-        objectId: form.targetObjectId,
-        expectedObjectVersion: form.expectedObjectVersion,
-        params: form.params,
+        ...form.payload,
         idempotencyKey: submitIdempotencyKey,
       } as OsdkActionPayload<OsdkActionType>,
     };
@@ -263,29 +276,17 @@ export function ActionFormPanel({
         ) : null}
       </div>
 
-      {form.parameterFields.length > 0 ? (
-        form.parameterFields.filter((field) => field.isVisible).map((field) => (
-          <div key={field.name} className="space-y-1">
-            <Label className="flex items-center gap-1 text-xs">
-              {field.label}
-              {field.isRequired ? (
-                <span className="text-destructive">*</span>
-              ) : null}
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {field.dataType}
-              </span>
-            </Label>
-            <ParameterInput
-              field={field}
-              onChange={(value) => form.setParam(field.name, value)}
+      {form.parameterSections.length > 0 ? (
+        <div className="space-y-3">
+          {form.parameterSections.map((section) => (
+            <ActionParameterSection
+              key={section.id}
+              section={section}
+              onChange={(field, value) => form.setParam(field.name, value)}
+              onUpload={uploadParameter}
             />
-            {field.description ? (
-              <p className="text-[11px] text-muted-foreground">
-                {field.description}
-              </p>
-            ) : null}
-          </div>
-        ))
+          ))}
+        </div>
       ) : (
         <p className="text-[11px] text-muted-foreground">
           이 액션은 파라미터가 없습니다.
@@ -323,10 +324,13 @@ export function ActionFormPanel({
         {form.hasRequiredParameters && !form.hasAllRequiredParameters ? (
           <StatusPill intent="warning">필수 파라미터 미입력</StatusPill>
         ) : null}
+        {!form.hasValidParameters ? (
+          <StatusPill intent="danger">파라미터 제약조건 불충족</StatusPill>
+        ) : null}
         <Button
           size="sm"
           variant="outline"
-          disabled={!form.generatedActionType || validateMutation.isRunning}
+          disabled={!form.runtimeActionType || validateMutation.isRunning}
           onClick={() => void validateMutation.execute(undefined)}
         >
           <ShieldCheck />

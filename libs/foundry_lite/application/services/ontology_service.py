@@ -106,6 +106,14 @@ class OntologyService(CoreService):
     def _action_type_by_id(self, conn: TransactionContext, ctx: RequestContext, action_type_id: str) -> ActionTypeRow:
         return self.lookup_service._action_type_by_id(conn, ctx, action_type_id)
 
+    def _object_type_by_id_or_none(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_id: str,
+    ) -> ObjectTypeRow | None:
+        return self.lookup_service._object_type_by_id_or_none(conn, ctx, object_type_id)
+
     def _properties_for_object_type(
         self,
         conn: TransactionContext,

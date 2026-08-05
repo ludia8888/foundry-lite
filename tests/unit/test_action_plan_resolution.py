@@ -9,7 +9,7 @@ from foundry_lite.application.action_types import ActionApplyCommand
 from foundry_lite.application.services.action_plan_resolution import LivePlanResolutionContext
 from foundry_lite.domain.action_runtime.value_expression import ParameterValue
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 
 def _command(
@@ -113,11 +113,10 @@ def test_secondary_object_binds_to_its_own_read_version() -> None:
     assert ref.version == 3
 
 
-def test_link_endpoint_to_a_missing_object_raises_not_found() -> None:
-    # Finding [1]/[3]: an absent param evaluates to None -> 'None' id -> missing endpoint ->
-    # NotFound (never a dangling link, never a silent write to an unseen row).
+def test_link_endpoint_to_an_absent_reference_fails_validation() -> None:
+    # An absent param cannot be coerced into a textual object id or a dangling link.
     adapter = _adapter({("Order", "O-1"): 5}, command=_command(params={}))
-    with pytest.raises(NotFound):
+    with pytest.raises(ValidationFailed, match="object reference"):
         adapter.resolve_link_endpoint("OrderCustomer", "target", ParameterValue("relatedCustomer"))
 
 
@@ -126,11 +125,13 @@ def test_link_endpoint_resolves_a_visible_object_by_its_endpoint_type() -> None:
     assert adapter.resolve_link_endpoint("OrderCustomer", "target", ParameterValue("cust")) == "C-7"
 
 
-def test_current_user_attribute_is_rejected_and_bare_user_resolves() -> None:
+def test_current_user_identity_and_groups_are_governed_value_sources() -> None:
     adapter = _adapter({}, command=_command())
     with pytest.raises(ValidationFailed, match="attribute"):
         adapter.current_user("email")
     assert adapter.current_user(None) == "u1"
+    assert adapter.current_user("id") == "u1"
+    assert adapter.current_user("groups") == ["viewer"]
 
 
 def test_many_cardinality_target_requires_a_list_of_ids() -> None:

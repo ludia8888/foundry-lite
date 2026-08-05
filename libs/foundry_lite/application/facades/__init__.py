@@ -22,6 +22,7 @@ from foundry_lite.application.facades.source_workspace import SourceWorkspace
 from foundry_lite.application.facades.supply_chain_demo import SupplyChainDemo
 from foundry_lite.application.facades.transform_pipeline import TransformPipeline
 from foundry_lite.application.services.aip.fde_mcp_service import FdeMcpGateway
+from foundry_lite.application.services.ontology_mcp_gateway import OntologyMcpGateway
 
 __all__ = [
     "ActionGateway",
@@ -38,6 +39,7 @@ __all__ = [
     "MediaWorkspace",
     "ObjectStore",
     "OntologyRegistry",
+    "OntologyMcpGateway",
     "OperationsConsole",
     "PipelineWorkspace",
     "ResourceWorkspace",

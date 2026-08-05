@@ -20,6 +20,7 @@ def _item() -> dict[str, object]:
         "contract": {"contractVersion": 3, "apiName": "ExpediteOrder"},
         "riskLevel": "low",
         "agentExecutionPolicy": "autonomous",
+        "access": {"canView": True, "canEdit": False, "canApply": True},
         "enabled": True,
     }
 
@@ -70,6 +71,25 @@ def test_action_catalog_routes_preserve_cursor_and_return_contract(monkeypatch) 
             calls.append(("dry_run", (action_api_name, kwargs["object_id"])))
             return _plan(is_dry_run=True)
 
+        def upload_parameter(self, action_api_name, parameter_name, **kwargs):
+            body = kwargs["source"].read()
+            calls.append(("upload", (action_api_name, parameter_name, kwargs["object_id"], body)))
+            return {
+                "actionApiName": action_api_name,
+                "parameter": parameter_name,
+                "referenceKind": "attachment",
+                "reference": {"mediaItemVersionId": "mver-1"},
+                "mediaTransactionId": "mtx-1",
+                "uploadState": "provisional",
+                "isRetentionMarked": True,
+                "malwareScan": {
+                    "scanner": "test-clean-scanner",
+                    "verdict": "clean",
+                    "contentHash": "sha256:test",
+                },
+                "isIdempotentReplay": False,
+            }
+
     class FakeFoundry:
         actions = FakeActions()
 
@@ -86,6 +106,12 @@ def test_action_catalog_routes_preserve_cursor_and_return_contract(monkeypatch) 
     }
     plan = client.post("/api/actions/ExpediteOrder/plan", json=payload)
     dry_run = client.post("/api/actions/ExpediteOrder/dry-run", json=payload)
+    uploaded = client.post(
+        "/api/actions/ExpediteOrder/parameters/receipt/uploads",
+        data={"objectType": "Order", "objectId": "O-1", "suppliedMimeType": "application/pdf"},
+        files={"file": ("receipt.pdf", b"%PDF receipt", "application/pdf")},
+        headers={"Idempotency-Key": "upload-1"},
+    )
 
     assert (
         listed.status_code
@@ -93,6 +119,7 @@ def test_action_catalog_routes_preserve_cursor_and_return_contract(monkeypatch) 
         == schema.status_code
         == plan.status_code
         == dry_run.status_code
+        == uploaded.status_code
         == 200
     )
     assert listed.json()["nextCursor"] == "next-page"
@@ -100,12 +127,14 @@ def test_action_catalog_routes_preserve_cursor_and_return_contract(monkeypatch) 
     assert schema.json()["type"] == "object"
     assert plan.json()["isDryRun"] is False
     assert dry_run.json()["isDryRun"] is True
+    assert uploaded.json()["reference"]["mediaItemVersionId"] == "mver-1"
     assert calls == [
         ("list", ("prior-page", 25)),
         ("get", "ExpediteOrder"),
         ("schema", "ExpediteOrder"),
         ("plan", ("ExpediteOrder", "O-1")),
         ("dry_run", ("ExpediteOrder", "O-1")),
+        ("upload", ("ExpediteOrder", "receipt", "O-1", b"%PDF receipt")),
     ]
     assert listed.headers["X-Request-ID"]
 

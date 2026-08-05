@@ -1,5 +1,6 @@
 import type { ActionValidationResponse } from "@foundry-lite/sdk";
 
+import { ActionCriteriaEvaluationPanel } from "@/components/shared/ActionCriteriaEvaluation";
 import { StatusPill } from "@/components/shared/StatusPill";
 
 interface ValidationResultPanelProps {
@@ -51,6 +52,7 @@ export function ValidationResultPanel({
           대상 상태·파라미터·제출 기준을 모두 통과했습니다.
         </div>
       ) : null}
+      <ActionCriteriaEvaluationPanel evaluation={result.submissionCriteriaEvaluation} />
     </div>
   );
 }

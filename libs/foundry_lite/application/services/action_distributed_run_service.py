@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from foundry_lite.application.services.action_attempt_heartbeat import ActionAttemptHeartbeat
+from foundry_lite.application.ports.action_notification_recipient_directory import (
+    ActionNotificationRecipientDirectory,
+)
 from foundry_lite.application.services.action_distributed_contracts import (
     ActionAsyncRunRow,
     ActionDefinitionV3,
+    ActionEditPlanResult,
     ActionExecutionRepository,
     ActionFunctionExecutionResult,
     ActionFunctionExecutor,
@@ -23,14 +26,13 @@ from foundry_lite.application.services.action_distributed_contracts import (
     OntologyLookupService,
     RequestContext,
     TransactionContext,
-    action_contract_fingerprint,
 )
 from foundry_lite.application.services.action_distributed_effects import (
     ActionBeforeEffectOutcomeUnknown,
     ActionEffectDeliveryService,
     ConnectorRegistryRepository,
-    authorize_action_effects,
 )
+from foundry_lite.application.services.action_distributed_revalidation import ActionRunRevalidator
 from foundry_lite.application.services.action_distributed_run_evidence import (
     ACTION_RUN_TERMINAL_STATUSES,
     action_error_kind,
@@ -38,34 +40,39 @@ from foundry_lite.application.services.action_distributed_run_evidence import (
     action_retry_at,
     append_action_attempt_event,
     append_action_run_event,
+    distributed_plan_summary,
     is_action_error_retryable,
 )
 from foundry_lite.application.services.action_distributed_run_support import (
     ActionStepLeaseLost,
     action_attempt_claim,
-    action_function_request,
+    action_attempt_heartbeat,
+    action_function_requests,
     action_plan_committer,
     action_success_output,
     action_worker_context,
     action_worker_lease,
     append_worker_attempt_event,
+    combine_action_function_results,
     complete_action_attempt,
+    criteria_read_expectations_from_manifest,
     load_action_run,
     mark_action_commit_pending,
     persist_terminal_action_failure,
+    plan_manifest,
     require_action_attempt_owner,
     require_stored_plan_hash,
     required_action_run,
     stored_action_contract,
     stored_edit_plan,
     utc_now,
+    with_criteria_expectations,
 )
-from foundry_lite.application.services.action_edit_plan_results import ActionEditPlanResult, plan_summary
-from foundry_lite.application.services.action_permission_guards import (
-    require_action_permission,
-    require_action_target_read,
+from foundry_lite.application.services.action_media_runtime_service import ActionMediaRuntimeService
+from foundry_lite.application.services.action_webhook_plan_resolution import (
+    requires_webhook_plan_resolution,
+    resolve_webhook_edit_plan,
 )
-from foundry_lite.application.services.action_plan_authorization import authorize_action_edit_plan
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.state_transitions import (
     ACTION_RUN_ASYNC_CANCELLED,
@@ -91,11 +98,14 @@ class ActionDistributedRunService(CoreService):
         "action_function_executor",
         "connector_registry_repository",
         "metadata_repository",
+        "object_read_repository",
+        "action_notification_recipient_directory",
     )
     required_collaborators = (
         "object_index_record_mutation_service",
         "object_records_service",
         "action_effect_delivery_service",
+        "action_media_runtime_service",
         "ontology_lookup_service",
         "osdk_application_service",
         "runtime_service",
@@ -104,6 +114,7 @@ class ActionDistributedRunService(CoreService):
     action_execution_repository: ActionExecutionRepository
     action_function_executor: ActionFunctionExecutor
     connector_registry_repository: ConnectorRegistryRepository
+    action_notification_recipient_directory: ActionNotificationRecipientDirectory
     metadata_repository: MetadataRepository
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
@@ -111,6 +122,7 @@ class ActionDistributedRunService(CoreService):
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
     action_effect_delivery_service: ActionEffectDeliveryService
+    action_media_runtime_service: ActionMediaRuntimeService
 
     def drive(self, request: ActionRunDispatchRequest, *, worker_id: str) -> dict[str, object]:
         row = load_action_run(self.engine, self.action_execution_repository, request.tenant_id, request.run_id)
@@ -123,7 +135,7 @@ class ActionDistributedRunService(CoreService):
         if attempt is None:
             return self._resolve_unclaimed(ctx, row, worker_id)
         try:
-            heartbeat = ActionAttemptHeartbeat(self.engine, self.action_execution_repository, attempt)
+            heartbeat = action_attempt_heartbeat(self.engine, self.action_execution_repository, attempt)
             heartbeat.start()
             try:
                 before_effect = self.action_effect_delivery_service.execute_before(ctx, row, attempt)
@@ -171,11 +183,28 @@ class ActionDistributedRunService(CoreService):
     ) -> tuple[EditPlan, ActionFunctionExecutionResult | None]:
         require_stored_plan_hash(row)
         contract = stored_action_contract(row)
+        criteria_reads = criteria_read_expectations_from_manifest(plan_manifest(row))
         if contract.function is None:
+            if requires_webhook_plan_resolution(contract):
+                with self.engine.begin() as transaction:
+                    plan = resolve_webhook_edit_plan(
+                        transaction,
+                        ctx,
+                        row,
+                        contract,
+                        before_effect,
+                        self.object_records_service,
+                        self.ontology_lookup_service,
+                    )
+                return with_criteria_expectations(plan, criteria_reads), None
             return stored_edit_plan(row), None
-        result = self.action_function_executor.execute(action_function_request(row, ctx, before_effect))
+        results = tuple(
+            self.action_function_executor.execute(request)
+            for request in action_function_requests(row, ctx, before_effect)
+        )
+        result = combine_action_function_results(results)
         plan = result.edit_batch.to_edit_plan(operation_prefix=f"{row['id']}:function")
-        return plan, result
+        return with_criteria_expectations(plan, criteria_reads), result
 
     def _commit(
         self,
@@ -193,12 +222,18 @@ class ActionDistributedRunService(CoreService):
             owner = require_action_attempt_owner(repository, transaction, ctx, attempt, changed_at)
             if current["status"] == "cancelling":
                 return self._cancel_claimed(transaction, ctx, current, owner, changed_at)
-            contract = self._revalidate(transaction, ctx, current, plan)
+            contract = self._revalidator().revalidate(transaction, ctx, current, plan)
             mark_action_commit_pending(repository, transaction, ctx, current, changed_at)
+            prepared_effects = self.action_effect_delivery_service.prepare_after(transaction, ctx, current)
             result = self._commit_edit_plan(transaction, ctx, row, plan, contract)
-            committed_plan = dict(plan_summary(result))
+            self.action_media_runtime_service.bind_plan_references(transaction, ctx, row["id"], plan)
+            committed_plan = distributed_plan_summary(result)
             effect_receipt_ids = self.action_effect_delivery_service.enqueue_after(
-                transaction, ctx, current, committed_plan
+                transaction,
+                ctx,
+                current,
+                committed_plan,
+                prepared_effects,
             )
             output = action_success_output(contract, function_result, before_effect, committed_plan, effect_receipt_ids)
             completed = complete_action_attempt(
@@ -236,41 +271,17 @@ class ActionDistributedRunService(CoreService):
             transition=ACTION_RUN_ASYNC_SUCCEEDED,
         )
 
-    def _revalidate(
-        self, transaction: TransactionContext, ctx: RequestContext, row: ActionAsyncRunRow, plan: EditPlan
-    ) -> ActionDefinitionV3:
-        contract = stored_action_contract(row)
-        active = self.ontology_lookup_service._active_action_type(transaction, ctx, row["action_type_api_name"])
-        if active["id"] != row["action_type_id"]:
-            raise ConflictDetected("Action definition changed after planning")
-        if action_contract_fingerprint(contract) != row["definition_version"]:
-            raise ConflictDetected("Action definition fingerprint changed after planning")
-        require_action_permission(
-            self.engine, self.policy, self.runtime_service, ctx, contract.api_name, action="execute"
-        )
-        require_action_target_read(
+    def _revalidator(self) -> ActionRunRevalidator:
+        return ActionRunRevalidator(
             self.engine,
             self.policy,
             self.runtime_service,
-            ctx,
-            contract.api_name,
-            row["target_object_type_api_name"],
-            row["target_object_id"],
-            action="execute",
-        )
-        self.osdk_application_service.require_resource_scope(
-            ctx, resource_type="action", resource_api_name=contract.api_name, operation="execute"
-        )
-        authorize_action_effects(
-            transaction,
-            ctx,
-            self.policy,
+            self.ontology_lookup_service,
             self.osdk_application_service,
             self.connector_registry_repository,
-            contract,
+            self.object_read_repository,
+            self.action_notification_recipient_directory,
         )
-        authorize_action_edit_plan(transaction, ctx, self.policy, self.ontology_lookup_service, contract, plan)
-        return contract
 
     def _record_failure(
         self, ctx: RequestContext, row: ActionAsyncRunRow, attempt: ActionStepAttemptRow, exc: Exception

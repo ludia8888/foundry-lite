@@ -36,6 +36,7 @@ class ObjectClientSurface:
 class ActionClientSurface:
     api_name: str
     target: str
+    target_kind: str
     payload_type: str
     methods: tuple[str, ...]
 
@@ -140,8 +141,12 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
                     "listClients",
                     "updateClient",
                     "deactivateClient",
+                    "rotateClientSecret",
+                    "revokeClientSecret",
+                    "listClientSecretVersions",
                 ),
             ),
+            OperationClientSurface("mcpServers", ("configure", "get", "list")),
             OperationClientSurface(
                 "sdkVersions",
                 (
@@ -185,8 +190,9 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             ActionClientSurface(
                 item.api_name,
                 item.target,
+                item.target_kind,
                 f"{item.api_name}ApplyRequest",
-                ("apply", "validate", "plan", "dryRun", "applyBatch"),
+                ("apply", "validate", "plan", "dryRun", "applyBatch", "uploadParameter"),
             )
             for item in ontology.actions
         ),
@@ -317,9 +323,11 @@ def _methods_payload(
 def render_client_surface_json(surface: SdkClientSurface) -> str:
     payload: dict[str, object] = {
         "actions": {
-            "_self": ["list", "get", "schema", "plan", "dryRun", "logs"],
-            "branches": ["diff", "object"],
-            "runs": ["start", "list", "get", "events", "cancel", "revertEligibility", "revert"],
+            "_self": ["list", "get", "schema", "validate", "apply", "plan", "dryRun", "logs", "uploadParameter"],
+            "notificationPolicies": ["list", "get", "create", "update", "disable"],
+            "effects": ["list", "get", "cancel", "retry", "reconcile"],
+            "branches": ["diff", "object", "link"],
+            "runs": ["start", "startBatch", "list", "get", "events", "cancel", "revertEligibility", "revert"],
             **_methods_payload(surface.actions),
         },
         "auth": _methods_payload(surface.auth),
@@ -347,7 +355,10 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
         "functions": _methods_payload(surface.functions),
         "ontology": {
             "_self": list(surface.ontology),
-            "branches": list(ONTOLOGY_BRANCH_METHODS),
+            "branches": {
+                "_self": list(ONTOLOGY_BRANCH_METHODS),
+                "actionTypes": ["list", "get", "create", "update", "delete"],
+            },
             "proposals": list(ONTOLOGY_PROPOSAL_METHODS),
             "resources": list(ONTOLOGY_RESOURCE_METHODS),
         },

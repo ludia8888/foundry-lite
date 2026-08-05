@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.ports import (
     OsdkApplicationBundle,
     OsdkApplicationClientRow,
+    OsdkMcpServerRow,
     OsdkSdkCompatibilityWindowRow,
     OsdkSdkReleaseChannelRow,
     OsdkSdkVersionBundle,
@@ -65,6 +66,31 @@ class DeveloperConsole:
             idempotency_key=idempotency_key,
         )
 
+    def configure_ontology_mcp_server(
+        self,
+        app_id: str,
+        *,
+        status: str,
+        description_markdown: str,
+        allowed_origins: Sequence[str] = (),
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> OsdkMcpServerRow:
+        return self._osdk_applications.configure_mcp_server(
+            app_id,
+            status=status,
+            description_markdown=description_markdown,
+            allowed_origins=allowed_origins,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def get_ontology_mcp_server(self, app_id: str, *, ctx: RequestContext | None = None) -> OsdkMcpServerRow:
+        return self._osdk_applications.get_mcp_server(app_id, ctx=ctx)
+
+    def list_ontology_mcp_hub(self, *, ctx: RequestContext | None = None) -> list[RuntimeJsonObject]:
+        return self._osdk_applications.list_mcp_hub(ctx=ctx)
+
     def create_osdk_application_client(
         self,
         app_id: str,
@@ -92,6 +118,43 @@ class DeveloperConsole:
         self, app_id: str, *, ctx: RequestContext | None = None
     ) -> list[OsdkApplicationClientRow]:
         return self._osdk_applications.list_clients(app_id, ctx=ctx)
+
+    def rotate_osdk_application_client_secret(
+        self,
+        app_id: str,
+        client_row_id: str,
+        *,
+        reason: str | None = None,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject:
+        return self._osdk_applications.rotate_client_secret(
+            app_id,
+            client_row_id,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def revoke_osdk_application_client_secret(
+        self,
+        app_id: str,
+        client_row_id: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject:
+        return self._osdk_applications.revoke_client_secret(
+            app_id,
+            client_row_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def list_osdk_application_client_secret_versions(
+        self, app_id: str, client_row_id: str, *, ctx: RequestContext | None = None
+    ) -> list[RuntimeJsonObject]:
+        return self._osdk_applications.list_client_secret_versions(app_id, client_row_id, ctx=ctx)
 
     def update_osdk_application_client(
         self,

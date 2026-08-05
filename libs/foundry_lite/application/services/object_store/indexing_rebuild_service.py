@@ -305,6 +305,7 @@ class ObjectIndexRebuildService(CoreService):
             if not should_delete_missing_source_item(
                 is_deleted=bool(record["deleted"]),
                 is_present_in_source=str(record["object_id"]) in source_object_ids,
+                is_source_backed=record["source_dataset_version_id"] is not None,
                 index_mode=plan.mode,
             ):
                 continue

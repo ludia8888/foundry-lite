@@ -10,6 +10,8 @@ from foundry_lite.application.ports.ontology_definitions import OntologyJsonObje
 
 
 class ActionCatalogItem(TypedDict):
+    """One permission-filtered canonical Action catalog entry."""
+
     apiName: str
     displayName: str
     description: str | None
@@ -21,15 +23,34 @@ class ActionCatalogItem(TypedDict):
     contract: OntologyJsonObject
     riskLevel: str
     agentExecutionPolicy: str
+    access: OntologyJsonObject
     enabled: bool
 
 
 class ActionCatalogPage(TypedDict):
+    """Cursor page of Action catalog entries."""
+
     items: list[ActionCatalogItem]
     nextCursor: str | None
 
 
+class ActionMediaUploadResult(TypedDict):
+    """Provisional immutable media reference returned for an Action parameter."""
+
+    actionApiName: str
+    parameter: str
+    referenceKind: str
+    reference: Mapping[str, object]
+    mediaTransactionId: str
+    uploadState: str
+    isRetentionMarked: bool
+    isIdempotentReplay: bool
+    malwareScan: Mapping[str, object]
+
+
 class ActionExecutionPlanResponse(TypedDict):
+    """Immutable, hash-addressed preview of edits, effects, risk, and authorization."""
+
     actionApiName: str
     ontologyVersionId: str
     definitionFingerprint: str
@@ -52,18 +73,24 @@ class ActionExecutionPlanResponse(TypedDict):
 
 
 class ActionValidationIssue(TypedDict):
+    """Machine-readable reason that an Action target or parameter is invalid."""
+
     code: str
     message: str
     details: NotRequired[Mapping[str, object]]
 
 
 class ActionValidationParameterResult(TypedDict):
+    """Validation result for one canonical Action parameter."""
+
     result: str
     required: bool
     issues: list[ActionValidationIssue]
 
 
 class ActionValidationTargetResult(TypedDict):
+    """OCC-aware validation result for the requested target object."""
+
     result: str
     objectType: str
     objectId: str
@@ -72,15 +99,28 @@ class ActionValidationTargetResult(TypedDict):
     issues: list[ActionValidationIssue]
 
 
+class ActionCriteriaEvaluation(TypedDict):
+    """Redacted tree explaining a submission-criteria decision."""
+
+    status: str
+    reason: str | None
+    tree: Mapping[str, object] | None
+
+
 class ActionValidationResponse(TypedDict):
+    """Complete non-mutating validation response for an Action request."""
+
     actionApiName: str
     result: str
     target: ActionValidationTargetResult
     parameters: dict[str, ActionValidationParameterResult]
     submissionCriteria: list[ActionValidationIssue]
+    submissionCriteriaEvaluation: ActionCriteriaEvaluation | None
 
 
 class ActionEditSummary(TypedDict):
+    """Committed object edit evidence returned to an Action caller."""
+
     objectType: str
     objectId: str
     objectEditId: NotRequired[str]
@@ -90,12 +130,16 @@ class ActionEditSummary(TypedDict):
 
 
 class ActionCacheRefreshHint(TypedDict):
+    """Typed client cache keys invalidated by an Action commit."""
+
     objectKeys: list[str]
     objectTypeKeys: list[str]
     actionRunKeys: list[str]
 
 
 class ActionPlanEdit(TypedDict):
+    """Compact object-operation row within an Action plan summary."""
+
     objectType: str
     objectId: str
     operation: str
@@ -113,6 +157,8 @@ class ActionPlanSummary(TypedDict):
 
 
 class ActionApplyResponse(TypedDict):
+    """Synchronous Action commit result with durable run evidence."""
+
     actionRunId: str
     status: str
     target: Mapping[str, object]
@@ -127,6 +173,8 @@ class ActionApplyResponse(TypedDict):
 
 
 class ActionWritebackReconciliationResult(TypedDict):
+    """Outcome of reconciling an ambiguous external writeback."""
+
     actionRunId: str
     writebackId: str
     status: str
@@ -138,6 +186,8 @@ class ActionWritebackReconciliationResult(TypedDict):
 
 
 class ActionWritebackRecoveryItem(TypedDict):
+    """One operator-visible recovery decision for an external writeback."""
+
     writebackId: str
     actionRunId: str
     status: str
@@ -151,6 +201,8 @@ class ActionWritebackRecoveryItem(TypedDict):
 
 
 class ActionWritebackRecoveryResult(TypedDict):
+    """Aggregate result of a bounded writeback recovery pass."""
+
     processed: int
     reconciled: int
     skipped: int
@@ -159,6 +211,8 @@ class ActionWritebackRecoveryResult(TypedDict):
 
 
 class ActionWritebackQueueItem(TypedDict):
+    """Durable writeback queue entry exposed for operator investigation."""
+
     writebackId: str
     actionRunId: str
     status: str
@@ -177,10 +231,14 @@ class ActionWritebackQueueItem(TypedDict):
 
 
 class ActionWritebackQueueResult(TypedDict):
+    """Operator-visible collection of pending writeback entries."""
+
     items: list[ActionWritebackQueueItem]
 
 
 class ActionBatchTargetResult(TypedDict):
+    """Committed evidence for one target in an atomic batch Action."""
+
     objectId: str
     objectEditId: str
     newObjectVersion: int
@@ -188,6 +246,8 @@ class ActionBatchTargetResult(TypedDict):
 
 
 class ActionBatchApplyResponse(TypedDict):
+    """All-or-nothing multi-target Action result."""
+
     actionRunId: str
     status: str
     objectType: str
@@ -218,12 +278,16 @@ class ActionBatchApplyCommand:
 
 @dataclass(frozen=True)
 class ActionBatchApplyOutcome:
+    """Internal success-or-deferred-error carrier for batch application."""
+
     response: ActionBatchApplyResponse | None = None
     deferred_error: Exception | None = None
 
 
 @dataclass(frozen=True)
 class ActionApplyCommand:
+    """Normalized idempotent command consumed by the Action application service."""
+
     action_api_name: str
     object_type: str
     object_id: str
@@ -240,5 +304,7 @@ class ActionApplyCommand:
 
 @dataclass(frozen=True)
 class ActionApplyOutcome:
+    """Internal success-or-deferred-error carrier for one Action application."""
+
     response: ActionApplyResponse | None = None
     deferred_error: Exception | None = None

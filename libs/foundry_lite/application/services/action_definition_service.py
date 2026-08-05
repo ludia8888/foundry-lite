@@ -9,6 +9,7 @@ from foundry_lite.application.services.action_catalog_payloads import (
     decode_action_catalog_cursor,
     encode_action_catalog_cursor,
 )
+from foundry_lite.application.services.action_permission_guards import can_access_action_type
 from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
@@ -38,9 +39,9 @@ class ActionDefinitionService(CoreService):
             active = self.ontology_lookup_service._active_ontology_version(conn, request_context)
             rows = self._action_rows(conn, request_context, active["id"])
         after = decode_action_catalog_cursor(cursor, active["id"], request_context.application_id)
-        visible = [row for row in rows if self._is_visible(request_context, row["api_name"])]
+        visible = [row for row in rows if self._is_visible(request_context, row)]
         page = _page_after(visible, after)[: bounded_limit + 1]
-        items = [action_catalog_item(row, active["id"]) for row in page[:bounded_limit]]
+        items = [action_catalog_item(row, active["id"], request_context) for row in page[:bounded_limit]]
         next_cursor = _next_cursor(page, bounded_limit, active["id"], request_context.application_id)
         return {"items": items, "nextCursor": next_cursor}
 
@@ -56,29 +57,32 @@ class ActionDefinitionService(CoreService):
         with self.engine.begin() as conn:
             active = self.ontology_lookup_service._active_ontology_version(conn, request_context)
             row = self.ontology_lookup_service._active_action_type(conn, request_context, action_api_name)
-        return action_catalog_item(row, active["id"])
+        if not can_access_action_type(request_context, row, "view"):
+            raise PermissionDenied("permission denied to view Action Type", details={"actionType": action_api_name})
+        return action_catalog_item(row, active["id"], request_context)
 
     def action_schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return dict(self.get_action(action_api_name, ctx=ctx)["parameterSchema"])
 
     def _action_rows(self, conn: TransactionContext, ctx: RequestContext, version_id: str) -> list[ActionTypeRow]:
         object_rows = self.ontology_lookup_service._object_types_for_version(conn, ctx, version_id)
+        interface_rows = self.ontology_lookup_service._interface_types_for_version(conn, ctx, version_id)
         rows = {
             action["id"]: action
-            for object_row in object_rows
-            for action in self.ontology_lookup_service._actions_for_target(conn, object_row["id"])
+            for target in (*object_rows, *interface_rows)
+            for action in self.ontology_lookup_service._actions_for_target(conn, target["id"])
             if action["enabled"]
         }
         return sorted(rows.values(), key=lambda row: row["api_name"])
 
-    def _is_visible(self, ctx: RequestContext, action_api_name: str) -> bool:
+    def _is_visible(self, ctx: RequestContext, row: ActionTypeRow) -> bool:
         try:
             self.osdk_application_service.require_resource_scope(
-                ctx, resource_type="action", resource_api_name=action_api_name, operation="validate"
+                ctx, resource_type="action", resource_api_name=row["api_name"], operation="validate"
             )
         except PermissionDenied:
             return False
-        return True
+        return can_access_action_type(ctx, row, "view")
 
 
 def _bounded_limit(limit: int) -> int:

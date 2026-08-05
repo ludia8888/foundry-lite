@@ -6,7 +6,13 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypedDict, cast
 
-from foundry_lite.application.action_types import ActionApplyResponse, ActionValidationResponse
+from foundry_lite.application.osdk_actions import (
+    OsdkActionBinding,
+    OsdkActionInvoker,
+    OsdkActionType,
+    OsdkBoundAction,
+    action_type,
+)
 from foundry_lite.application.osdk_aggregation import (
     OsdkAggregateResult,
     aggregate_request_select,
@@ -33,24 +39,10 @@ class OsdkObjectType:
 
 
 @dataclass(frozen=True)
-class OsdkActionType:
-    api_name: str
-    target_object_type: str
-    parameter_names: tuple[str, ...] = ()
-    required_parameters: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class OsdkLinkBinding:
     alias: str
     link_api_name: str
     target_object_type: OsdkObjectType
-
-
-@dataclass(frozen=True)
-class OsdkActionBinding:
-    alias: str
-    action_type: OsdkActionType
 
 
 @dataclass(frozen=True)
@@ -169,77 +161,6 @@ class OsdkLinkSet:
         return _object_from_payload(self.source._client, self.source._ctx, payload)
 
 
-@dataclass(frozen=True)
-class OsdkActionInvoker:
-    _client: OsdkHost
-    action_type: OsdkActionType
-    _ctx: RequestContext | None = None
-
-    def apply_action(
-        self,
-        params: Mapping[str, object],
-        *,
-        idempotency_key: str,
-        target: OsdkObject | None = None,
-        object_id: str | None = None,
-        expected_object_version: int | None = None,
-        ctx: RequestContext | None = None,
-    ) -> ActionApplyResponse:
-        _validate_action_params(self.action_type, params)
-        target_ref = _action_target_ref(self.action_type, target, object_id, expected_object_version)
-        if not idempotency_key:
-            raise ValidationFailed("Python OSDK action requires idempotency_key")
-        return self._client.actions.apply(
-            self.action_type.api_name,
-            object_type=self.action_type.target_object_type,
-            object_id=target_ref.object_id,
-            expected_object_version=target_ref.object_version,
-            params=params,
-            idempotency_key=idempotency_key,
-            ctx=ctx or self._ctx,
-        )
-
-    def validate_action(
-        self,
-        params: Mapping[str, object],
-        *,
-        target: OsdkObject | None = None,
-        object_id: str | None = None,
-        expected_object_version: int | None = None,
-        ctx: RequestContext | None = None,
-    ) -> ActionValidationResponse:
-        _validate_action_params(self.action_type, params)
-        target_ref = _action_target_ref(self.action_type, target, object_id, expected_object_version)
-        return self._client.actions.validate(
-            self.action_type.api_name,
-            object_type=self.action_type.target_object_type,
-            object_id=target_ref.object_id,
-            expected_object_version=target_ref.object_version,
-            params=params,
-            ctx=ctx or self._ctx,
-        )
-
-
-@dataclass(frozen=True)
-class OsdkBoundAction:
-    source: OsdkObject
-    action_type: OsdkActionType
-
-    def apply_action(self, params: Mapping[str, object], *, idempotency_key: str) -> ActionApplyResponse:
-        invoker = OsdkActionInvoker(self.source._client, self.action_type, self.source._ctx)
-        return invoker.apply_action(params, idempotency_key=idempotency_key, target=self.source)
-
-    def validate_action(self, params: Mapping[str, object]) -> ActionValidationResponse:
-        invoker = OsdkActionInvoker(self.source._client, self.action_type, self.source._ctx)
-        return invoker.validate_action(params, target=self.source)
-
-
-@dataclass(frozen=True)
-class OsdkTargetRef:
-    object_id: str
-    object_version: int
-
-
 class OsdkLinks:
     def __init__(self, source: OsdkObject) -> None:
         self._source = source
@@ -264,16 +185,6 @@ class OsdkActions:
 
 def object_type(api_name: str, *, property_names: Sequence[str] = ()) -> OsdkObjectType:
     return OsdkObjectType(api_name=api_name, property_names=tuple(property_names))
-
-
-def action_type(
-    api_name: str,
-    *,
-    target_object_type: str,
-    parameter_names: Sequence[str] = (),
-    required_parameters: Sequence[str] = (),
-) -> OsdkActionType:
-    return OsdkActionType(api_name, target_object_type, tuple(parameter_names), tuple(required_parameters))
 
 
 def osdk_resource(
@@ -408,37 +319,6 @@ def _object_from_payload(client: OsdkHost, ctx: RequestContext | None, payload: 
 
 def _target_missing(link: ObjectLinkPayload) -> bool:
     return bool(link["to"].get("targetMissing"))
-
-
-def _validate_action_params(action_type_resource: OsdkActionType, params: Mapping[str, object]) -> None:
-    missing = sorted(set(action_type_resource.required_parameters) - set(params))
-    if missing:
-        raise ValidationFailed("Python OSDK action params missing required parameter", details={"missing": missing})
-    unknown = sorted(set(params) - set(action_type_resource.parameter_names))
-    if action_type_resource.parameter_names and unknown:
-        raise ValidationFailed("Python OSDK action params include unknown parameter", details={"unknown": unknown})
-
-
-def _action_target_ref(
-    action_type_resource: OsdkActionType,
-    target: OsdkObject | None,
-    object_id: str | None,
-    expected_object_version: int | None,
-) -> OsdkTargetRef:
-    if target is not None:
-        _validate_target_object_type(action_type_resource, target.object_type)
-        return OsdkTargetRef(target.object_id, target.object_version)
-    if object_id is None or expected_object_version is None:
-        raise ValidationFailed("Python OSDK action target requires object_id and expected_object_version")
-    return OsdkTargetRef(object_id, expected_object_version)
-
-
-def _validate_target_object_type(action_type_resource: OsdkActionType, object_type_name: str) -> None:
-    if object_type_name != action_type_resource.target_object_type:
-        raise ValidationFailed(
-            "Python OSDK action target object type mismatch",
-            details={"expected": action_type_resource.target_object_type, "actual": object_type_name},
-        )
 
 
 Order = object_type(

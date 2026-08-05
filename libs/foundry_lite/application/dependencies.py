@@ -12,7 +12,10 @@ from foundry_lite.application.dependency_action import (
     ActionDependencyAccessors,
     ActionEffectExecutor,
     ActionExecutionRepository,
+    ActionFileScanner,
     ActionFunctionExecutor,
+    ActionNotificationPolicyRepository,
+    ActionNotificationRecipientDirectory,
     ActionRepository,
     ActionRunOrchestrator,
 )
@@ -170,8 +173,11 @@ class CoreDependencies(ActionDependencyAccessors):
     action_branch_repository: ActionBranchRepository
     action_execution_repository: ActionExecutionRepository
     action_effect_executor: ActionEffectExecutor
+    action_file_scanner: ActionFileScanner
     action_function_executor: ActionFunctionExecutor
     action_run_orchestrator: ActionRunOrchestrator
+    action_notification_policy_repository: ActionNotificationPolicyRepository
+    action_notification_recipient_directory: ActionNotificationRecipientDirectory
     paths: PathDependencies
     security: SecurityDependencies
     action: ActionDependencies
@@ -215,11 +221,8 @@ class CoreDependencies(ActionDependencyAccessors):
         fill_missing_bundles_from_flat_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
         apply_flat_dependency_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
         assign_dependency_bundles(self, bundles)
-        object.__setattr__(
-            self,
-            "pipeline_dag_orchestrator",
-            pipeline_dag_orchestrator or UnavailablePipelineDagOrchestrator(),
-        )
+        orchestrator = pipeline_dag_orchestrator or UnavailablePipelineDagOrchestrator()
+        object.__setattr__(self, "pipeline_dag_orchestrator", orchestrator)
         object.__setattr__(self, "profile", RuntimeProfile.from_value(profile))
 
     @property

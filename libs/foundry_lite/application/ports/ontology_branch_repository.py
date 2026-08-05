@@ -40,6 +40,18 @@ class OntologyBranchRow(TypedDict):
     merged_version_number: int | None
 
 
+class OntologyBranchActionIdempotencyRow(TypedDict):
+    id: str
+    tenant_id: str
+    actor_user_id: str
+    branch_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    response_json: dict[str, object]
+    created_at: str
+
+
 @dataclass(frozen=True)
 class OntologyBranchRecord:
     branch_id: str
@@ -65,6 +77,19 @@ class OntologyBranchRebase:
     content_fingerprint: str
     rebased_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class OntologyBranchActionIdempotencyRecord:
+    record_id: str
+    tenant_id: str
+    actor_user_id: str
+    branch_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    response_json: dict[str, object]
+    created_at: str
 
 
 class OntologyBranchRepository(Protocol):
@@ -165,4 +190,26 @@ class OntologyBranchRepository(Protocol):
         updated_at: str,
     ) -> TransitionResult:
         """CAS open -> merged/abandoned, recording the merged version when merging."""
+        ...
+
+    def action_idempotency_record(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        actor_user_id: str,
+        branch_id: str,
+        operation: str,
+        idempotency_key: str,
+    ) -> OntologyBranchActionIdempotencyRow | None:
+        """Return the durable result bound to one branch Action mutation key."""
+        ...
+
+    def insert_action_idempotency_or_existing(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: OntologyBranchActionIdempotencyRecord,
+    ) -> OntologyBranchActionIdempotencyRow | None:
+        """Insert the record, returning the existing winner on unique conflict."""
         ...

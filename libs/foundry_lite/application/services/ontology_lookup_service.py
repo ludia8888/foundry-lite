@@ -170,3 +170,15 @@ class OntologyLookupService(CoreService):
         if row is None:
             raise NotFound("object type not found", details={"object_type_id": object_type_id})
         return row
+
+    def _object_type_by_id_or_none(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_id: str,
+    ) -> ObjectTypeRow | None:
+        return self.ontology_repository.object_type_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_id=object_type_id,
+        )

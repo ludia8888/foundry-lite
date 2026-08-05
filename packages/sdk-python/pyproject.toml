@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foundry-lite-osdk"
+version = "0.1.0"
+description = "Generated Python OSDK for a version-pinned Foundry-lite Ontology."
+requires-python = ">=3.12"
+dependencies = ["foundry-lite>=0.1.0"]
+
+[tool.setuptools.package-data]
+foundry_lite_sdk = ["py.typed"]

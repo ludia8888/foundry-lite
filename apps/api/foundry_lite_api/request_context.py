@@ -16,6 +16,7 @@ def _ctx(
     x_tenant_id: str | None = Header(default=None),
     x_user_id: str | None = Header(default=None),
     x_roles: str | None = Header(default=None),
+    x_user_attributes: str | None = Header(default=None),
     x_foundry_lite_app_id: str | None = Header(default=None),
     x_foundry_lite_client_id: str | None = Header(default=None),
     x_foundry_lite_scopes: str | None = Header(default=None),
@@ -27,6 +28,7 @@ def _ctx(
         x_tenant_id=x_tenant_id,
         x_user_id=x_user_id,
         x_roles=x_roles,
+        x_user_attributes=x_user_attributes,
         x_foundry_lite_app_id=x_foundry_lite_app_id,
         x_foundry_lite_client_id=x_foundry_lite_client_id,
         x_foundry_lite_scopes=x_foundry_lite_scopes,
@@ -41,6 +43,8 @@ def _ctx(
         application_id=principal.application_id,
         client_id=principal.client_id,
         token_scopes=principal.token_scopes,
+        oauth_session_id=principal.oauth_session_id,
+        user_attributes=principal.user_attributes,
     )
 
 
@@ -57,6 +61,8 @@ def _websocket_ctx(websocket: WebSocket) -> RequestContext:
         application_id=principal.application_id,
         client_id=principal.client_id,
         token_scopes=principal.token_scopes,
+        oauth_session_id=principal.oauth_session_id,
+        user_attributes=principal.user_attributes,
     )
 
 
@@ -67,6 +73,7 @@ def _collect_websocket_credentials(websocket: WebSocket) -> dict[str, str]:
         ("X-Tenant-ID", websocket.headers.get("X-Tenant-ID")),
         ("X-User-ID", websocket.headers.get("X-User-ID")),
         ("X-Roles", websocket.headers.get("X-Roles")),
+        ("X-User-Attributes", websocket.headers.get("X-User-Attributes")),
         ("X-Foundry-Lite-App-ID", websocket.headers.get("X-Foundry-Lite-App-ID")),
         ("X-Foundry-Lite-Client-ID", websocket.headers.get("X-Foundry-Lite-Client-ID")),
         ("X-Foundry-Lite-Scopes", websocket.headers.get("X-Foundry-Lite-Scopes")),
@@ -116,6 +123,7 @@ def _collect_credentials(
     x_tenant_id: str | None,
     x_user_id: str | None,
     x_roles: str | None,
+    x_user_attributes: str | None,
     x_foundry_lite_app_id: str | None,
     x_foundry_lite_client_id: str | None,
     x_foundry_lite_scopes: str | None,
@@ -125,6 +133,7 @@ def _collect_credentials(
         ("X-Tenant-ID", _header_or_request(x_tenant_id, request, "X-Tenant-ID")),
         ("X-User-ID", _header_or_request(x_user_id, request, "X-User-ID")),
         ("X-Roles", _header_or_request(x_roles, request, "X-Roles")),
+        ("X-User-Attributes", _header_or_request(x_user_attributes, request, "X-User-Attributes")),
         ("X-Foundry-Lite-App-ID", _header_or_request(x_foundry_lite_app_id, request, "X-Foundry-Lite-App-ID")),
         ("X-Foundry-Lite-Client-ID", _header_or_request(x_foundry_lite_client_id, request, "X-Foundry-Lite-Client-ID")),
         ("X-Foundry-Lite-Scopes", _header_or_request(x_foundry_lite_scopes, request, "X-Foundry-Lite-Scopes")),

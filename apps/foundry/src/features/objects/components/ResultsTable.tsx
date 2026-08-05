@@ -16,6 +16,7 @@ import {
   statusIntentFor,
   type ObjectRef,
 } from "../lib/explorer-model";
+import { InlineActionCell, inlineActionBinding } from "./InlineActionCell";
 
 const MAX_PROPERTY_COLUMNS = 8;
 
@@ -31,10 +32,12 @@ interface ResultsTableProps {
   onNextPage: () => void;
   onFirstPage: () => void;
   onOpenObject: (ref: ObjectRef) => void;
+  onObjectsChanged: () => void;
 }
 
 function buildColumns(
   objectView: FoundryLiteOntologyObjectView,
+  onObjectsChanged: () => void,
 ): DataTableColumn<GenericObject>[] {
   const titleColumn: DataTableColumn<GenericObject> = {
     key: "__title",
@@ -66,12 +69,31 @@ function buildColumns(
         : undefined,
       render: (object) => {
         const value = object.properties[property.apiName];
-        if (property.apiName === "status" && typeof value === "string") {
-          return (
+        const rendered = property.apiName === "status" && typeof value === "string" ? (
             <StatusPill intent={statusIntentFor(value)}>{value}</StatusPill>
+          ) : (
+            formatPropertyValue(value)
+          );
+        const inlineAction = objectView.actions
+          .map((actionView) => ({ actionView, binding: inlineActionBinding(actionView) }))
+          .filter(({ actionView, binding }) =>
+            Boolean(actionView.isEnabled && binding?.propertyApiName === property.apiName),
+          )
+          .sort((left, right) => left.actionView.apiName.localeCompare(right.actionView.apiName))[0];
+        if (property.isEditable && inlineAction?.binding) {
+          return (
+            <InlineActionCell
+              actionView={inlineAction.actionView}
+              binding={inlineAction.binding}
+              object={object}
+              property={property}
+              onApplied={onObjectsChanged}
+            >
+              {rendered}
+            </InlineActionCell>
           );
         }
-        return formatPropertyValue(value);
+        return rendered;
       },
     }));
   const versionColumn: DataTableColumn<GenericObject> = {
@@ -97,6 +119,7 @@ export function ResultsTable({
   onNextPage,
   onFirstPage,
   onOpenObject,
+  onObjectsChanged,
 }: ResultsTableProps) {
   if (isLoading) return <LoadingState rowCount={8} />;
   if (error) return <ErrorState error={error} onRetry={onRetry} />;
@@ -104,7 +127,7 @@ export function ResultsTable({
   return (
     <div className="space-y-2">
       <DataTable
-        columns={buildColumns(objectView)}
+        columns={buildColumns(objectView, onObjectsChanged)}
         rows={objects}
         rowKey={(object) => object.objectId}
         selectedKey={selectedObjectId}

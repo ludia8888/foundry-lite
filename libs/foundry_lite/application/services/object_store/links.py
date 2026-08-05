@@ -6,12 +6,17 @@ from collections.abc import Sequence
 from typing import Literal, Protocol
 
 from foundry_lite.application.ports import (
+    ActionRepository,
     ObjectLinkPayload,
     ObjectLinkRow,
     ObjectRecordRow,
     OsdkResourceOperation,
     OsdkResourceType,
     TransactionContext,
+)
+from foundry_lite.application.services.action_log_payloads import (
+    action_and_object_from_log_link,
+    action_api_name_from_log_object_type,
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.query_protocols import ObjectQueryOntologyLookup
@@ -39,10 +44,11 @@ class _OsdkScopeBoundary(Protocol):
 
 
 class ObjectLinksService(CoreService):
-    required_dependencies = ("engine", "policy", "object_read_repository")
+    required_dependencies = ("engine", "policy", "object_read_repository", "action_repository")
     required_collaborators = ("ontology_service", "osdk_application_service")
     ontology_service: ObjectQueryOntologyLookup
     osdk_application_service: _OsdkScopeBoundary
+    action_repository: ActionRepository
 
     def get_links(
         self,
@@ -54,6 +60,9 @@ class ObjectLinksService(CoreService):
     ) -> list[ObjectLinkPayload]:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
+        virtual_coordinate = action_and_object_from_log_link(link_type_api_name)
+        if virtual_coordinate is not None:
+            return self._action_log_links(object_type_api_name, object_id, link_type_api_name, virtual_coordinate, ctx)
         self._require_link_read_scope(ctx, link_type_api_name)
         with self.engine.begin() as conn:
             if not self._can_traverse_from(conn, ctx, object_type_api_name, object_id):
@@ -69,6 +78,83 @@ class ObjectLinksService(CoreService):
             if links:
                 return self._link_payloads(conn, ctx, link_type_api_name, object_type_api_name, object_id, links)
             return self._reverse_link_payloads(conn, ctx, link_type_api_name, object_type_api_name, object_id)
+
+    def _action_log_links(
+        self,
+        source_type: str,
+        source_id: str,
+        link_type: str,
+        coordinate: tuple[str, str],
+        ctx: RequestContext,
+    ) -> list[ObjectLinkPayload]:
+        action_api_name, target_type = coordinate
+        if action_api_name_from_log_object_type(source_type) != action_api_name:
+            return []
+        self.policy.require(ctx, "action:log:read")
+        self._require_virtual_log_scopes(ctx, action_api_name, target_type)
+        with self.engine.begin() as conn:
+            log = self.action_repository.action_log_by_run_id(
+                transaction=conn, tenant_id=ctx.tenant_id, action_run_id=source_id
+            )
+            if log is None or log["action_type_api_name"] != action_api_name:
+                return []
+            edited = self.action_repository.action_log_objects(
+                transaction=conn, tenant_id=ctx.tenant_id, action_log_entry_id=log["id"]
+            )
+            return self._virtual_log_link_payloads(conn, ctx, source_type, source_id, link_type, target_type, edited)
+
+    def _require_virtual_log_scopes(self, ctx: RequestContext, action_api_name: str, target_type: str) -> None:
+        self.osdk_application_service.require_resource_scope(
+            ctx, resource_type="action", resource_api_name=action_api_name, operation="validate"
+        )
+        self.osdk_application_service.require_resource_scope(
+            ctx, resource_type="object", resource_api_name=target_type, operation="read"
+        )
+
+    def _virtual_log_link_payloads(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        source_type: str,
+        source_id: str,
+        link_type: str,
+        target_type: str,
+        edited: Sequence[object],
+    ) -> list[ObjectLinkPayload]:
+        target_ids = list(
+            dict.fromkeys(
+                str(item["object_id"])
+                for item in edited
+                if isinstance(item, dict) and item.get("object_type_api_name") == target_type
+            )
+        )
+        rows = self.object_read_repository.object_records(
+            transaction=conn, tenant_id=ctx.tenant_id, object_type_api_name=target_type, object_ids=target_ids
+        )
+        visible = {
+            row["object_id"]: row
+            for row in rows
+            if row_visible(self._target_scope(conn, ctx, {}, target_type), row["properties"])
+        }
+        return [
+            self._virtual_log_link_payload(ctx, source_type, source_id, link_type, target_type, target_id, visible)
+            for target_id in target_ids
+        ]
+
+    def _virtual_log_link_payload(
+        self,
+        ctx: RequestContext,
+        source_type: str,
+        source_id: str,
+        link_type: str,
+        target_type: str,
+        target_id: str,
+        visible: dict[str, ObjectRecordRow],
+    ) -> ObjectLinkPayload:
+        target = visible.get(target_id)
+        if target is None:
+            return self._missing_target_payload(link_type, source_type, source_id, target_type, target_id)
+        return self._link_payload(ctx, link_type, source_type, source_id, target)
 
     def _reverse_link_payloads(
         self,

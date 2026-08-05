@@ -3,7 +3,7 @@ import {
   useFoundryLiteClient,
   useFoundryLiteMutation,
 } from "@foundry-lite/sdk/react";
-import { KeyRound, Plus } from "lucide-react";
+import { History, KeyRound, Plus, RotateCw, ShieldX } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -48,6 +48,13 @@ export function ClientsTab({
   );
   const [pendingRowId, setPendingRowId] = useState<string | null>(null);
   const [lastKey, setLastKey] = useState<string | null>(null);
+  const [secretReceipt, setSecretReceipt] = useState<{
+    clientId: string;
+    clientSecret: string;
+  } | null>(null);
+  const [secretHistory, setSecretHistory] = useState<
+    Array<Record<string, unknown>>
+  >([]);
 
   const deactivate = useFoundryLiteMutation(
     ({ rowId, key }: { rowId: string; key: string }) =>
@@ -55,6 +62,23 @@ export function ClientsTab({
         idempotencyKey: key,
       }),
     { lockKey: ({ rowId }) => `developer:client:deactivate:${rowId}` },
+  );
+  const rotateSecret = useFoundryLiteMutation(
+    ({ rowId, key }: { rowId: string; key: string }) =>
+      client.developerConsole.osdkApplications.rotateClientSecret(
+        appId,
+        rowId,
+        { reason: "Operator rotation from Developer Console" },
+        { idempotencyKey: key },
+      ),
+    { lockKey: ({ rowId }) => `developer:client-secret:rotate:${rowId}` },
+  );
+  const revokeSecret = useFoundryLiteMutation(
+    ({ rowId, key }: { rowId: string; key: string }) =>
+      client.developerConsole.osdkApplications.revokeClientSecret(appId, rowId, {
+        idempotencyKey: key,
+      }),
+    { lockKey: ({ rowId }) => `developer:client-secret:revoke:${rowId}` },
   );
 
   const handleDeactivate = async (row: OsdkClientRow) => {
@@ -74,6 +98,42 @@ export function ClientsTab({
     setCreatedClient(row);
     void clientsQuery.reload();
     onClientsChanged();
+  };
+
+  const handleRotateSecret = async (row: OsdkClientRow) => {
+    const key = idempotencyKey("osdk_client_secret_rotate", row.id);
+    setLastKey(key);
+    const result = await rotateSecret.execute({ rowId: row.id, key });
+    if (result && typeof result.clientSecret === "string") {
+      setSecretReceipt({ clientId: row.clientId, clientSecret: result.clientSecret });
+      toast.success(`${row.clientId}의 Client Secret이 교체되었습니다`);
+      await clientsQuery.reload();
+      onClientsChanged();
+    }
+  };
+
+  const handleRevokeSecret = async (row: OsdkClientRow) => {
+    const key = idempotencyKey("osdk_client_secret_revoke", row.id);
+    setLastKey(key);
+    const result = await revokeSecret.execute({ rowId: row.id, key });
+    if (result) {
+      setSecretReceipt(null);
+      toast.success(`${row.clientId}의 Client Secret이 폐기되었습니다`);
+      await clientsQuery.reload();
+      onClientsChanged();
+    }
+  };
+
+  const handleSecretHistory = async (row: OsdkClientRow) => {
+    try {
+      const history = await client.developerConsole.osdkApplications.listClientSecretVersions(
+        appId,
+        row.id,
+      );
+      setSecretHistory(history);
+    } catch {
+      toast.error("Client Secret 이력을 불러오지 못했습니다");
+    }
   };
 
   const columns: readonly DataTableColumn<OsdkClientRow>[] = [
@@ -126,14 +186,31 @@ export function ClientsTab({
       className: "text-right",
       render: (row) =>
         row.status === "active" ? (
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => void handleDeactivate(row)}
-            disabled={deactivate.isRunning && pendingRowId === row.id}
-          >
-            비활성화
-          </Button>
+          <div className="flex justify-end gap-1">
+            {row.redirectUris.length === 0 ? (
+              <>
+                <Button variant="outline" size="xs" onClick={() => void handleRotateSecret(row)}>
+                  <RotateCw className="size-3" /> {row.currentSecretId ? "교체" : "발급"}
+                </Button>
+                <Button variant="ghost" size="xs" onClick={() => void handleSecretHistory(row)}>
+                  <History className="size-3" /> 이력
+                </Button>
+                {row.currentSecretId ? (
+                  <Button variant="ghost" size="xs" onClick={() => void handleRevokeSecret(row)}>
+                    <ShieldX className="size-3" /> 폐기
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => void handleDeactivate(row)}
+              disabled={deactivate.isRunning && pendingRowId === row.id}
+            >
+              비활성화
+            </Button>
+          </div>
         ) : (
           <span className="text-[11px] text-muted-foreground">-</span>
         ),
@@ -181,6 +258,35 @@ export function ClientsTab({
         </div>
       ) : null}
 
+      {secretReceipt ? (
+        <div className="space-y-2 rounded border border-warning/40 bg-warning/5 p-3">
+          <div className="flex items-center gap-1.5 text-[13px] font-semibold">
+            <KeyRound className="size-4" /> {secretReceipt.clientId} 새 Client Secret
+          </div>
+          <CopyField
+            label="Client Secret"
+            value={secretReceipt.clientSecret}
+            sensitiveNote="이 값은 지금 한 번만 표시됩니다. 안전한 비밀 저장소에 복사하세요."
+          />
+          <div className="flex justify-end">
+            <Button variant="ghost" size="xs" onClick={() => setSecretReceipt(null)}>닫기</Button>
+          </div>
+        </div>
+      ) : null}
+
+      {secretHistory.length > 0 ? (
+        <div className="space-y-2 rounded border bg-card p-3">
+          <div className="section-label">Client Secret 변경 이력</div>
+          {secretHistory.map((item) => (
+            <div key={String(item.secretId)} className="flex flex-wrap justify-between gap-2 border-t pt-2 text-[11px] first:border-t-0 first:pt-0">
+              <span className="font-mono">{String(item.secretVersion)}</span>
+              <span>{String(item.status)}</span>
+              <span className="text-muted-foreground">마지막 사용 {String(item.lastUsedAt ?? "-")}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {clientsQuery.error ? (
         <ErrorState
           error={clientsQuery.error}
@@ -206,6 +312,8 @@ export function ClientsTab({
       )}
 
       {deactivate.error ? <ErrorState error={deactivate.error} /> : null}
+      {rotateSecret.error ? <ErrorState error={rotateSecret.error} /> : null}
+      {revokeSecret.error ? <ErrorState error={revokeSecret.error} /> : null}
       {lastKey ? (
         <div className="font-mono text-[11px] text-muted-foreground">
           idempotency_key={lastKey}

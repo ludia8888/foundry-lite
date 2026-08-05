@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from collections.abc import Mapping
-from datetime import datetime
+from typing import Protocol
 
 from foundry_lite.application.action_log_types import (
     ActionLogEntryRow,
@@ -21,21 +20,41 @@ from foundry_lite.application.services.action_log_payloads import (
     decode_action_log_cursor,
     next_action_log_cursor,
 )
-from foundry_lite.application.services.action_log_writer import record_action_log
+from foundry_lite.application.services.action_log_writer import record_action_log_for_definition
 from foundry_lite.application.services.action_protocols import ActionObjectIndexer, ActionRuntimeBoundary
 from foundry_lite.application.services.action_revert_mutations import apply_inverse_edit
+from foundry_lite.application.services.action_runtime_monitoring import (
+    ACTION_MONITORING_RUN_LIMIT,
+    action_monitoring_window,
+    action_runtime_monitoring_payload,
+)
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
-from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+
+
+class _ActionMediaRevertBoundary(Protocol):
+    def bind_reverted_references(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        edits: list[ObjectEditRow],
+    ) -> None: ...
 
 
 class ActionLogRevertService(CoreService):
     """Query Action logs and restore eligible internal Ontology edits atomically."""
 
     required_dependencies = ("engine", "policy", "action_repository", "action_execution_repository")
-    required_collaborators = ("object_index_record_mutation_service", "ontology_lookup_service", "runtime_service")
+    required_collaborators = (
+        "action_media_runtime_service",
+        "object_index_record_mutation_service",
+        "ontology_lookup_service",
+        "runtime_service",
+    )
+    action_media_runtime_service: _ActionMediaRevertBoundary
     action_repository: ActionRepository
     action_execution_repository: ActionExecutionRepository
     object_index_record_mutation_service: ActionObjectIndexer
@@ -60,17 +79,23 @@ class ActionLogRevertService(CoreService):
         return {"items": items, "nextCursor": next_action_log_cursor(rows, bounded), "monitoring": monitoring}
 
     def _monitoring(self, transaction: TransactionContext, ctx: RequestContext) -> dict[str, object]:
-        window_limit = 1_000
+        started_at, ended_at = action_monitoring_window()
         rows = self.action_repository.action_runs_for_monitoring(
             transaction=transaction,
             tenant_id=ctx.tenant_id,
-            limit=window_limit + 1,
+            created_at_from=started_at,
+            limit=ACTION_MONITORING_RUN_LIMIT + 1,
         )
         effect_counts = self.action_execution_repository.effect_status_counts(
             transaction=transaction,
             tenant_id=ctx.tenant_id,
         )
-        return _monitoring_payload(rows, effect_counts, window_limit)
+        return action_runtime_monitoring_payload(
+            rows,
+            effect_counts,
+            started_at=started_at,
+            ended_at=ended_at,
+        )
 
     def revert_eligibility(self, run_id: str, *, ctx: RequestContext) -> ActionRevertEligibility:
         """Explain whether all edits from one run are still the latest and reversible."""
@@ -94,6 +119,7 @@ class ActionLogRevertService(CoreService):
                 raise ConflictDetected("Action run is not revertible", details=dict(eligibility))
             revert_run_id = self._insert_revert_run(transaction, ctx, original, run_id, idempotency_key)
             committed = self._apply_inverse_edits(transaction, ctx, revert_run_id, edits)
+            self.action_media_runtime_service.bind_reverted_references(transaction, ctx, revert_run_id, edits)
             result = self._finalize_revert(transaction, ctx, original, log, revert_run_id, run_id, committed)
         return result
 
@@ -129,7 +155,7 @@ class ActionLogRevertService(CoreService):
         effects = self.action_execution_repository.effect_receipts_for_run(
             transaction=transaction, tenant_id=ctx.tenant_id, run_id=run["id"]
         )
-        return {
+        result: ActionRevertEligibility = {
             "actionRunId": run["id"],
             "isEligible": reason is None,
             "reason": reason,
@@ -137,6 +163,17 @@ class ActionLogRevertService(CoreService):
             "hasPreservedExternalEffects": bool(effects),
             "logEntryId": log["id"],
         }
+        compensation = self._compensation_action(log)
+        if compensation is not None:
+            result["compensationAction"] = compensation
+        return result
+
+    @staticmethod
+    def _compensation_action(log: ActionLogEntryRow) -> str | None:
+        result = log.get("result")
+        policy = result.get("revertPolicy") if isinstance(result, Mapping) else None
+        compensation = policy.get("compensationAction") if isinstance(policy, Mapping) else None
+        return compensation if isinstance(compensation, str) and compensation.strip() else None
 
     def _policy_blocker(
         self, ctx: RequestContext, run: ActionRunRow, log: ActionLogEntryRow, edits: list[ObjectEditRow]
@@ -339,12 +376,12 @@ class ActionLogRevertService(CoreService):
         action_type = self.ontology_lookup_service._active_action_type(
             transaction, ctx, original["action_type_api_name"]
         )
-        record_action_log(
+        record_action_log_for_definition(
             self.action_repository,
             transaction,
             ctx,
             revert_run_id,
-            compile_action_contract(action_type["definition"]),
+            action_type["definition"],
             edits,
             definition_version_override=original_log["definition_version"],
             is_revert_allowed_override=False,
@@ -412,45 +449,3 @@ def _revert_key(original_run_id: str, idempotency_key: str) -> str:
 
 def _revert_fingerprint(original_run_id: str) -> str:
     return "sha256:" + hashlib.sha256(f"action-revert:{original_run_id}".encode()).hexdigest()
-
-
-def _monitoring_payload(
-    rows: list[ActionRunRow], effect_counts: Mapping[str, int], window_limit: int
-) -> dict[str, object]:
-    visible = rows[:window_limit]
-    durations = [duration for row in visible if (duration := _duration_ms(row)) is not None]
-    terminal = [row for row in visible if row["completed_at"] is not None]
-    failures = [row for row in terminal if row["status"] in _FAILURE_STATUSES]
-    backlog = sum(effect_counts.get(status, 0) for status in ("pending", "delivering", "retry_wait"))
-    return {
-        "window": {"maxRuns": window_limit, "observedRuns": len(visible), "isTruncated": len(rows) > window_limit},
-        "durationMs": {"p95": _nearest_rank_p95(durations), "terminalSample": len(durations)},
-        "failure": {"count": len(failures), "rate": round(len(failures) / len(terminal), 4) if terminal else 0.0},
-        "effects": {
-            "deliveryBacklog": backlog,
-            "deadLetter": effect_counts.get("dead_letter", 0),
-            "outcomeUnknown": effect_counts.get("outcome_unknown", 0),
-        },
-    }
-
-
-def _duration_ms(row: ActionRunRow) -> int | None:
-    completed_at = row["completed_at"]
-    if completed_at is None:
-        return None
-    try:
-        started = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
-        completed = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return max(0, round((completed - started).total_seconds() * 1_000))
-
-
-def _nearest_rank_p95(values: list[int]) -> int | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    return ordered[max(0, math.ceil(len(ordered) * 0.95) - 1)]
-
-
-_FAILURE_STATUSES = {"failed", "conflict", "outcome_unknown", "compensation_required"}

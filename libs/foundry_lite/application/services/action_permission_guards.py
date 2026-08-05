@@ -11,6 +11,12 @@ from foundry_lite.application.services.action_helpers import (
     failure_injection_audit_ref,
     require_failure_injection_allowed,
 )
+from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3, compile_action_contract
+from foundry_lite.domain.action_runtime.action_permissions import (
+    ActionPermissionOperation,
+    can_access_action,
+    require_action_access,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.security.policy import PolicyService
@@ -38,6 +44,42 @@ def require_action_permission(
         action=action,
         after_ref={"permission": permission},
     )
+
+
+def can_access_action_type(
+    ctx: RequestContext,
+    action_type: ActionTypeRow,
+    operation: ActionPermissionOperation,
+) -> bool:
+    """Return whether one catalog row is visible for an Action operation."""
+    return can_access_action(ctx, compile_action_contract(action_type["definition"]).permissions, operation)
+
+
+def require_action_contract_permission(
+    engine: TransactionManager,
+    runtime_service: SupportsAudit,
+    ctx: RequestContext,
+    contract: ActionDefinitionV3,
+    operation: ActionPermissionOperation,
+    *,
+    action: str | None = None,
+) -> None:
+    """Require and audit the Action contract's independent View/Edit/Apply grant."""
+    try:
+        require_action_access(ctx, contract.api_name, contract.permissions, operation)
+    except PermissionDenied:
+        with engine.begin() as conn:
+            runtime_service._audit(
+                conn,
+                ctx,
+                event_type="permission.denied",
+                resource_type="action_type",
+                resource_id=contract.api_name,
+                action=action or operation,
+                decision="deny",
+                after_ref={"permission": f"action:{operation}:{contract.api_name}"},
+            )
+        raise
 
 
 def require_action_target_read(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from foundry_lite.application.ports import (
@@ -202,6 +203,63 @@ class OntologyRegistry:
     ) -> dict[str, object]:
         return self._branches.update_branch_content(
             branch_id, yaml_text=yaml_text, expected_fingerprint=expected_fingerprint, ctx=ctx
+        )
+
+    def list_branch_action_types(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._branches.list_branch_action_types(branch_id, ctx=ctx)
+
+    def get_branch_action_type(
+        self, branch_id: str, api_name: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self._branches.get_branch_action_type(branch_id, api_name, ctx=ctx)
+
+    def create_branch_action_type(
+        self,
+        branch_id: str,
+        *,
+        definition: Mapping[str, object],
+        expected_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.create_branch_action_type(
+            branch_id,
+            definition=definition,
+            expected_fingerprint=expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def update_branch_action_type(
+        self,
+        branch_id: str,
+        api_name: str,
+        *,
+        definition: Mapping[str, object],
+        expected_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.update_branch_action_type(
+            branch_id,
+            api_name,
+            definition=definition,
+            expected_fingerprint=expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def delete_branch_action_type(
+        self,
+        branch_id: str,
+        api_name: str,
+        *,
+        expected_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.delete_branch_action_type(
+            branch_id, api_name, expected_fingerprint=expected_fingerprint, idempotency_key=idempotency_key, ctx=ctx
         )
 
     def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:

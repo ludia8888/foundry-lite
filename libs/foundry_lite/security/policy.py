@@ -72,6 +72,14 @@ class PolicyService:
         "link:edit": {"admin", "data_engineer", "ops_manager"},
         "function:execute": {"admin", "data_engineer", "ops_manager"},
         "action:effect:execute": {"admin", "ops_manager"},
+        "action:effect:read": {"admin", "data_engineer", "ops_manager"},
+        "action:effect:manage": {"admin", "ops_manager"},
+        "action:notification-policy:read": {"admin", "data_engineer", "ops_manager"},
+        "action:notification-policy:manage": {"admin", "data_engineer"},
+        # Run observation is deliberately separate from execution. The run
+        # ledger can contain operational failure/effect evidence, so viewers do
+        # not receive it merely because they may browse the Ontology catalog.
+        "action:run:read": {"admin", "data_engineer", "ops_manager"},
         "action:log:read": {"admin", "data_engineer", "ops_manager"},
         "action:revert": {"admin", "ops_manager"},
         # explain exposes base/edit property layers plus operational lineage and

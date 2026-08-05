@@ -11,10 +11,11 @@ no writes and holds no mutable state; one instance is built per apply request.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from foundry_lite.application.action_types import ActionApplyCommand
-from foundry_lite.application.ports import ObjectRecordRow, TransactionContext
+from foundry_lite.application.ports import LinkTypeRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.action_edit_plan_committer import CommitLinkTypeResolver
 from foundry_lite.application.services.action_ir_compiler import V1_TARGET_PARAMETER
@@ -36,6 +37,7 @@ class LivePlanResolutionContext:
     object_lookup: ActionObjectRecordLookup
     ontology_lookup: ActionOntologyLookup
     link_type_lookup: CommitLinkTypeResolver
+    webhook_response_values: Mapping[str, object] | None = None
 
     # --- ValueResolutionContext -------------------------------------------------
     def parameter(self, name: str) -> object:
@@ -64,12 +66,14 @@ class LivePlanResolutionContext:
         raise ValidationFailed("function-backed value sources are not yet supported", details={"key": key})
 
     def current_user(self, attribute: str | None) -> object:
-        if attribute is not None:
-            raise ValidationFailed(
-                "current-user attribute/group value sources are not yet supported",
-                details={"attribute": attribute},
-            )
-        return self.ctx.actor_user_id
+        if attribute in (None, "id"):
+            return self.ctx.actor_user_id
+        if attribute in {"group", "groups", "roles"}:
+            return list(self.ctx.roles)
+        raise ValidationFailed(
+            "unsupported current-user action value attribute",
+            details={"attribute": attribute},
+        )
 
     def current_time(self, unit: str) -> str:
         now = _now()
@@ -79,7 +83,11 @@ class LivePlanResolutionContext:
         return _new_id(strategy or "gen")
 
     def webhook_response(self, field: str) -> object:
-        raise ValidationFailed("webhook response value sources are not yet supported", details={"field": field})
+        if self.webhook_response_values is None:
+            return {"$foundryDeferredSource": f"beforeEffect.response.{field}"}
+        if field not in self.webhook_response_values:
+            raise ValidationFailed("before-commit webhook response field is missing", details={"field": field})
+        return self.webhook_response_values[field]
 
     # --- PlanResolutionContext --------------------------------------------------
     def evaluate(self, expression: ValueExpression) -> object:
@@ -103,7 +111,43 @@ class LivePlanResolutionContext:
         # writing a link to a row the caller cannot see (or to a null-coerced id).
         meta = self.link_type_lookup.link_type(self.conn, self.ctx, link_type)
         endpoint_type = meta["from_api_name"] if role == "source" else meta["to_api_name"]
-        return self._require_ref(endpoint_type, str(self.evaluate(expression))).object_id
+        object_type, object_id = _object_reference(self.evaluate(expression))
+        if object_type is not None and object_type != endpoint_type:
+            raise ValidationFailed(
+                "link endpoint object type does not match the concrete link",
+                details={"expectedObjectType": endpoint_type, "objectType": object_type, "role": role},
+            )
+        return self._require_ref(endpoint_type, object_id).object_id
+
+    def resolve_interface_link_deletes(
+        self,
+        link_types: tuple[str, ...],
+        source: ValueExpression,
+        target: ValueExpression,
+    ) -> tuple[tuple[str, str, str], ...]:
+        source_type, source_id = _object_reference(self.evaluate(source))
+        target_type, target_id = _object_reference(self.evaluate(target))
+        metas = tuple(self.link_type_lookup.link_type(self.conn, self.ctx, name) for name in link_types)
+        selected = _matching_interface_links(metas, source_type, target_type)
+        self._require_unambiguous_interface_target(selected, target_type)
+        return tuple(self._resolved_link_delete(meta, source_id, target_id) for meta in selected)
+
+    def _require_unambiguous_interface_target(self, metas: tuple[LinkTypeRow, ...], target_type: str | None) -> None:
+        if target_type is not None:
+            return
+        concrete_targets = {meta["to_api_name"] for meta in metas}
+        if len(concrete_targets) > 1:
+            raise ValidationFailed(
+                "interface link delete needs a typed target reference",
+                details={"candidateObjectTypes": sorted(concrete_targets)},
+            )
+
+    def _resolved_link_delete(self, link: LinkTypeRow, source_id: str, target_id: str) -> tuple[str, str, str]:
+        source_type = link["from_api_name"]
+        target_type = link["to_api_name"]
+        self._require_ref(source_type, source_id)
+        self._require_ref(target_type, target_id)
+        return link["api_name"], source_id, target_id
 
     def generate_object_id(self, rule_id: str) -> str:
         del rule_id
@@ -140,3 +184,32 @@ class LivePlanResolutionContext:
                 },
             )
         return self.command.expected_object_version
+
+
+def _object_reference(value: object) -> tuple[str | None, str]:
+    if isinstance(value, Mapping):
+        object_type = value.get("objectType")
+        object_id = value.get("objectId")
+        if not isinstance(object_type, str) or not object_type or not isinstance(object_id, str) or not object_id:
+            raise ValidationFailed("typed object reference requires objectType and objectId")
+        return object_type, object_id
+    if isinstance(value, str) and value:
+        return None, value
+    raise ValidationFailed("object reference must be an object id or typed object reference")
+
+
+def _matching_interface_links(
+    metas: tuple[LinkTypeRow, ...], source_type: str | None, target_type: str | None
+) -> tuple[LinkTypeRow, ...]:
+    selected = tuple(
+        meta
+        for meta in metas
+        if (source_type is None or meta["from_api_name"] == source_type)
+        and (target_type is None or meta["to_api_name"] == target_type)
+    )
+    if not selected:
+        raise ValidationFailed(
+            "typed interface link references do not match a concrete implementation",
+            details={"sourceObjectType": source_type, "targetObjectType": target_type},
+        )
+    return selected

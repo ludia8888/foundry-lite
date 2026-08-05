@@ -18,6 +18,7 @@ recovery sweep. The shared received-state helpers (replay, validation, mutation 
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -32,7 +33,15 @@ from foundry_lite.application.ports import (
     TransactionManager,
 )
 from foundry_lite.application.ports.external_writeback_adapter import RemoteOutcomeStatus
-from foundry_lite.application.services.action_helpers import require_action_target_api_name
+from foundry_lite.application.services.action_apply_support import (
+    action_request_error,
+    canonical_action_contract,
+    resolved_action_command,
+)
+from foundry_lite.application.services.action_helpers import (
+    require_action_target_api_name,
+)
+from foundry_lite.application.services.action_media_runtime_service import ActionMediaRuntimeService
 from foundry_lite.application.services.action_protocols import (
     ActionObjectRecordLookup,
     ActionOntologyLookup,
@@ -45,6 +54,7 @@ from foundry_lite.application.services.action_workflow import (
     WriteReceipt,
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
+from foundry_lite.domain.action_runtime.edit_plan import EditPlan
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -53,6 +63,14 @@ from foundry_lite.domain.errors import (
     PermissionDenied,
     ValidationFailed,
 )
+from foundry_lite.security.policy import PolicyService
+
+
+class ResolvedCriteriaContext(Protocol):
+    """The external saga only needs the already-resolved, read-only value map."""
+
+    @property
+    def values(self) -> Mapping[str, object]: ...
 
 
 class ApplyServiceCallbacks(Protocol):
@@ -61,11 +79,13 @@ class ApplyServiceCallbacks(Protocol):
     on the apply-service module (keeps the application dependency graph acyclic)."""
 
     engine: TransactionManager
+    policy: PolicyService
     action_repository: ActionRepository
     object_records_service: ActionObjectRecordLookup
     ontology_service: ActionOntologyLookup
     runtime_service: ActionRuntimeBoundary
     action_writeback_service: ActionWritebackService
+    action_media_runtime_service: ActionMediaRuntimeService
 
     def _replay_or_none(
         self,
@@ -84,29 +104,31 @@ class ApplyServiceCallbacks(Protocol):
         command: ActionApplyCommand,
     ) -> ObjectRecordRow | None: ...
 
-    def _action_request_error(
-        self,
-        ctx: RequestContext,
-        action_type: ActionTypeRow,
-        record: ObjectRecordRow | None,
-        command: ActionApplyCommand,
-    ) -> Exception | None: ...
-
-    def _resolved_command(
-        self,
-        ctx: RequestContext,
-        action_type: ActionTypeRow,
-        record: ObjectRecordRow,
-        command: ActionApplyCommand,
-    ) -> ActionApplyCommand: ...
-
     def _authorized_edit_plan(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         action_type: ActionTypeRow,
         command: ActionApplyCommand,
-    ) -> object: ...
+    ) -> EditPlan: ...
+
+    def _criteria_context(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow | None,
+    ) -> ResolvedCriteriaContext: ...
+
+    def _verify_plan_criteria(self, conn: TransactionContext, ctx: RequestContext, plan: EditPlan) -> None: ...
+
+    def _persist_resolved_parameters(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        command: ActionApplyCommand,
+    ) -> None: ...
 
     def _fail_action_run(
         self, conn: TransactionContext, ctx: RequestContext, action_run_id: str, error: Exception
@@ -212,7 +234,15 @@ class ExternalActionApply:
         record: ObjectRecordRow | None,
         command: ActionApplyCommand,
     ) -> ActionApplyOutcome | None:
-        error = self.service._action_request_error(ctx, action_type, record, command)
+        criteria = self.service._criteria_context(conn, ctx, action_type, record)
+        error = action_request_error(
+            self.service.policy,
+            ctx,
+            action_type,
+            record,
+            command,
+            linked_object_properties=criteria.values,
+        )
         if error is not None:
             self.service._fail_action_run(conn, ctx, action_run_id, error)
             return ActionApplyOutcome(deferred_error=error)
@@ -234,10 +264,13 @@ class ExternalActionApply:
         record: ObjectRecordRow,
         command: ActionApplyCommand,
     ) -> tuple[ActionApplyCommand | None, ActionApplyOutcome | None]:
-        effective = self.service._resolved_command(ctx, action_type, record, command)
         try:
+            effective = resolved_action_command(ctx, action_type, record, command)
+            contract = canonical_action_contract(action_type["definition"])
+            effective = self.service.action_media_runtime_service.resolve_command(conn, ctx, contract, effective)
+            self.service._persist_resolved_parameters(conn, ctx, action_run_id, effective)
             self.service._authorized_edit_plan(conn, ctx, action_type, effective)
-        except (PermissionDenied, ValidationFailed) as error:
+        except (ConflictDetected, NotFound, PermissionDenied, ValidationFailed) as error:
             self.service._fail_action_run(conn, ctx, action_run_id, error)
             return None, ActionApplyOutcome(deferred_error=error)
         return effective, None
@@ -321,6 +354,8 @@ class ExternalActionApply:
                 runner.record_succeeded(conn, ctx, action_run_id, command, receipt)
                 try:
                     record = self._pending_target(conn, ctx, run)
+                    plan = self.service._authorized_edit_plan(conn, ctx, action_type, command)
+                    self.service._verify_plan_criteria(conn, ctx, plan)
                     response = self.service._mutation_unit_of_work().commit(
                         conn,
                         ctx,
@@ -330,6 +365,7 @@ class ExternalActionApply:
                         params=command.params,
                         idempotency_key=command.idempotency_key,
                     )
+                    self.service.action_media_runtime_service.bind_plan_references(conn, ctx, action_run_id, plan)
                 except Exception as exc:
                     raise LocalCommitFailed(receipt) from exc
             return ActionApplyOutcome(response=response)

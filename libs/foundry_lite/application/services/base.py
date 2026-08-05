@@ -45,6 +45,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
     WorkflowAdapter,
 )
+from foundry_lite.application.ports.action_notification_policy_repository import ActionNotificationPolicyRepository
 from foundry_lite.application.ports.backup_artifact_store import BackupArtifactStore
 from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
@@ -89,7 +90,11 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_branch_service": "ActionBranchService",
     "action_definition_service": "ActionDefinitionService",
     "action_effect_delivery_service": "ActionEffectDeliveryService",
+    "action_effect_operator_service": "ActionEffectOperatorService",
     "action_log_revert_service": "ActionLogRevertService",
+    "action_media_service": "ActionMediaService",
+    "action_media_runtime_service": "ActionMediaRuntimeService",
+    "action_notification_policy_service": "ActionNotificationPolicyService",
     "action_planning_service": "ActionPlanningService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",
@@ -131,6 +136,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "function_execution_service": "FunctionExecutionService",
     "fde_application_tool_service": "FdeApplicationToolService",
     "fde_context_service": "FdeContextService",
+    "fde_data_connection_tool_service": "FdeDataConnectionToolService",
     "fde_ontology_tool_service": "FdeOntologyToolService",
     "fde_pilot_service": "FdePilotService",
     "fde_platform_tool_service": "FdePlatformToolService",
@@ -166,6 +172,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "ontology_service": "OntologyService",
     "osdk_application_service": "OsdkApplicationService",
     "osdk_application_sdk_service": "OsdkApplicationSdkService",
+    "osdk_mcp_server_service": "OsdkMcpServerService",
     "osdk_oauth_session_service": "OsdkOAuthSessionService",
     "outbox_publisher_service": "OutboxPublisherService",
     "pipeline_async_run_service": "PipelineAsyncRunService",
@@ -266,6 +273,7 @@ class CoreService:
     metadata_repository: MetadataRepository
     insight_review_service: object
     action_repository: ActionRepository
+    action_notification_policy_repository: ActionNotificationPolicyRepository
     action_effect_executor: ActionEffectExecutor
     action_execution_repository: ActionExecutionRepository
     action_function_executor: ActionFunctionExecutor

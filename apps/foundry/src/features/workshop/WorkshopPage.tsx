@@ -319,8 +319,9 @@ export default function WorkshopPage() {
           <OntologyRequiredState className="h-full" />
         ) : (
           <RuntimeMode
-            page={definition.page}
+            definition={definition}
             objectViewsByApiName={objectViewsByApiName}
+            actionViews={actionViews}
           />
         )}
       </div>

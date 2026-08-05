@@ -153,6 +153,46 @@ def test_validate_ontology_interfaces_accepts_conforming_and_rejects_duplicates(
         validate_ontology_interfaces(bad_type)
 
 
+def test_interface_link_constraints_validate_target_cardinality_and_required_implementation() -> None:
+    interface = _asset_interface()
+    interface["linkConstraints"] = [
+        {
+            "apiName": "customer",
+            "targetKind": "object",
+            "target": "Customer",
+            "cardinality": "one",
+            "required": True,
+        }
+    ]
+    definition = _definition(
+        interfaces=[interface],
+        order=_order_type(implements=["Asset"]),
+        customer=_customer_type(implements=[]),
+    )
+    definition["linkTypes"] = [
+        {"apiName": "OrderCustomer", "from": "Order", "to": "Customer", "cardinality": "many_to_one"}
+    ]
+    validate_ontology_interfaces(definition)
+
+    definition["linkTypes"] = []
+    with raises(ValidationFailed, match="do not conform") as missing:
+        validate_ontology_interfaces(definition)
+    assert missing.value.details["violations"] == [
+        {
+            "kind": "missing_required_interface_link",
+            "objectType": "Order",
+            "interface": "Asset",
+            "constraint": "customer",
+        }
+    ]
+
+    interface["linkConstraints"] = [
+        {"apiName": "ghost", "targetKind": "object", "target": "Ghost", "cardinality": "many"}
+    ]
+    with raises(ValidationFailed, match="target was not found"):
+        validate_ontology_interfaces(definition)
+
+
 def test_apply_publishes_interfaces_and_implements_in_catalog(foundry: FoundryLite, tmp_path: Path) -> None:
     admin = _prepare_datasets(foundry, tmp_path)
     foundry.ontology.apply_text(_yaml_text(_definition()), ctx=admin)
@@ -164,6 +204,7 @@ def test_apply_publishes_interfaces_and_implements_in_catalog(foundry: FoundryLi
             "apiName": "Asset",
             "displayName": "Asset",
             "properties": [{"apiName": "riskScore", "type": "float", "nullable": True, "indexed": True}],
+            "linkConstraints": [],
             "implementedBy": ["Customer", "Order"],
         }
     ]

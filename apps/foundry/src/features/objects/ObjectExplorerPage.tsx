@@ -1,5 +1,6 @@
 import { useFoundryLiteProvidedObjectActionWorkspace } from "@foundry-lite/sdk/react";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -64,6 +65,7 @@ function atHistoryIndex(exploration: Exploration, index: number): Exploration {
 
 /** Object Explorer / ObjectSet: 객체 탐색·필터·집계 + linked object + 액션 실행. */
 export default function ObjectExplorerPage() {
+  const [searchParams] = useSearchParams();
   const [explorations, setExplorations] = useState<Exploration[]>([]);
   const [activeExplorationId, setActiveExplorationId] = useState<string | null>(
     null,
@@ -79,6 +81,7 @@ export default function ObjectExplorerPage() {
     useState<FoundryLiteOntologyActionView | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
+  const [openedDeepLink, setOpenedDeepLink] = useState<string | null>(null);
 
   const activeExploration =
     explorations.find(
@@ -112,6 +115,19 @@ export default function ObjectExplorerPage() {
       search: appliedSearch || null,
     },
   });
+
+  useEffect(() => {
+    const objectType = searchParams.get("objectType");
+    const objectId = searchParams.get("objectId");
+    if (!objectType || !objectId || !workspace.objectViewsByApiName[objectType]) return;
+    const deepLink = `${objectType}/${objectId}`;
+    if (openedDeepLink === deepLink) return;
+    const exploration = createExploration(objectType);
+    setExplorations((current) => [...current, exploration]);
+    setActiveExplorationId(exploration.id);
+    setDetailStack([{ objectType, objectId }]);
+    setOpenedDeepLink(deepLink);
+  }, [openedDeepLink, searchParams, workspace.objectViewsByApiName]);
   const activeView = activeTypeName
     ? (workspace.objectViewsByApiName[activeTypeName] ?? null)
     : null;
@@ -394,6 +410,7 @@ export default function ObjectExplorerPage() {
                 onNextPage={() => setPageCursor(objectQuery.nextCursor)}
                 onFirstPage={() => setPageCursor(null)}
                 onOpenObject={(ref) => setDetailStack([ref])}
+                onObjectsChanged={handleObjectsChanged}
               />
             </div>
           )}

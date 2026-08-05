@@ -5,6 +5,13 @@ interfaces:
       - apiName: riskScore
         type: float
         indexed: true
+    linkConstraints:
+      - apiName: customer
+        displayName: Customer
+        targetKind: object
+        target: Customer
+        cardinality: one
+        required: false
 objectTypes:
   - apiName: Order
     displayName: Order

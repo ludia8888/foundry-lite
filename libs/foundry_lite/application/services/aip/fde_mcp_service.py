@@ -7,16 +7,42 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from foundry_lite.application.ports.ai_run_repository import (
+from foundry_lite.application.ports import (
     AiExecutionRunRecord,
     AiRunRepository,
     AiSessionRecord,
     AiToolCallRecord,
+    OsdkApplicationRepository,
+    TransactionManager,
 )
-from foundry_lite.application.ports.transaction_context import AI_RUN_FAILED, AI_RUN_SUCCEEDED, TransactionManager
+from foundry_lite.application.ports.transaction_context import AI_RUN_FAILED, AI_RUN_SUCCEEDED
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.aip.agent_runtime_ledger import event_record, hash_json
 from foundry_lite.application.services.aip.fde_catalog import FDE_MODES, fde_tool_catalog
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    activation_record as _activation_record,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    allowed_modes as _allowed_modes,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    is_search as _is_search,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    mcp_search_tool as _mcp_search_tool,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    rank_tools as _rank_tools,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    required_search_query as _required_search_query,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    search_ledger as _search_ledger,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    search_limit as _search_limit,
+)
 from foundry_lite.application.services.aip.fde_ontology_tools import FdeOntologyToolError
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, FdePlatformToolRequest
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerResult, ToolSpec
@@ -60,8 +86,14 @@ class FdeMcpApplicationReader(Protocol):
     def get_application(self, app_id: str, *, ctx: RequestContext | None = None) -> JsonObject: ...
 
 
+class FdeMcpAccessSessionValidator(Protocol):
+    def require_active(self, ctx: RequestContext, application_id: str) -> None: ...
+
+
 class FdeMcpGateway:
     """External MCP integration boundary over governed application services."""
+
+    access_session_validator: FdeMcpAccessSessionValidator
 
     def __init__(
         self,
@@ -72,6 +104,8 @@ class FdeMcpGateway:
         context_validator: FdeMcpContextValidator,
         platform_executor: FdeMcpPlatformExecutor,
         application_reader: FdeMcpApplicationReader,
+        application_repository: OsdkApplicationRepository,
+        access_session_validator: FdeMcpAccessSessionValidator,
     ) -> None:
         self.engine = engine
         self.policy = policy
@@ -79,16 +113,43 @@ class FdeMcpGateway:
         self.fde_context_service = context_validator
         self.fde_platform_tool_service = platform_executor
         self.osdk_application_service = application_reader
+        self.osdk_application_repository = application_repository
+        self.access_session_validator = access_session_validator
 
-    def list_tools(self, ctx: RequestContext, application_id: str) -> dict[str, object]:
+    def list_tools(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        *,
+        session_id: str | None = None,
+        discovery_mode: str = "eager",
+    ) -> dict[str, object]:
         bundle = self._authorized_application_bundle(ctx, application_id)
+        allowed = self._allowed_tools(ctx, bundle)
+        search = _mcp_search_tool(_allowed_modes(allowed))
+        if discovery_mode == "eager":
+            projected = [
+                _mcp_tool(tuple(sorted(modes)), tool) for tool, modes in allowed.values() if not _is_search(tool)
+            ]
+            return {"tools": [search, *projected], "discoveryMode": "eager"}
+        if discovery_mode != "lazy" or not session_id:
+            raise ValidationFailed("Builder MCP discoveryMode must be eager or lazy with a session")
+        activated = self._activated_tool_ids(ctx, application_id, session_id)
+        projected = [
+            _mcp_tool(tuple(sorted(modes)), tool)
+            for tool, modes in allowed.values()
+            if tool.tool_id in activated and not _is_search(tool)
+        ]
+        return {"tools": [search, *projected], "discoveryMode": "lazy", "activatedToolCount": len(projected)}
+
+    def _allowed_tools(self, ctx: RequestContext, bundle: JsonObject) -> dict[str, tuple[ToolSpec, set[str]]]:
         allowed: dict[str, tuple[ToolSpec, set[str]]] = {}
         for mode in FDE_MODES:
             if self._mode_allowed(ctx, bundle, mode.mode_id):
                 for tool in fde_tool_catalog(mode.mode_id, ()):
                     if self.policy.decide(ctx, tool.required_permission).allowed:
                         allowed.setdefault(tool.tool_id, (tool, set()))[1].add(mode.mode_id)
-        return {"tools": [_mcp_tool(tuple(sorted(modes)), tool) for tool_id, (tool, modes) in sorted(allowed.items())]}
+        return dict(sorted(allowed.items()))
 
     def execute_tool(self, ctx: RequestContext, request: FdeMcpToolCall) -> dict[str, object]:
         bundle = self._authorized_application_bundle(ctx, request.application_id)
@@ -96,6 +157,8 @@ class FdeMcpGateway:
             raise PermissionDenied("Builder MCP mode is outside application restrictions")
         self.fde_context_service.validate_scope(ctx, request.mode, request.workspace_ref)
         catalog = fde_tool_catalog(request.mode, ())
+        if request.tool_id in {"search_tools", "fde.tools.search"}:
+            return self._execute_tool_search(ctx, request, catalog)
         spec = _tool_spec(catalog, request.tool_id)
         _guard_external_tool(spec)
         run_id = _mcp_run_id(ctx, request)
@@ -118,7 +181,65 @@ class FdeMcpGateway:
         self._complete_run(ctx, run_id, result.ledger_record)
         return _result_payload(run_id, result.tool_call_id, result.output_json, is_replayed=False)
 
+    def _execute_tool_search(
+        self, ctx: RequestContext, request: FdeMcpToolCall, catalog: tuple[ToolSpec, ...]
+    ) -> dict[str, object]:
+        query = _required_search_query(request.arguments)
+        limit = _search_limit(request.arguments.get("maxResults"))
+        candidates = tuple(
+            tool
+            for tool in catalog
+            if not _is_search(tool) and self.policy.decide(ctx, tool.required_permission).allowed
+        )
+        matches = _rank_tools(query, candidates, limit)
+        run_id = _mcp_run_id(ctx, request)
+        replay = self._replay(ctx, run_id)
+        if replay is not None:
+            return replay
+        self._seed_run(ctx, request, run_id, catalog)
+        output = self._activate_tools(ctx, request, query, matches)
+        record = _search_ledger(ctx, request, run_id, output)
+        self._complete_run(ctx, run_id, record)
+        return _result_payload(run_id, record.id, output, is_replayed=False)
+
+    def _activate_tools(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+        query: str,
+        matches: tuple[tuple[ToolSpec, int], ...],
+    ) -> dict[str, object]:
+        query_hash = hash_json({"mode": request.mode, "query": query.casefold()})
+        activated: list[dict[str, object]] = []
+        with self.engine.begin() as conn:
+            for tool, score in matches:
+                is_new = self.osdk_application_repository.activate_mcp_tool(
+                    transaction=conn,
+                    record=_activation_record(ctx, request, tool.tool_id, query_hash),
+                )
+                activated.append(
+                    {"toolId": tool.tool_id, "description": tool.description, "score": score, "isNew": is_new}
+                )
+        return {
+            "queryHash": query_hash,
+            "activatedTools": activated,
+            "toolsListChanged": any(item["isNew"] for item in activated),
+        }
+
+    def _activated_tool_ids(self, ctx: RequestContext, application_id: str, session_id: str) -> set[str]:
+        with self.engine.begin() as conn:
+            rows = self.osdk_application_repository.mcp_tool_activations(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                app_id=application_id,
+                session_id=session_id,
+                client_id=ctx.client_id or "",
+                actor_user_id=ctx.actor_user_id,
+            )
+        return {str(row["tool_id"]) for row in rows}
+
     def _authorized_application_bundle(self, ctx: RequestContext, application_id: str) -> JsonObject:
+        self.access_session_validator.require_active(ctx, application_id)
         if ctx.application_id != application_id or not ctx.client_id:
             raise PermissionDenied("Builder MCP requires an OAuth application and active client")
         if not ctx.token_scopes:

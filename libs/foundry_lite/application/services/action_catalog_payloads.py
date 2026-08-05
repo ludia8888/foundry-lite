@@ -14,10 +14,16 @@ from foundry_lite.domain.action_runtime.action_contract import (
     action_parameter_json_schema,
     compile_action_contract,
 )
+from foundry_lite.domain.action_runtime.action_permissions import can_access_action
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 
-def action_catalog_item(row: ActionTypeRow, ontology_version_id: str) -> ActionCatalogItem:
+def action_catalog_item(
+    row: ActionTypeRow,
+    ontology_version_id: str,
+    ctx: RequestContext,
+) -> ActionCatalogItem:
     contract = compile_action_contract(row["definition"])
     return {
         "apiName": contract.api_name,
@@ -31,6 +37,11 @@ def action_catalog_item(row: ActionTypeRow, ontology_version_id: str) -> ActionC
         "contract": action_contract_payload(contract),
         "riskLevel": contract.risk_level,
         "agentExecutionPolicy": contract.agent_execution_policy,
+        "access": {
+            "canView": can_access_action(ctx, contract.permissions, "view"),
+            "canEdit": can_access_action(ctx, contract.permissions, "edit"),
+            "canApply": can_access_action(ctx, contract.permissions, "apply"),
+        },
         "enabled": bool(row["enabled"]),
     }
 

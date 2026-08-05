@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from foundry_lite.application.services.aip.fde_palantir_mcp_catalog import (
+    PALANTIR_MCP_NATIVE_TOOLS,
+    PALANTIR_MCP_TOOLS_BY_CAPABILITY,
+)
 from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -39,8 +43,8 @@ FDE_MODES = (
         FDE_MODE_EXPLORATION,
         "Exploration",
         "Search and inspect governed platform resources without mutation.",
-        ("resource.search", "resource.inspect"),
-        ("tenant:", "project:", "resource:"),
+        ("resource.search", "resource.inspect", "object.query", "dataset.inspect", "lineage.inspect"),
+        ("tenant:", "project:", "resource:", "dataset:"),
     ),
     FdeModeSpec(
         FDE_MODE_ONTOLOGY,
@@ -60,8 +64,8 @@ FDE_MODES = (
         "data_connection",
         "Data connection",
         "Inspect a governed Source, diagnose connection evidence, and run an approved live probe.",
-        ("source.inspect", "source.diagnostics", "source.test"),
-        ("source:",),
+        ("source.inspect", "source.diagnostics", "source.test", "source.author"),
+        ("source:", "tenant:"),
     ),
     FdeModeSpec(
         "functions_editing",
@@ -73,8 +77,8 @@ FDE_MODES = (
     FdeModeSpec(
         "governance",
         "Governance",
-        "Inspect permission-scoped projects, resources, and governance evidence.",
-        ("resource.search", "resource.inspect", "governance.project.inspect"),
+        "Inspect and create permission-scoped projects and governance resources.",
+        ("resource.search", "resource.inspect", "governance.project.inspect", "governance.project.create"),
         ("tenant:", "project:", "resource:"),
     ),
     FdeModeSpec(
@@ -88,14 +92,14 @@ FDE_MODES = (
         "osdk_react",
         "OSDK React",
         "Inspect and explicitly update Developer Console application resource scopes.",
-        ("osdk.inspect", "osdk.edit", "pilot.plan", "pilot.generate"),
+        ("osdk.inspect", "osdk.docs", "osdk.edit", "platform.sdk.inspect", "pilot.plan", "pilot.generate"),
         ("osdk-app:", "project:"),
     ),
     FdeModeSpec(
         "platform_qa",
         "Platform Q&A",
         "Answer platform questions from a curated, versioned documentation allowlist.",
-        ("platform.docs.search",),
+        ("platform.docs.search", "platform.sdk.inspect"),
         ("tenant:", "docs:"),
     ),
 )
@@ -376,7 +380,7 @@ _FDE_TOOLS = (
         "WRITE",
         "USER",
     ),
-)
+) + PALANTIR_MCP_NATIVE_TOOLS
 
 _TOOLS_BY_CAPABILITY = {
     _META_CAPABILITY: ("fde.tools.search", "fde.plan.present", "fde.clarification.request"),
@@ -402,4 +406,5 @@ _TOOLS_BY_CAPABILITY = {
     "platform.docs.search": ("platform.docs.search",),
     "pilot.plan": ("pilot.application.plan",),
     "pilot.generate": ("pilot.application.generate",),
+    **PALANTIR_MCP_TOOLS_BY_CAPABILITY,
 }

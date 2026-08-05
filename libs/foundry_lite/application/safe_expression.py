@@ -129,12 +129,13 @@ def validate_action_request(
     params: Mapping[str, object],
     ctx: RequestContext | None = None,
     generate_id: Callable[[str], str] | None = None,
+    linked_object_properties: Mapping[str, object] | None = None,
 ) -> Exception | None:
     resolution, resolution_error = _resolve_action_parameters_or_error(action_type, record, params, ctx, generate_id)
     if resolution_error is not None:
         return resolution_error
     effective_params = resolution.values if resolution is not None else params
-    return _validated_action_request_error(action_type, record, effective_params, ctx)
+    return _validated_action_request_error(action_type, record, effective_params, ctx, linked_object_properties or {})
 
 
 def _resolve_action_parameters_or_error(
@@ -156,8 +157,9 @@ def _validated_action_request_error(
     record: Mapping[str, object],
     effective_params: Mapping[str, object],
     ctx: RequestContext | None,
+    linked_object_properties: Mapping[str, object],
 ) -> Exception | None:
-    criteria_error = _submission_criteria_error(action_type, record, effective_params, ctx)
+    criteria_error = _submission_criteria_error(action_type, record, effective_params, ctx, linked_object_properties)
     if criteria_error is not None:
         return criteria_error
     schema_error = _parameter_schema_error(action_type, effective_params)
@@ -216,6 +218,7 @@ def resolve_action_request_parameters(
         _mapping_or_empty(record.get("properties")),
         request_context.actor_user_id,
         request_context.roles,
+        request_context.user_attributes,
         generate_id or (lambda strategy: f"preview-{strategy}"),
     )
     return resolve_action_parameters(contract, resolver_context)
@@ -226,6 +229,7 @@ def _submission_criteria_error(
     record: Mapping[str, object],
     params: Mapping[str, object],
     ctx: RequestContext | None,
+    linked_object_properties: Mapping[str, object],
 ) -> ValidationFailed | None:
     definition = _mapping_or_empty(action_type.get("definition"))
     raw = definition.get("submissionCriteria")
@@ -237,6 +241,8 @@ def _submission_criteria_error(
         object_properties=_mapping_or_empty(record.get("properties")),
         actor_user_id=request_context.actor_user_id,
         actor_groups=request_context.roles,
+        actor_attributes=request_context.user_attributes,
+        linked_object_properties=linked_object_properties,
     )
     if evaluate_action_condition(raw, condition_context):
         return None

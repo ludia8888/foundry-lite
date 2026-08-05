@@ -105,9 +105,10 @@ export function RuntimeActionForm({
   }, [lastResponse]);
 
   const buildRequest = (submitIdempotencyKey: string): PinnedRequest | null => {
-    const actionType = form.generatedActionType as OsdkActionType | null;
+    const actionType = form.runtimeActionType as OsdkActionType | null;
     if (
       !actionType ||
+      !form.payload ||
       form.targetObjectId === null ||
       form.expectedObjectVersion === null
     ) {
@@ -118,9 +119,7 @@ export function RuntimeActionForm({
       idempotencyKey: submitIdempotencyKey,
       expectedObjectVersion: form.expectedObjectVersion,
       payload: {
-        objectId: form.targetObjectId,
-        expectedObjectVersion: form.expectedObjectVersion,
-        params: form.params,
+        ...form.payload,
         idempotencyKey: submitIdempotencyKey,
       } as OsdkActionPayload<OsdkActionType>,
     };

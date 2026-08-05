@@ -8,7 +8,12 @@ from foundry_lite.application.action_log_types import ActionLogEntryRecord, Acti
 from foundry_lite.application.ports import ActionRepository, TransactionContext
 from foundry_lite.application.ports.action_repository import ActionRunRow
 from foundry_lite.application.services.action_edit_plan_results import CommittedEdit
-from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3, action_contract_fingerprint
+from foundry_lite.application.services.action_log_payloads import action_log_object_type_api_name
+from foundry_lite.domain.action_runtime.action_contract import (
+    ActionDefinitionV3,
+    action_contract_fingerprint,
+    compile_action_contract,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
 
@@ -47,6 +52,30 @@ def record_action_log(
     return entry.log_entry_id
 
 
+def record_action_log_for_definition(
+    repository: ActionRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    action_run_id: str,
+    definition: Mapping[str, object],
+    edits: Sequence[CommittedEdit],
+    *,
+    definition_version_override: str | None = None,
+    is_revert_allowed_override: bool | None = None,
+) -> str:
+    """Compile a persisted definition and record its normalized Action log."""
+    return record_action_log(
+        repository,
+        transaction,
+        ctx,
+        action_run_id,
+        compile_action_contract(definition),
+        edits,
+        definition_version_override=definition_version_override,
+        is_revert_allowed_override=is_revert_allowed_override,
+    )
+
+
 def _log_entry(
     ctx: RequestContext,
     run: ActionRunRow,
@@ -60,7 +89,7 @@ def _log_entry(
         log_entry_id=f"action_log_{run['id']}",
         tenant_id=ctx.tenant_id,
         action_run_id=run["id"],
-        log_object_type_api_name=f"[LOG] {run['action_type_api_name']}",
+        log_object_type_api_name=action_log_object_type_api_name(run["action_type_api_name"]),
         log_object_id=run["id"],
         action_type_id=run["action_type_id"],
         action_type_api_name=run["action_type_api_name"],
@@ -68,7 +97,7 @@ def _log_entry(
         actor_user_id=run["actor_user_id"],
         status=run["status"],
         parameters=run["parameters"],
-        result=run["result"] or {},
+        result={**_mapping(run.get("result")), "revertPolicy": dict(contract.revert_policy)},
         branch_id=_optional_text(execution_plan.get("branchId")),
         plan_hash=_optional_text(run.get("plan_hash")),
         approval_id=_approval_id(execution_plan),

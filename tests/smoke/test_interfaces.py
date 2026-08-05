@@ -97,6 +97,7 @@ def test_api_action_validate_route_does_not_require_idempotency(monkeypatch) -> 
                 },
                 "parameters": {"reason": {"result": "VALID", "required": True, "issues": []}},
                 "submissionCriteria": [],
+                "submissionCriteriaEvaluation": None,
             }
 
     class FakeFoundry:
@@ -587,8 +588,13 @@ def test_api_ontology_catalog_returns_active_object_action_and_link_metadata(fou
     assert catalog["ontologyVersionId"].startswith("ont_")
 
     objects = {item["apiName"]: item for item in catalog["objectTypes"]}
-    assert set(objects) == {"Customer", "Order"}
+    assert set(objects) == {"Customer", "Order", "[LOG] ApproveOrder"}
     assert objects["Order"]["primaryKeyProperty"] == "orderId"
+
+    action_log = objects["[LOG] ApproveOrder"]
+    assert action_log["backing"] == {"mode": "action_log", "actionType": "ApproveOrder"}
+    assert action_log["config"] == {"isSystem": True, "actionLogFor": "ApproveOrder"}
+    assert action_log["actions"] == []
 
     order_properties = {item["apiName"]: item for item in objects["Order"]["properties"]}
     assert order_properties["orderId"]["columnName"] == "order_id"

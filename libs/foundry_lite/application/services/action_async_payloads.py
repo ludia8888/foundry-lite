@@ -127,11 +127,24 @@ def _effect_payload(row: ActionEffectReceiptRow) -> dict[str, object]:
         "maxAttempts": row["max_attempts"],
         "workerId": row["worker_id"],
         "fencingToken": row["fencing_token"],
+        "heartbeatAt": row["heartbeat_at"],
+        "dispatchStartedAt": row["dispatch_started_at"],
         "retryAt": row["retry_at"],
+        "cancelRequestedAt": row["cancel_requested_at"],
+        "cancelReason": row["cancel_reason"],
         "externalExecutionId": row["external_execution_id"],
         "outboxEventId": row["outbox_event_id"],
         "response": row["response"],
         "error": row["error"],
+        "reconciledAt": row["reconciled_at"],
+        "reconciledByUserId": row["reconciled_by_user_id"],
+        "reconciliation": row["reconciliation"],
+        "notificationRendering": _notification_rendering(row),
         "createdAt": row["created_at"],
         "completedAt": row["completed_at"],
     }
+
+
+def _notification_rendering(row: ActionEffectReceiptRow) -> dict[str, object] | None:
+    value = row["request"].get("notificationRendering")
+    return dict(value) if isinstance(value, dict) else None

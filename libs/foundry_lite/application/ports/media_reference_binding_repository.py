@@ -28,6 +28,26 @@ class MediaReferenceBindingRecord:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class AttachmentHolderAssociationRecord:
+    """One lifetime attachment-to-object association; never deleted with the live binding."""
+
+    association_id: str
+    tenant_id: str
+    media_item_version_id: str
+    holder_type: str
+    holder_id: str
+    first_action_run_id: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class AttachmentHolderReservationResult:
+    is_reserved: bool
+    is_existing: bool
+    holder_count: int
+
+
 class MediaReferenceBindingRepository(Protocol):
     """DB boundary for media-reference bindings. CAS / uniqueness / durable-row only."""
 
@@ -64,4 +84,47 @@ class MediaReferenceBindingRepository(Protocol):
 
     def update_binding(self, *, transaction: TransactionContext, record: MediaReferenceBindingRecord) -> None:
         """Re-point an existing binding to a new media version + idempotency key."""
+        ...
+
+    def delete_bindings_by_holder_property(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        holder_type: str,
+        holder_id: str,
+        property_name: str,
+    ) -> int:
+        """Delete the prior direct/list bindings for one property before an atomic replacement."""
+        ...
+
+    def delete_bindings_by_holder(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        holder_type: str,
+        holder_id: str,
+    ) -> int:
+        """Delete every binding when its owning object is soft-deleted."""
+        ...
+
+    def reserve_attachment_holder(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: AttachmentHolderAssociationRecord,
+        max_holders: int,
+    ) -> AttachmentHolderReservationResult:
+        """Atomically reserve a lifetime holder slot, retaining deleted/unmapped history forever."""
+        ...
+
+    def attachment_associations_for_media_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        media_item_version_id: str,
+    ) -> list[AttachmentHolderAssociationRecord]:
+        """Return immutable lifetime holder associations for audit and contract verification."""
         ...

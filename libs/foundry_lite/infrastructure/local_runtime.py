@@ -52,6 +52,8 @@ from foundry_lite.infrastructure.action_runtime_dependencies import (
     LogicDagActionFunctionExecutor,
     TemporalActionRunConfig,
     TemporalActionRunOrchestrator,
+    action_file_scanner_adapter,
+    action_notification_recipient_directory_adapter,
 )
 from foundry_lite.infrastructure.adapters import (
     AnthropicLanguageModel,
@@ -138,6 +140,7 @@ from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionBranchRepository,
     SqlAlchemyActionExecutionRepository,
+    SqlAlchemyActionNotificationPolicyRepository,
     SqlAlchemyActionRepository,
     SqlAlchemyAiEvalRepository,
     SqlAlchemyAiRunRepository,
@@ -189,6 +192,7 @@ _ANTHROPIC_REGION_ENV = "FOUNDRY_LITE_ANTHROPIC_REGION"
 _DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
 _LOCAL_FAKE_AUTH_REFERENCE = "local-fake-reference"
 _PROTECTED_REQUIRED_ADAPTER_PROFILES: Mapping[str, frozenset[str]] = {
+    "action_file_scanner": frozenset({"clamav"}),
     "dataset_storage": frozenset({"s3-storage", "iceberg"}),
     "media_storage": frozenset({"s3-media"}),
     "content_index": frozenset({"elasticsearch"}),
@@ -216,6 +220,7 @@ class RuntimeAdapterProfiles:
     workflow: str
     external_media: str
     language_model: str
+    action_file_scanner: str
 
     @classmethod
     def from_env(
@@ -237,6 +242,7 @@ class RuntimeAdapterProfiles:
             workflow=_env_profile(source, "FOUNDRY_LITE_WORKFLOW_PROFILE", base),
             external_media=_env_profile(source, "FOUNDRY_LITE_EXTERNAL_MEDIA_PROFILE", base),
             language_model=_env_profile(source, "FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE", base),
+            action_file_scanner=_env_profile(source, "FOUNDRY_LITE_ACTION_FILE_SCANNER_PROFILE", "local-signature"),
         )
 
 
@@ -259,7 +265,7 @@ def _classification_provider(
 
 
 def _action_role_provider(engine: Engine, ontology_repository: SqlAlchemyOntologyRepository) -> ActionRoleProvider:
-    """Read one action's declared ``permissions.allowedRoles`` from the active ontology."""
+    """Read one action's declared apply roles from the active ontology."""
 
     def provider(tenant_id: str, action_api_name: str) -> tuple[str, ...] | None:
         with engine.begin() as conn:
@@ -399,6 +405,7 @@ def _create_core_dependencies(
     pipeline_dag_orchestrator = _pipeline_dag_orchestrator(profiles.workflow)
     action_run_orchestrator = _action_run_orchestrator(profiles.workflow)
     action_function_executor = LogicDagActionFunctionExecutor()
+    action_file_scanner = action_file_scanner_adapter(profiles.action_file_scanner)
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
@@ -426,6 +433,10 @@ def _create_core_dependencies(
         engine,
         media_repository,
         media_storage,
+    )
+    notification_policy_repository = SqlAlchemyActionNotificationPolicyRepository(
+        engine,
+        fallback=action_notification_recipient_directory_adapter(is_protected=runtime_profile.is_protected),
     )
     allow_schema_mutation = not runtime_profile.is_protected
     return CoreDependencies(
@@ -461,6 +472,9 @@ def _create_core_dependencies(
             ),
             action_function_executor=action_function_executor,
             action_run_orchestrator=action_run_orchestrator,
+            action_file_scanner=action_file_scanner,
+            action_notification_recipient_directory=notification_policy_repository,
+            action_notification_policy_repository=notification_policy_repository,
         ),
         data=DataDependencies(
             ontology_repository=ontology_repository,

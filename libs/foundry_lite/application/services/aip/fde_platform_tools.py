@@ -6,7 +6,12 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from foundry_lite.application.services.aip.fde_application_tools import FdeApplicationToolService
+from foundry_lite.application.services.aip.fde_data_connection_tools import FdeDataConnectionToolService
 from foundry_lite.application.services.aip.fde_ontology_tools import FdeOntologyToolRequest, FdeOntologyToolService
+from foundry_lite.application.services.aip.fde_palantir_mcp_catalog import (
+    PALANTIR_MCP_DATA_CONNECTION_TOOL_IDS,
+    PALANTIR_MCP_ONTOLOGY_TOOL_IDS,
+)
 from foundry_lite.application.services.aip.fde_tool_result import (
     FdePlatformToolError,
     FdePlatformToolRequest,
@@ -106,6 +111,7 @@ class FdePlatformToolService(CoreService):
     required_dependencies = ("policy",)
     required_collaborators = (
         "fde_application_tool_service",
+        "fde_data_connection_tool_service",
         "fde_ontology_tool_service",
         "function_execution_service",
         "pipeline_catalog_service",
@@ -116,6 +122,7 @@ class FdePlatformToolService(CoreService):
         "source_onboarding_service",
     )
     fde_application_tool_service: FdeApplicationToolService
+    fde_data_connection_tool_service: FdeDataConnectionToolService
     fde_ontology_tool_service: FdeOntologyToolService
     function_execution_service: FdeFunctionExecutor
     pipeline_catalog_service: FdePipelineCatalog
@@ -127,7 +134,7 @@ class FdePlatformToolService(CoreService):
 
     def execute(self, ctx: RequestContext, request: FdePlatformToolRequest) -> ToolBrokerResult:
         self.policy.require(ctx, request.spec.required_permission)
-        if request.spec.tool_id.startswith("ontology."):
+        if request.spec.tool_id.startswith("ontology.") or request.spec.tool_id in PALANTIR_MCP_ONTOLOGY_TOOL_IDS:
             return self._ontology(ctx, request)
         require_tool_approval(request)
         output = self._dispatch(ctx, request)
@@ -144,6 +151,8 @@ class FdePlatformToolService(CoreService):
             return self._pipeline(ctx, request)
         if request.spec.tool_id.startswith("source."):
             return self._source(ctx, request)
+        if request.spec.tool_id in PALANTIR_MCP_DATA_CONNECTION_TOOL_IDS:
+            return self.fde_data_connection_tool_service.execute(ctx, request)
         if request.spec.tool_id == "function.execute":
             return self._function(ctx, request)
         if request.spec.tool_id == "ml.catalog.inspect":

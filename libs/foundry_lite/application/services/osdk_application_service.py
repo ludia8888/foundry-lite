@@ -7,6 +7,9 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.ports import (
     OsdkApplicationBundle,
     OsdkApplicationClientRow,
+    OsdkMcpServerRow,
+    OsdkMcpSessionEventRow,
+    OsdkMcpSessionRow,
     OsdkResourceOperation,
     OsdkResourceType,
     OsdkSdkCompatibilityWindowRow,
@@ -20,6 +23,7 @@ from foundry_lite.application.services.osdk_application_clients import OsdkAppli
 from foundry_lite.application.services.osdk_application_records import scope_for as scope_for
 from foundry_lite.application.services.osdk_application_scope import OsdkApplicationScopeService
 from foundry_lite.application.services.osdk_application_sdk import OsdkApplicationSdkService
+from foundry_lite.application.services.osdk_mcp_server_service import OsdkMcpServerService
 from foundry_lite.domain.context import RequestContext
 
 
@@ -29,10 +33,12 @@ class OsdkApplicationService(CoreService):
     required_dependencies = ()
     required_collaborators = (
         "osdk_application_client_service",
+        "osdk_mcp_server_service",
         "osdk_application_scope_service",
         "osdk_application_sdk_service",
     )
     osdk_application_client_service: OsdkApplicationClientService
+    osdk_mcp_server_service: OsdkMcpServerService
     osdk_application_scope_service: OsdkApplicationScopeService
     osdk_application_sdk_service: OsdkApplicationSdkService
 
@@ -88,6 +94,68 @@ class OsdkApplicationService(CoreService):
             operation=operation,
         )
 
+    def runtime_resource_grants(self, ctx: RequestContext, *, application_id: str) -> list[Mapping[str, object]]:
+        return list(
+            self.osdk_application_scope_service.runtime_resource_grants(
+                ctx,
+                application_id=application_id,
+            )
+        )
+
+    def configure_mcp_server(
+        self,
+        app_id: str,
+        *,
+        status: str,
+        description_markdown: str,
+        allowed_origins: Sequence[str] = (),
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> OsdkMcpServerRow:
+        return self.osdk_mcp_server_service.configure(
+            app_id,
+            status=status,
+            description_markdown=description_markdown,
+            allowed_origins=allowed_origins,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def get_mcp_server(self, app_id: str, *, ctx: RequestContext | None = None) -> OsdkMcpServerRow:
+        return self.osdk_mcp_server_service.get(app_id, ctx=ctx)
+
+    def list_mcp_hub(self, *, ctx: RequestContext | None = None) -> list[RuntimeJsonObject]:
+        return self.osdk_mcp_server_service.list_hub(ctx=ctx)
+
+    def require_mcp_enabled(self, ctx: RequestContext, app_id: str, *, origin: str | None = None) -> None:
+        self.osdk_mcp_server_service.require_enabled(ctx, app_id, origin=origin)
+
+    def open_mcp_session(
+        self, ctx: RequestContext, app_id: str, session_id: str, *, origin: str | None = None
+    ) -> OsdkMcpSessionRow:
+        return self.osdk_mcp_server_service.open_session(ctx, app_id, session_id, origin=origin)
+
+    def record_mcp_session_event(
+        self,
+        ctx: RequestContext,
+        app_id: str,
+        session_id: str,
+        *,
+        event_type: str,
+        payload: RuntimeJsonObject,
+    ) -> OsdkMcpSessionEventRow:
+        return self.osdk_mcp_server_service.record_session_event(
+            ctx, app_id, session_id, event_type=event_type, payload=payload
+        )
+
+    def list_mcp_session_events(
+        self, ctx: RequestContext, app_id: str, session_id: str, *, after_sequence: int = 0
+    ) -> list[OsdkMcpSessionEventRow]:
+        return self.osdk_mcp_server_service.list_session_events(ctx, app_id, session_id, after_sequence=after_sequence)
+
+    def close_mcp_session(self, ctx: RequestContext, app_id: str, session_id: str) -> OsdkMcpSessionRow:
+        return self.osdk_mcp_server_service.close_session(ctx, app_id, session_id)
+
     def create_client(
         self,
         app_id: str,
@@ -109,6 +177,47 @@ class OsdkApplicationService(CoreService):
             access_token_ttl_seconds=access_token_ttl_seconds,
             refresh_token_ttl_seconds=refresh_token_ttl_seconds,
             idempotency_key=idempotency_key,
+        )
+
+    def rotate_client_secret(
+        self,
+        app_id: str,
+        client_row_id: str,
+        *,
+        reason: str | None = None,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject:
+        return self.osdk_application_client_service.rotate_client_secret(
+            app_id,
+            client_row_id,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def revoke_client_secret(
+        self,
+        app_id: str,
+        client_row_id: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject:
+        return self.osdk_application_client_service.revoke_client_secret(
+            app_id,
+            client_row_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def list_client_secret_versions(
+        self, app_id: str, client_row_id: str, *, ctx: RequestContext | None = None
+    ) -> list[RuntimeJsonObject]:
+        return self.osdk_application_client_service.list_client_secret_versions(
+            app_id,
+            client_row_id,
+            ctx=ctx,
         )
 
     def list_clients(self, app_id: str, *, ctx: RequestContext | None = None) -> list[OsdkApplicationClientRow]:

@@ -74,7 +74,10 @@ def list_runs(
     before_run_id: str | None,
     limit: int,
 ) -> list[ActionAsyncRunRow]:
-    conditions = [db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.execution_mode == "async"]
+    # The Action DB is the canonical ledger for both bounded synchronous edits
+    # and Temporal-backed runs. A public history that filters to async rows
+    # makes successful low-latency Actions disappear from monitoring/revert UI.
+    conditions = [db.action_runs.c.tenant_id == tenant_id]
     if before_created_at is not None and before_run_id is not None:
         conditions.append(
             or_(

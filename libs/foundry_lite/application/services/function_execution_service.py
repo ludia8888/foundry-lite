@@ -73,6 +73,19 @@ class FunctionExecutionService(CoreService):
             row = self.ontology_lookup_service._active_function_type(conn, ctx, function_api_name)
         return self._execute_row(ctx, row, inputs)
 
+    def describe_function(self, function_api_name: str, *, ctx: RequestContext | None = None) -> FunctionTypeRow:
+        ctx = ctx or RequestContext()
+        with self.engine.begin() as conn:
+            row = self.ontology_lookup_service._active_function_type(conn, ctx, function_api_name)
+        self._require_function_roles(ctx, row)
+        self.osdk_application_service.require_resource_scope(
+            ctx,
+            resource_type="function",
+            resource_api_name=row["api_name"],
+            operation="execute",
+        )
+        return row
+
     def execute_pinned_function(
         self,
         function_api_name: str,

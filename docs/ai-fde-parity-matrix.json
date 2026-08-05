@@ -72,9 +72,11 @@
       "palantirContract": "Only configured native tools are exposed to the model.",
       "foundryLiteEvidence": [
         "fde_tool_catalog",
-        "FdePlatformToolService"
+        "FdePlatformToolService",
+        "libs/foundry_lite/application/services/aip/fde_palantir_mcp_catalog.py",
+        "tests/integration/test_ai_fde_platform.py"
       ],
-      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits."
+      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits. There are 68 server-owned tools: 43 exact-name tools from Palantir's public 72-tool catalog are wired to real Compass, Dataset, lineage, Ontology branch, Object Query, OSDK/Platform SDK, Developer Console, governed Data Connection, and documentation services; 25 are Foundry-lite-specific branch/test/proposal/Pilot tools. The remaining official 29 are not advertised until their underlying Code Repository, Global Branching, Compute Module, Dataset build/SQL, Developer Console conversion, or versioned webhook-update product foundation exists."
     },
     {
       "id": "explicit-mutation-confirmation",
@@ -148,9 +150,10 @@
       "palantirContract": "Large tool catalogs can be searched and loaded lazily to reduce context use.",
       "foundryLiteEvidence": [
         "fde.tools.search",
-        "test_ai_fde_lazy_tool_search_activates_docs_and_persists_structured_plan"
+        "test_ai_fde_lazy_tool_search_activates_docs_and_persists_structured_plan",
+        "test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session"
       ],
-      "boundary": "Lazy mode starts with control tools and activates only server-catalog matches for later model turns."
+      "boundary": "AI FDE and external Builder MCP lazy modes start with search_tools, activate only app-scoped server-catalog matches, persist activation per session, emit tools/list_changed, isolate new sessions, and preserve eager fallback."
     },
     {
       "id": "structured-plan-and-clarification",
@@ -181,10 +184,14 @@
       "palantirContract": "A builder-oriented MCP exposes governed resource-authoring tools separately from consumer Ontology MCP.",
       "foundryLiteEvidence": [
         "apps/api/foundry_lite_api/routers/builder_mcp.py",
+        "libs/foundry_lite/application/services/aip/fde_palantir_mcp_catalog.py",
+        "libs/foundry_lite/application/services/aip/fde_data_connection_tools.py",
         "test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope",
-        "test_builder_mcp_is_oauth_app_restricted_and_idempotent"
+        "test_builder_mcp_is_oauth_app_restricted_and_idempotent",
+        "test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session",
+        "tests/integration/test_ai_fde_platform.py"
       ],
-      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, app/client/resource-scope intersection, Origin checks, structured content, out-of-band mutation confirmation, and no approval/merge/deploy tools."
+      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, app/client/resource-scope intersection, Origin checks, structured content, durable session-scoped lazy discovery, out-of-band mutation confirmation, and no approval/merge/deploy tools. The current native breadth is 43 exact-name tools out of the official 72; the other 25 catalog entries are product-specific rather than false parity claims."
     },
     {
       "id": "pilot-application-generation",

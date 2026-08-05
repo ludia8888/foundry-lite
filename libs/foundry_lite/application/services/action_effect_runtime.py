@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 
 from foundry_lite.application.action_async_execution_types import (
@@ -12,7 +13,16 @@ from foundry_lite.application.action_async_execution_types import (
     ActionEffectReceiptRow,
 )
 from foundry_lite.application.ports.action_effect_executor import ActionEffectExecutionRequest
-from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.ports.action_notification_recipient_directory import (
+    ActionNotificationRecipientDirectory,
+)
+from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.primitives import _new_id
+from foundry_lite.application.services.action_notification_authorization import (
+    AuthorizedNotificationRequest,
+    authorize_notification_request,
+)
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.action_runtime.action_effects import (
     ActionEffectV3,
     action_effect_payload,
@@ -20,6 +30,71 @@ from foundry_lite.domain.action_runtime.action_effects import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
+
+__all__ = [
+    "ActionNotificationRecipientDirectory",
+    "AuthorizedNotificationRequest",
+    "authorize_notification_request",
+    "audit_effect_receipt",
+    "effect_claim",
+    "deliver_effect_rows",
+    "effect_now",
+    "effect_receipt_record",
+    "effect_request",
+    "effect_retry_at",
+    "effect_worker_context",
+]
+
+
+def audit_effect_receipt(
+    runtime_service: RuntimeEvidenceBoundary,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    row: ActionEffectReceiptRow,
+) -> None:
+    """Persist the stable operator audit view for a terminal effect receipt."""
+    runtime_service._audit(
+        transaction,
+        ctx,
+        event_type=f"action.effect.{row['status']}",
+        resource_type="action_effect_receipt",
+        resource_id=row["id"],
+        action="deliver",
+        decision="allow" if row["status"] == "succeeded" else "deny",
+        after_ref={"status": row["status"], "effectId": row["effect_id"], "retryAt": row["retry_at"]},
+        correlation_id=row["action_run_id"],
+    )
+
+
+def effect_now() -> str:
+    """Return the canonical UTC coordinate used by effect lease string comparisons."""
+    return datetime.now(UTC).isoformat()
+
+
+def deliver_effect_rows(
+    rows: list[ActionEffectReceiptRow],
+    worker_id: str,
+    lease_seconds: int,
+    concurrency: int,
+    deliver: Callable[[ActionEffectReceiptRow, str, int], str],
+) -> list[str]:
+    """Run independent receipt deliveries concurrently without defining an order."""
+    worker_count = max(1, min(concurrency, 32, len(rows)))
+    if worker_count == 1:
+        return [deliver(row, worker_id, lease_seconds) for row in rows]
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="action-effect") as executor:
+        futures = [executor.submit(deliver, row, worker_id, lease_seconds) for row in rows]
+        return [future.result() for future in as_completed(futures)]
+
+
+def effect_worker_context(row: ActionEffectReceiptRow, worker_id: str) -> RequestContext:
+    """Build the trace identity for one fenced effect attempt."""
+    return RequestContext(
+        tenant_id=row["tenant_id"],
+        actor_user_id=worker_id,
+        request_id=f"action-effect:{row['id']}:{row['attempt_count']}",
+        roles=("admin",),
+    )
 
 
 def effect_receipt_record(
@@ -29,9 +104,10 @@ def effect_receipt_record(
     *,
     committed_result: Mapping[str, object] | None = None,
     outbox_event_id: str | None = None,
+    rendering_evidence: Mapping[str, object] | None = None,
 ) -> ActionEffectReceiptRecord:
     """Create the deterministic durable receipt record for one planned effect."""
-    created_at = _now()
+    created_at = effect_now()
     return ActionEffectReceiptRecord(
         receipt_id=f"{row['id']}:effect:{effect.effect_id}",
         tenant_id=ctx.tenant_id,
@@ -48,6 +124,7 @@ def effect_receipt_record(
             "requestId": ctx.request_id,
             "parameters": dict(row["parameters"]),
             "committedResult": dict(committed_result or {}),
+            **({"notificationRendering": dict(rendering_evidence)} if rendering_evidence else {}),
         },
         created_at=created_at,
         outbox_event_id=outbox_event_id,

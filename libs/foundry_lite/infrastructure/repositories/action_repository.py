@@ -31,9 +31,20 @@ from foundry_lite.application.ports.action_repository import (
     ObjectLinkWrite,
     ObjectTargetUpdate,
 )
-from foundry_lite.application.ports.object_read_repository import ObjectLinkRow, ObjectRecordRow
+from foundry_lite.application.ports.object_read_repository import (
+    ObjectAggregationGroup,
+    ObjectAggregationMetric,
+    ObjectLinkRow,
+    ObjectOrderBy,
+    ObjectQueryCursor,
+    ObjectRecordRow,
+)
 from foundry_lite.application.ports.transaction_context import ACTION_WRITEBACK_RECONCILED, StatusTransition
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.action_log_query_rows import (
+    aggregate_action_log_rows,
+    query_action_log_rows,
+)
 from foundry_lite.infrastructure.repositories.action_log_rows import (
     action_log_by_run,
     action_log_object_rows,
@@ -196,6 +207,27 @@ class SqlAlchemyActionRepository:
                 "completed_at": completed_at,
             },
         )
+
+    def update_action_run_parameters(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_run_id: str,
+        parameters: Mapping[str, object],
+    ) -> bool:
+        result = transaction.execute(
+            update(db.action_runs)
+            .where(
+                and_(
+                    db.action_runs.c.tenant_id == tenant_id,
+                    db.action_runs.c.id == action_run_id,
+                    db.action_runs.c.status == "received",
+                )
+            )
+            .values(parameters=dict(parameters))
+        )
+        return result.rowcount == 1
 
     def action_run_usage(
         self,
@@ -414,11 +446,65 @@ class SqlAlchemyActionRepository:
         before_created_at: str | None,
         before_log_id: str | None,
         limit: int,
+        action_type_api_name: str | None = None,
     ) -> list[ActionLogEntryRow]:
-        return list_action_log_rows(transaction, tenant_id, before_created_at, before_log_id, limit)
+        return list_action_log_rows(
+            transaction,
+            tenant_id,
+            before_created_at,
+            before_log_id,
+            limit,
+            action_type_api_name=action_type_api_name,
+        )
 
-    def action_runs_for_monitoring(self, *, transaction: Any, tenant_id: str, limit: int) -> list[ActionRunRow]:
-        return action_runs_for_monitoring_rows(transaction, tenant_id, limit)
+    def query_action_logs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: ObjectQueryCursor | None,
+        search_text: str | None,
+        limit: int,
+    ) -> list[ActionLogEntryRow]:
+        return query_action_log_rows(
+            transaction,
+            tenant_id,
+            action_type_api_name,
+            filter_ast,
+            order_by,
+            cursor,
+            search_text,
+            limit,
+        )
+
+    def aggregate_action_logs(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        group_by: Sequence[str],
+        metrics: Sequence[ObjectAggregationMetric],
+        group_limit: int,
+    ) -> list[ObjectAggregationGroup]:
+        return aggregate_action_log_rows(
+            transaction,
+            tenant_id,
+            action_type_api_name,
+            filter_ast,
+            group_by,
+            metrics,
+            group_limit,
+        )
+
+    def action_runs_for_monitoring(
+        self, *, transaction: Any, tenant_id: str, created_at_from: str, limit: int
+    ) -> list[ActionRunRow]:
+        return action_runs_for_monitoring_rows(transaction, tenant_id, created_at_from, limit)
 
     def mark_action_log_reverted(
         self, *, transaction: Any, tenant_id: str, action_run_id: str, reverted_by_run_id: str

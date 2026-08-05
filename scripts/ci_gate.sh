@@ -289,7 +289,17 @@ run_runtime_full_gate() {
 
   run_runtime_step "Action Types v2 IR and atomic edit-plan ratchet" pnpm --silent quality:action-types-v2
 
+  run_runtime_step "Consumer Ontology MCP OAuth, app restriction, and Action approval ratchet" pnpm --silent quality:ontology-mcp
+
+  run_runtime_step "Consumer Ontology MCP official-client PostgreSQL ratchet" pnpm --silent quality:ontology-mcp-live
+
   run_runtime_step "Action Types two-worker Temporal fault ratchet" pnpm --silent quality:action-types-palantir-live
+
+  run_runtime_step "Action notification policy PostgreSQL and RLS ratchet" pnpm --silent quality:action-notification-policies-live
+
+  run_runtime_step "Action effect two-worker takeover ratchet" pnpm --silent quality:action-effect-operations-live
+
+  run_runtime_step "Action monitoring live Kafka alert ratchet" pnpm --silent quality:action-monitoring-live
 
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
 

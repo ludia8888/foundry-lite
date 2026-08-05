@@ -1,4 +1,4 @@
-"""Generate the Sprint 35 TypeScript SDK from the active demo ontology.
+"""Generate the TypeScript, browser, and Python SDKs from the active demo Ontology.
 
 Thin CLI entrypoint; rendering lives in the scripts/sdk_generator package
 (ontology parsing, client surface, TypeScript/browser templates). This path
@@ -21,10 +21,13 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts.sdk_generator.ontology import load_ontology  # noqa: E402
 from scripts.sdk_generator.paths import (  # noqa: E402
     DEFAULT_ONTOLOGY,
+    DEFAULT_PYTHON_INIT_OUTPUT,
+    DEFAULT_PYTHON_OUTPUT,
     DEFAULT_TS_OUTPUT,
     DEFAULT_WEB_OUTPUT,
     _display_path,
 )
+from scripts.sdk_generator.python import render_python, render_python_init  # noqa: E402
 from scripts.sdk_generator.surface import (  # noqa: E402,F401  (re-exported test surface)
     client_surface,
     render_client_surface_json,
@@ -38,6 +41,8 @@ def write_or_check_outputs(
     ontology_path: Path,
     ts_output: Path,
     web_output: Path,
+    python_output: Path | None = None,
+    python_init_output: Path | None = None,
     should_check: bool,
 ) -> int:
     ontology = load_ontology(ontology_path)
@@ -45,6 +50,10 @@ def write_or_check_outputs(
         ts_output: render_typescript(ontology),
         web_output: render_web_javascript(ontology),
     }
+    if python_output is not None:
+        outputs[python_output] = render_python(ontology)
+    if python_init_output is not None:
+        outputs[python_init_output] = render_python_init(ontology)
     if should_check:
         stale = [
             path
@@ -70,6 +79,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--ontology", type=Path, default=DEFAULT_ONTOLOGY)
     parser.add_argument("--ts-output", type=Path, default=DEFAULT_TS_OUTPUT)
     parser.add_argument("--web-output", type=Path, default=DEFAULT_WEB_OUTPUT)
+    parser.add_argument("--python-output", type=Path, default=DEFAULT_PYTHON_OUTPUT)
+    parser.add_argument("--python-init-output", type=Path, default=DEFAULT_PYTHON_INIT_OUTPUT)
     parser.add_argument("--check", action="store_true")
     return parser.parse_args(argv)
 
@@ -80,6 +91,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ontology_path=args.ontology,
         ts_output=args.ts_output,
         web_output=args.web_output,
+        python_output=args.python_output,
+        python_init_output=args.python_init_output,
         should_check=args.check,
     )
 

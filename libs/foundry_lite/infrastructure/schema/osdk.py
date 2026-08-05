@@ -35,9 +35,35 @@ osdk_application_clients = Table(
     Column("allowed_scopes", JSON),
     Column("access_token_ttl_seconds", Integer),
     Column("refresh_token_ttl_seconds", Integer),
+    Column("current_secret_id", String),
     Column("created_at", String, nullable=False),
     Column("updated_at", String),
     UniqueConstraint("tenant_id", "client_id", name="uq_osdk_application_client_id"),
+)
+
+
+osdk_client_secret_versions = Table(
+    "osdk_client_secret_versions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("app_id", String, nullable=False),
+    Column("client_row_id", String, nullable=False),
+    Column("client_id", String, nullable=False),
+    Column("vault_secret_name", String, nullable=False),
+    Column("vault_secret_version", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("created_by_user_id", String, nullable=False),
+    Column("rotation_reason", String),
+    Column("created_at", String, nullable=False),
+    Column("revoked_at", String),
+    Column("last_used_at", String),
+    UniqueConstraint(
+        "tenant_id",
+        "client_row_id",
+        "vault_secret_version",
+        name="uq_osdk_client_secret_version",
+    ),
 )
 
 
@@ -57,6 +83,77 @@ osdk_application_resources = Table(
         "resource_type",
         "resource_api_name",
         name="uq_osdk_application_resource",
+    ),
+)
+
+
+osdk_mcp_servers = Table(
+    "osdk_mcp_servers",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("app_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("description_markdown", String, nullable=False),
+    Column("allowed_origins", JSON, nullable=False),
+    Column("last_activity_at", String),
+    Column("updated_by_user_id", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "app_id", name="uq_osdk_mcp_server_application"),
+)
+
+
+osdk_mcp_sessions = Table(
+    "osdk_mcp_sessions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("app_id", String, nullable=False),
+    Column("client_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("last_sequence", Integer, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("last_seen_at", String, nullable=False),
+    Column("terminated_at", String),
+)
+
+
+osdk_mcp_session_events = Table(
+    "osdk_mcp_session_events",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("session_id", String, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("payload_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "session_id", "sequence", name="uq_osdk_mcp_session_event_sequence"),
+)
+
+
+osdk_mcp_tool_activations = Table(
+    "osdk_mcp_tool_activations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("app_id", String, nullable=False),
+    Column("session_id", String, nullable=False),
+    Column("client_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("tool_id", String, nullable=False),
+    Column("query_hash", String, nullable=False),
+    Column("activated_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "app_id",
+        "session_id",
+        "client_id",
+        "actor_user_id",
+        "tool_id",
+        name="uq_osdk_mcp_tool_activation",
     ),
 )
 

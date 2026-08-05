@@ -70,6 +70,40 @@ class OsdkApplicationIdempotencyService(CoreService):
         )
         return _with_download_token(self.root, ctx, stored, request_hash)
 
+    def _idempotent_one_time_secret_response(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        operation: str,
+        idempotency_key: str,
+        request: Mapping[str, object],
+        create_response: Callable[[], RuntimeJsonObject],
+    ) -> RuntimeJsonObject:
+        """Store only secret metadata and never reveal a one-time value on replay."""
+
+        request_hash = _request_hash(request)
+        existing = self._idempotency_record(conn, ctx, operation, idempotency_key, request_hash)
+        if existing is not None:
+            return {**existing, "clientSecret": None, "isReplayed": True}
+        response = create_response()
+        raw_secret = response.get("clientSecret")
+        if not isinstance(raw_secret, str) or not raw_secret:
+            raise RuntimeError("one-time secret mutation did not produce a secret")
+        safe_response = cast(
+            RuntimeJsonObject, {key: value for key, value in response.items() if key != "clientSecret"}
+        )
+        stored = self._store_idempotency_record(
+            conn,
+            ctx,
+            operation,
+            idempotency_key,
+            request_hash,
+            safe_response,
+        )
+        if stored != safe_response:
+            raise ConflictDetected("OSDK client secret rotation lost a concurrent idempotency race")
+        return {**stored, "clientSecret": raw_secret, "isReplayed": False}
+
     def _idempotency_record(
         self, conn: TransactionContext, ctx: RequestContext, operation: str, idempotency_key: str, request_hash: str
     ) -> RuntimeJsonObject | None:

@@ -14,6 +14,8 @@ from foundry_lite.application.action_async_execution_types import (
     ActionAsyncRunRecord,
     ActionAsyncRunRow,
     ActionEffectClaim,
+    ActionEffectOperationRecord,
+    ActionEffectOperationRow,
     ActionEffectReceiptRecord,
     ActionEffectReceiptRow,
     ActionRunEventRecord,
@@ -68,6 +70,30 @@ class SqlAlchemyActionExecutionRepository:
     def effect_receipts_for_run(self, *, transaction: Any, tenant_id: str, run_id: str) -> list[ActionEffectReceiptRow]:
         return effect_rows.receipts_for_run(transaction, tenant_id, run_id)
 
+    def effect_receipt_by_id(
+        self, *, transaction: Any, tenant_id: str, receipt_id: str
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.receipt_by_id(transaction, tenant_id, receipt_id)
+
+    def list_effect_receipts(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        status: str | None,
+        before_created_at: str | None,
+        before_receipt_id: str | None,
+        limit: int,
+    ) -> list[ActionEffectReceiptRow]:
+        return effect_rows.list_receipts(
+            transaction,
+            tenant_id,
+            status,
+            before_created_at,
+            before_receipt_id,
+            limit,
+        )
+
     def pending_effect_receipts(
         self, *, transaction: Any, tenant_id: str, limit: int, due_at: str
     ) -> list[ActionEffectReceiptRow]:
@@ -78,6 +104,97 @@ class SqlAlchemyActionExecutionRepository:
 
     def claim_effect_receipt(self, *, transaction: Any, claim: ActionEffectClaim) -> ActionEffectReceiptRow | None:
         return effect_rows.claim_receipt(transaction, claim)
+
+    def start_effect_dispatch(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        receipt_id: str,
+        worker_id: str,
+        lease_token: str,
+        fencing_token: int,
+        started_at: str,
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.start_dispatch(
+            transaction,
+            tenant_id=tenant_id,
+            receipt_id=receipt_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            fencing_token=fencing_token,
+            started_at=started_at,
+        )
+
+    def request_effect_cancel(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        receipt_id: str,
+        reason: str | None,
+        requested_at: str,
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.request_cancel(
+            transaction,
+            tenant_id=tenant_id,
+            receipt_id=receipt_id,
+            reason=reason,
+            requested_at=requested_at,
+        )
+
+    def retry_effect_receipt(
+        self, *, transaction: Any, tenant_id: str, receipt_id: str, requested_at: str
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.retry_receipt(
+            transaction,
+            tenant_id=tenant_id,
+            receipt_id=receipt_id,
+            requested_at=requested_at,
+        )
+
+    def reconcile_effect_receipt(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        receipt_id: str,
+        resolution: str,
+        evidence: dict[str, object],
+        actor_user_id: str,
+        reconciled_at: str,
+    ) -> ActionEffectReceiptRow | None:
+        return effect_rows.reconcile_receipt(
+            transaction,
+            tenant_id=tenant_id,
+            receipt_id=receipt_id,
+            resolution=resolution,
+            evidence=evidence,
+            actor_user_id=actor_user_id,
+            reconciled_at=reconciled_at,
+        )
+
+    def effect_operation_by_idempotency(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        actor_user_id: str,
+        operation: str,
+        idempotency_key: str,
+    ) -> ActionEffectOperationRow | None:
+        return effect_rows.operation_by_idempotency(
+            transaction,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            operation=operation,
+            idempotency_key=idempotency_key,
+        )
+
+    def insert_effect_operation_or_existing(
+        self, *, transaction: Any, record: ActionEffectOperationRecord
+    ) -> ActionEffectOperationRow | None:
+        return effect_rows.insert_operation_or_existing(transaction, record)
 
     def complete_effect_receipt(
         self,

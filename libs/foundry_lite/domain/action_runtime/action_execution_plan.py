@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from foundry_lite.domain.action_runtime.edit_plan import (
+    CriteriaReadExpectation,
     EditPlan,
     LinkCreate,
     LinkDelete,
@@ -21,7 +22,7 @@ from foundry_lite.domain.errors import ValidationFailed
 
 def edit_plan_manifest(plan: EditPlan) -> dict[str, object]:
     """Return the stable, storage-safe operation manifest used by approvals."""
-    return {
+    manifest: dict[str, object] = {
         "objectCreates": [
             {
                 "operationKey": item.operation_key,
@@ -58,6 +59,9 @@ def edit_plan_manifest(plan: EditPlan) -> dict[str, object]:
         "linkDeletes": [_link_manifest(item) for item in plan.links_to_delete],
         "readSetVersions": dict(sorted(plan.read_set_versions.items())),
     }
+    if plan.criteria_read_expectations:
+        manifest["criteriaReadSet"] = [_criteria_read_manifest(item) for item in plan.criteria_read_expectations]
+    return manifest
 
 
 def seal_action_execution_plan(payload: Mapping[str, object]) -> dict[str, object]:
@@ -77,9 +81,17 @@ def edit_plan_from_manifest(manifest: Mapping[str, object]) -> EditPlan:
         links_to_create=tuple(_link_create(item) for item in _items(manifest, "linkCreates")),
         links_to_delete=tuple(_link_delete(item) for item in _items(manifest, "linkDeletes")),
         read_set_versions=_read_versions(manifest.get("readSetVersions")),
+        criteria_read_expectations=tuple(_criteria_read(item) for item in _items(manifest, "criteriaReadSet")),
     )
     validate_edit_plan(plan)
     return plan
+
+
+def criteria_read_expectations_from_manifest(
+    manifest: Mapping[str, object],
+) -> tuple[CriteriaReadExpectation, ...]:
+    """Read criteria OCC evidence even when a function-backed plan has no static edits."""
+    return tuple(_criteria_read(item) for item in _items(manifest, "criteriaReadSet"))
 
 
 def _link_manifest(item: LinkCreate | LinkDelete) -> dict[str, object]:
@@ -90,6 +102,40 @@ def _link_manifest(item: LinkCreate | LinkDelete) -> dict[str, object]:
         "sourceObjectId": item.source_object_id,
         "targetObjectId": item.target_object_id,
     }
+
+
+def _criteria_read_manifest(item: CriteriaReadExpectation) -> dict[str, object]:
+    return {
+        "referenceKey": item.reference_key,
+        "linkType": item.link_type,
+        "direction": item.direction,
+        "anchorObjectType": item.anchor_object_type,
+        "anchorObjectId": item.anchor_object_id,
+        "linkedObjectType": item.linked_object_type,
+        "property": item.property_name,
+        "aggregation": item.aggregation,
+        "snapshotFingerprint": item.snapshot_fingerprint,
+    }
+
+
+def _criteria_read(item: Mapping[str, object]) -> CriteriaReadExpectation:
+    direction = _text(item, "direction")
+    aggregation = _text(item, "aggregation")
+    if direction not in {"incoming", "outgoing"}:
+        raise ValidationFailed("Action criteria read direction is invalid")
+    if aggregation not in {"values", "count"}:
+        raise ValidationFailed("Action criteria read aggregation is invalid")
+    return CriteriaReadExpectation(
+        reference_key=_text(item, "referenceKey"),
+        link_type=_text(item, "linkType"),
+        direction=direction,
+        anchor_object_type=_text(item, "anchorObjectType"),
+        anchor_object_id=_text(item, "anchorObjectId"),
+        linked_object_type=_text(item, "linkedObjectType"),
+        property_name=_text(item, "property"),
+        aggregation=aggregation,
+        snapshot_fingerprint=_text(item, "snapshotFingerprint"),
+    )
 
 
 def _object_create(item: Mapping[str, object]) -> ObjectCreate:

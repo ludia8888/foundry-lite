@@ -13,12 +13,20 @@ This lives in the application layer because it reads the application-owned
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from foundry_lite.application.ports.ontology_definitions import ActionMutationDefinition, ActionTypeDefinition
 from foundry_lite.application.services.action_interface_resolution import (
+    require_interface_create_plan_target as require_interface_create_plan_target,
+)
+from foundry_lite.application.services.action_interface_resolution import (
     resolve_interface_action_definition as resolve_interface_action_definition,
 )
-from foundry_lite.domain.action_runtime.action_contract import compile_action_contract
+from foundry_lite.domain.action_runtime.action_contract import (
+    ActionDefinitionV3,
+    action_contract_payload,
+    compile_action_contract,
+)
 from foundry_lite.domain.action_runtime.action_ir import (
     ActionDefinitionV2,
     ActionRule,
@@ -64,6 +72,16 @@ def compile_action_definition(definition: ActionTypeDefinition) -> ActionDefinit
     compiled = ActionDefinitionV2(api_name=api_name, rules=rules)
     validate_action_definition(compiled)
     return compiled
+
+
+def canonical_action_contract(definition: ActionTypeDefinition) -> ActionDefinitionV3:
+    """Compile one persisted definition into the canonical v3 contract."""
+    return compile_action_contract(definition)
+
+
+def compile_canonical_action_definition(contract: ActionDefinitionV3) -> ActionDefinitionV2:
+    """Compile an already canonical contract into executable Action IR."""
+    return compile_action_definition(cast(ActionTypeDefinition, action_contract_payload(contract)))
 
 
 def _normalize_v1(definition: ActionTypeDefinition) -> tuple[ActionRule, ...]:
@@ -146,6 +164,21 @@ def _on_interface(payload: Mapping[str, object]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _interface_link_constraint(payload: Mapping[str, object]) -> str | None:
+    value = payload.get("interfaceLinkConstraint")
+    return value if isinstance(value, str) and value else None
+
+
+def _link_type(payload: Mapping[str, object]) -> str:
+    value = payload.get("linkType")
+    if isinstance(value, str) and value:
+        return value
+    constraint = _interface_link_constraint(payload)
+    if constraint is not None:
+        return f"__interface__:{constraint}"
+    raise ValidationFailed("action rule requires text", details={"field": "linkType"})
+
+
 def _value_expr(payload: Mapping[str, object], key: str) -> ValueExpression:
     raw = payload.get(key)
     if not isinstance(raw, Mapping):
@@ -210,18 +243,22 @@ def _parse_delete_objects(payload: Mapping[str, object]) -> ActionRule:
 def _parse_create_link(payload: Mapping[str, object]) -> ActionRule:
     return CreateLinkRule(
         rule_id=_rule_id(payload),
-        link_type=_text(payload, "linkType"),
+        link_type=_link_type(payload),
         source=_value_expr(payload, "source"),
         target=_value_expr(payload, "target"),
+        on_interface=_on_interface(payload),
+        interface_link_constraint=_interface_link_constraint(payload),
     )
 
 
 def _parse_delete_link(payload: Mapping[str, object]) -> ActionRule:
     return DeleteLinkRule(
         rule_id=_rule_id(payload),
-        link_type=_text(payload, "linkType"),
+        link_type=_link_type(payload),
         source=_value_expr(payload, "source"),
         target=_value_expr(payload, "target"),
+        on_interface=_on_interface(payload),
+        interface_link_constraint=_interface_link_constraint(payload),
     )
 
 

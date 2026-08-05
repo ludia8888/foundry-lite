@@ -79,6 +79,8 @@ class CreateLinkRule:
     link_type: str
     source: ValueExpression
     target: ValueExpression
+    on_interface: str | None = None
+    interface_link_constraint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,18 @@ class DeleteLinkRule:
 
     rule_id: str
     link_type: str
+    source: ValueExpression
+    target: ValueExpression
+    on_interface: str | None = None
+    interface_link_constraint: str | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedInterfaceLinkDeleteRule:
+    """Delete every concrete link implementing one interface link constraint."""
+
+    rule_id: str
+    concrete_link_types: tuple[str, ...]
     source: ValueExpression
     target: ValueExpression
 
@@ -104,7 +118,15 @@ class FunctionEditRule:
     function_version: str
 
 
-ActionRule = CreateObjectRule | ModifyObjectRule | DeleteObjectRule | CreateLinkRule | DeleteLinkRule | FunctionEditRule
+ActionRule = (
+    CreateObjectRule
+    | ModifyObjectRule
+    | DeleteObjectRule
+    | CreateLinkRule
+    | DeleteLinkRule
+    | ResolvedInterfaceLinkDeleteRule
+    | FunctionEditRule
+)
 
 
 @dataclass(frozen=True)
@@ -127,7 +149,11 @@ def iter_value_expressions(rule: ActionRule) -> Iterator[ValueExpression]:
             yield from (assignment.value for assignment in assignments)
         case DeleteObjectRule(target=target):
             yield target
-        case CreateLinkRule(source=source, target=target) | DeleteLinkRule(source=source, target=target):
+        case (
+            CreateLinkRule(source=source, target=target)
+            | DeleteLinkRule(source=source, target=target)
+            | ResolvedInterfaceLinkDeleteRule(source=source, target=target)
+        ):
             yield source
             yield target
         case FunctionEditRule():

@@ -17,6 +17,12 @@ DEFAULT_TS_OUTPUT = ROOT / "packages" / "sdk-ts" / "src" / "generated.ts"
 DEFAULT_WEB_OUTPUT = ROOT / "apps" / "web" / "generated-sdk.js"
 
 
+DEFAULT_PYTHON_OUTPUT = ROOT / "packages" / "sdk-python" / "src" / "foundry_lite_sdk" / "generated.py"
+
+
+DEFAULT_PYTHON_INIT_OUTPUT = ROOT / "packages" / "sdk-python" / "src" / "foundry_lite_sdk" / "__init__.py"
+
+
 SDK_PACKAGE_JSON = ROOT / "packages" / "sdk-ts" / "package.json"
 
 

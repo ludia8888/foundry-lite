@@ -1,0 +1,190 @@
+"""Deterministic consumer Ontology MCP tool-schema builders."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+
+from foundry_lite.domain.platform.scopes import resource_scope
+
+
+def object_tools(name: str, scopes: tuple[str, ...]) -> list[dict[str, object]]:
+    if resource_scope("object", name, "read") not in scopes:
+        return []
+    return [
+        _tool(
+            f"object.{name}.get",
+            f"Get one permitted {name} object by ID.",
+            {"objectId": {"type": "string"}},
+            ["objectId"],
+            is_write=False,
+        ),
+        _tool(
+            f"object.{name}.search",
+            f"Search permitted {name} objects with bounded pagination.",
+            {
+                "search": {"type": "string"},
+                "filter": {"type": "object"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                "cursor": {"type": "string"},
+            },
+            [],
+            is_write=False,
+        ),
+    ]
+
+
+def action_tool(
+    name: str,
+    operation: str,
+    description: str,
+    parameter_schema: Mapping[str, object],
+    *,
+    is_write: bool,
+) -> dict[str, object]:
+    suffix = (
+        "Execute autonomously only when low-risk; otherwise return an approval requirement."
+        if is_write
+        else "Return an immutable governed EditPlan without committing."
+    )
+    return _tool(
+        f"action.{name}.{operation}",
+        f"{description} {suffix}",
+        {
+            "objectType": {"type": "string"},
+            "objectId": {"type": "string"},
+            "expectedObjectVersion": {"type": "integer", "minimum": 1},
+            "params": parameter_schema,
+        },
+        ["objectType", "objectId", "expectedObjectVersion", "params"],
+        is_write=is_write,
+    )
+
+
+def function_tools(name: str, scopes: tuple[str, ...], definition: Mapping[str, object]) -> list[dict[str, object]]:
+    if resource_scope("function", name, "execute") not in scopes:
+        return []
+    return [
+        _tool(
+            f"function.{name}.execute",
+            _function_description(name, definition),
+            {"inputs": _function_input_schema(definition)},
+            ["inputs"],
+            is_write=False,
+        )
+    ]
+
+
+def _function_input_schema(definition: Mapping[str, object]) -> dict[str, object]:
+    raw_inputs = definition.get("inputs")
+    inputs = raw_inputs if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, str | bytes) else ()
+    properties: dict[str, object] = {}
+    required: list[str] = []
+    for value in inputs:
+        if not isinstance(value, Mapping) or not isinstance(value.get("apiName"), str):
+            continue
+        name = str(value["apiName"])
+        properties[name] = _function_value_schema(value)
+        if value.get("required") is True:
+            required.append(name)
+    return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+
+
+def _function_value_schema(definition: Mapping[str, object]) -> dict[str, object]:
+    value_type = str(definition.get("type"))
+    builder = _FUNCTION_SCHEMA_BUILDERS.get(value_type)
+    return builder(definition) if builder else dict(_FUNCTION_VALUE_SCHEMAS.get(value_type, {"type": "object"}))
+
+
+def _function_collection_schema(definition: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "array",
+        "items": _function_value_schema({**definition, "type": definition.get("itemType", "string")}),
+        "uniqueItems": definition.get("type") == "objectSet",
+    }
+
+
+def _function_struct_schema(definition: Mapping[str, object]) -> dict[str, object]:
+    fields = definition.get("fields")
+    rows = fields if isinstance(fields, Sequence) and not isinstance(fields, str | bytes) else ()
+    typed_rows = tuple(field for field in rows if isinstance(field, Mapping) and isinstance(field.get("apiName"), str))
+    properties = {str(field["apiName"]): _function_value_schema(field) for field in typed_rows}
+    required = [str(field["apiName"]) for field in typed_rows if field.get("required") is True]
+    return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
+
+
+_FUNCTION_VALUE_SCHEMAS: Mapping[str, Mapping[str, object]] = {
+    "string": {"type": "string"},
+    "boolean": {"type": "boolean"},
+    "integer": {"type": "integer"},
+    "long": {"type": "integer"},
+    "float": {"type": "number"},
+    "decimal": {"type": "number"},
+    "date": {"type": "string", "format": "date"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "media_reference": {"type": "string", "format": "foundry-media-reference"},
+    "media": {"type": "object", "format": "foundry-media-reference"},
+    "attachment": {"type": "object", "format": "foundry-attachment-reference"},
+    "object": {"type": "object", "format": "foundry-object-reference"},
+    "interface": {"type": "object", "format": "foundry-interface-reference"},
+    "ontology_edit_batch": {"type": "object"},
+}
+_FUNCTION_SCHEMA_BUILDERS = {
+    "array": _function_collection_schema,
+    "objectSet": _function_collection_schema,
+    "struct": _function_struct_schema,
+}
+
+
+def _function_description(name: str, definition: Mapping[str, object]) -> str:
+    display_name = definition.get("displayName")
+    version = definition.get("version")
+    label = display_name if isinstance(display_name, str) and display_name else name
+    version_label = version if isinstance(version, str) and version else "v1"
+    return f"Execute the permitted, version-pinned query function {label} ({version_label})."
+
+
+def run_status_tool() -> dict[str, object]:
+    return _tool(
+        "action_run.get",
+        "Get durable status and evidence for an Action run visible to this application.",
+        {"runId": {"type": "string"}},
+        ["runId"],
+        is_write=False,
+    )
+
+
+def approval_status_tool() -> dict[str, object]:
+    return _tool(
+        "action_approval.get",
+        "Get read-only human approval and execution status for an Action proposal created by this MCP principal.",
+        {"reviewId": {"type": "string"}},
+        ["reviewId"],
+        is_write=False,
+    )
+
+
+def _tool(
+    name: str,
+    description: str,
+    properties: Mapping[str, object],
+    required: Sequence[str],
+    *,
+    is_write: bool,
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "title": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": dict(properties),
+            "required": list(required),
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": not is_write,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    }

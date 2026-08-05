@@ -20,17 +20,15 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.ontology_datasource_validation import yaml_property_datasources
-from foundry_lite.application.services.ontology_function_validation import (
-    import_function_types,
-    validate_ontology_functions,
-)
-from foundry_lite.application.services.ontology_interface_validation import (
+from foundry_lite.application.services.ontology_activation_contracts import (
     import_action_types,
+    import_function_types,
     import_interface_types,
     object_type_implements,
-    validate_ontology_interfaces,
+    ontology_validation_result,
+    validate_activation_contracts,
 )
+from foundry_lite.application.services.ontology_datasource_validation import yaml_property_datasources
 from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     plan_ontology_migration,
@@ -44,16 +42,13 @@ from foundry_lite.application.services.ontology_protocols import (
     require_ontology_write_open,
     upsert_ontology_resource,
 )
-from foundry_lite.application.services.ontology_validation import (
-    ontology_validation_result,
-    validate_ontology_definition,
-)
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     link_type_backing,
     mapping_sequence,
     object_type_backing,
     object_type_materialization_config,
+    object_type_media_properties,
     object_type_row_policies,
     optional_bool,
     optional_str,
@@ -71,7 +66,7 @@ from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 class OntologyActivationService(CoreService):
     """Validate, import, and activate ontology YAML definitions."""
 
-    required_dependencies = ("engine", "ontology_repository", "resource_catalog_repository")
+    required_dependencies = ("engine", "media_repository", "ontology_repository", "resource_catalog_repository")
     required_collaborators = (
         "dataset_registry_service",
         "dataset_version_service",
@@ -114,9 +109,14 @@ class OntologyActivationService(CoreService):
         require_yaml_text_within_limit(yaml_text)
         definition = self._load_ontology_text(yaml_text)
         with self.engine.begin() as conn:
-            validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
-            validate_ontology_interfaces(definition)
-            validate_ontology_functions(definition, ctx, self.visual_builder_service)
+            validate_activation_contracts(
+                self.media_repository,
+                conn,
+                ctx,
+                definition,
+                self._dataset_columns_for_ref,
+                self.visual_builder_service,
+            )
             migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         return ontology_validation_result(definition, migration_plan)
 
@@ -126,9 +126,14 @@ class OntologyActivationService(CoreService):
         ctx: RequestContext,
         definition: YamlObject,
     ) -> OntologyApplyResult:
-        validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
-        validate_ontology_interfaces(definition)
-        functions = validate_ontology_functions(definition, ctx, self.visual_builder_service)
+        functions = validate_activation_contracts(
+            self.media_repository,
+            conn,
+            ctx,
+            definition,
+            self._dataset_columns_for_ref,
+            self.visual_builder_service,
+        )
         migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         migration_plan.raise_if_blocked()
         ontology_version_id, version_number = self._create_draft_version(conn, ctx)
@@ -267,6 +272,9 @@ class OntologyActivationService(CoreService):
         property_datasources = yaml_property_datasources(item)
         if property_datasources is not None:
             config["propertyDatasources"] = property_datasources
+        media_properties = object_type_media_properties(item)
+        if media_properties:
+            config["mediaProperties"] = media_properties
         return config
 
     def _import_properties_for_object_type(

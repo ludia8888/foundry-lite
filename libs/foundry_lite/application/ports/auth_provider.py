@@ -16,7 +16,7 @@ dictionary - it forces a service composition to opt into anonymous fallback.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
@@ -41,6 +41,8 @@ class Principal:
     application_id: str | None = None
     client_id: str | None = None
     token_scopes: tuple[str, ...] = ()
+    oauth_session_id: str | None = None
+    user_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
 
 
 @runtime_checkable

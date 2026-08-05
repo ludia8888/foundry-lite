@@ -8,6 +8,7 @@ from foundry_lite.application.action_types import ActionApplyCommand
 from foundry_lite.application.ports import ActionTypeRow, PropertyTypeRow, TransactionContext
 from foundry_lite.application.services.action_ir_compiler import (
     compile_action_definition,
+    require_interface_create_plan_target,
     resolve_interface_action_definition,
 )
 from foundry_lite.application.services.action_plan_resolution import LivePlanResolutionContext
@@ -46,6 +47,7 @@ def resolve_authorized_action_edit_plan(
     resolution = LivePlanResolutionContext(conn, ctx, command, object_lookup, ontology, ontology)
     plan = build_edit_plan(compiled, resolution)
     validate_edit_plan(plan)
+    require_interface_create_plan_target(contract, compiled, plan, command.object_type, command.object_id)
     sensitive = authorize_action_edit_plan(conn, ctx, policy, ontology, contract, plan)
     require_declared_risk_floor(action_plan_risk(contract, plan, sensitive))
     return plan

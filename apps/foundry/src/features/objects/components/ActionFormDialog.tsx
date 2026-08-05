@@ -18,6 +18,7 @@ import { RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
+import { ActionCriteriaEvaluationPanel } from "@/components/shared/ActionCriteriaEvaluation";
 import { StatusPill } from "@/components/shared/StatusPill";
 import {
   StaleObjectVersionNotice,
@@ -147,6 +148,7 @@ function ValidationResultPanel({
           <span className="font-mono">[{issue.code}]</span> {issue.message}
         </div>
       ))}
+      <ActionCriteriaEvaluationPanel evaluation={result.submissionCriteriaEvaluation} />
     </div>
   );
 }
@@ -188,15 +190,15 @@ function ActionFormContent({
     useState(false);
 
   const runValidate = useCallback(async () => {
-    const generated = form.generatedActionType as OsdkActionType | null;
-    if (!generated) return null;
+    const actionType = form.runtimeActionType as OsdkActionType | null;
+    if (!actionType) return null;
     const payload = {
       objectId: targetObject.objectId,
       expectedObjectVersion: targetObject.objectVersion,
       params: form.params,
     } as OsdkActionValidationPayload<OsdkActionType>;
-    return osdk(generated).validateAction(payload);
-  }, [form.generatedActionType, form.params, osdk, targetObject]);
+    return osdk(actionType).validateAction(payload);
+  }, [form.runtimeActionType, form.params, osdk, targetObject]);
 
   const validateMutation = useFoundryLiteMutation(runValidate, {
     onSuccess: (result) => {
@@ -249,9 +251,10 @@ function ActionFormContent({
   const buildSubmitRequest = (
     submitIdempotencyKey: string,
   ): PinnedActionRequest | null => {
-    const actionType = form.generatedActionType as OsdkActionType | null;
+    const actionType = form.runtimeActionType as OsdkActionType | null;
     if (
       !actionType ||
+      !form.payload ||
       form.targetObjectId === null ||
       form.expectedObjectVersion === null
     ) {
@@ -262,9 +265,7 @@ function ActionFormContent({
       idempotencyKey: submitIdempotencyKey,
       expectedObjectVersion: form.expectedObjectVersion,
       payload: {
-        objectId: form.targetObjectId,
-        expectedObjectVersion: form.expectedObjectVersion,
-        params: form.params,
+        ...form.payload,
         idempotencyKey: submitIdempotencyKey,
       } as OsdkActionPayload<OsdkActionType>,
     };
@@ -432,7 +433,7 @@ function ActionFormContent({
         <Button
           size="sm"
           variant="outline"
-          disabled={!form.generatedActionType || validateMutation.isRunning}
+          disabled={!form.runtimeActionType || validateMutation.isRunning}
           onClick={() => void validateMutation.execute(undefined)}
         >
           <ShieldCheck />

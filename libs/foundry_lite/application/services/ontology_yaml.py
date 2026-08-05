@@ -215,6 +215,21 @@ def object_type_row_policies(item: YamlObject) -> tuple[OntologyJsonObject, ...]
     return tuple(policies)
 
 
+def object_type_media_properties(item: YamlObject) -> OntologyJsonObject:
+    """Persist media property contracts in object config so rollback cannot drop them."""
+    result: dict[str, object] = {}
+    for prop in mapping_sequence(item, "properties"):
+        property_type = required_str(prop, "type")
+        if property_type not in {"media_reference", "attachment"}:
+            continue
+        result[required_str(prop, "apiName")] = {
+            "mediaSet": required_str(prop, "mediaSet"),
+            "referenceKind": "attachment" if property_type == "attachment" else "media",
+            "allowMultiple": optional_bool(prop, "allowMultiple", False),
+        }
+    return result
+
+
 def link_type_backing(item: YamlObject) -> LinkTypeBacking:
     """Build a link-type backing payload from YAML."""
     backing = required_mapping(item, "backing")
@@ -246,6 +261,14 @@ def action_parameter_schema(parameters: Sequence[YamlObject]) -> ActionParameter
         "target": "__target__",
         "parameters": [dict(parameter) for parameter in parameters],
     }
+    return cast(ActionParameterSchema, action_parameter_json_schema(compile_action_contract(definition)))
+
+
+def action_type_parameter_schema(item: YamlObject) -> ActionParameterSchema:
+    """Generate the consumer schema from the complete canonical Action contract."""
+    from foundry_lite.domain.action_runtime.action_contract import action_parameter_json_schema, compile_action_contract
+
+    definition = action_type_definition(item)
     return cast(ActionParameterSchema, action_parameter_json_schema(compile_action_contract(definition)))
 
 
@@ -310,8 +333,9 @@ def action_permissions(item: YamlObject) -> OntologyJsonObject | None:
     permissions = optional_mapping(item, "permissions")
     if permissions is None:
         return None
-    if permissions.get("allowedRoles") is not None:
-        string_sequence(permissions["allowedRoles"], "permissions.allowedRoles")
+    for field in ("allowedRoles", "viewRoles", "editRoles", "applyRoles"):
+        if permissions.get(field) is not None:
+            string_sequence(permissions[field], f"permissions.{field}")
     return permissions
 
 
@@ -325,10 +349,10 @@ def action_allowed_roles(definition: Mapping[str, object]) -> tuple[str, ...] | 
     permissions = definition.get("permissions")
     if not isinstance(permissions, Mapping):
         return None
-    value = permissions.get("allowedRoles")
+    value = permissions.get("applyRoles", permissions.get("allowedRoles"))
     if value is None:
         return None
-    return string_sequence(value, "permissions.allowedRoles")
+    return string_sequence(value, "permissions.applyRoles")
 
 
 def _copy_sequence_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:
@@ -392,24 +416,51 @@ def _copy_action_contract_fields(definition: ActionTypeDefinition, item: YamlObj
         text_value = optional_str(item, key)
         if text_value is not None:
             definition[key] = text_value
-    for key in ("submissionCriteria", "function", "actionLog", "revert", "branchPolicy"):
+    for key in ("submissionCriteria", "function", "actionLog", "revert", "branchPolicy", "formLayout"):
         mapping_value = optional_mapping(item, key)
         if mapping_value is not None:
             definition[key] = mapping_value  # type: ignore[literal-required]
 
 
 def _copy_action_parameter_config(result: ActionParameterDefinition, parameter: YamlObject) -> None:
+    _copy_action_parameter_mappings(result, parameter)
+    _copy_action_parameter_overrides(result, parameter)
+    _copy_action_parameter_text(result, parameter)
+    _copy_action_parameter_media_limits(result, parameter)
+    _copy_action_parameter_fields(result, parameter)
+
+
+def _copy_action_parameter_mappings(result: ActionParameterDefinition, parameter: YamlObject) -> None:
     for key in ("default", "constraints"):
         mapping_value = optional_mapping(parameter, key)
         if mapping_value is not None:
             result[key] = mapping_value
+
+
+def _copy_action_parameter_overrides(result: ActionParameterDefinition, parameter: YamlObject) -> None:
     overrides = tuple(yaml_object(row, "overrides[]") for row in mapping_sequence(parameter, "overrides"))
     if overrides:
         result["overrides"] = overrides
-    for key in ("objectType", "interfaceType", "itemType"):
+
+
+def _copy_action_parameter_text(result: ActionParameterDefinition, parameter: YamlObject) -> None:
+    for key in ("objectType", "interfaceType", "itemType", "mediaSet", "render"):
         text_value = optional_str(parameter, key)
         if text_value is not None:
-            result[key] = text_value  # type: ignore[literal-required]
+            result[key] = text_value
+
+
+def _copy_action_parameter_media_limits(result: ActionParameterDefinition, parameter: YamlObject) -> None:
+    if "allowedMimeTypes" in parameter:
+        result["allowedMimeTypes"] = string_sequence(parameter["allowedMimeTypes"], "allowedMimeTypes")
+    if "maxBytes" in parameter:
+        maximum = parameter["maxBytes"]
+        if not isinstance(maximum, int) or isinstance(maximum, bool):
+            raise ValidationFailed("maxBytes must be an integer")
+        result["maxBytes"] = maximum
+
+
+def _copy_action_parameter_fields(result: ActionParameterDefinition, parameter: YamlObject) -> None:
     fields = tuple(yaml_object(row, "fields[]") for row in mapping_sequence(parameter, "fields"))
     if fields:
         result["fields"] = fields

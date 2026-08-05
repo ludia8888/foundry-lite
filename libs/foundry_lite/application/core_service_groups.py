@@ -2,9 +2,53 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, TypedDict
 
+from foundry_lite.application.services.aip.runtime_services import (
+    FdeApplicationToolService,
+    FdeContextService,
+    FdeDataConnectionToolService,
+    FdeOntologyToolService,
+    FdePilotService,
+    FdePlatformToolService,
+    FdeRuntimeService,
+)
+from foundry_lite.application.services.backup_restore_services import BackupRestoreServices
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.dataset_service import DatasetServices
+from foundry_lite.application.services.media_service import MediaServices
+from foundry_lite.application.services.object_service import ObjectServices
+from foundry_lite.application.services.runtime_bundle import IcebergMaintenanceService, InsightReviewService
+from foundry_lite.application.services.source_services import (
+    SourceCdcObjectIndexService,
+    SourceConnectionTestService,
+    SourceLifecycleService,
+    SourceManagementService,
+    SourceSchedulerService,
+)
+
+
+class SharedCoreServices(TypedDict):
+    """Concrete services reused while composing the full application graph."""
+
+    backup_restore: BackupRestoreServices
+    dataset: DatasetServices
+    fde_application_tools: FdeApplicationToolService
+    fde_context: FdeContextService
+    fde_data_connection_tools: FdeDataConnectionToolService
+    fde_ontology_tools: FdeOntologyToolService
+    fde_pilot: FdePilotService
+    fde_platform_tools: FdePlatformToolService
+    fde_runtime: FdeRuntimeService
+    iceberg_maintenance: IcebergMaintenanceService
+    insight_review: InsightReviewService
+    media: MediaServices
+    object_store: ObjectServices
+    source_management: SourceManagementService
+    source_connection_test: SourceConnectionTestService
+    source_lifecycle: SourceLifecycleService
+    source_cdc_object_index: SourceCdcObjectIndexService
+    source_scheduler: SourceSchedulerService
 
 
 class CoreServiceGroups(Protocol):
@@ -34,6 +78,9 @@ class CoreServiceGroups(Protocol):
 
     @property
     def fde_context(self) -> CoreService: ...
+
+    @property
+    def fde_data_connection_tools(self) -> CoreService: ...
 
     @property
     def fde_pilot(self) -> CoreService: ...
@@ -92,6 +139,7 @@ def aip_service_items(services: CoreServiceGroups) -> list[CoreService]:
         services.fde_ontology_tools,
         services.fde_application_tools,
         services.fde_context,
+        services.fde_data_connection_tools,
         services.fde_pilot,
         services.fde_platform_tools,
         services.fde_runtime,

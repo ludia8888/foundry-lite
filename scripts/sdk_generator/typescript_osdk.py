@@ -29,6 +29,7 @@ def _osdk_type_lines() -> list[str]:
         '  readonly kind: "action";',
         "  readonly apiName: string;",
         "  readonly targetObjectType: string;",
+        '  readonly targetKind: "object" | "interface";',
         "  readonly __payload?: TPayload;",
         "  readonly __result?: TResult;",
         "};",
@@ -395,7 +396,7 @@ def _ts_link_registry_interface_lines(ontology: OntologyDef) -> list[str]:
 def _ts_action_registry_interface_lines(ontology: OntologyDef) -> list[str]:
     lines = ["export interface OsdkGeneratedObjectActionRegistry {"]
     for object_def in ontology.objects:
-        actions = [action for action in ontology.actions if action.target == object_def.api_name]
+        actions = _actions_for_object(ontology, object_def)
         if not actions:
             continue
         lines.append(f"  {object_def.api_name}: {{")
@@ -443,7 +444,7 @@ def _ts_osdk_action_entries_lines(ontology: OntologyDef) -> list[str]:
         "  switch (objectType.apiName) {",
     ]
     for object_def in ontology.objects:
-        actions = [action for action in ontology.actions if action.target == object_def.api_name]
+        actions = _actions_for_object(ontology, object_def)
         lines.append(f"    case '{object_def.api_name}':")
         if actions:
             lines.append("      return [")
@@ -862,6 +863,7 @@ def _osdk_action_constant_lines(action_def: ActionDef) -> list[str]:
         '  kind: "action",',
         f'  apiName: "{action_def.api_name}",',
         f'  targetObjectType: "{action_def.target}",',
+        f'  targetKind: "{action_def.target_kind}",',
         f"}} as const satisfies OsdkActionType<{action_def.api_name}ApplyRequest, ActionApplyResponse>;",
     ]
 
@@ -1400,6 +1402,7 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "  return {",
         "    validateAction(params, options = {}) {",
         "      return createOsdkActionInvoker(client, actionType).validateAction({",
+        "        objectType: source.objectType,",
         "        objectId: source.objectId,",
         "        expectedObjectVersion: options.expectedObjectVersion ?? source.objectVersion,",
         "        params,",
@@ -1407,6 +1410,7 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "    },",
         "    applyAction(params, options = {}) {",
         "      return createOsdkActionInvoker(client, actionType).applyAction({",
+        "        objectType: source.objectType,",
         "        objectId: source.objectId,",
         "        expectedObjectVersion: options.expectedObjectVersion ?? source.objectVersion,",
         "        params,",
@@ -1508,6 +1512,23 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "  };",
         "}",
         "",
+        "function osdkGenericActionRequest<TAction extends OsdkActionType>(",
+        "  actionType: TAction,",
+        "  payload: OsdkActionValidationPayload<TAction>,",
+        "): ActionPlanRequest {",
+        "  const rawPayload = payload as unknown as {",
+        "    objectId: string; expectedObjectVersion: number; params: Record<string, unknown>; objectType?: string;",
+        "  };",
+        "  const objectType = actionType.targetKind === 'interface' && rawPayload.objectType",
+        "    ? rawPayload.objectType",
+        "    : actionType.targetObjectType;",
+        "  return {",
+        "    target: { objectType, objectId: rawPayload.objectId },",
+        "    expectedObjectVersion: rawPayload.expectedObjectVersion,",
+        "    params: rawPayload.params,",
+        "  };",
+        "}",
+        "",
         "function createOsdkActionInvoker<TAction extends OsdkActionType>(",
         "  client: FoundryLiteGeneratedClient,",
         "  actionType: TAction,",
@@ -1517,17 +1538,9 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "      const actionClient = (client.actions as unknown as Record<string, {",
         "        validate(payload: OsdkActionValidationPayload<TAction>): Promise<ActionValidationResponse>;",
         "      }>)[actionType.apiName];",
-        "      if (!actionClient) {",
-        "        throw new FoundryLiteApiError(",
-        "          0,",
-        '          "UNKNOWN_OSDK_ACTION",',
-        "          `Unknown OSDK action ${actionType.apiName}`,",
-        "          { actionApiName: actionType.apiName },",
-        "          null,",
-        "          false,",
-        "        );",
-        "      }",
-        "      return actionClient.validate(payload);",
+        "      return actionClient",
+        "        ? actionClient.validate(payload)",
+        "        : client.actions.validate(actionType.apiName, osdkGenericActionRequest(actionType, payload));",
         "    },",
         "    applyAction(payload, options = {}) {",
         "      const idempotency =",
@@ -1535,23 +1548,21 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "      const actionClient = (client.actions as unknown as Record<string, {",
         "        apply(payload: OsdkActionPayload<TAction>): Promise<OsdkActionResult<TAction>>;",
         "      }>)[actionType.apiName];",
-        "      if (!actionClient) {",
-        "        throw new FoundryLiteApiError(",
-        "          0,",
-        '          "UNKNOWN_OSDK_ACTION",',
-        "          `Unknown OSDK action ${actionType.apiName}`,",
-        "          { actionApiName: actionType.apiName },",
-        "          null,",
-        "          false,",
-        "        );",
-        "      }",
+        "      const resolvedIdempotency = requireIdempotencyKey(",
+        "        idempotency,",
+        "        `osdk.actions.${actionType.apiName}.applyAction`,",
+        "      );",
         "      const payloadWithIdempotency = Object.assign({}, payload, {",
-        "        idempotencyKey: requireIdempotencyKey(",
-        "          idempotency,",
-        "          `osdk.actions.${actionType.apiName}.applyAction`,",
-        "        ),",
+        "        idempotencyKey: resolvedIdempotency,",
         "      }) as OsdkActionPayload<TAction>;",
-        "      return actionClient.apply(payloadWithIdempotency).then((result) => {",
+        "      const applyRequest = actionClient",
+        "        ? actionClient.apply(payloadWithIdempotency)",
+        "        : client.actions.apply(",
+        "            actionType.apiName,",
+        "            osdkGenericActionRequest(actionType, payloadWithIdempotency),",
+        "            { idempotencyKey: resolvedIdempotency },",
+        "          ) as Promise<OsdkActionResult<TAction>>;",
+        "      return applyRequest.then((result) => {",
         "        const cacheRefresh = (result as ActionApplyResponse).cacheRefresh;",
         "        if (cacheRefresh && options.onCacheRefresh) options.onCacheRefresh(cacheRefresh);",
         "        return result;",
@@ -1605,4 +1616,13 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "    media: createOsdkMediaClient(client),",
         "  });",
         "}",
+    ]
+
+
+def _actions_for_object(ontology: OntologyDef, object_def: ObjectDef) -> list[ActionDef]:
+    return [
+        action
+        for action in ontology.actions
+        if (action.target_kind == "object" and action.target == object_def.api_name)
+        or (action.target_kind == "interface" and action.target in object_def.implements)
     ]

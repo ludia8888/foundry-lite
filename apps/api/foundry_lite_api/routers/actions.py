@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 from collections.abc import AsyncIterator
 
 import anyio.to_thread
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Form, Header, Query, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
@@ -16,17 +17,109 @@ from foundry_lite.application.action_types import (
     ActionCatalogItem,
     ActionCatalogPage,
     ActionExecutionPlanResponse,
+    ActionMediaUploadResult,
     ActionValidationResponse,
 )
+from foundry_lite.application.upload_limits import max_media_upload_bytes
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import FoundryLiteError
+from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
 from foundry_lite_api.request_context import _ctx
-from foundry_lite_api.schemas import ActionApplyBatchRequest, ActionApplyRequest, ActionRunCancelRequest
+from foundry_lite_api.schemas import (
+    MEDIA_UPLOAD_FILE,
+    ActionApplyBatchRequest,
+    ActionApplyRequest,
+    ActionEffectCancelRequest,
+    ActionEffectReconcileRequest,
+    ActionFunctionBatchRunRequest,
+    ActionNotificationPolicyCreateRequest,
+    ActionNotificationPolicyDisableRequest,
+    ActionNotificationPolicyUpdateRequest,
+    ActionRunCancelRequest,
+)
 
 router = APIRouter()
+
+
+@router.get("/api/actions/effects")
+def list_action_effects(
+    request: Request,
+    effect_status: str | None = Query(default=None, alias="status"),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.list_effect_receipts(
+            status=effect_status,
+            cursor=cursor,
+            limit=limit,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/effects/{receipt_id}")
+def get_action_effect(request: Request, receipt_id: str) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.get_effect_receipt(receipt_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/effects/{receipt_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+def cancel_action_effect(
+    request: Request,
+    receipt_id: str,
+    payload: ActionEffectCancelRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.cancel_effect(
+            receipt_id,
+            reason=payload.reason,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/effects/{receipt_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_action_effect(
+    request: Request,
+    receipt_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.retry_effect(
+            receipt_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/effects/{receipt_id}/reconcile")
+def reconcile_action_effect(
+    request: Request,
+    receipt_id: str,
+    payload: ActionEffectReconcileRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.reconcile_effect(
+            receipt_id,
+            resolution=payload.resolution,
+            evidence=payload.evidence.model_dump(by_alias=True, exclude_none=True),
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @router.get("/api/actions")
@@ -137,6 +230,101 @@ def action_branch_object(request: Request, branch_id: str, object_type: str, obj
         raise _handle_error(exc, request) from exc
 
 
+@router.get("/api/actions/branches/{branch_id}/links/{link_type}/{from_object_id}/{to_object_id}")
+def action_branch_link(
+    request: Request,
+    branch_id: str,
+    link_type: str,
+    from_object_id: str,
+    to_object_id: str,
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.branch_link(
+            branch_id, link_type, from_object_id, to_object_id, ctx=_ctx(request)
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/notification-policies")
+def list_action_notification_policies(
+    request: Request,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.list_notification_policies(cursor=cursor, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/notification-policies", status_code=status.HTTP_201_CREATED)
+def create_action_notification_policy(
+    request: Request,
+    payload: ActionNotificationPolicyCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.create_notification_policy(
+            payload.policy_name,
+            display_name=payload.display_name,
+            delivery_mode=payload.delivery_mode,
+            recipients=[item.model_dump(by_alias=True) for item in payload.recipients],
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/actions/notification-policies/{policy_name}")
+def get_action_notification_policy(request: Request, policy_name: str) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.get_notification_policy(policy_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.put("/api/actions/notification-policies/{policy_name}")
+def update_action_notification_policy(
+    request: Request,
+    policy_name: str,
+    payload: ActionNotificationPolicyUpdateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.update_notification_policy(
+            policy_name,
+            display_name=payload.display_name,
+            delivery_mode=payload.delivery_mode,
+            recipients=[item.model_dump(by_alias=True) for item in payload.recipients],
+            status=payload.status,
+            expected_fingerprint=payload.expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.delete("/api/actions/notification-policies/{policy_name}")
+def disable_action_notification_policy(
+    request: Request,
+    policy_name: str,
+    payload: ActionNotificationPolicyDisableRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, object]:
+    try:
+        return runtime.foundry.actions.disable_notification_policy(
+            policy_name,
+            expected_fingerprint=payload.expected_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @router.get("/api/actions/{action_type}/schema")
 def action_schema(request: Request, action_type: str) -> dict[str, object]:
     try:
@@ -149,6 +337,36 @@ def action_schema(request: Request, action_type: str) -> dict[str, object]:
 def get_action(request: Request, action_type: str) -> ActionCatalogItem:
     try:
         return runtime.foundry.actions.get(action_type, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/{action_type}/parameters/{parameter_name}/uploads")
+def upload_action_parameter(
+    request: Request,
+    action_type: str,
+    parameter_name: str,
+    object_type: str = Form(..., alias="objectType"),
+    object_id: str = Form(..., alias="objectId"),
+    file: UploadFile = MEDIA_UPLOAD_FILE,
+    supplied_mime_type: str | None = Form(default=None, alias="suppliedMimeType"),
+    format: str | None = Form(default=None),
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> ActionMediaUploadResult:
+    try:
+        _require_action_upload_size(file)
+        return runtime.foundry.actions.upload_parameter(
+            action_type,
+            parameter_name,
+            object_type=object_type,
+            object_id=object_id,
+            file_name=file.filename or "upload.bin",
+            source=file.file,
+            supplied_mime_type=supplied_mime_type or file.content_type or "application/octet-stream",
+            idempotency_key=idempotency_key,
+            format=format,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -214,6 +432,31 @@ def start_action_run(
             object_id=payload.target.object_id,
             expected_object_version=payload.expected_object_version,
             params=payload.params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=_ctx(request),
+        )
+        if snapshot["status"] in {"succeeded", "failed", "cancelled", "conflict", "outcome_unknown"}:
+            response.status_code = status.HTTP_200_OK
+        return snapshot
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/actions/{action_type}/batch-runs", status_code=status.HTTP_202_ACCEPTED)
+def start_action_batch_run(
+    request: Request,
+    response: Response,
+    action_type: str,
+    payload: ActionFunctionBatchRunRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    wait_seconds: int = Query(default=0, ge=0, le=30, alias="waitSeconds"),
+) -> dict[str, object]:
+    try:
+        snapshot = runtime.foundry.actions.start_batch_run(
+            action_type,
+            object_type=payload.object_type,
+            items=[item.model_dump(by_alias=True) for item in payload.items],
             idempotency_key=idempotency_key,
             wait_seconds=wait_seconds,
             ctx=_ctx(request),
@@ -314,6 +557,18 @@ def _event_sequence(value: str | None) -> int:
         return max(0, int(value))
     except ValueError:
         return 0
+
+
+def _require_action_upload_size(file: UploadFile) -> None:
+    file.file.seek(0, os.SEEK_END)
+    size_bytes = file.file.tell()
+    file.file.seek(0)
+    maximum = max_media_upload_bytes()
+    if size_bytes > maximum:
+        raise ValidationFailed(
+            "Action media upload exceeds the platform size limit",
+            details={"sizeBytes": size_bytes, "maxBytes": maximum},
+        )
 
 
 async def _action_event_stream(

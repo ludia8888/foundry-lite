@@ -46,7 +46,13 @@ def _order_type(*, extra_properties: list[dict[str, object]] | None = None) -> d
         "backing": {"dataset": "clean.orders"},
         "properties": [
             {"apiName": "orderId", "column": "order_id", "type": "string", "nullable": False, "indexed": True},
-            {"apiName": "status", "column": "status", "type": "string"},
+            {
+                "apiName": "status",
+                "column": "status",
+                "type": "string",
+                "editable": True,
+                "source": "edit_layer",
+            },
             *(extra_properties or []),
         ],
     }
@@ -66,6 +72,49 @@ def _customer_type() -> dict[str, object]:
 
 def _note_property(api_name: str = "note") -> dict[str, object]:
     return {"apiName": api_name, "type": "string", "source": "edit_layer"}
+
+
+def _branch_action_type(*, display_name: str = "Set order status") -> dict[str, object]:
+    return {
+        "contractVersion": 3,
+        "apiName": "SetOrderStatus",
+        "displayName": display_name,
+        "description": "Update one order through the governed Action runtime.",
+        "target": "Order",
+        "targetKind": "object",
+        "riskLevel": "low",
+        "agentExecutionPolicy": "approval_required",
+        "permissions": {
+            "viewRoles": ["viewer", "data_engineer"],
+            "editRoles": ["data_engineer"],
+            "applyRoles": ["data_engineer"],
+        },
+        "parameters": [{"apiName": "status", "type": "string", "required": True}],
+        "formLayout": {
+            "sections": [
+                {
+                    "id": "decision",
+                    "title": "Decision",
+                    "columns": 2,
+                    "parameterNames": ["status"],
+                }
+            ]
+        },
+        "rules": [
+            {
+                "kind": "modifyObject",
+                "ruleId": "set-order-status",
+                "objectType": "Order",
+                "target": {"kind": "parameter", "parameter": "__target__"},
+                "assignments": [
+                    {
+                        "property": "status",
+                        "value": {"kind": "parameter", "parameter": "status"},
+                    }
+                ],
+            }
+        ],
+    }
 
 
 def _yaml_text(*object_types: dict[str, object]) -> str:
@@ -182,6 +231,201 @@ def test_branch_edits_never_touch_the_active_catalog(foundry, tmp_path) -> None:
     assert catalog["versionNumber"] == 1
     assert [item["apiName"] for item in catalog["objectTypes"]] == ["Order"]
     assert "note" not in {prop["apiName"] for prop in catalog["objectTypes"][0]["properties"]}
+
+
+def test_branch_action_type_crud_uses_canonical_contract_without_touching_main(foundry, tmp_path) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    branch = _create_branch(foundry, name="action-builder", key="action-builder-branch")
+    branch_id = str(branch["id"])
+
+    created = foundry.ontology.create_branch_action_type(
+        branch_id,
+        definition=_branch_action_type(),
+        expected_fingerprint=str(branch["contentFingerprint"]),
+        idempotency_key="create-set-status",
+        ctx=CREATOR,
+    )
+    action = cast(dict[str, Any], created["actionType"])
+    assert created["isReplay"] is False
+    assert action["contractFingerprint"] == action["parameterSchema"]["x-foundry-contract-fingerprint"]
+    assert action["contract"]["formLayout"] == action["parameterSchema"]["x-foundry-form-layout"]
+    assert action["inlineEligibility"] == {
+        "isEligible": True,
+        "reasons": [],
+        "propertyApiName": "status",
+        "parameterApiName": "status",
+        "parameterType": "string",
+    }
+
+    replay = foundry.ontology.create_branch_action_type(
+        branch_id,
+        definition=_branch_action_type(),
+        expected_fingerprint=str(branch["contentFingerprint"]),
+        idempotency_key="create-set-status",
+        ctx=CREATOR,
+    )
+    assert replay["isReplay"] is True
+    assert replay["branch"]["baseStale"] is False
+    assert replay["branch"]["contentFingerprint"] == created["branch"]["contentFingerprint"]
+    with raises(ConflictDetected, match="Idempotency-Key"):
+        foundry.ontology.create_branch_action_type(
+            branch_id,
+            definition=_branch_action_type(display_name="Different request"),
+            expected_fingerprint=str(branch["contentFingerprint"]),
+            idempotency_key="create-set-status",
+            ctx=CREATOR,
+        )
+    assert foundry.ontology.get_branch_action_type(branch_id, "SetOrderStatus", ctx=CREATOR)["apiName"] == (
+        "SetOrderStatus"
+    )
+    listed = foundry.ontology.list_branch_action_types(branch_id, ctx=CREATOR)
+    assert [item["apiName"] for item in listed["items"]] == ["SetOrderStatus"]
+    assert foundry.ontology.catalog(ctx=admin).get("actions", []) == []
+
+    foundry.ontology.apply_text(_yaml_text(_order_type(extra_properties=[_note_property()])), ctx=admin)
+    stale_replay = foundry.ontology.create_branch_action_type(
+        branch_id,
+        definition=_branch_action_type(),
+        expected_fingerprint=str(branch["contentFingerprint"]),
+        idempotency_key="create-set-status",
+        ctx=CREATOR,
+    )
+    assert stale_replay["isReplay"] is True
+    assert stale_replay["branch"]["baseStale"] is False
+    assert foundry.ontology.get_branch(branch_id, ctx=CREATOR)["baseStale"] is True
+    operations = foundry.operations.list_runs(ctx=admin)
+    created_audits = [
+        event
+        for event in operations["auditEvents"]
+        if event["event_type"] == "ontology.branch.action_type.created" and event["resource_id"] == branch_id
+    ]
+    created_outbox = [
+        event
+        for event in operations["outboxEvents"]
+        if event["event_type"] == "ontology.branch.action_type.created" and event["aggregate_id"] == branch_id
+    ]
+    assert len(created_audits) == len(created_outbox) == 1
+
+    updated = foundry.ontology.update_branch_action_type(
+        branch_id,
+        "SetOrderStatus",
+        definition=_branch_action_type(display_name="Change order state"),
+        expected_fingerprint=str(created["branch"]["contentFingerprint"]),
+        idempotency_key="update-set-status",
+        ctx=COLLABORATOR,
+    )
+    assert updated["actionType"]["displayName"] == "Change order state"
+
+    deleted = foundry.ontology.delete_branch_action_type(
+        branch_id,
+        "SetOrderStatus",
+        expected_fingerprint=str(updated["branch"]["contentFingerprint"]),
+        idempotency_key="delete-set-status",
+        ctx=CREATOR,
+    )
+    assert deleted["isReplay"] is False
+    assert foundry.ontology.list_branch_action_types(branch_id, ctx=CREATOR)["items"] == []
+
+
+def test_branch_action_activation_preserves_canonical_consumer_schema(foundry, tmp_path) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    branch = _create_branch(foundry, name="inline-action", key="inline-action-branch")
+    created = foundry.ontology.create_branch_action_type(
+        str(branch["id"]),
+        definition=_branch_action_type(),
+        expected_fingerprint=str(branch["contentFingerprint"]),
+        idempotency_key="create-inline-action",
+        ctx=CREATOR,
+    )
+    proposed = foundry.ontology.propose_branch(
+        str(branch["id"]),
+        title="Activate inline Action",
+        idempotency_key="propose-inline-action",
+        ctx=CREATOR,
+    )
+    proposal = cast(dict[str, Any], proposed["proposal"])
+    foundry.ontology.decide_proposal(
+        str(proposal["id"]),
+        decision="approve",
+        expected_fingerprint=str(proposal["fingerprint"]),
+        ctx=REVIEWER,
+    )
+    foundry.ontology.execute_proposal(
+        str(proposal["id"]),
+        expected_fingerprint=str(proposal["fingerprint"]),
+        ctx=REVIEWER,
+    )
+
+    catalog = foundry.ontology.catalog(ctx=admin)
+    order = next(item for item in catalog["objectTypes"] if item["apiName"] == "Order")
+    active_action = next(item for item in order["actions"] if item["apiName"] == "SetOrderStatus")
+
+    assert active_action["parameterSchema"] == created["actionType"]["parameterSchema"]
+    assert active_action["parameterSchema"]["x-foundry-inline-eligibility"]["propertyApiName"] == "status"
+
+
+def test_branch_action_view_and_edit_roles_are_enforced_server_side(foundry, tmp_path) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    branch = foundry.ontology.create_branch(
+        name="action-acl",
+        idempotency_key="action-acl-branch",
+        ctx=admin,
+    )
+    definition = _branch_action_type(display_name="Restricted action")
+    definition["permissions"] = {
+        "viewRoles": ["ops_manager"],
+        "editRoles": ["ops_manager"],
+        "applyRoles": ["ops_manager"],
+    }
+
+    created = foundry.ontology.create_branch_action_type(
+        str(branch["id"]),
+        definition=definition,
+        expected_fingerprint=str(branch["contentFingerprint"]),
+        idempotency_key="create-restricted-action",
+        ctx=admin,
+    )
+    assert foundry.ontology.list_branch_action_types(str(branch["id"]), ctx=CREATOR)["items"] == []
+    with raises(PermissionDenied, match="view Action Type"):
+        foundry.ontology.get_branch_action_type(str(branch["id"]), "SetOrderStatus", ctx=CREATOR)
+
+    replacement = _branch_action_type(display_name="Still restricted")
+    replacement["permissions"] = definition["permissions"]
+    with raises(PermissionDenied, match="edit Action Type"):
+        foundry.ontology.update_branch_action_type(
+            str(branch["id"]),
+            "SetOrderStatus",
+            definition=replacement,
+            expected_fingerprint=str(created["branch"]["contentFingerprint"]),
+            idempotency_key="edit-restricted-action",
+            ctx=CREATOR,
+        )
+
+
+def test_branch_action_type_crud_rejects_stale_or_invalid_definitions(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    branch = _create_branch(foundry, name="action-validation", key="action-validation-branch")
+    branch_id = str(branch["id"])
+    invalid = _branch_action_type()
+    invalid["target"] = "MissingObject"
+
+    with raises(ValidationFailed, match="target reference was not found"):
+        foundry.ontology.create_branch_action_type(
+            branch_id,
+            definition=invalid,
+            expected_fingerprint=str(branch["contentFingerprint"]),
+            idempotency_key="invalid-target",
+            ctx=CREATOR,
+        )
+
+    with raises(ConflictDetected, match="fingerprint"):
+        foundry.ontology.create_branch_action_type(
+            branch_id,
+            definition=_branch_action_type(),
+            expected_fingerprint="sha256:stale",
+            idempotency_key="stale-create",
+            ctx=CREATOR,
+        )
 
 
 def test_rebase_carries_branch_changes_when_main_moves_compatibly(foundry, tmp_path) -> None:
@@ -619,3 +863,75 @@ def test_api_branch_flow_and_error_mapping(foundry, tmp_path, monkeypatch: Monke
     missing = client.get("/api/ontology/branches/ontbranch_missing", headers=CREATOR_HEADERS)
     assert missing.status_code == 404
     assert missing.json()["detail"]["code"] == "NOT_FOUND"
+
+
+def test_api_branch_action_type_crud_requires_cas_and_idempotency(foundry, tmp_path, monkeypatch: MonkeyPatch) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    branch = client.post(
+        "/api/ontology/branches",
+        headers={**CREATOR_HEADERS, "Idempotency-Key": "api-action-builder-branch"},
+        json={"name": "api-action-builder"},
+    ).json()
+    branch_id = branch["id"]
+    request_payload = {
+        "definition": _branch_action_type(),
+        "expectedFingerprint": branch["contentFingerprint"],
+    }
+
+    missing_key = client.post(
+        f"/api/ontology/branches/{branch_id}/action-types", headers=CREATOR_HEADERS, json=request_payload
+    )
+    assert missing_key.status_code == 422
+
+    created = client.post(
+        f"/api/ontology/branches/{branch_id}/action-types",
+        headers={**CREATOR_HEADERS, "Idempotency-Key": "api-create-set-status"},
+        json=request_payload,
+    )
+    assert created.status_code == 200
+    assert created.json()["actionType"]["parameterSchema"]["x-foundry-form-layout"]["sections"][0]["id"] == ("decision")
+
+    replay = client.post(
+        f"/api/ontology/branches/{branch_id}/action-types",
+        headers={**CREATOR_HEADERS, "Idempotency-Key": "api-create-set-status"},
+        json=request_payload,
+    )
+    assert replay.status_code == 200
+    assert replay.json()["isReplay"] is True
+    conflicting_reuse = client.post(
+        f"/api/ontology/branches/{branch_id}/action-types",
+        headers={**CREATOR_HEADERS, "Idempotency-Key": "api-create-set-status"},
+        json={
+            "definition": _branch_action_type(display_name="Different request"),
+            "expectedFingerprint": branch["contentFingerprint"],
+        },
+    )
+    assert conflicting_reuse.status_code == 409
+    assert conflicting_reuse.json()["detail"]["code"] == "CONFLICT"
+
+    listed = client.get(f"/api/ontology/branches/{branch_id}/action-types", headers=CREATOR_HEADERS)
+    detail = client.get(f"/api/ontology/branches/{branch_id}/action-types/SetOrderStatus", headers=CREATOR_HEADERS)
+    assert listed.status_code == detail.status_code == 200
+    assert [item["apiName"] for item in listed.json()["items"]] == ["SetOrderStatus"]
+
+    updated = client.put(
+        f"/api/ontology/branches/{branch_id}/action-types/SetOrderStatus",
+        headers={**CREATOR_HEADERS, "Idempotency-Key": "api-update-set-status"},
+        json={
+            "definition": _branch_action_type(display_name="Change order state"),
+            "expectedFingerprint": created.json()["branch"]["contentFingerprint"],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["actionType"]["displayName"] == "Change order state"
+
+    deleted = client.request(
+        "DELETE",
+        f"/api/ontology/branches/{branch_id}/action-types/SetOrderStatus",
+        headers={**CREATOR_HEADERS, "Idempotency-Key": "api-delete-set-status"},
+        json={"expectedFingerprint": updated.json()["branch"]["contentFingerprint"]},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["actionType"] is None

@@ -17,6 +17,7 @@ from foundry_lite.infrastructure.auth import (
     AUTH_PROFILE_ENV,
     HEADER_ROLES_KEY,
     HEADER_TENANT_KEY,
+    HEADER_USER_ATTRIBUTES_KEY,
     HEADER_USER_KEY,
     OIDC_AUDIENCE_ENV,
     OIDC_DISCOVERY_JSON_ENV,
@@ -65,6 +66,19 @@ def test_header_trust_authenticate_round_trips_headers() -> None:
         actor_user_id="user-7",
         roles=("admin", "data_engineer"),
     )
+
+
+def test_header_trust_authenticate_preserves_verified_user_attributes() -> None:
+    principal = HeaderTrustAuthProvider().authenticate(
+        {
+            HEADER_TENANT_KEY: "tenant-A",
+            HEADER_USER_KEY: "user-7",
+            HEADER_ROLES_KEY: "ops_manager",
+            HEADER_USER_ATTRIBUTES_KEY: json.dumps({"department": "sales", "region": "apac"}),
+        }
+    )
+
+    assert principal.user_attributes == {"department": "sales", "region": "apac"}
 
 
 def test_header_trust_authenticate_round_trips_osdk_application_scope_headers() -> None:
@@ -150,6 +164,20 @@ def test_jwt_auth_provider_extracts_application_claims() -> None:
     assert principal.application_id == "osdk_app_orders"
     assert principal.client_id == "orders-web-client"
     assert principal.token_scopes == ("osdk:object:Order:read", "osdk:object:Order:subscribe")
+
+
+def test_jwt_auth_provider_extracts_namespaced_user_attributes() -> None:
+    private_key, jwk = _rsa_key("kid-attributes")
+    provider = _jwt_provider({"keys": [jwk]})
+    token = _jwt_token(
+        private_key,
+        "kid-attributes",
+        extra_claims={"user_attributes": {"department": "sales", "clearance": 3}},
+    )
+
+    principal = provider.authenticate({"Authorization": f"Bearer {token}"})
+
+    assert principal.user_attributes == {"department": "sales", "clearance": 3}
 
 
 def test_jwt_auth_provider_extracts_local_oauth_session_claims(tmp_path) -> None:

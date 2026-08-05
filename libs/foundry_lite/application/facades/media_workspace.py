@@ -130,10 +130,13 @@ class MediaWorkspace:
         )
 
     def process(self, ctx: RequestContext, *, media_item_version_id: str, spec: ProcessorSpec) -> ProcessingOutcome:
+        self._media.reference.resolve(ctx, media_item_version_id=media_item_version_id)
         return self._media.processing.process(ctx, media_item_version_id=media_item_version_id, spec=spec)
 
     def resolve_derivative(self, ctx: RequestContext, *, media_derivative_id: str) -> MediaDerivativeRecord:
-        return self._media.processing.resolve_derivative(ctx, media_derivative_id=media_derivative_id)
+        derivative = self._media.processing.resolve_derivative(ctx, media_derivative_id=media_derivative_id)
+        self._media.reference.resolve(ctx, media_item_version_id=derivative.source_media_item_version_id)
+        return derivative
 
     def list_derivative_content_units(
         self,
@@ -144,13 +147,15 @@ class MediaWorkspace:
         page_number: int | None = None,
         limit: int = 200,
     ) -> ContentUnitPage:
-        return self._media.processing.list_derivative_content_units(
+        page = self._media.processing.list_derivative_content_units(
             ctx,
             media_derivative_id=media_derivative_id,
             after_ordinal=after_ordinal,
             page_number=page_number,
             limit=limit,
         )
+        self._media.reference.resolve(ctx, media_item_version_id=page.source_media_item_version_id)
+        return page
 
     def sweep_orphan_derivatives(self, ctx: RequestContext, *, older_than: str) -> list[str]:
         return self._media.processing.sweep_orphan_derivatives(ctx, older_than=older_than)
@@ -184,7 +189,8 @@ class MediaWorkspace:
         self._media.indexing.promote(ctx, expected_active=expected_active, generation=generation)
 
     def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
-        return self._media.retrieval.search_content(ctx, query=query)
+        hits = self._media.retrieval.search_content(ctx, query=query)
+        return self._media.search_access.filter_hits(ctx, hits)
 
     def index_visual_derivative(
         self, ctx: RequestContext, *, media_derivative_id: str, generation: str
@@ -199,7 +205,8 @@ class MediaWorkspace:
         self._media.visual_search.promote(ctx, expected_active=expected_active, generation=generation)
 
     def search_visual(self, ctx: RequestContext, *, text: str, top_k: int = 10) -> list[ContentSearchHit]:
-        return self._media.visual_search.search_visual(ctx, text=text, top_k=top_k)
+        hits = self._media.visual_search.search_visual(ctx, text=text, top_k=top_k)
+        return self._media.search_access.filter_hits(ctx, hits)
 
     def bind_reference(
         self,
@@ -229,13 +236,16 @@ class MediaWorkspace:
         property_name: str,
         allowed_classifications: tuple[str, ...] | None = None,
     ) -> MediaReference | None:
-        return self._media.binding.resolve(
+        reference = self._media.binding.resolve(
             ctx,
             holder_type=holder_type,
             holder_id=holder_id,
             property_name=property_name,
             allowed_classifications=allowed_classifications,
         )
+        if reference is not None:
+            self._media.reference.resolve(ctx, media_item_version_id=reference.media_item_version_id)
+        return reference
 
     def preview(
         self,
@@ -247,6 +257,7 @@ class MediaWorkspace:
         persistence_policy: str = "persist",
         ttl_seconds: int | None = None,
     ) -> MediaReadGrant:
+        self._media.reference.resolve(ctx, media_item_version_id=media_item_version_id)
         return self._media.access_pattern.preview(
             ctx,
             media_item_version_id=media_item_version_id,

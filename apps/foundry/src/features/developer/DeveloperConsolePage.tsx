@@ -39,7 +39,7 @@ export default function DeveloperConsolePage() {
       <div className="border-b px-4 pt-3 pb-3">
         <PageHeader
           title="Developer Console"
-          description="온톨로지 위에 OSDK 앱을 발급하고 클라이언트·SDK 버전·OAuth를 관리합니다"
+          description="OSDK 앱·OAuth 클라이언트·Ontology MCP 공개·SDK 버전을 한곳에서 관리합니다"
           actions={<RequestTelemetry />}
         />
       </div>

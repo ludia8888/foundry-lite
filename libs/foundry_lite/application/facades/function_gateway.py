@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from foundry_lite.application.ports import FunctionTypeRow
 from foundry_lite.application.services.function_execution_service import (
     FunctionExecutionResult,
     FunctionExecutionService,
@@ -25,3 +26,6 @@ class FunctionGateway:
         ctx: RequestContext | None = None,
     ) -> FunctionExecutionResult:
         return self._function_execution_service.execute_function(function_api_name, inputs=inputs, ctx=ctx)
+
+    def describe(self, function_api_name: str, *, ctx: RequestContext | None = None) -> FunctionTypeRow:
+        return self._function_execution_service.describe_function(function_api_name, ctx=ctx)

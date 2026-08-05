@@ -82,6 +82,7 @@ export type OsdkClientRow = {
   allowedScopes: string[];
   accessTokenTtlSeconds: number | null;
   refreshTokenTtlSeconds: number | null;
+  currentSecretId: string | null;
   clientSecret: string | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -100,6 +101,8 @@ export function toClientRow(raw: Json): OsdkClientRow {
     refreshTokenTtlSeconds: num(
       raw.refresh_token_ttl_seconds ?? raw.refreshTokenTtlSeconds,
     ),
+    currentSecretId:
+      str(raw.current_secret_id) ?? str(raw.currentSecretId),
     // 생성 시 1회만 노출되는 secret (있으면 노출, 재조회 불가).
     clientSecret: str(raw.client_secret) ?? str(raw.clientSecret),
     createdAt: str(raw.created_at) ?? str(raw.createdAt),

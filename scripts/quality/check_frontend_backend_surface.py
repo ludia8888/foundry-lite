@@ -592,7 +592,12 @@ def _sdk_three_part_surface_exists(surface: dict[str, Any], parts: list[str]) ->
     if not isinstance(group, dict):
         return False
     methods = group.get(parts[1])
-    return isinstance(methods, list) and parts[2] in methods
+    if isinstance(methods, list):
+        return parts[2] in methods
+    if isinstance(methods, dict):
+        own_methods = methods.get("_self")
+        return isinstance(own_methods, list) and parts[2] in own_methods
+    return False
 
 
 def _sdk_nested_surface_exists(surface: dict[str, Any], parts: list[str]) -> bool:

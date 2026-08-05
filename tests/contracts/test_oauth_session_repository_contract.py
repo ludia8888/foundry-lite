@@ -85,6 +85,33 @@ def test_authorization_code_consumption_is_single_winner_compare_and_set() -> No
     assert second is False
 
 
+def test_client_session_revocation_is_tenant_and_application_scoped() -> None:
+    engine = _engine()
+    repository: OAuthSessionRepository = SqlAlchemyOAuthSessionRepository(engine)
+    with engine.begin() as conn:
+        repository.insert_session(transaction=conn, record=_session_record())
+        repository.insert_session(transaction=conn, record=_session_record(session_id="session-2"))
+        repository.insert_session(
+            transaction=conn,
+            record=_session_record(session_id="other-session", client_id="other-client"),
+        )
+        revoked_count = repository.revoke_active_sessions_for_client(
+            transaction=conn,
+            tenant_id="tenant-a",
+            app_id="osdk_app_1",
+            client_id="orders-web",
+            revoked_at="2026-07-01T00:04:00+00:00",
+        )
+        first = repository.session_by_id(transaction=conn, tenant_id="tenant-a", session_id="session-1")
+        second = repository.session_by_id(transaction=conn, tenant_id="tenant-a", session_id="session-2")
+        other = repository.session_by_id(transaction=conn, tenant_id="tenant-a", session_id="other-session")
+
+    assert revoked_count == 2
+    assert first is not None and first["status"] == "revoked"
+    assert second is not None and second["status"] == "revoked"
+    assert other is not None and other["status"] == "active"
+
+
 def test_oauth_token_issuer_contract_emits_public_jwks_and_osdk_claims(tmp_path) -> None:
     issuer: OAuthTokenIssuer = LocalOAuthTokenIssuer.from_key_path(tmp_path / "oauth-private-key.pem")
 
@@ -107,6 +134,7 @@ def test_oauth_token_issuer_contract_emits_public_jwks_and_osdk_claims(tmp_path)
     assert token["claims"]["osdk_app_id"] == "osdk_app_1"
     assert token["claims"]["client_id"] == "orders-web"
     assert token["claims"]["scope"] == "osdk:object:Order:read"
+    assert token["claims"]["foundry_lite_session_id"] == "session-1"
     assert cast(list[dict[str, Any]], jwks["keys"])[0]["kid"] == "foundry-lite-local-osdk-oauth"
 
 
@@ -134,12 +162,12 @@ def _code_record() -> OAuthAuthorizationCodeRecord:
     )
 
 
-def _session_record() -> OAuthSessionRecord:
+def _session_record(*, session_id: str = "session-1", client_id: str = "orders-web") -> OAuthSessionRecord:
     return OAuthSessionRecord(
-        session_id="session-1",
+        session_id=session_id,
         tenant_id="tenant-a",
         app_id="osdk_app_1",
-        client_id="orders-web",
+        client_id=client_id,
         actor_user_id="user-a",
         roles=("admin",),
         scopes=("osdk:object:Order:read",),

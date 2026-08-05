@@ -31,6 +31,7 @@ __all__ = [
     "OIDC_SCOPE_CLAIM_ENV",
     "OIDC_SERVICE_ACCOUNT_CLAIM_ENV",
     "OIDC_TENANT_CLAIM_ENV",
+    "OIDC_USER_ATTRIBUTES_CLAIM_ENV",
     "JwtOidcAuthConfig",
     "JwtOidcAuthProvider",
     "jwt_oidc_auth_provider_from_env",
@@ -49,6 +50,7 @@ OIDC_ROLES_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_ROLES_CLAIM"
 OIDC_SERVICE_ACCOUNT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SERVICE_ACCOUNT_CLAIM"
 OIDC_OSDK_APP_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_OSDK_APP_CLAIM"
 OIDC_SCOPE_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SCOPE_CLAIM"
+OIDC_USER_ATTRIBUTES_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_USER_ATTRIBUTES_CLAIM"
 
 _DEFAULT_ALGORITHM: Final = "RS256"
 _DEFAULT_TENANT_CLAIM: Final = "tenant_id"
@@ -56,6 +58,8 @@ _DEFAULT_ROLES_CLAIM: Final = "roles"
 _DEFAULT_SERVICE_ACCOUNT_CLAIM: Final = "client_id"
 _DEFAULT_OSDK_APP_CLAIM: Final = "osdk_app_id"
 _DEFAULT_SCOPE_CLAIM: Final = "scope"
+_DEFAULT_USER_ATTRIBUTES_CLAIM: Final = "user_attributes"
+_OSDK_SESSION_CLAIM: Final = "foundry_lite_session_id"
 _SERVICE_ACCOUNT_ACTOR_PREFIX: Final = "service-account:"
 _JWT_ID_CLAIM: Final = "jti"
 _SUBJECT_CLAIM: Final = "sub"
@@ -83,6 +87,7 @@ class JwtOidcAuthConfig:
     service_account_claim: str = _DEFAULT_SERVICE_ACCOUNT_CLAIM
     osdk_app_claim: str = _DEFAULT_OSDK_APP_CLAIM
     scope_claim: str = _DEFAULT_SCOPE_CLAIM
+    user_attributes_claim: str = _DEFAULT_USER_ATTRIBUTES_CLAIM
     revoked_token_ids: frozenset[str] = field(default_factory=frozenset)
     algorithm: str = _DEFAULT_ALGORITHM
     leeway_seconds: int = 0
@@ -141,6 +146,12 @@ class JwtOidcAuthProvider:
             application_id=_optional_payload_string(payload, self.config.osdk_app_claim),
             client_id=_optional_payload_string(payload, self.config.service_account_claim),
             token_scopes=_scopes_from_payload(payload, self.config.scope_claim),
+            oauth_session_id=_optional_payload_string(payload, _OSDK_SESSION_CLAIM),
+            user_attributes=_user_attributes_from_payload(
+                payload,
+                self.config.user_attributes_claim,
+                self.profile_name,
+            ),
         )
 
     def anonymous(self) -> Principal:
@@ -216,28 +227,47 @@ class JwtOidcAuthProvider:
 def jwt_oidc_auth_provider_from_env(environ: Mapping[str, str] | None = None) -> JwtOidcAuthProvider:
     """Build a JWT/OIDC provider from environment-backed local discovery data."""
     source = os.environ if environ is None else environ
+    config = _oidc_config_from_env(source)
+    return JwtOidcAuthProvider(config=config, jwks_loader=lambda: _json_object_from_env(source, OIDC_JWKS_JSON_ENV))
+
+
+def _oidc_config_from_env(source: Mapping[str, str]) -> JwtOidcAuthConfig:
+    """Resolve one immutable OIDC adapter configuration from environment values."""
     discovery = _json_object_from_env(source, OIDC_DISCOVERY_JSON_ENV, default={})
-    issuer = _env_value(source, OIDC_ISSUER_ENV) or _object_string(discovery, "issuer")
-    audience = _env_value(source, OIDC_AUDIENCE_ENV)
+    issuer = _required_oidc_value(
+        _env_value(source, OIDC_ISSUER_ENV) or _object_string(discovery, "issuer"),
+        f"{OIDC_ISSUER_ENV} or discovery issuer",
+    )
+    audience = _required_oidc_value(_env_value(source, OIDC_AUDIENCE_ENV), OIDC_AUDIENCE_ENV)
     jwks = _json_object_from_env(source, OIDC_JWKS_JSON_ENV)
-    if not issuer:
-        raise ValueError(f"{OIDC_ISSUER_ENV} or discovery issuer is required for JWT/OIDC auth")
-    if not audience:
-        raise ValueError(f"{OIDC_AUDIENCE_ENV} is required for JWT/OIDC auth")
-    config = JwtOidcAuthConfig(
+    return JwtOidcAuthConfig(
         issuer=issuer,
         audience=audience,
         jwks=jwks,
-        tenant_claim=_env_value(source, OIDC_TENANT_CLAIM_ENV) or _DEFAULT_TENANT_CLAIM,
-        roles_claim=_env_value(source, OIDC_ROLES_CLAIM_ENV) or _DEFAULT_ROLES_CLAIM,
-        service_account_claim=_env_value(source, OIDC_SERVICE_ACCOUNT_CLAIM_ENV) or _DEFAULT_SERVICE_ACCOUNT_CLAIM,
-        osdk_app_claim=_env_value(source, OIDC_OSDK_APP_CLAIM_ENV) or _DEFAULT_OSDK_APP_CLAIM,
-        scope_claim=_env_value(source, OIDC_SCOPE_CLAIM_ENV) or _DEFAULT_SCOPE_CLAIM,
+        tenant_claim=_oidc_claim(source, OIDC_TENANT_CLAIM_ENV, _DEFAULT_TENANT_CLAIM),
+        roles_claim=_oidc_claim(source, OIDC_ROLES_CLAIM_ENV, _DEFAULT_ROLES_CLAIM),
+        service_account_claim=_oidc_claim(source, OIDC_SERVICE_ACCOUNT_CLAIM_ENV, _DEFAULT_SERVICE_ACCOUNT_CLAIM),
+        osdk_app_claim=_oidc_claim(source, OIDC_OSDK_APP_CLAIM_ENV, _DEFAULT_OSDK_APP_CLAIM),
+        scope_claim=_oidc_claim(source, OIDC_SCOPE_CLAIM_ENV, _DEFAULT_SCOPE_CLAIM),
+        user_attributes_claim=_oidc_claim(
+            source,
+            OIDC_USER_ATTRIBUTES_CLAIM_ENV,
+            _DEFAULT_USER_ATTRIBUTES_CLAIM,
+        ),
         revoked_token_ids=_json_string_set_from_env(source, OIDC_REVOKED_JTIS_JSON_ENV),
         jwks_refresh_interval_seconds=_int_from_env(source, OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV, 300),
         retired_key_grace_seconds=_int_from_env(source, OIDC_RETIRED_KEY_GRACE_SECONDS_ENV, 300),
     )
-    return JwtOidcAuthProvider(config=config, jwks_loader=lambda: _json_object_from_env(source, OIDC_JWKS_JSON_ENV))
+
+
+def _required_oidc_value(value: str | None, setting: str) -> str:
+    if value is None:
+        raise ValueError(f"{setting} is required for JWT/OIDC auth")
+    return value
+
+
+def _oidc_claim(source: Mapping[str, str], setting: str, default: str) -> str:
+    return _env_value(source, setting) or default
 
 
 def _bearer_token(credentials: Credentials) -> str | None:
@@ -322,6 +352,18 @@ def _scopes_from_payload(payload: Mapping[str, object], claim: str) -> tuple[str
     if isinstance(value, Sequence) and not isinstance(value, str):
         return _string_sequence(value)
     return _string_roles(value)
+
+
+def _user_attributes_from_payload(payload: Mapping[str, object], claim: str, profile_name: str) -> dict[str, object]:
+    value = payload.get(claim)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise _permission_denied(profile_name, f"invalid_{claim}")
+    attributes = cast(Mapping[object, object], value)
+    if not all(isinstance(key, str) and key.strip() for key in attributes):
+        raise _permission_denied(profile_name, f"invalid_{claim}")
+    return {str(key): item for key, item in attributes.items()}
 
 
 def _string_sequence(value: Sequence[object]) -> tuple[str, ...]:

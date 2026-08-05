@@ -32,10 +32,18 @@ from foundry_lite.application.services.action_distributed_contracts import (
     RequestContext,
     TransactionContext,
 )
+from foundry_lite.application.services.action_function_batch import (
+    ActionFunctionBatchItem,
+    action_function_batch_fingerprint,
+    action_function_batch_plan,
+    parse_action_function_batch_items,
+)
+from foundry_lite.application.services.action_permission_guards import require_action_permission
 from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_protocols import ActionOntologyLookup
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
+from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3, compile_action_contract
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.security.tenant_context import tenant_context
 
@@ -100,8 +108,91 @@ class ActionAsyncRunService(CoreService):
         self._dispatch(ctx, row)
         return self._wait_for_snapshot(ctx, str(row["id"]), wait_seconds)
 
+    def start_batch(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        raw_items: tuple[Mapping[str, object], ...],
+        idempotency_key: str,
+        wait_seconds: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        """Queue one atomic multi-request function execution without running it in the API process."""
+        _require_start_values(idempotency_key, wait_seconds)
+        contract = self._function_batch_contract(ctx, action_api_name, object_type)
+        function = contract.function
+        if function is None:
+            raise ValidationFailed("batch-runs requires a Function-backed Action")
+        items = parse_action_function_batch_items(raw_items, maximum=function.max_batch_size)
+        fingerprint = action_function_batch_fingerprint(ctx, action_api_name, object_type, items)
+        existing = self._existing_run(ctx, action_api_name, idempotency_key)
+        if existing is not None:
+            _require_replay(existing, fingerprint)
+            self._dispatch(ctx, existing)
+            return self._wait_for_snapshot(ctx, str(existing["id"]), wait_seconds)
+        plans = self._function_batch_plans(ctx, action_api_name, object_type, items)
+        plan = action_function_batch_plan(plans, contract)
+        row, is_created = self._create_run(ctx, action_api_name, plan, idempotency_key, fingerprint)
+        if not is_created:
+            _require_replay(row, fingerprint)
+        self._dispatch(ctx, row)
+        return self._wait_for_snapshot(ctx, str(row["id"]), wait_seconds)
+
+    def _function_batch_contract(
+        self, ctx: RequestContext, action_api_name: str, object_type: str
+    ) -> ActionDefinitionV3:
+        with self.engine.begin() as transaction:
+            action_type = self.ontology_lookup_service._active_action_type(transaction, ctx, action_api_name)
+        contract = compile_action_contract(action_type["definition"])
+        if contract.function is None:
+            raise ValidationFailed("batch-runs requires a Function-backed Action")
+        if contract.target.api_name != object_type:
+            raise ValidationFailed("Action target does not match batch objectType")
+        return contract
+
+    def _function_batch_plans(
+        self,
+        ctx: RequestContext,
+        action_api_name: str,
+        object_type: str,
+        items: tuple[ActionFunctionBatchItem, ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        return tuple(
+            self.action_planning_service.plan_action(
+                action_api_name,
+                object_type=object_type,
+                object_id=item.object_id,
+                expected_object_version=item.expected_object_version,
+                params=item.parameters,
+                ctx=ctx,
+            )
+            for item in items
+        )
+
+    def resume_idempotent(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext,
+    ) -> dict[str, object] | None:
+        fingerprint = async_request_fingerprint(
+            ctx, action_api_name, object_type, object_id, expected_object_version, params
+        )
+        existing = self._existing_run(ctx, action_api_name, idempotency_key)
+        if existing is None:
+            return None
+        _require_replay(existing, fingerprint)
+        self._dispatch(ctx, existing)
+        return self.get(str(existing["id"]), ctx=ctx)
+
     def get(self, run_id: str, *, ctx: RequestContext) -> dict[str, object]:
-        self.policy.require(ctx, "action:apply")
+        self.policy.require(ctx, "action:run:read")
         with self.engine.begin() as transaction:
             row = self._required_run(transaction, ctx, run_id)
             steps = self.action_execution_repository.steps_for_run(
@@ -116,7 +207,7 @@ class ActionAsyncRunService(CoreService):
         return action_run_snapshot(row, steps, attempts, effects)
 
     def list_runs(self, *, cursor: str | None, limit: int, ctx: RequestContext) -> dict[str, object]:
-        self.policy.require(ctx, "action:apply")
+        self.policy.require(ctx, "action:run:read")
         created_at, run_id = decode_action_run_cursor(cursor)
         bounded = max(1, min(limit, 100))
         with self.engine.begin() as transaction:
@@ -134,7 +225,7 @@ class ActionAsyncRunService(CoreService):
         }
 
     def events(self, run_id: str, *, after_sequence: int, limit: int, ctx: RequestContext) -> dict[str, object]:
-        self.policy.require(ctx, "action:apply")
+        self.policy.require(ctx, "action:run:read")
         with self.engine.begin() as transaction:
             self._required_run(transaction, ctx, run_id)
             rows = self.action_execution_repository.run_events(
@@ -204,7 +295,14 @@ class ActionAsyncRunService(CoreService):
     def _existing_run(
         self, ctx: RequestContext, action_api_name: str, idempotency_key: str
     ) -> ActionAsyncRunRow | None:
-        self.policy.require(ctx, "action:apply")
+        require_action_permission(
+            self.engine,
+            self.policy,
+            self.runtime_service,
+            ctx,
+            action_api_name,
+            action="start",
+        )
         with self.engine.begin() as transaction:
             action_type = self.ontology_lookup_service._active_action_type(transaction, ctx, action_api_name)
             return self.action_execution_repository.run_by_idempotency_key(
@@ -281,7 +379,7 @@ class ActionAsyncRunService(CoreService):
         self, ctx: RequestContext, run_id: str, idempotency_key: str, fingerprint: str, reason: str | None
     ) -> ActionAsyncRunRow:
         with self.engine.begin() as transaction:
-            current = self._required_run(transaction, ctx, run_id)
+            current = self._required_run(transaction, ctx, run_id, is_async_required=True)
             _require_cancel_replay(current, idempotency_key, fingerprint)
             if current["status"] in _TERMINAL or current["status"] == "cancelling":
                 return current
@@ -312,11 +410,18 @@ class ActionAsyncRunService(CoreService):
             )
             return updated
 
-    def _required_run(self, transaction: TransactionContext, ctx: RequestContext, run_id: str) -> ActionAsyncRunRow:
+    def _required_run(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        run_id: str,
+        *,
+        is_async_required: bool = False,
+    ) -> ActionAsyncRunRow:
         row = self.action_execution_repository.run_by_id(
             transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
         )
-        if row is None or row["execution_mode"] != "async":
+        if row is None or (is_async_required and row["execution_mode"] != "async"):
             raise NotFound("Action run not found", details={"actionRunId": run_id})
         return row
 

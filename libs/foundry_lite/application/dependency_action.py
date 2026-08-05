@@ -15,9 +15,21 @@ from foundry_lite.application.ports.action_effect_executor import (
     UnavailableActionEffectExecutor,
 )
 from foundry_lite.application.ports.action_execution_repository import ActionExecutionRepository
+from foundry_lite.application.ports.action_file_scanner import (
+    ActionFileScanner,
+    UnavailableActionFileScanner,
+)
 from foundry_lite.application.ports.action_function_executor import (
     ActionFunctionExecutor,
     UnavailableActionFunctionExecutor,
+)
+from foundry_lite.application.ports.action_notification_policy_repository import (
+    ActionNotificationPolicyRepository,
+    UnavailableActionNotificationPolicyRepository,
+)
+from foundry_lite.application.ports.action_notification_recipient_directory import (
+    ActionNotificationRecipientDirectory,
+    UnavailableActionNotificationRecipientDirectory,
 )
 from foundry_lite.application.ports.action_repository import ActionRepository
 from foundry_lite.application.ports.action_run_orchestrator import (
@@ -36,6 +48,13 @@ class ActionDependencies:
     action_effect_executor: ActionEffectExecutor = field(default_factory=UnavailableActionEffectExecutor)
     action_function_executor: ActionFunctionExecutor = field(default_factory=UnavailableActionFunctionExecutor)
     action_run_orchestrator: ActionRunOrchestrator = field(default_factory=UnavailableActionRunOrchestrator)
+    action_file_scanner: ActionFileScanner = field(default_factory=UnavailableActionFileScanner)
+    action_notification_recipient_directory: ActionNotificationRecipientDirectory = field(
+        default_factory=UnavailableActionNotificationRecipientDirectory
+    )
+    action_notification_policy_repository: ActionNotificationPolicyRepository = field(
+        default_factory=UnavailableActionNotificationPolicyRepository
+    )
 
 
 class ActionDependencyAccessors:
@@ -66,3 +85,15 @@ class ActionDependencyAccessors:
     @property
     def action_run_orchestrator(self) -> ActionRunOrchestrator:
         return self.action.action_run_orchestrator
+
+    @property
+    def action_file_scanner(self) -> ActionFileScanner:
+        return self.action.action_file_scanner
+
+    @property
+    def action_notification_recipient_directory(self) -> ActionNotificationRecipientDirectory:
+        return self.action.action_notification_recipient_directory
+
+    @property
+    def action_notification_policy_repository(self) -> ActionNotificationPolicyRepository:
+        return self.action.action_notification_policy_repository

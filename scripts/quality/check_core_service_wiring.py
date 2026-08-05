@@ -39,6 +39,8 @@ ALLOWED_AIP_COLLABORATOR_EDGES = frozenset(
 # They stay visible in the report but are not treated as dead wiring.
 ALLOWED_UNUSED_COLLABORATORS = frozenset(
     {
+        "action_effect_operator_service",
+        "action_notification_policy_service",
         "action_proposal_service",
         "action_service",
         "agent_runtime_service",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +13,16 @@ SCALAR_TYPES = {
     "boolean": "boolean",
     "float": "number",
     "integer": "number",
+    "long": "number",
+    "decimal": "number",
+    "date": "string",
+    "timestamp": "string",
     "string": "string",
+    "media": "ActionMediaReference",
+    "attachment": "ActionMediaReference",
 }
+
+ACTION_PARAMETER_TYPES = frozenset({*SCALAR_TYPES, "object", "interface", "objectSet", "array", "struct"})
 
 
 @dataclass(frozen=True)
@@ -77,7 +86,12 @@ class FunctionDef:
 class ParameterDef:
     api_name: str
     ts_type: str
+    python_type: str
     is_required: bool
+    data_type: str
+    type_name: str | None = None
+    item_type: str | None = None
+    fields: tuple[ParameterDef, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,6 +99,7 @@ class ActionDef:
     api_name: str
     target: str
     parameters: tuple[ParameterDef, ...]
+    target_kind: str = "object"
 
 
 @dataclass(frozen=True)
@@ -247,12 +262,30 @@ def _function_input_def(value: object) -> FunctionInputDef:
 
 def _action_def(value: object) -> ActionDef:
     row = _mapping(value, "actionTypes[]")
-    parameters = tuple(_parameter_def(item) for item in _sequence(row.get("parameters"), "parameters"))
-    return ActionDef(
-        api_name=_string(row.get("apiName"), "action apiName"),
-        target=_string(row.get("target"), "action target"),
-        parameters=parameters,
+    api_name = _string(row.get("apiName"), "action apiName")
+    target_kind, target = _action_target(row)
+    parameters = tuple(
+        _parameter_def(item, owner_name=api_name) for item in _sequence(row.get("parameters"), "parameters")
     )
+    return ActionDef(
+        api_name=api_name,
+        target=target,
+        parameters=parameters,
+        target_kind=target_kind,
+    )
+
+
+def _action_target(row: Mapping[str, object]) -> tuple[str, str]:
+    raw = row.get("target")
+    if isinstance(raw, Mapping):
+        target = _string(raw.get("apiName"), "action target apiName")
+        kind = _string(raw.get("kind", "object"), "action target kind")
+    else:
+        target = _string(raw, "action target")
+        kind = _string(row.get("targetKind", "object"), "action target kind")
+    if kind not in {"object", "interface"}:
+        raise ValueError("action target kind must be object or interface")
+    return kind, target
 
 
 def _link_def(value: object) -> LinkDef:
@@ -264,13 +297,89 @@ def _link_def(value: object) -> LinkDef:
     )
 
 
-def _parameter_def(value: object) -> ParameterDef:
+def _parameter_def(value: object, *, owner_name: str) -> ParameterDef:
     row = _mapping(value, "parameters[]")
+    api_name = _string(row.get("apiName"), "parameter apiName")
+    data_type = _string(row.get("type"), "parameter type")
+    if data_type not in ACTION_PARAMETER_TYPES:
+        raise ValueError(f"unsupported action parameter type {data_type}")
+    type_name = f"{owner_name}{_pascal_identifier(api_name)}Struct" if data_type == "struct" else None
+    fields = _parameter_fields(row, type_name)
+    item_type = _parameter_item_type(row, data_type)
     return ParameterDef(
-        api_name=_string(row.get("apiName"), "parameter apiName"),
-        ts_type=_ts_type(_string(row.get("type"), "parameter type"), is_sensitive=False),
+        api_name=api_name,
+        ts_type=_action_ts_type(data_type, type_name=type_name, item_type=item_type),
+        python_type=_action_python_type(data_type, type_name=type_name, item_type=item_type),
         is_required=row.get("required") is not False,
+        data_type=data_type,
+        type_name=type_name,
+        item_type=item_type,
+        fields=fields,
     )
+
+
+def _parameter_fields(row: Mapping[str, object], type_name: str | None) -> tuple[ParameterDef, ...]:
+    if type_name is None:
+        return ()
+    raw_fields = _sequence(row.get("fields"), "struct fields")
+    if not raw_fields:
+        raise ValueError("struct action parameter requires at least one typed field")
+    return tuple(_parameter_def(item, owner_name=type_name.removesuffix("Struct")) for item in raw_fields)
+
+
+def _parameter_item_type(row: Mapping[str, object], data_type: str) -> str | None:
+    if data_type not in {"array", "objectSet"}:
+        return None
+    item_type = _string(row.get("itemType", "string"), "parameter itemType")
+    if item_type not in SCALAR_TYPES and item_type not in {"object", "interface"}:
+        raise ValueError("array action parameter itemType is unsupported")
+    return item_type
+
+
+def _action_ts_type(data_type: str, *, type_name: str | None, item_type: str | None) -> str:
+    if data_type in {"media", "attachment"}:
+        return "ActionMediaInput"
+    if data_type in {"object", "interface"}:
+        return "string | ObjectReference"
+    if data_type in {"array", "objectSet"}:
+        assert item_type is not None
+        return f"ReadonlyArray<{_action_ts_type(item_type, type_name=None, item_type=None)}>"
+    if data_type == "struct":
+        assert type_name is not None
+        return type_name
+    return SCALAR_TYPES.get(data_type, "unknown")
+
+
+def _action_python_type(data_type: str, *, type_name: str | None, item_type: str | None) -> str:
+    scalar = {
+        "boolean": "bool",
+        "float": "float",
+        "integer": "int",
+        "long": "int",
+        "decimal": "Decimal",
+        "date": "date",
+        "timestamp": "datetime",
+        "string": "str",
+        "media": "str | ActionMediaReference",
+        "attachment": "str | ActionMediaReference",
+        "object": "str | OntologyObjectReference",
+        "interface": "str | OntologyObjectReference",
+    }
+    if data_type in {"array", "objectSet"}:
+        assert item_type is not None
+        return f"Sequence[{_action_python_type(item_type, type_name=None, item_type=None)}]"
+    if data_type == "struct":
+        assert type_name is not None
+        return type_name
+    return scalar.get(data_type, "object")
+
+
+def _pascal_identifier(value: str) -> str:
+    chunks = [chunk for chunk in re.split(r"\W+|_+", value) if chunk]
+    normalized = "".join(chunk[:1].upper() + chunk[1:] for chunk in chunks)
+    if not normalized:
+        return "Value"
+    return normalized if not normalized[0].isdigit() else f"Value{normalized}"
 
 
 def _mapping(value: object, field: str) -> Mapping[str, object]:

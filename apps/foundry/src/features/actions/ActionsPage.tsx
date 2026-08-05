@@ -18,6 +18,9 @@ import { StatusPill } from "@/components/shared/StatusPill";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { ActionFormPanel } from "./components/ActionFormPanel";
+import { ActionBuilderPanel } from "./components/ActionBuilderPanel";
+import { ActionRuntimePanel } from "./components/ActionRuntimePanel";
+import { ActionNotificationPolicyPanel } from "./components/ActionNotificationPolicyPanel";
 import { ActionTypeList } from "./components/ActionTypeList";
 import { BatchApplyPanel } from "./components/BatchApplyPanel";
 import { FunctionsPanel } from "./components/FunctionsPanel";
@@ -25,8 +28,9 @@ import { ObjectPicker } from "./components/ObjectPicker";
 import { ProposalBridgePanel } from "./components/ProposalBridgePanel";
 import { SubmissionCriteriaPanel } from "./components/SubmissionCriteriaPanel";
 import { actionDefinitionView } from "./lib/action-definition";
+import { useActionNotificationPolicies } from "./use-action-notification-policies";
 
-type WorkspaceTab = "form" | "batch" | "functions";
+type WorkspaceTab = "builder" | "form" | "runtime" | "notification-policies" | "batch" | "functions";
 
 /** Action Types / Functions: 액션 폼 런타임 · 배치 실행 · 함수 실행 워크스페이스. */
 export default function ActionsPage() {
@@ -40,6 +44,7 @@ export default function ActionsPage() {
   >(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
+  const notificationPolicies = useActionNotificationPolicies();
 
   const workspace = useFoundryLiteProvidedObjectActionWorkspace({
     selectedActionApiName,
@@ -132,13 +137,26 @@ export default function ActionsPage() {
       >
         <div className="border-b bg-card px-4">
           <TabsList variant="line" className="h-auto flex-wrap gap-x-4">
+            <TabsTrigger value="builder">Action Builder</TabsTrigger>
             <TabsTrigger value="form">폼 실행</TabsTrigger>
+            <TabsTrigger value="runtime">실행·로그</TabsTrigger>
+            <TabsTrigger value="notification-policies">알림 정책</TabsTrigger>
             <TabsTrigger value="batch">배치 실행</TabsTrigger>
             <TabsTrigger value="functions">Functions</TabsTrigger>
           </TabsList>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto bg-canvas p-4">
+          <TabsContent value="builder" className="mt-0">
+            <ActionBuilderPanel
+              objects={workspace.objectViews}
+              links={workspace.catalog?.linkTypes ?? []}
+              interfaces={workspace.catalog?.interfaces ?? []}
+              functions={workspace.catalog?.functionTypes ?? []}
+              notificationPolicies={notificationPolicies.policies.filter((item) => item.status === "active")}
+            />
+          </TabsContent>
+
           <TabsContent value="form" className="mt-0">
             <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[240px_minmax(0,1fr)_300px]">
               <ActionTypeList
@@ -224,6 +242,14 @@ export default function ActionsPage() {
                 )}
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="runtime" className="mt-0">
+            <ActionRuntimePanel />
+          </TabsContent>
+
+          <TabsContent value="notification-policies" className="mt-0">
+            <ActionNotificationPolicyPanel {...notificationPolicies} />
           </TabsContent>
 
           <TabsContent value="functions" className="mt-0">

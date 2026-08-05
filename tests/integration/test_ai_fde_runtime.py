@@ -217,6 +217,53 @@ def test_ai_fde_catalog_is_permission_scoped_and_lists_current_modes(foundry: An
     assert modes["data_integration"] == "current"
     assert modes["platform_qa"] == "current"
     assert catalog["safetyBoundary"]["writes"] == "governed_scope_only"
+    tool_ids = {str(tool["toolId"]) for tool in catalog["tools"]}
+    assert len(tool_ids) == 68
+    assert {
+        "list_resources_in_foundry_folder",
+        "get_project_imports",
+        "create_foundry_project",
+        "search_foundry_projects",
+        "query_ontology_objects",
+        "aggregate_ontology_objects",
+        "get_foundry_dataset_schema",
+        "list_dataset_files",
+        "get_dataset_stats",
+        "get_resource_graph",
+        "get_foundry_ontology_rid",
+        "search_foundry_ontology",
+        "search_foundry_functions",
+        "view_foundry_object_type",
+        "view_foundry_link_type",
+        "view_foundry_action_type",
+        "create_or_update_foundry_object_type",
+        "create_or_update_foundry_link_type",
+        "create_or_update_foundry_action_type",
+        "delete_foundry_object_type",
+        "delete_foundry_link_type",
+        "delete_foundry_action_type",
+        "get_ontology_sdk_context",
+        "get_ontology_sdk_examples",
+        "list_platform_sdk_apis",
+        "get_platform_sdk_api_reference",
+        "get_python_transforms_documentation",
+        "get_typescript_v1_functions_documentation",
+        "get_typescript_v2_functions_documentation",
+        "get_custom_widget_documentation",
+        "get_ml_documentation",
+        "get_spark_profile_documentation",
+        "get_osdk_react_components_documentation",
+        "create_foundry_rest_api_data_source",
+        "create_foundry_rest_api_data_source_webhook",
+        "view_foundry_rest_api_data_source_webhook",
+        "get_or_create_network_egress_policy",
+        "get_documentation_summaries",
+        "search_foundry_documentation",
+        "load_foundry_documentation_page",
+        "view_osdk_definition",
+        "generate_new_ontology_sdk_version",
+        "install_sdk_package",
+    } <= tool_ids
     viewer_catalog = foundry.aip.fde_catalog(ctx=VIEWER)
     viewer_modes = {str(mode["modeId"]) for mode in viewer_catalog["modes"]}
     assert "ontology_editing" not in viewer_modes

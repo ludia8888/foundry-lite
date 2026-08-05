@@ -20,7 +20,27 @@ SUPPORTED_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_LOGIC_DAG})
 
 #: Function inputs/outputs use the object property type vocabulary (kept in
 #: sync with INTERFACE_PROPERTY_DATA_TYPES / OBJECT_PROPERTY_DATA_TYPES).
-FUNCTION_DATA_TYPES = frozenset({"boolean", "float", "integer", "media_reference", "ontology_edit_batch", "string"})
+FUNCTION_DATA_TYPES = frozenset(
+    {
+        "array",
+        "attachment",
+        "boolean",
+        "date",
+        "decimal",
+        "float",
+        "integer",
+        "interface",
+        "long",
+        "media",
+        "media_reference",
+        "object",
+        "objectSet",
+        "ontology_edit_batch",
+        "string",
+        "struct",
+        "timestamp",
+    }
+)
 
 
 def normalized_function_definition(item: Mapping[str, object]) -> dict[str, object]:
@@ -66,11 +86,33 @@ def _normalized_inputs(item: Mapping[str, object], api_name: str) -> list[dict[s
                 "duplicate function input apiName", details={"function": api_name, "input": input_api}
             )
         seen.add(input_api)
-        _require_function_data_type(input_def, api_name, f"inputs.{input_api}")
-        inputs.append(
-            {"apiName": input_api, "type": _required_str(input_def, "type"), "required": _required_flag(input_def)}
-        )
+        inputs.append(_normalized_input(input_def, api_name, f"inputs.{input_api}"))
     return inputs
+
+
+def _normalized_input(input_def: Mapping[str, object], api_name: str, path: str) -> dict[str, object]:
+    _require_function_data_type(input_def, api_name, path)
+    normalized: dict[str, object] = {
+        "apiName": _required_str(input_def, "apiName"),
+        "type": _required_str(input_def, "type"),
+        "required": _required_flag(input_def),
+    }
+    for key in ("description", "objectType", "interfaceType", "itemType", "mediaSet", "render"):
+        if key in input_def:
+            normalized[key] = _required_str(input_def, key)
+    for key in ("default", "constraints"):
+        if key in input_def:
+            normalized[key] = dict(_required_mapping(input_def, key, api_name))
+    if "allowedMimeTypes" in input_def:
+        normalized["allowedMimeTypes"] = list(_string_sequence(input_def["allowedMimeTypes"], "allowedMimeTypes"))
+    if "maxBytes" in input_def:
+        normalized["maxBytes"] = _optional_int(input_def, "maxBytes", 0)
+    if "fields" in input_def:
+        normalized["fields"] = [
+            _normalized_input(field, api_name, f"{path}.fields.{_required_str(field, 'apiName')}")
+            for field in _mapping_sequence(input_def, "fields")
+        ]
+    return normalized
 
 
 def _normalized_output(item: Mapping[str, object], api_name: str) -> dict[str, object]:

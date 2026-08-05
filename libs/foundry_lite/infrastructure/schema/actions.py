@@ -145,6 +145,9 @@ action_effect_receipts = Table(
     Column("lease_expires_at", String),
     Column("fencing_token", Integer, nullable=False, server_default=text("0")),
     Column("heartbeat_at", String),
+    Column("dispatch_started_at", String),
+    Column("cancel_requested_at", String),
+    Column("cancel_reason", String),
     Column("request", JSON, nullable=False),
     Column("response", JSON),
     Column("error", JSON),
@@ -154,6 +157,9 @@ action_effect_receipts = Table(
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     Column("completed_at", String),
+    Column("reconciled_at", String),
+    Column("reconciled_by_user_id", String),
+    Column("reconciliation", JSON),
     UniqueConstraint("tenant_id", "action_run_id", "effect_id", name="uq_action_effect_receipt"),
     UniqueConstraint("tenant_id", "idempotency_key", name="uq_action_effect_idempotency"),
 )
@@ -163,10 +169,93 @@ Index(
     action_effect_receipts.c.status,
     action_effect_receipts.c.retry_at,
 )
+
+
+action_effect_operation_requests = Table(
+    "action_effect_operation_requests",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("receipt_id", String, nullable=False),
+    Column("operation", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("request_fingerprint", String, nullable=False),
+    Column("response_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "actor_user_id",
+        "operation",
+        "idempotency_key",
+        name="uq_action_effect_operation_idempotency",
+    ),
+)
+Index(
+    "ix_action_effect_operation_requests_scope",
+    action_effect_operation_requests.c.tenant_id,
+    action_effect_operation_requests.c.receipt_id,
+    action_effect_operation_requests.c.created_at,
+)
 Index(
     "ix_action_effect_receipts_tenant_run",
     action_effect_receipts.c.tenant_id,
     action_effect_receipts.c.action_run_id,
+)
+
+
+action_notification_policies = Table(
+    "action_notification_policies",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("policy_name", String, nullable=False),
+    Column("target_ref", String, nullable=False),
+    Column("display_name", String, nullable=False),
+    Column("delivery_mode", String, nullable=False),
+    Column("recipients", JSON, nullable=False),
+    Column("status", String, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("config_fingerprint", String, nullable=False),
+    Column("created_by_user_id", String, nullable=False),
+    Column("updated_by_user_id", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "policy_name", name="uq_action_notification_policy_name"),
+    UniqueConstraint("tenant_id", "target_ref", name="uq_action_notification_policy_target"),
+)
+Index(
+    "ix_action_notification_policies_tenant_status",
+    action_notification_policies.c.tenant_id,
+    action_notification_policies.c.status,
+    action_notification_policies.c.policy_name,
+)
+
+
+action_notification_policy_idempotency_records = Table(
+    "action_notification_policy_idempotency_records",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("operation", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("request_fingerprint", String, nullable=False),
+    Column("response_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "actor_user_id",
+        "operation",
+        "idempotency_key",
+        name="uq_action_notification_policy_idempotency",
+    ),
+)
+Index(
+    "ix_action_notification_policy_idempotency_scope",
+    action_notification_policy_idempotency_records.c.tenant_id,
+    action_notification_policy_idempotency_records.c.actor_user_id,
+    action_notification_policy_idempotency_records.c.operation,
 )
 
 
@@ -235,6 +324,38 @@ action_branch_objects = Table(
     UniqueConstraint("tenant_id", "branch_id", "object_type_api_name", "object_id", name="uq_action_branch_object"),
 )
 Index("ix_action_branch_objects_scope", action_branch_objects.c.tenant_id, action_branch_objects.c.branch_id)
+
+
+action_branch_links = Table(
+    "action_branch_links",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("branch_id", String, nullable=False),
+    Column("link_type_id", String, nullable=False),
+    Column("link_type_api_name", String, nullable=False),
+    Column("from_object_type_id", String, nullable=False),
+    Column("from_api_name", String, nullable=False),
+    Column("from_object_id", String, nullable=False),
+    Column("to_object_type_id", String, nullable=False),
+    Column("to_api_name", String, nullable=False),
+    Column("to_object_id", String, nullable=False),
+    Column("base_link_version", Integer),
+    Column("overlay_version", Integer, nullable=False),
+    Column("deleted", Boolean, nullable=False),
+    Column("last_action_run_id", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "branch_id",
+        "link_type_api_name",
+        "from_object_id",
+        "to_object_id",
+        name="uq_action_branch_link",
+    ),
+)
+Index("ix_action_branch_links_scope", action_branch_links.c.tenant_id, action_branch_links.c.branch_id)
 
 
 action_branch_edits = Table(
