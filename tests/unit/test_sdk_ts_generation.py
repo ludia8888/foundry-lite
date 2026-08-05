@@ -470,7 +470,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "transactions": ["open", "upload", "commit"],
         "versions": ["process", "readContent"],
         "derivatives": ["get", "contentUnits", "index"],
-        "content": ["search"],
+        "content": ["promoteGeneration", "search"],
         "visual": ["indexDerivative", "promoteGeneration", "search"],
         "processingRuns": ["list", "get"],
         "processors": ["list"],
