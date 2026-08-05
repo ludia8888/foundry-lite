@@ -245,9 +245,16 @@ def test_github_coverage_lane_keeps_serial_layer_coverage_from_timing_out() -> N
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     coverage_job = workflow.split("quality_coverage:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
-    assert "timeout-minutes: 45" in coverage_job
+    # 60, not 45: a completed run took 39m31s and the next push timed out at 45m18s. A timeout
+    # that fires on runner variance destroys the measurement it protects — three consecutive
+    # main pushes produced no coverage number. The lane must keep real headroom over observed
+    # runtime rather than sitting at 88% of its own cap.
+    assert "timeout-minutes: 60" in coverage_job
     assert "run: pnpm ci:gate:coverage" in coverage_job
     assert "Coverage runs the full backend suite serially" in coverage_job
+    # Sharding is the tempting alternative and is explicitly ruled out: layer coverage is only
+    # trustworthy from a single process, so the lane buys time with wall clock, not with xdist.
+    assert "--cov-fail-under=95" in (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
 
 
 def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None:
