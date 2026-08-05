@@ -326,6 +326,7 @@ def test_ontology_activation_cas_conflict_reports_lost_draft_state() -> None:
         engine=object(),
         ontology_repository=_ActivationConflictRepository(),
         resource_catalog_repository=object(),
+        media_repository=object(),
     )
 
     with pytest.raises(ConflictDetected, match="lost its draft state") as exc_info:
@@ -340,6 +341,7 @@ def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
         engine=object(),
         ontology_repository=_RecordingOntologyRepository(),
         resource_catalog_repository=object(),
+        media_repository=object(),
     )
     service.bind_collaborators(
         {
@@ -373,6 +375,7 @@ def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() ->
         engine=object(),
         ontology_repository=_RecordingOntologyRepository(),
         resource_catalog_repository=object(),
+        media_repository=object(),
     )
 
     with pytest.raises(ValidationFailed, match="duplicate property apiName") as exc_info:
@@ -396,6 +399,7 @@ def test_ontology_import_rejects_null_property_source() -> None:
         engine=object(),
         ontology_repository=_RecordingOntologyRepository(),
         resource_catalog_repository=object(),
+        media_repository=object(),
     )
 
     with pytest.raises(ValidationFailed, match="property source must be set") as exc_info:
@@ -414,6 +418,7 @@ def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
         engine=object(),
         ontology_repository=_RecordingOntologyRepository(),
         resource_catalog_repository=object(),
+        media_repository=object(),
     )
 
     with pytest.raises(ValidationFailed, match="link references unknown object type"):

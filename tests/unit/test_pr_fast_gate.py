@@ -101,6 +101,100 @@ def test_pr_plan_bounds_automatic_linked_tests_without_dropping_changed_tests(mo
     assert "tests/unit/test_changed_contract.py" in plan.selected_tests
 
 
+def test_pr_plan_keeps_linked_tests_when_changed_tests_already_fill_the_cap(monkeypatch, tmp_path: Path) -> None:
+    """A large changed-test set must not starve source-linked evidence.
+
+    This is the shape that broke main after PR #164: 55 changed test files consumed every
+    slot, the linked selection silently became empty, and a source whose own test file did
+    not change went unverified until the coverage lane caught it.
+    """
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_linked_floor")
+    source = tmp_path / "libs/foundry_lite/application/services/reservation_engine.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def reserve() -> None:\n    return None\n", encoding="utf-8")
+    tests = tmp_path / "tests/unit"
+    tests.mkdir(parents=True)
+    changed_names = [f"test_changed_{index:02d}.py" for index in range(gate.MAX_SELECTED_TEST_FILES + 20)]
+    for name in changed_names:
+        (tests / name).write_text("def test_changed() -> None:\n    assert True\n", encoding="utf-8")
+    linked_names = [f"test_reservation_engine_{index:02d}.py" for index in range(20)]
+    for name in linked_names:
+        (tests / name).write_text("def test_linked() -> None:\n    assert True\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+
+    plan = gate.build_plan(
+        (
+            "libs/foundry_lite/application/services/reservation_engine.py",
+            *(f"tests/unit/{name}" for name in changed_names),
+        )
+    )
+
+    selected_linked = [path for path in plan.selected_tests if "reservation_engine" in path]
+    assert len(selected_linked) == gate.MIN_LINKED_TEST_FILES, "the linked floor must survive a full cap"
+    assert all(f"tests/unit/{name}" in plan.selected_tests for name in changed_names)
+    # What the floor could not hold is reported, never silently dropped.
+    assert len(plan.dropped_linked_tests) == len(linked_names) - gate.MIN_LINKED_TEST_FILES
+    assert set(plan.dropped_linked_tests).isdisjoint(plan.selected_tests)
+
+
+def test_pr_plan_ranks_linked_tests_by_how_many_changed_sources_reach_them(monkeypatch, tmp_path: Path) -> None:
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_linked_rank")
+    services = tmp_path / "libs/foundry_lite/application/services"
+    services.mkdir(parents=True)
+    for stem in ("reservation_engine", "reservation_pricing"):
+        (services / f"{stem}.py").write_text("def run() -> None:\n    return None\n", encoding="utf-8")
+    tests = tmp_path / "tests/unit"
+    tests.mkdir(parents=True)
+    # Reached by both changed sources.
+    (tests / "test_reservation_engine_reservation_pricing.py").write_text(
+        "def test_both() -> None:\n    assert True\n", encoding="utf-8"
+    )
+    # Reached by one changed source each.
+    (tests / "test_reservation_engine_only.py").write_text(
+        "def test_one() -> None:\n    assert True\n", encoding="utf-8"
+    )
+    (tests / "test_reservation_pricing_only.py").write_text(
+        "def test_one() -> None:\n    assert True\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    monkeypatch.setattr(gate, "MIN_LINKED_TEST_FILES", 1)
+    monkeypatch.setattr(gate, "MAX_SELECTED_TEST_FILES", 1)
+
+    plan = gate.build_plan(
+        (
+            "libs/foundry_lite/application/services/reservation_engine.py",
+            "libs/foundry_lite/application/services/reservation_pricing.py",
+        )
+    )
+
+    assert plan.selected_tests == ("tests/unit/test_reservation_engine_reservation_pricing.py",)
+
+
+def test_quality_control_change_requests_the_node_runtime() -> None:
+    """A quality-control change must install Node even with no frontend file touched.
+
+    Changing `scripts/quality/**` pulls `tests/unit/test_quality_ci_workflows.py` into the
+    selection, and that test shells out to `node scripts/quality/run_ast_grep.cjs`. Before
+    this signal existed the job skipped `pnpm install` for backend-only PRs and the test died
+    on empty stdout instead of on anything it asserts.
+    """
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_should_install_node")
+
+    backend_only = gate.build_plan(("libs/foundry_lite/domain/action_runtime/action_presentation.py",))
+    quality_only = gate.build_plan(("scripts/quality/pr_fast_gate.py",))
+    frontend_only = gate.build_plan(("apps/foundry/src/App.tsx",))
+
+    assert backend_only.should_install_node is False
+    assert quality_only.should_install_node is True
+    assert frontend_only.should_install_node is True
+
+    # The workflow must gate its Node setup on this signal, not on frontend alone.
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    pr_job = workflow.split("quality_pr:", maxsplit=1)[1].split("quality_static:", maxsplit=1)[0]
+    assert "steps.scope.outputs.should_install_node == 'true'" in pr_job
+    assert "has_frontend == 'true' || steps.scope.outputs.has_sdk_contract" not in pr_job
+
+
 def test_pr_plan_keeps_live_infrastructure_tests_out_of_the_budgeted_lane() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_live_infra")
     live_infra_tests = (

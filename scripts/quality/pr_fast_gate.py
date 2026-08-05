@@ -16,6 +16,8 @@ import shutil
 import subprocess  # nosec B404 - this gate intentionally spawns fixed quality commands
 import sys
 import time
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -29,6 +31,8 @@ REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_fast_gate.json"
 SECURITY_REPORT_PATH = ROOT / "artifacts" / "quality" / "pr_diff_security.json"
 DEFAULT_BUDGET_SECONDS = 420.0
 MAX_SELECTED_TEST_FILES = 32
+# Floor of source-linked test files, held even when changed tests already fill the cap.
+MIN_LINKED_TEST_FILES = 8
 GENERIC_MODULE_STEMS = {
     "__init__",
     "base",
@@ -71,6 +75,8 @@ class PullRequestPlan:
     has_frontend: bool
     has_sdk_contract: bool
     is_docs_only: bool
+    should_install_node: bool = False
+    dropped_linked_tests: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -169,11 +175,23 @@ def _direct_test_matches(source_path: str, test_paths: tuple[Path, ...]) -> set[
     return matches
 
 
-def _bounded_test_selection(changed_tests: set[str], direct_tests: set[str]) -> tuple[str, ...]:
+def _bounded_test_selection(
+    changed_tests: set[str],
+    ranked_direct_tests: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Select changed tests plus a never-empty slice of source-linked tests.
+
+    A source-linked test is the only thing that catches "a source file changed but its own
+    test file did not" — the exact shape that broke main after PR #164, where 55 changed test
+    files consumed every slot and the linked selection silently became empty. So the linked
+    slice keeps a floor: a large change widens the risk that this evidence covers, it must not
+    delete it. Anything the floor cannot fit is returned so the gate can report the drop
+    instead of presenting a truncated run as full coverage.
+    """
     required = sorted(changed_tests)
-    remaining_slots = max(0, MAX_SELECTED_TEST_FILES - len(required))
-    linked = sorted(direct_tests - changed_tests)[:remaining_slots]
-    return tuple([*required, *linked])
+    candidates = [path for path in ranked_direct_tests if path not in changed_tests]
+    slots = max(MIN_LINKED_TEST_FILES, MAX_SELECTED_TEST_FILES - len(required))
+    return tuple([*required, *candidates[:slots]]), tuple(sorted(candidates[slots:]))
 
 
 def _is_fast_test_path(path: str) -> bool:
@@ -209,15 +227,32 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
     """Build the bounded PR evidence plan from changed paths."""
     existing_tests = tuple(sorted(ROOT.glob("tests/**/test_*.py")))
     changed_python_tests = _changed_python_tests(paths)
-    selected_tests, untested = _source_test_evidence(paths, existing_tests, changed_python_tests)
+    selected_tests, untested, dropped_linked = _source_test_evidence(paths, existing_tests, changed_python_tests)
     return PullRequestPlan(
         changed_files=paths,
         selected_tests=selected_tests,
         source_files_without_tests=untested,
+        dropped_linked_tests=dropped_linked,
         has_backend=any(_is_backend_path(path) for path in paths),
         has_frontend=any(_is_frontend_path(path) for path in paths),
         has_sdk_contract=any(_needs_sdk_contract(path) for path in paths),
         is_docs_only=bool(paths) and all(_is_docs_path(path) for path in paths),
+        should_install_node=_should_install_node_runtime(paths),
+    )
+
+
+def _should_install_node_runtime(paths: tuple[str, ...]) -> bool:
+    """Whether this run executes anything that needs installed Node dependencies.
+
+    Frontend and SDK-contract checks obviously do. So does a quality-control change: it pulls
+    `tests/unit/test_quality_ci_workflows.py` into the selection, and that file shells out to
+    `node scripts/quality/run_ast_grep.cjs`. Without this the job skips `pnpm install` and the
+    test fails on empty stdout rather than on anything it is meant to assert.
+    """
+    return (
+        any(_is_frontend_path(path) for path in paths)
+        or any(_needs_sdk_contract(path) for path in paths)
+        or _quality_control_changed(paths)
     )
 
 
@@ -237,15 +272,27 @@ def _source_test_evidence(
     paths: tuple[str, ...],
     existing_tests: tuple[Path, ...],
     changed_python_tests: set[str],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     source_paths = _source_python_paths(paths)
     source_matches = {path: _direct_test_matches(path, existing_tests) for path in source_paths}
-    direct_tests = {test for matches in source_matches.values() for test in matches}
-    selected_tests = _bounded_test_selection(changed_python_tests, direct_tests)
+    ranked = _rank_direct_tests(source_matches)
+    selected_tests, dropped_linked = _bounded_test_selection(changed_python_tests, ranked)
     untested = tuple(
         sorted(path for path, matches in source_matches.items() if not matches and not changed_python_tests)
     )
-    return selected_tests, untested
+    return selected_tests, untested, dropped_linked
+
+
+def _rank_direct_tests(source_matches: Mapping[str, set[str]]) -> tuple[str, ...]:
+    """Order linked tests by how many changed sources feed them, then by name.
+
+    When the floor cannot hold every linked test, the ones kept should be those covering the
+    most changed surface rather than whichever sorts first alphabetically.
+    """
+    link_counts: Counter[str] = Counter()
+    for matches in source_matches.values():
+        link_counts.update(matches)
+    return tuple(sorted(link_counts, key=lambda test: (-link_counts[test], test)))
 
 
 def _source_python_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
@@ -263,6 +310,7 @@ def _github_output(plan: PullRequestPlan, path: Path) -> None:
         "has_frontend": str(plan.has_frontend).lower(),
         "has_sdk_contract": str(plan.has_sdk_contract).lower(),
         "is_docs_only": str(plan.is_docs_only).lower(),
+        "should_install_node": str(plan.should_install_node).lower(),
     }
     with path.open("a", encoding="utf-8") as handle:
         for key, value in values.items():
@@ -420,8 +468,26 @@ def run_gate(base: str, head: str, budget_seconds: float) -> int:
     violations = _gate_violations(plan, results, duration, budget_seconds)
     _write_report(REPORT_PATH, _gate_payload(plan, results, violations, duration, budget_seconds))
     _print_command_failures(results)
+    _print_dropped_linked_tests(plan)
     print(f"PR fast gate: {len(results)} checks in {duration:.1f}s; violations={len(violations)}")
     return int(bool(violations))
+
+
+def _print_dropped_linked_tests(plan: PullRequestPlan) -> None:
+    """Name the source-linked tests this run did not execute.
+
+    The lane is budgeted, so a large change cannot run every linked test. Saying so is the
+    difference between a bounded run and a run that looks complete but is not: whoever reads
+    this output should know the main-push coverage lane is the backstop for these files.
+    """
+    if not plan.dropped_linked_tests:
+        return
+    print(
+        f"PR fast gate: {len(plan.dropped_linked_tests)} source-linked test files exceeded the "
+        f"selection budget and did not run here; the main coverage lane covers them:"
+    )
+    for path in plan.dropped_linked_tests:
+        print(f"  - {path}")
 
 
 def _execute_commands(commands: list[tuple[str, list[str]]], timeout_seconds: float) -> list[CommandResult]:

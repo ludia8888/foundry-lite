@@ -1253,6 +1253,18 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
 
             return call
 
+    class MediaSearchAccess:
+        """Classification filter that passes hits through.
+
+        The facade funnels both content and visual search through ``filter_hits``; returning
+        the hits unchanged keeps the delegated payload observable so this test still proves
+        which component produced it, while recording that the filter was applied.
+        """
+
+        def filter_hits(self, _ctx: object, hits: object) -> object:
+            media_calls.append("filter_hits")
+            return hits
+
     media = MediaWorkspace(
         SimpleNamespace(
             access_pattern=MediaComponent(),
@@ -1263,6 +1275,7 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
             reference=MediaComponent(),
             retention=MediaComponent(),
             retrieval=MediaComponent(),
+            search_access=MediaSearchAccess(),
             transaction=MediaComponent(),
             upload=MediaComponent(),
             virtual_sets=MediaComponent(),
@@ -1294,6 +1307,7 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
         "purge_marked_media_versions"
     )
     assert "abort" in media_calls
+    assert "filter_hits" in media_calls
 
     class FacadeDelegate:
         def __getattr__(self, name: str):

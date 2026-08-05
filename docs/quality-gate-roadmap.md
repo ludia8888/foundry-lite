@@ -2489,7 +2489,11 @@ diff secret/위험 코드 검사, Ruff·mypy·pyright·Bandit·아키텍처/스�
 직접 변경되었거나 변경 모듈과 파일명이 연결된 pytest, 영향받은 TypeScript SDK/Foundry typecheck와
 request contract를 병렬 실행한다. 새 Python source가 직접 또는 변경된 테스트와 연결되지 않으면
 fail-closed하고, 변경된 fast test는 모두 실행하되 source-name 자동 연관 테스트는 전체 선택이 32개 파일을
-넘지 않게 제한한다. `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
+넘지 않게 제한한다. 다만 연관 테스트 슬롯에는 하한(8)이 있다 — 2026-08-05 이전에는 변경된 테스트가
+32개를 넘으면 연관 테스트 슬롯이 0이 되어, "소스는 바뀌었는데 그 소스의 테스트 파일은 안 바뀐"
+경우를 잡는 유일한 증거가 조용히 사라졌다. PR #164가 정확히 그 형태로 main coverage 레인을 깨뜨렸다.
+하한이 담지 못한 연관 테스트는 `dropped_linked_tests`로 리포트와 stdout에 이름까지 남긴다 — 잘린 실행을
+완전한 실행처럼 보이게 두지 않는다. 그 집합의 backstop은 main push coverage 레인이다. `artifacts/quality/pr_fast_gate.json`에 선택된 파일·테스트·각 검사 시간·위반을
 남긴다. GitHub job 자체가 9분 timeout이고 내부 검사 budget은 420초다.
 
 budget은 2026-08-05에 210초에서 420초로 올렸다. PR이 작다는 전제 위에 세운 값이었는데,

@@ -57,6 +57,7 @@ def test_action_service_forwards_to_focused_use_case_services() -> None:
             "action_branch_service": object(),
             "action_definition_service": object(),
             "action_log_revert_service": object(),
+            "action_media_service": object(),
             "action_planning_service": object(),
             "action_validation_service": validation,
             "action_writeback_service": writeback,

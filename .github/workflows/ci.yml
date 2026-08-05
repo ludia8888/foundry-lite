@@ -60,20 +60,20 @@ jobs:
         run: uv sync --all-groups --frozen
 
       - name: Set up pnpm
-        if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
+        if: steps.scope.outputs.should_install_node == 'true'
         uses: pnpm/action-setup@v6
         with:
           version: 10.18.2
 
       - name: Set up Node
-        if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
+        if: steps.scope.outputs.should_install_node == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: pnpm
 
       - name: Install Node dependencies
-        if: steps.scope.outputs.has_frontend == 'true' || steps.scope.outputs.has_sdk_contract == 'true'
+        if: steps.scope.outputs.should_install_node == 'true'
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Run budgeted pull-request gate

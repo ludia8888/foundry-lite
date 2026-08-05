@@ -27,11 +27,15 @@ from foundry_lite.application.services.media.references import MediaReferenceSer
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import InvariantViolation
+from foundry_lite.domain.errors import InvariantViolation, NotFound
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
-from foundry_lite.infrastructure.repositories import SqlAlchemyMediaAccessCacheRepository, SqlAlchemyMediaRepository
+from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyMediaAccessCacheRepository,
+    SqlAlchemyMediaReferenceBindingRepository,
+    SqlAlchemyMediaRepository,
+)
 from foundry_lite.security.policy import PolicyService
 from PIL import Image
 
@@ -254,6 +258,28 @@ def test_access_pattern_rejects_bytes_changed_after_storage_stat(
     assert renderer.calls == 0
 
 
+class _NoHolderObjectQuery:
+    """Attachment holder lookup that never resolves.
+
+    This fixture stores normal media, never an ``attachment``-kind parameter, so
+    ``has_visible_attachment_holder`` short-circuits before consulting this. Failing the
+    lookup keeps that assumption honest instead of silently granting access.
+    """
+
+    def get_object(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        include_explain: bool = False,
+    ) -> object:
+        raise NotFound(
+            "no attachment holder in this fixture",
+            details={"objectType": object_type_api_name, "objectId": object_id},
+        )
+
+
 def test_reference_resolve_never_reads_access_cache(env: _Env) -> None:
     # Populate a cache, then poison it; resolving the reference must still return the committed
     # source bytes' hash, proving reference resolution reads the source, never the cache.
@@ -263,8 +289,10 @@ def test_reference_resolve_never_reads_access_cache(env: _Env) -> None:
         engine=env.engine,
         policy=PolicyService(),
         media_repository=env.repo,
+        media_reference_binding_repository=SqlAlchemyMediaReferenceBindingRepository(env.engine),
         media_storage=env.storage,
     )
+    reference.bind_collaborators({"object_query_service": _NoHolderObjectQuery()})
     resolved = reference.resolve(env.ctx, media_item_version_id=env.version_id)
     assert resolved.version.content_hash == env.source_hash
     assert resolved.reference.content_hash == env.source_hash
