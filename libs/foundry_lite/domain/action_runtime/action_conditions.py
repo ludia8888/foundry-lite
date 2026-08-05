@@ -7,14 +7,35 @@ The same AST is used by parameter overrides and submission criteria.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 from foundry_lite.domain.errors import ValidationFailed
 
+# Mirrors Palantir's submission-criteria operator set. Their single-value operators are
+# is / is not / matches (regex) / is less than / is greater than or equals, and their
+# multi-value operators are includes / includes any / is included in / each is / each is not.
+# `matches`, `eachIs`, and `eachIsNot` exist here for that parity; `startsWith` predates it.
 COMPARISON_OPERATORS = frozenset(
-    {"eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte", "contains", "startsWith", "exists"}
+    {
+        "eq",
+        "neq",
+        "in",
+        "notIn",
+        "lt",
+        "lte",
+        "gt",
+        "gte",
+        "contains",
+        "containsAny",
+        "startsWith",
+        "matches",
+        "eachIs",
+        "eachIsNot",
+        "exists",
+    }
 )
 
 
@@ -188,7 +209,52 @@ def _compare(operator: str, left: object, right: object) -> bool:
         return _contains(left, right)
     if operator == "startsWith":
         return isinstance(left, str) and isinstance(right, str) and left.startswith(right)
+    if operator == "containsAny":
+        return _contains_any(left, right)
+    if operator == "matches":
+        return _matches(left, right)
+    if operator in {"eachIs", "eachIsNot"}:
+        return _each_is(operator, left, right)
     raise ValidationFailed("unsupported action condition operator", details={"operator": operator})
+
+
+def _contains_any(container: object, members: object) -> bool:
+    """Palantir's `includes any`: the left collection shares at least one member with the right."""
+    if not isinstance(members, Sequence) or isinstance(members, str | bytes):
+        return _contains(container, members)
+    return any(_contains(container, member) for member in cast(Sequence[object], members))
+
+
+def _matches(left: object, pattern: object) -> bool:
+    """Palantir's `matches`: a full-string regex test.
+
+    Anchored with ``fullmatch`` rather than ``search`` so an author writing ``ACTIVE`` does not
+    silently accept ``INACTIVE`` — a partial match is the kind of near-miss that reads as
+    correct in review and passes the wrong rows in production.
+    """
+    if not isinstance(left, str) or not isinstance(pattern, str):
+        return False
+    try:
+        return re.fullmatch(pattern, left) is not None
+    except re.error as exc:
+        raise ValidationFailed(
+            "action condition regex is invalid", details={"operator": "matches", "pattern": pattern}
+        ) from exc
+
+
+def _each_is(operator: str, left: object, right: object) -> bool:
+    """Palantir's `each is` / `each is not`: every member of the left collection is compared.
+
+    An empty collection satisfies both, matching the vacuous-truth reading of "every member".
+    A non-collection left side fails rather than being treated as a single-element collection,
+    because silently widening the type would hide an authoring mistake.
+    """
+    if not isinstance(left, Sequence) or isinstance(left, str | bytes):
+        return False
+    members = cast(Sequence[object], left)
+    if operator == "eachIs":
+        return all(member == right for member in members)
+    return all(member != right for member in members)
 
 
 def _ordered_compare(operator: str, left: object, right: object) -> bool:

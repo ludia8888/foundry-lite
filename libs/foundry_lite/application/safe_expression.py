@@ -165,7 +165,7 @@ def _validated_action_request_error(
     schema_error = _parameter_schema_error(action_type, effective_params)
     if schema_error is not None:
         return schema_error
-    return _legacy_precondition_error(action_type, record)
+    return _precondition_error(action_type, record, effective_params, ctx, linked_object_properties)
 
 
 def _parameter_schema_error(
@@ -186,17 +186,70 @@ def _parameter_schema_error(
     return None
 
 
-def _legacy_precondition_error(action_type: Mapping[str, object], record: Mapping[str, object]) -> Exception | None:
+def _precondition_error(
+    action_type: Mapping[str, object],
+    record: Mapping[str, object],
+    params: Mapping[str, object],
+    ctx: RequestContext | None,
+    linked_object_properties: Mapping[str, object],
+) -> Exception | None:
+    """Evaluate ontology-declared preconditions as submission criteria.
+
+    Palantir models this as one structured condition — ``[Left] [Operator] [Right]`` over a
+    parameter, an object property, a linked object property, or the current user — and has no
+    expression-string form at all. A precondition that declares ``op`` therefore goes through
+    the same canonical condition contract the v3 ``submissionCriteria`` field uses, which is
+    what gives it the full operator set and access to parameters.
+
+    ``safeExpression`` remains only for definitions authored before that contract existed. It
+    can compare an object property against a literal and nothing else, so a rule such as
+    "party size must fit the table" is inexpressible there — the reason to move.
+    """
     definition = _mapping_or_empty(action_type.get("definition"))
+    condition_context = _condition_context(record, params, ctx, linked_object_properties)
     for raw_precondition in _object_sequence(definition.get("preconditions", ())):
         precondition = _mapping_or_empty(raw_precondition)
-        expression = precondition_expression(precondition)
-        if not evaluate_safe_expression(expression, _mapping_or_empty(record.get("properties"))):
-            return ValidationFailed(
-                _string_or_empty(precondition.get("message")) or "action precondition failed",
-                details={"expression": expression},
-            )
+        error = _single_precondition_error(precondition, record, condition_context)
+        if error is not None:
+            return error
     return None
+
+
+def _single_precondition_error(
+    precondition: Mapping[str, object],
+    record: Mapping[str, object],
+    condition_context: StaticActionConditionContext,
+) -> Exception | None:
+    message = _string_or_empty(precondition.get("message")) or "action precondition failed"
+    if _is_structured_condition(precondition):
+        if evaluate_action_condition(precondition, condition_context):
+            return None
+        return ValidationFailed(message, details={"criteria": dict(precondition)})
+    expression = precondition_expression(precondition)
+    if evaluate_safe_expression(expression, _mapping_or_empty(record.get("properties"))):
+        return None
+    return ValidationFailed(message, details={"expression": expression})
+
+
+def _is_structured_condition(precondition: Mapping[str, object]) -> bool:
+    return any(key in precondition for key in ("op", "all", "any", "not"))
+
+
+def _condition_context(
+    record: Mapping[str, object],
+    params: Mapping[str, object],
+    ctx: RequestContext | None,
+    linked_object_properties: Mapping[str, object],
+) -> StaticActionConditionContext:
+    request_context = ctx or RequestContext()
+    return StaticActionConditionContext(
+        parameters=params,
+        object_properties=_mapping_or_empty(record.get("properties")),
+        actor_user_id=request_context.actor_user_id,
+        actor_groups=request_context.roles,
+        actor_attributes=request_context.user_attributes,
+        linked_object_properties=linked_object_properties,
+    )
 
 
 def resolve_action_request_parameters(
@@ -235,15 +288,7 @@ def _submission_criteria_error(
     raw = definition.get("submissionCriteria")
     if not isinstance(raw, Mapping):
         return None
-    request_context = ctx or RequestContext()
-    condition_context = StaticActionConditionContext(
-        parameters=params,
-        object_properties=_mapping_or_empty(record.get("properties")),
-        actor_user_id=request_context.actor_user_id,
-        actor_groups=request_context.roles,
-        actor_attributes=request_context.user_attributes,
-        linked_object_properties=linked_object_properties,
-    )
+    condition_context = _condition_context(record, params, ctx, linked_object_properties)
     if evaluate_action_condition(raw, condition_context):
         return None
     message = raw.get("message")
