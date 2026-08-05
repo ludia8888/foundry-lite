@@ -179,8 +179,17 @@ def _bounded_test_selection(changed_tests: set[str], direct_tests: set[str]) -> 
 def _is_fast_test_path(path: str) -> bool:
     if not path.startswith("tests/") or not path.endswith(".py"):
         return False
+    # Live-infrastructure tests boot real brokers, clusters, and CDC connectors
+    # through testcontainers, so they belong to the runtime lane (AGENTS.md §28)
+    # and are already enforced by named ratchets there. The `_live.py` suffix
+    # only covers files that end that way; `test_kafka_live_broker_*`,
+    # `test_debezium_live_cdc.py`, and `test_elasticsearch_live_cluster.py` name
+    # the infrastructure mid-stem and previously leaked into the PR budget.
     slow_markers = (
         "_live.py",
+        "live_broker",
+        "live_cdc",
+        "live_cluster",
         "temporal",
         "infra_composition",
         "all_infra",

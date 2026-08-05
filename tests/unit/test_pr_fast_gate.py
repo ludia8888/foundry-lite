@@ -101,6 +101,25 @@ def test_pr_plan_bounds_automatic_linked_tests_without_dropping_changed_tests(mo
     assert "tests/unit/test_changed_contract.py" in plan.selected_tests
 
 
+def test_pr_plan_keeps_live_infrastructure_tests_out_of_the_budgeted_lane() -> None:
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_live_infra")
+    live_infra_tests = (
+        "tests/integration/test_kafka_live_broker_stream_archive.py",
+        "tests/integration/test_debezium_live_cdc.py",
+        "tests/integration/test_elasticsearch_live_cluster.py",
+    )
+    runtime_commands = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"].values()
+
+    for path in live_infra_tests:
+        assert (ROOT / path).is_file(), f"{path} moved; update the live-infra lane contract"
+        assert gate._is_fast_test_path(path) is False, f"{path} boots real infrastructure inside the PR budget"
+        assert any(path in command for command in runtime_commands), f"{path} lost its runtime-lane ratchet"
+
+    # Simulation-only tests name "live" without booting infrastructure, so the
+    # marker must not evict them from the budgeted lane.
+    assert gate._is_fast_test_path("tests/unit/test_palantir_live_simulation.py") is True
+
+
 def test_pr_diff_security_detects_high_confidence_secret_and_unsafe_python() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_security")
     fake_aws_key = "AKIA" + ("A" * 16)
