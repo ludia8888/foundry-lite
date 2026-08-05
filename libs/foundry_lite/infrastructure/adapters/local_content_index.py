@@ -23,6 +23,7 @@ from foundry_lite.application.ports.content_index import (
     HybridContentQuery,
     IndexedContentUnit,
     is_classification_cleared,
+    is_media_set_in_scope,
 )
 from foundry_lite.application.ports.embedding_model import EmbeddingVector
 
@@ -77,6 +78,9 @@ class LocalContentIndexAdapter:
             for unit in generation.values()
             if unit.tenant_id == query.tenant_id
             and is_classification_cleared(unit.classification, query.allowed_classifications)
+            # Scope narrows the candidate pool before ranking, so top-k comes from inside the
+            # requested media sets rather than from whatever survives a tenant-wide top-k.
+            and is_media_set_in_scope(unit.media_set_id, query.media_set_ids)
         ]
         if query.query_vector is None:
             ranked = _lexical_rank(candidates, query.text)
@@ -98,6 +102,9 @@ class LocalContentIndexAdapter:
                 "search",
                 f"embedding model mismatch (index {active_model!r}, query {query.embedding_model_version!r})",
             )
+
+    def active_generation(self) -> str:
+        return self._active
 
     def promote_generation(self, expected_active: str, shadow: str) -> None:
         if shadow not in self._generations:
@@ -169,4 +176,5 @@ def _hit(unit: IndexedContentUnit, generation: str) -> ContentSearchHit:
         start_ms=unit.start_ms,
         end_ms=unit.end_ms,
         text_hash=unit.text_hash,
+        media_set_id=unit.media_set_id,
     )

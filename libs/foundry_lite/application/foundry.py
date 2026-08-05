@@ -174,6 +174,7 @@ class FoundryLite:
         self.ontology_mcp = OntologyMcpGateway(
             applications=services.osdk_applications.entrypoint,
             objects=self.objects,
+            unified_search=services.ontology_search,
             actions=self.actions,
             functions=self.functions,
             approvals=services.action_proposal,

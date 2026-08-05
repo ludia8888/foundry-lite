@@ -1029,12 +1029,17 @@ def render_typescript(ontology: OntologyDef) -> str:
         "};",
         "export type MediaContentUnitFilters = { afterOrdinal?: number; pageNumber?: number; limit?: number };",
         "export type MediaIndexDerivativeRequest = { generation: string };",
-        "export type MediaIndexingOutcome = { generation: string; indexed: number; failed: number };",
+        (
+            "export type MediaIndexingOutcome = "
+            "{ generation: string; indexed: number; failed: number; active_generation: string };"
+        ),
+        "export type MediaContentPromoteRequest = { expectedActive: string; generation: string };",
         "export type MediaVisualPromoteRequest = { expectedActive: string; generation: string };",
         "export type MediaSearchRequest = {",
         "  text?: string | null;",
         "  topK?: number;",
         "  allowedClassifications?: string[] | null;",
+        "  mediaSetIds?: string[] | null;",
         "};",
         "export type MediaVisualSearchRequest = { text: string; topK?: number };",
         "export type MediaContentSearchHit = {",
@@ -1045,6 +1050,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  text_hash: string | null;",
         "  chunk_spec_hash: string;",
         "  classification: string;",
+        "  media_set_id: string;",
         "  page_number?: number | null;",
         "  start_ms?: number | null;",
         "  end_ms?: number | null;",

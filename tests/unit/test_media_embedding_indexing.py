@@ -27,7 +27,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
-from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
+from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from sqlalchemy import create_engine
 
 _SOURCE = "miv-1"
@@ -118,6 +118,7 @@ def env(tmp_path: Path) -> _Env:
     embedding = LocalEmbeddingAdapter(embedding_engine=_fake_engine, model_version=_MODEL)
     indexing = MediaIndexingService(
         engine=engine,
+        media_repository=SqlAlchemyMediaRepository(engine),
         media_derivative_repository=repo,
         content_index_adapter=index,
         embedding_model_adapter=embedding,
@@ -160,6 +161,7 @@ def test_indexing_raises_when_engine_returns_fewer_vectors_than_units(env: _Env)
     short_engine = LocalEmbeddingAdapter(embedding_engine=lambda texts: _fake_engine(texts)[:1], model_version=_MODEL)
     indexing = MediaIndexingService(
         engine=env.engine,  # type: ignore[arg-type]
+        media_repository=SqlAlchemyMediaRepository(env.engine),
         media_derivative_repository=SqlAlchemyMediaDerivativeRepository(env.engine),  # type: ignore[arg-type]
         content_index_adapter=LocalContentIndexAdapter(),
         embedding_model_adapter=short_engine,

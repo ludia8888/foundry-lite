@@ -28,6 +28,7 @@ from foundry_lite_api.schemas import (
     MEDIA_UPLOAD_FILE,
     JsonObject,
     MediaBindReferenceRequest,
+    MediaContentPromoteRequest,
     MediaIndexDerivativeRequest,
     MediaOpenTransactionRequest,
     MediaProcessRequest,
@@ -250,8 +251,28 @@ def search_media_content(request: Request, payload: MediaSearchRequest) -> list[
             text=payload.text,
             top_k=payload.top_k,
             allowed_classifications=allowed_media_classifications(ctx),
+            media_set_ids=tuple(payload.media_set_ids) if payload.media_set_ids is not None else None,
         )
         return [cast(JsonObject, asdict(hit)) for hit in runtime.foundry.media.search_content(ctx, query=query)]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/media/content/generations/promote")
+def promote_media_content_generation(request: Request, payload: MediaContentPromoteRequest) -> JsonObject:
+    """Make one indexed text generation the active query source.
+
+    Indexing writes into a shadow generation; nothing reaches search until this compare-and-swap
+    lands. That is the same boundary Palantir draws when an object type only becomes queryable
+    once its indexing job reports complete — a half-built generation is never served.
+    """
+    try:
+        runtime.foundry.media.promote_content_generation(
+            _ctx(request),
+            expected_active=payload.expected_active,
+            generation=payload.generation,
+        )
+        return {"status": "ok", "generation": payload.generation}
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

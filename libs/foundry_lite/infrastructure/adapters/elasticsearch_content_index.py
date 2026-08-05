@@ -93,6 +93,10 @@ class ElasticsearchContentIndexAdapter:
             raise classify_es_error(self.profile_name, "search", exc) from exc
         return [_hit(raw) for raw in _raw_hits(response)]
 
+    def active_generation(self) -> str:
+        with self._guard("active_generation"):
+            return self._active_generation()
+
     def promote_generation(self, expected_active: str, shadow: str) -> None:
         with self._guard("promote_generation"):
             if not self.client.indices.exists(index=self._index_name(shadow)):
@@ -163,6 +167,7 @@ _MAPPINGS: Mapping[str, object] = {
         "end_ms": {"type": "long"},
         "chunk_spec_hash": {"type": "keyword"},
         "classification": {"type": "keyword"},
+        "media_set_id": {"type": "keyword"},
         "embedding_model_version": {"type": "keyword"},
         "embedding": {"type": "dense_vector"},
     }
@@ -186,6 +191,7 @@ def _document_body(unit: IndexedContentUnit) -> Mapping[str, object]:
         "end_ms": unit.end_ms,
         "chunk_spec_hash": unit.chunk_spec_hash,
         "classification": unit.classification,
+        "media_set_id": unit.media_set_id,
         "embedding_model_version": unit.embedding_model_version,
         "embedding": list(unit.embedding),
     }
@@ -213,6 +219,11 @@ def _search_body(query: HybridContentQuery) -> Mapping[str, object]:
     # or the lexical/score pass. ``None`` = full clearance, so no term is added (back-compat).
     if query.allowed_classifications is not None:
         filters.append({"terms": {"classification": list(query.allowed_classifications)}})
+    # Scope is a filter, not a post-pass: the kNN and the lexical pass both run inside it, so a
+    # scoped search returns the best hits from those media sets rather than the tenant-wide best
+    # hits that happen to belong to them.
+    if query.media_set_ids is not None:
+        filters.append({"terms": {"media_set_id": list(query.media_set_ids)}})
     if query.query_vector is not None:
         return _dense_search_body(query, filters)
     must = [{"match": {"text": query.text}}] if query.text else [{"match_all": {}}]
@@ -256,6 +267,7 @@ def _hit(raw: Mapping[str, object]) -> ContentSearchHit:
         start_ms=_opt_int(source.get("start_ms")),
         end_ms=_opt_int(source.get("end_ms")),
         text_hash=str(source.get("text_hash", "")) or None,
+        media_set_id=str(source.get("media_set_id", "")),
     )
 
 

@@ -1479,6 +1479,16 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "media.content.promoteGeneration",
+  () => client.media.content.promoteGeneration({ expectedActive: "gen-1", generation: "gen-2" }),
+  {
+    path: "/api/media/content/generations/promote",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { expectedActive: "gen-1", generation: "gen-2" },
+  },
+);
+await expectSdkCall(
   "media.visual.promoteGeneration",
   () => client.media.visual.promoteGeneration({ expectedActive: "", generation: "clip-g1" }),
   {

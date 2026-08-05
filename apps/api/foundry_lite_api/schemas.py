@@ -730,6 +730,15 @@ class MediaIndexDerivativeRequest(BaseModel):
     generation: str
 
 
+class MediaContentPromoteRequest(BaseModel):
+    """Compare-and-swap promotion of one text content-index generation."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_active: str = Field(alias="expectedActive")
+    generation: str
+
+
 class MediaVisualPromoteRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -743,6 +752,10 @@ class MediaSearchRequest(BaseModel):
     text: str | None = None
     top_k: int = Field(default=10, alias="topK")
     allowed_classifications: list[str] | None = Field(default=None, alias="allowedClassifications")
+    # Narrow the search to these media sets. Omitting it searches every media set the caller can
+    # read, which is the right default for a global search box and the wrong one for a screen
+    # that already has a media set selected.
+    media_set_ids: list[str] | None = Field(default=None, alias="mediaSetIds")
 
 
 class MediaVisualSearchRequest(BaseModel):

@@ -3081,7 +3081,13 @@ export function useFoundryLiteProvidedMediaUpload(
   return useFoundryLiteMediaUpload(client, options);
 }
 
-export type FoundryLiteMediaProcessingPhase = "idle" | "processing" | "indexing" | "succeeded" | "failed";
+export type FoundryLiteMediaProcessingPhase =
+  | "idle"
+  | "processing"
+  | "indexing"
+  | "promoting"
+  | "succeeded"
+  | "failed";
 
 export type FoundryLiteMediaProcessingPayload = {
   mediaItemVersionId: string;
@@ -3131,6 +3137,15 @@ export function useFoundryLiteMediaProcessing(
           generation: payload.indexGeneration,
         });
         setIndexing(nextIndexing);
+        // Indexing only fills a shadow generation. Content stays invisible to search until the
+        // active generation points at it, so the upload flow is not done until this
+        // compare-and-swap lands. `active_generation` is what indexing just observed, so two
+        // concurrent uploads cannot both believe they won.
+        setPhase("promoting");
+        await client.media.content.promoteGeneration({
+          expectedActive: nextIndexing.active_generation ?? "",
+          generation: nextIndexing.generation,
+        });
       }
       return {
         processing: nextProcessing,
@@ -3220,6 +3235,7 @@ export type FoundryLiteMediaPipelinePhase =
   | "committing"
   | "processing"
   | "indexing"
+  | "promoting"
   | "searching"
   | "succeeded"
   | "failed";
@@ -3371,6 +3387,15 @@ export function useFoundryLiteMediaPipeline(
           generation: payload.indexGeneration,
         });
         setIndexing(nextIndexing);
+        // Indexing only fills a shadow generation. Content stays invisible to search until the
+        // active generation points at it, so the upload flow is not done until this
+        // compare-and-swap lands. `active_generation` is what indexing just observed, so two
+        // concurrent uploads cannot both believe they won.
+        setPhase("promoting");
+        await client.media.content.promoteGeneration({
+          expectedActive: nextIndexing.active_generation ?? "",
+          generation: nextIndexing.generation,
+        });
       }
       let nextHits: MediaContentSearchHit[] = [];
       if (payload.search) {

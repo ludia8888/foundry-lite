@@ -28,6 +28,7 @@ def _unit(
     text_hash: str | None = None,
     page_number: int = 1,
     classification: str = "",
+    media_set_id: str = "",
 ) -> IndexedContentUnit:
     return IndexedContentUnit(
         tenant_id=tenant_id,
@@ -38,6 +39,7 @@ def _unit(
         version=version,
         page_number=page_number,
         classification=classification,
+        media_set_id=media_set_id,
     )
 
 
@@ -83,6 +85,79 @@ def test_pre_filter_excludes_over_classified_unit_from_ranking() -> None:
         HybridContentQuery(tenant_id="tenant-demo", text="payment", top_k=10, allowed_classifications=("public",))
     )
     assert [hit.content_unit_id for hit in hits] == ["cu-public"]
+
+
+def test_media_set_scope_narrows_candidates_before_ranking() -> None:
+    """A scoped search must rank inside the scope, not filter a tenant-wide ranking.
+
+    The out-of-scope unit here would win the lexical ranking outright — it repeats the query
+    token. If the scope were applied after ranking with a small top_k, the in-scope unit would
+    already have been discarded and the screen would show nothing. Palantir avoids this the same
+    way: filter the object set first, then run nearestNeighbors inside it.
+    """
+    adapter = LocalContentIndexAdapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-other", "payment payment payment", media_set_id="ms-other"),
+                _unit("cu-mine", "payment terms", media_set_id="ms-mine", page_number=2),
+            ),
+        )
+    )
+
+    hits = adapter.search(
+        HybridContentQuery(tenant_id="tenant-demo", text="payment", top_k=1, media_set_ids=("ms-mine",))
+    )
+
+    assert [hit.content_unit_id for hit in hits] == ["cu-mine"]
+    assert hits[0].media_set_id == "ms-mine"
+
+
+def test_media_set_scope_of_none_searches_every_readable_set() -> None:
+    adapter = LocalContentIndexAdapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-a", "payment a", media_set_id="ms-a"),
+                _unit("cu-b", "payment b", media_set_id="ms-b", page_number=2),
+            ),
+        )
+    )
+
+    hits = adapter.search(HybridContentQuery(tenant_id="tenant-demo", text="payment", top_k=10))
+
+    assert {hit.content_unit_id for hit in hits} == {"cu-a", "cu-b"}
+
+
+def test_media_set_scope_and_classification_scope_both_apply() -> None:
+    adapter = LocalContentIndexAdapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-in-secret", "payment", media_set_id="ms-mine", classification="secret"),
+                _unit("cu-out-public", "payment", media_set_id="ms-other", classification="public"),
+                _unit("cu-in-public", "payment", media_set_id="ms-mine", classification="public", page_number=3),
+            ),
+        )
+    )
+
+    hits = adapter.search(
+        HybridContentQuery(
+            tenant_id="tenant-demo",
+            text="payment",
+            top_k=10,
+            allowed_classifications=("public",),
+            media_set_ids=("ms-mine",),
+        )
+    )
+
+    assert [hit.content_unit_id for hit in hits] == ["cu-in-public"]
 
 
 def test_full_clearance_when_allowed_classifications_is_none() -> None:

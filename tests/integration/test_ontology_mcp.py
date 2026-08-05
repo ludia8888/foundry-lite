@@ -57,6 +57,7 @@ def test_ontology_mcp_projects_only_app_resources_and_enforces_action_risk(
     assert set(tools) == {
         "object.Order.get",
         "object.Order.search",
+        "object.Order.unifiedSearch",
         "action.ExpediteOrder.plan",
         "action.ExpediteOrder.apply",
         "action.ApproveOrder.plan",
@@ -65,6 +66,11 @@ def test_ontology_mcp_projects_only_app_resources_and_enforces_action_risk(
         "action_approval.get",
     }
     assert "object.Customer.get" not in tools
+    # The consumer surface exposes meaning-based retrieval, not just keyword match, and an
+    # object-anchored search that reaches into bound documents. Both stay behind the same
+    # object:read grant, so search is not a way around the projection.
+    assert "semanticText" in tools["object.Order.search"]["inputSchema"]["properties"]
+    assert "object.Customer.unifiedSearch" not in tools
     assert tools["action.ExpediteOrder.apply"]["inputSchema"]["properties"]["params"]["required"] == ["mode"]
 
     object_result = _call(

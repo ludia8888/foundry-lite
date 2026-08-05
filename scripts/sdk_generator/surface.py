@@ -176,7 +176,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("transactions", ("open", "upload", "commit")),
             OperationClientSurface("versions", ("process", "readContent")),
             OperationClientSurface("derivatives", ("get", "contentUnits", "index")),
-            OperationClientSurface("content", ("search",)),
+            OperationClientSurface("content", ("promoteGeneration", "search")),
             OperationClientSurface("visual", ("indexDerivative", "promoteGeneration", "search")),
             OperationClientSurface("processingRuns", ("list", "get")),
             OperationClientSurface("processors", ("list",)),

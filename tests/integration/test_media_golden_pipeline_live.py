@@ -261,6 +261,7 @@ def plane(minio_server: MinioServer, es_url: str, tmp_path: Path) -> _Plane:
     transaction.bind_collaborators({"runtime_service": runtime})
     indexing = MediaIndexingService(
         engine=engine,
+        media_repository=SqlAlchemyMediaRepository(engine),
         media_derivative_repository=deriv,
         content_index_adapter=index,
         embedding_model_adapter=embedding,
