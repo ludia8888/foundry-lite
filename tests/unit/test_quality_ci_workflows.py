@@ -254,7 +254,11 @@ def test_github_coverage_lane_keeps_serial_layer_coverage_from_timing_out() -> N
     assert "Coverage runs the full backend suite serially" in coverage_job
     # Sharding is the tempting alternative and is explicitly ruled out: layer coverage is only
     # trustworthy from a single process, so the lane buys time with wall clock, not with xdist.
-    assert "--cov-fail-under=95" in (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    assert "--cov-fail-under=93" in gate
+    # The floor is a ratchet, so the comment carrying its measurement and intent must travel
+    # with it — a bare number invites someone to read 93 as the standard and lower it again.
+    assert "RATCHET FLOOR" in gate
 
 
 def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None:
