@@ -10,27 +10,59 @@ from foundry_lite.domain.platform.scopes import resource_scope
 def object_tools(name: str, scopes: tuple[str, ...]) -> list[dict[str, object]]:
     if resource_scope("object", name, "read") not in scopes:
         return []
-    return [
-        _tool(
-            f"object.{name}.get",
-            f"Get one permitted {name} object by ID.",
-            {"objectId": {"type": "string"}},
-            ["objectId"],
-            is_write=False,
+    return [_object_get_tool(name), _object_unified_search_tool(name), _object_search_tool(name)]
+
+
+def _object_get_tool(name: str) -> dict[str, object]:
+    return _tool(
+        f"object.{name}.get",
+        f"Get one permitted {name} object by ID.",
+        {"objectId": {"type": "string"}},
+        ["objectId"],
+        is_write=False,
+    )
+
+
+def _object_unified_search_tool(name: str) -> dict[str, object]:
+    return _tool(
+        f"object.{name}.unifiedSearch",
+        (
+            f"Find {name} objects by their own fields AND by the content of documents bound to them. "
+            f"Returns objects, not document chunks: a match inside an attached PDF, transcript, or "
+            f"video frame lifts its owning object into the ranking, with the citation that caused it. "
+            f"Use this when the answer may live in an attachment rather than in a property."
         ),
-        _tool(
-            f"object.{name}.search",
-            f"Search permitted {name} objects with bounded pagination.",
-            {
-                "search": {"type": "string"},
-                "filter": {"type": "object"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                "cursor": {"type": "string"},
+        {
+            "query": {"type": "string"},
+            "filter": {"type": "object"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        },
+        ["query"],
+        is_write=False,
+    )
+
+
+def _object_search_tool(name: str) -> dict[str, object]:
+    return _tool(
+        f"object.{name}.search",
+        f"Search permitted {name} objects with bounded pagination.",
+        {
+            "search": {"type": "string", "description": "Keyword match over indexed text."},
+            "semanticText": {
+                "type": "string",
+                "description": (
+                    "Meaning-based match over the object type's vector property. Combine with "
+                    "`search` for hybrid retrieval, or use alone when the caller phrased an intent "
+                    "rather than the words that appear in the data."
+                ),
             },
-            [],
-            is_write=False,
-        ),
-    ]
+            "filter": {"type": "object"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            "cursor": {"type": "string"},
+        },
+        [],
+        is_write=False,
+    )
 
 
 def action_tool(

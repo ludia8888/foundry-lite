@@ -23,6 +23,10 @@ from foundry_lite.application.services.ontology_mcp_tools import (
     object_tools,
     run_status_tool,
 )
+from foundry_lite.application.services.ontology_mcp_unified_search import (
+    OntologyMcpUnifiedSearchRuntime,
+    _unified_hit_payload,
+)
 from foundry_lite.application.services.ontology_mcp_values import (
     ActionRequest as _ActionRequest,
 )
@@ -230,6 +234,7 @@ class OntologyMcpGateway:
 
     applications: OntologyMcpApplicationRuntime
     objects: OntologyMcpObjectRuntime
+    unified_search: OntologyMcpUnifiedSearchRuntime
     actions: OntologyMcpActionRuntime
     functions: OntologyMcpFunctionRuntime
     approvals: OntologyMcpApprovalRuntime
@@ -240,6 +245,7 @@ class OntologyMcpGateway:
         *,
         applications: OntologyMcpApplicationRuntime,
         objects: OntologyMcpObjectRuntime,
+        unified_search: OntologyMcpUnifiedSearchRuntime,
         actions: OntologyMcpActionRuntime,
         functions: OntologyMcpFunctionRuntime,
         approvals: OntologyMcpApprovalRuntime,
@@ -247,6 +253,7 @@ class OntologyMcpGateway:
     ) -> None:
         self.applications = applications
         self.objects = objects
+        self.unified_search = unified_search
         self.actions = actions
         self.functions = functions
         self.approvals = approvals
@@ -352,7 +359,19 @@ class OntologyMcpGateway:
                 limit=_bounded_int(arguments.get("limit"), 20, 1, 50),
                 cursor=_optional_text(arguments.get("cursor")),
                 search_text=_optional_text(arguments.get("search")),
+                # The runtime has always accepted this; only the MCP surface withheld it, so an
+                # external agent could keyword-match but never search by meaning.
+                semantic_text=_optional_text(arguments.get("semanticText")),
             )
+        if operation == "unifiedSearch":
+            hits = self.unified_search.unified_search(
+                ctx,
+                query_text=_text(arguments, "query"),
+                object_type=name,
+                filters=_optional_mapping(arguments.get("filter")),
+                limit=_bounded_int(arguments.get("limit"), 20, 1, 50),
+            )
+            return {"hits": [_unified_hit_payload(hit) for hit in hits]}
         raise ValidationFailed("unsupported Ontology MCP object operation")
 
     def _execute_action(
