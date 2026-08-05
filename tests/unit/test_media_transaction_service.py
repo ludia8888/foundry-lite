@@ -25,11 +25,37 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
-from foundry_lite.infrastructure.repositories import SqlAlchemyMediaRepository
+from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyMediaReferenceBindingRepository,
+    SqlAlchemyMediaRepository,
+)
 from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _FUTURE = "2099-01-01T00:00:00Z"
+
+
+class _NoHolderObjectQuery:
+    """Attachment holder lookup that never resolves.
+
+    These transaction tests upload normal media, never ``attachment``-kind parameters, so
+    ``has_visible_attachment_holder`` short-circuits before this is consulted. Failing the
+    lookup keeps that assumption honest: if a test ever did stage an attachment, it would
+    surface as an unreachable holder instead of silently passing the access check.
+    """
+
+    def get_object(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        include_explain: bool = False,
+    ) -> object:
+        raise NotFound(
+            "no attachment holder in this fixture",
+            details={"objectType": object_type_api_name, "objectId": object_id},
+        )
 
 
 class _FakeRuntime:
@@ -112,8 +138,10 @@ def media(tmp_path: Path) -> _MediaEnv:
         engine=engine,
         policy=PolicyService(),
         media_repository=repo,
+        media_reference_binding_repository=SqlAlchemyMediaReferenceBindingRepository(engine),
         media_storage=storage,
     )
+    reference.bind_collaborators({"object_query_service": _NoHolderObjectQuery()})
     ctx = RequestContext(roles=("admin",))
     media_set = catalog.create_media_set(
         ctx,

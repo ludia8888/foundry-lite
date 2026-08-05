@@ -70,6 +70,21 @@ class _AllowOsdkScope:
         return None
 
 
+class _PassthroughActionMedia:
+    """Media runtime that leaves the command untouched.
+
+    These tests drive the idempotency race with commands that carry no media or attachment
+    parameters, so the real runtime would resolve to the same command and bind no references.
+    Passing the command straight through keeps the race the only variable under test.
+    """
+
+    def resolve_command(self, _conn: object, _ctx: object, _contract: object, command: object) -> object:
+        return command
+
+    def bind_plan_references(self, _conn: object, _ctx: object, _run_id: object, _plan: object) -> None:
+        return None
+
+
 class _UnusedWriteback:
     def real_writeback_runner(self, _command: object) -> None:
         # No external writeback URI on these commands, so there is no real runner and the
@@ -122,9 +137,15 @@ class _WriteOpenRuntime:
 
 def test_action_apply_service_replays_when_insert_loses_idempotency_race() -> None:
     repository = _RaceActionRepository()
-    service = ActionApplyService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
+    service = ActionApplyService(
+        engine=_FakeEngine(),
+        policy=_AllowPolicy(),
+        action_repository=repository,
+        object_read_repository=object(),
+    )
     service.bind_collaborators(
         {
+            "action_media_runtime_service": _PassthroughActionMedia(),
             "action_writeback_service": _UnusedWriteback(),
             "object_index_record_mutation_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
@@ -158,9 +179,15 @@ def test_protected_runtime_blocks_action_failure_injection_before_run_insert(mon
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
     repository = _RaceActionRepository()
     runtime = _WriteOpenRuntime()
-    service = ActionApplyService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
+    service = ActionApplyService(
+        engine=_FakeEngine(),
+        policy=_AllowPolicy(),
+        action_repository=repository,
+        object_read_repository=object(),
+    )
     service.bind_collaborators(
         {
+            "action_media_runtime_service": _PassthroughActionMedia(),
             "action_writeback_service": _UnusedWriteback(),
             "object_index_record_mutation_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),

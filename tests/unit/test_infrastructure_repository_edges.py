@@ -104,6 +104,7 @@ def test_prompt_artifact_local_dev_key_requires_explicit_env_opt_in(monkeypatch:
 
 
 def _set_protected_adapter_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_ACTION_FILE_SCANNER_PROFILE", "clamav")
     monkeypatch.setenv("FOUNDRY_LITE_MEDIA_STORAGE_PROFILE", "s3-media")
     monkeypatch.setenv("FOUNDRY_LITE_CONTENT_INDEX_PROFILE", "elasticsearch")
     monkeypatch.setenv("FOUNDRY_LITE_COMPUTE_PROFILE", "spark")
