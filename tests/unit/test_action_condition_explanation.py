@@ -24,9 +24,7 @@ class _Context:
     def current_user(self, attribute: str | None) -> object:
         return f"SECRET-user-{attribute or 'id'}"
 
-    def linked_object_property(
-        self, link_type: str, direction: str, property_name: str, aggregation: str
-    ) -> object:
+    def linked_object_property(self, link_type: str, direction: str, property_name: str, aggregation: str) -> object:
         return f"SECRET-linked-{link_type}-{direction}-{property_name}-{aggregation}"
 
 

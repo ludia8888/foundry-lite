@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-
 from foundry_lite.domain.action_runtime.action_presentation import (
     action_form_layout_payload,
     action_inline_eligibility,
