@@ -251,6 +251,7 @@ def search_media_content(request: Request, payload: MediaSearchRequest) -> list[
             text=payload.text,
             top_k=payload.top_k,
             allowed_classifications=allowed_media_classifications(ctx),
+            media_set_ids=tuple(payload.media_set_ids) if payload.media_set_ids is not None else None,
         )
         return [cast(JsonObject, asdict(hit)) for hit in runtime.foundry.media.search_content(ctx, query=query)]
     except FoundryLiteError as exc:

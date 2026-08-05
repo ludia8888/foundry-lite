@@ -112,6 +112,7 @@ def env(tmp_path: Path) -> _Env:
     )
     indexing = MediaIndexingService(
         engine=engine,
+        media_repository=SqlAlchemyMediaRepository(engine),
         media_derivative_repository=deriv,
         content_index_adapter=index,
         embedding_model_adapter=embedding,

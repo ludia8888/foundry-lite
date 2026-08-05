@@ -43,7 +43,7 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
     LocalEmbeddingAdapter,
     _fastembed_embedding_engine,
 )
-from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
+from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from sqlalchemy import create_engine
 
 from tests.integration.elasticsearch_live_lock import live_elasticsearch_container, live_elasticsearch_lock
@@ -139,6 +139,7 @@ def env(tmp_path: Path) -> _Env:
     embedding = _real_embedding()
     indexing = MediaIndexingService(
         engine=engine,
+        media_repository=SqlAlchemyMediaRepository(engine),
         media_derivative_repository=repo,
         content_index_adapter=index,
         embedding_model_adapter=embedding,
@@ -228,6 +229,7 @@ def test_real_embeddings_rank_semantic_match_through_live_elasticsearch_dense_ve
     )
     es_indexing = MediaIndexingService(
         engine=env.engine,  # type: ignore[arg-type]
+        media_repository=SqlAlchemyMediaRepository(env.engine),
         media_derivative_repository=env.repo,
         content_index_adapter=es_index,
         embedding_model_adapter=env.embedding,

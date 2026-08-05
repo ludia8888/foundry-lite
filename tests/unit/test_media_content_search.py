@@ -27,7 +27,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
-from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
+from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from sqlalchemy import create_engine
 
 _SOURCE = "miv-1"
@@ -126,6 +126,7 @@ def env(tmp_path: Path) -> _Env:
     embedding = LocalEmbeddingAdapter()
     indexing = MediaIndexingService(
         engine=engine,
+        media_repository=SqlAlchemyMediaRepository(engine),
         media_derivative_repository=repo,
         content_index_adapter=index,
         embedding_model_adapter=embedding,

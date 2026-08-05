@@ -1018,6 +1018,7 @@ export type MediaSearchRequest = {
   text?: string | null;
   topK?: number;
   allowedClassifications?: string[] | null;
+  mediaSetIds?: string[] | null;
 };
 export type MediaVisualSearchRequest = { text: string; topK?: number };
 export type MediaContentSearchHit = {
@@ -1028,6 +1029,7 @@ export type MediaContentSearchHit = {
   text_hash: string | null;
   chunk_spec_hash: string;
   classification: string;
+  media_set_id: string;
   page_number?: number | null;
   start_ms?: number | null;
   end_ms?: number | null;

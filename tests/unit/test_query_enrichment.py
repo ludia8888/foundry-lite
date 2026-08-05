@@ -39,7 +39,7 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
     LocalEmbeddingAdapter,
     _fastembed_embedding_engine,
 )
-from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
+from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from sqlalchemy import create_engine
 
 # A cold-chain clause is the retrieval target; an invoice + an unrelated HR doc are distractors.
@@ -246,6 +246,7 @@ def bge_env(tmp_path: Path) -> _BgeEnv:
     )
     indexing = MediaIndexingService(
         engine=engine,
+        media_repository=SqlAlchemyMediaRepository(engine),
         media_derivative_repository=repo,
         content_index_adapter=index,
         embedding_model_adapter=embedding,

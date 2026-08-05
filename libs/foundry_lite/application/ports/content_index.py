@@ -39,6 +39,10 @@ class IndexedContentUnit:
     start_ms: int | None = None
     end_ms: int | None = None
     chunk_spec_hash: str = ""
+    # The media set this unit came from, denormalized onto the projection so a scoped search
+    # can narrow candidates in the query itself. Same reason classification is carried here:
+    # a filter applied after ranking would already have lost the rows it should have kept.
+    media_set_id: str = ""
     embedding: EmbeddingVector = ()
     embedding_model_version: str = ""
     # AIP P0a: the unit's classification, copied from its source content_unit's security_envelope
@@ -79,6 +83,17 @@ class HybridContentQuery:
     # whose classification is in this set, so over-classified candidates never enter the kNN/ranking
     # and cannot reach an LLM. Mirrors MediaReferenceBindingService.resolve's allowed_classifications.
     allowed_classifications: tuple[str, ...] | None = None
+    # Narrow the candidate set to these media sets before ranking. ``None`` means every media
+    # set the caller may read. This is a PRE-filter for the same reason the classification set
+    # is: Palantir scopes semantic search by filtering the object set and running
+    # ``nearestNeighbors`` inside it, so the top-k comes from the scope rather than being
+    # whatever survives a post-filter of a tenant-wide top-k.
+    media_set_ids: tuple[str, ...] | None = None
+
+
+def is_media_set_in_scope(media_set_id: str, media_set_ids: tuple[str, ...] | None) -> bool:
+    """Whether one projected unit belongs to the requested media-set scope."""
+    return media_set_ids is None or media_set_id in media_set_ids
 
 
 def is_classification_cleared(classification: str, allowed_classifications: tuple[str, ...] | None) -> bool:
@@ -113,6 +128,7 @@ class ContentSearchHit:
     text: str = ""
     chunk_spec_hash: str = ""
     classification: str = ""
+    media_set_id: str = ""
 
 
 class ContentIndexAdapter(Protocol):

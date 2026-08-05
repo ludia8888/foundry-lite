@@ -33,12 +33,17 @@ class _FakeContentIndex:
         return None
 
     def search(self, query: HybridContentQuery) -> list[ContentSearchHit]:
+        # Scope is part of the query contract, not a courtesy: an adapter that ignores
+        # media_set_ids would let a scoped screen serve hits from other media sets.
+        if query.media_set_ids is not None and "ms-1" not in query.media_set_ids:
+            return []
         return [
             ContentSearchHit(
                 source_media_item_version_id="miv-1",
                 content_unit_id="cu-1",
                 index_generation=self.active,
                 page_number=1,
+                media_set_id="ms-1",
             )
         ]
 
@@ -60,6 +65,12 @@ def test_content_index_projection_shape() -> None:
     assert adapter.active_generation() == "g1"
     hits = adapter.search(HybridContentQuery(tenant_id="t", text="acme", top_k=5))
 
+    scoped_out = adapter.search(HybridContentQuery(tenant_id="t", text="acme", top_k=5, media_set_ids=("ms-other",)))
+    scoped_in = adapter.search(HybridContentQuery(tenant_id="t", text="acme", top_k=5, media_set_ids=("ms-1",)))
+
+    assert scoped_out == [], "a media-set scope must be applied inside the query"
+    assert [hit.content_unit_id for hit in scoped_in] == ["cu-1"]
+    assert scoped_in[0].media_set_id == "ms-1", "hits carry the media set so callers can group them"
     assert result.indexed == 2 and result.failed == 0
     assert hits[0].source_media_item_version_id == "miv-1"
     assert hits[0].index_generation == "g1"
