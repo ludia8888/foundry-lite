@@ -30,6 +30,7 @@ from foundry_lite.application.facades import (
     SourceWorkspace,
     SupplyChainDemo,
     TransformPipeline,
+    VirtualTableGateway,
 )
 from foundry_lite.application.osdk import (
     OsdkActionInvoker,
@@ -167,6 +168,7 @@ class FoundryLite:
         self.media = MediaWorkspace(services.media)
         self.connectors = ConnectorWorkspace(services.connector_onboarding)
         self.sources = _source_workspace(services)
+        self.virtual_tables = VirtualTableGateway(services.virtual_table)
         self.erasure = ErasureGateway(services.erasure)
         self.developer_console = DeveloperConsole(services.osdk_applications.entrypoint)
 

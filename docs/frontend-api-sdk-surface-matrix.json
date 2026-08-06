@@ -3803,6 +3803,66 @@
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
       "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.delete",
+      "route": "DELETE /api/virtual-tables/{virtual_table_rid}",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.delete",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Removes the pointer only; the external table is untouched because the platform never owned it.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.list",
+      "route": "GET /api/sources/{connection_rid}/virtual-tables",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Pointers are listed per connection and scoped to the caller's tenant, matching where Data Connection surfaces them.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.get",
+      "route": "GET /api/virtual-tables/{virtual_table_rid}",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "One pointer with the columns pinned at registration, which is what downstream pipeline nodes resolved against.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.schema-drift",
+      "route": "GET /api/virtual-tables/{virtual_table_rid}/schema-drift",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.schemaDrift",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Reports added and removed columns against the pinned shape without adopting them, so a consumer built on the old columns is never moved silently.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.register",
+      "route": "POST /api/sources/{connection_rid}/virtual-tables",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.register",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Registration pins the source's current column shape and stores only a vault reference, so a pointer never carries the connection credential.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
     }
   ],
   "sdkHelpers": [

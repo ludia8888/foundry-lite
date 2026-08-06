@@ -72,6 +72,7 @@ from foundry_lite.application.services.source_services import (
 )
 from foundry_lite.application.services.transform_service import TransformService
 from foundry_lite.application.services.transform_services import TransformServices
+from foundry_lite.application.services.virtual_table_service import VirtualTableService
 
 __all__ = [
     "CoreServices",
@@ -161,6 +162,7 @@ class CoreServices:
     fde_runtime: FdeRuntimeService
     function_execution: FunctionExecutionService
     python_function_runtime: PythonFunctionRuntimeService
+    virtual_table: VirtualTableService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
@@ -246,7 +248,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: SharedCoreSer
         fde_ontology_tools=shared["fde_ontology_tools"], fde_pilot=shared["fde_pilot"],
         fde_application_tools=shared["fde_application_tools"], fde_context=shared["fde_context"],
         fde_data_connection_tools=shared["fde_data_connection_tools"], fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],  # noqa: E501
-        function_execution=build_service(FunctionExecutionService, dependencies), python_function_runtime=build_service(PythonFunctionRuntimeService, dependencies),  # noqa: E501
+        function_execution=build_service(FunctionExecutionService, dependencies), python_function_runtime=build_service(PythonFunctionRuntimeService, dependencies), virtual_table=build_service(VirtualTableService, dependencies),  # noqa: E501
         iceberg_maintenance=shared["iceberg_maintenance"],
         materialization=build_service(MaterializationService, dependencies),
         media=shared["media"], citation=build_service(CitationService, dependencies),
@@ -309,6 +311,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.erasure,
         services.function_execution,
         services.python_function_runtime,
+        services.virtual_table,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,

@@ -176,3 +176,23 @@ class OrderService:
     assert '"gate": "transaction_outbox_pair"' in report
     assert '"gate_pass": false' in report
     assert '"count": 1' in report
+
+
+def test_evidence_is_cached_per_method_not_per_path() -> None:
+    """Keying the cache on the route that reached a method made the walk exponential.
+
+    A call like `self.runtime_service._audit(...)` cannot be resolved to one class, so it fans
+    out to every method of that name. With the caller's `seen` set in the key, the same method
+    was re-analysed once per distinct path to it, and the cost grew with the number of paths
+    rather than the number of methods: adding one more `_audit` definition took this gate from
+    5s to past its 415s lane ceiling. Evidence for a method under a given transaction parameter
+    does not depend on who called it.
+    """
+    assert gate.EvidenceCacheKey is gate.MethodCallKey
+
+
+def test_the_gate_still_passes_on_this_repository() -> None:
+    """The cache change must not have bought speed by losing findings."""
+    findings = gate.collect_findings()
+
+    assert findings == []
