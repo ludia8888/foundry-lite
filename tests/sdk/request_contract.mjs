@@ -2206,6 +2206,64 @@ await expectSdkCall(
     },
   },
 );
+await expectSdkCall(
+  "virtual-tables.discover",
+  () =>
+    client.virtualTables.discover("conn/ongleam", {
+      config: { databaseUrlSecretRef: "src/ongleam/url" },
+      schemaNames: ["public"],
+    }),
+  {
+    path: "/api/sources/conn%2Fongleam/virtual-tables/discover",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { config: { databaseUrlSecretRef: "src/ongleam/url" }, schemaNames: ["public"] },
+  },
+);
+await expectSdkCall(
+  "virtual-tables.register-many",
+  () =>
+    client.virtualTables.registerMany("conn/ongleam", {
+      parentRid: "folder-1",
+      config: { databaseUrlSecretRef: "src/ongleam/url" },
+      tables: [{ schema: "public", table: "youtube_videos" }],
+    }),
+  {
+    path: "/api/sources/conn%2Fongleam/virtual-tables/bulk",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      parentRid: "folder-1",
+      config: { databaseUrlSecretRef: "src/ongleam/url" },
+      tables: [{ schema: "public", table: "youtube_videos" }],
+    },
+  },
+);
+const autoRegisterPayload = {
+  parentRid: "auto",
+  config: { databaseUrlSecretRef: "src/ongleam/url" },
+  schemaNames: ["public"],
+};
+await expectSdkCall(
+  "virtual-tables.preview-auto-registration",
+  () => client.virtualTables.previewAutoRegistration("conn/ongleam", autoRegisterPayload),
+  {
+    path: "/api/sources/conn%2Fongleam/virtual-tables/auto-registration/preview",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: autoRegisterPayload,
+  },
+);
+await expectSdkCall(
+  "virtual-tables.run-auto-registration",
+  () => client.virtualTables.runAutoRegistration("conn/ongleam", autoRegisterPayload),
+  {
+    path: "/api/sources/conn%2Fongleam/virtual-tables/auto-registration/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: autoRegisterPayload,
+  },
+);
 await expectSdkCall("virtual-tables.list", () => client.virtualTables.list("conn/ongleam"), {
   path: "/api/sources/conn%2Fongleam/virtual-tables",
 });

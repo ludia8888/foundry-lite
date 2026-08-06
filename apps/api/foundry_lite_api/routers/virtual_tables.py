@@ -11,13 +11,18 @@ read time, and the service refuses a config that carries a URL instead.
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from foundry_lite.application.ports.virtual_table import VirtualTableRecord
+from foundry_lite.application.ports.virtual_table import ExternalTableRef, VirtualTableRecord
 from foundry_lite.domain.errors import FoundryLiteError
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
 from foundry_lite_api.request_context import _ctx
-from foundry_lite_api.schemas import VirtualTableRegisterRequest
+from foundry_lite_api.schemas import (
+    VirtualTableAutoRegisterRequest,
+    VirtualTableBulkRegisterRequest,
+    VirtualTableDiscoverRequest,
+    VirtualTableRegisterRequest,
+)
 
 router = APIRouter()
 
@@ -56,6 +61,91 @@ def register_virtual_table(
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
     return _view(record)
+
+
+@router.post("/api/sources/{connection_rid}/virtual-tables/discover")
+def discover_external_tables(
+    request: Request, connection_rid: str, payload: VirtualTableDiscoverRequest
+) -> dict[str, object]:
+    """List what the connection can reach, so a caller chooses before registering.
+
+    A POST because the connection reference travels in the body: putting a vault path in a query
+    string would place it in access logs and browser history.
+    """
+    del connection_rid
+    try:
+        tables = runtime.foundry.virtual_tables.discover(
+            config=payload.config, schema_names=tuple(payload.schema_names), ctx=_ctx(request)
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+    return {"tables": [{"schema": t.schema_name, "table": t.table_name} for t in tables]}
+
+
+@router.post("/api/sources/{connection_rid}/virtual-tables/bulk")
+def register_virtual_tables(
+    request: Request, connection_rid: str, payload: VirtualTableBulkRegisterRequest
+) -> dict[str, object]:
+    """Register many pointers at once. One failure does not abandon the rest."""
+    try:
+        result = runtime.foundry.virtual_tables.register_many(
+            parent_rid=payload.parent_rid,
+            connection_rid=connection_rid,
+            config=payload.config,
+            tables=tuple(
+                ExternalTableRef(schema_name=item.schema_name, table_name=item.table_name) for item in payload.tables
+            ),
+            markings=tuple(payload.markings),
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+    return {
+        "registered": [_view(record) for record in result.registered],
+        "failures": [{"table": failure.table, "reason": failure.reason} for failure in result.failures],
+    }
+
+
+@router.post("/api/sources/{connection_rid}/virtual-tables/auto-registration/preview")
+def preview_auto_registration(
+    request: Request, connection_rid: str, payload: VirtualTableAutoRegisterRequest
+) -> dict[str, object]:
+    """What a scheduled pass would change. Missing tables are reported, never unregistered."""
+    try:
+        plan = runtime.foundry.virtual_tables.preview_auto_registration(
+            connection_rid=connection_rid,
+            config=payload.config,
+            schema_names=tuple(payload.schema_names),
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+    return {
+        "newTables": [{"schema": ref.schema_name, "table": ref.table_name} for ref in plan.new_tables],
+        "missingTables": list(plan.missing_tables),
+    }
+
+
+@router.post("/api/sources/{connection_rid}/virtual-tables/auto-registration/run")
+def run_auto_registration(
+    request: Request, connection_rid: str, payload: VirtualTableAutoRegisterRequest
+) -> dict[str, object]:
+    """Register whatever appeared at the source since the last pass."""
+    try:
+        result = runtime.foundry.virtual_tables.run_auto_registration(
+            parent_rid=payload.parent_rid,
+            connection_rid=connection_rid,
+            config=payload.config,
+            schema_names=tuple(payload.schema_names),
+            markings=tuple(payload.markings),
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+    return {
+        "registered": [_view(record) for record in result.registered],
+        "failures": [{"table": failure.table, "reason": failure.reason} for failure in result.failures],
+    }
 
 
 @router.get("/api/sources/{connection_rid}/virtual-tables")

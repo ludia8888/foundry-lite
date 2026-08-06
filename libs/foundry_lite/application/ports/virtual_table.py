@@ -140,6 +140,24 @@ class VirtualTableRepository(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ExternalTableRef:
+    """One table the source says exists and the configured credential can reach.
+
+    Discovery is credential-scoped on purpose: Palantir registers "all tables in the source that
+    are accessible to the configured credentials", so what the platform can see is exactly what
+    the connection can see, and nothing about a table nobody is allowed to read leaks into a
+    Foundry-side listing.
+    """
+
+    schema_name: str
+    table_name: str
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.schema_name}.{self.table_name}"
+
+
 class VirtualTableReader(Protocol):
     """Boundary that executes a bounded read against the external table itself."""
 
@@ -152,6 +170,10 @@ class VirtualTableReader(Protocol):
 
     def describe(self, *, connection_url: str, config: Mapping[str, object]) -> VirtualTableSchema:
         """Read the external table's current column shape, for pinning or drift comparison."""
+        ...
+
+    def discover(self, *, connection_url: str, schema_names: tuple[str, ...] = ()) -> tuple[ExternalTableRef, ...]:
+        """List the tables this credential can reach, optionally narrowed to given schemas."""
         ...
 
     def read(
