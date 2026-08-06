@@ -48,8 +48,8 @@ from foundry_lite.application.services.runtime_run_cursors import require_operat
 from foundry_lite.domain.ontology.datasources import property_datasource_rows
 from foundry_lite.infrastructure.action_runtime_dependencies import (
     ConnectorActionEffectExecutor,
+    InProcessActionFunctionExecutor,
     LocalActionRunOrchestrator,
-    LogicDagActionFunctionExecutor,
     TemporalActionRunConfig,
     TemporalActionRunOrchestrator,
     action_file_scanner_adapter,
@@ -412,7 +412,7 @@ def _create_core_dependencies(
     workflow_adapter = _workflow_adapter(profiles.workflow)
     pipeline_dag_orchestrator = _pipeline_dag_orchestrator(profiles.workflow)
     action_run_orchestrator = _action_run_orchestrator(profiles.workflow)
-    action_function_executor = LogicDagActionFunctionExecutor()
+    action_function_executor = InProcessActionFunctionExecutor()
     action_file_scanner = action_file_scanner_adapter(profiles.action_file_scanner)
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)

@@ -155,3 +155,34 @@ def test_a_manifest_that_is_not_an_object_is_a_contract_error(tmp_path: Path) ->
 
     assert runner.main([str(manifest_path), str(result_path)]) == 1
     assert json.loads(result_path.read_text(encoding="utf-8"))["failureType"] == "runner_contract_error"
+
+
+# --- ontology edits are a proposal, not a write ---------------------------------------
+
+
+def test_a_function_may_return_an_ontology_edit_batch() -> None:
+    """Palantir's TypeScript v2 and Python functions return edits explicitly rather than void."""
+    manifest = _manifest(
+        'def compute():\n    return {"edits": [{"kind": "modifyObject", "objectId": "T-2"}]}\n',
+        output_type="ontology_edit_batch",
+    )
+
+    assert runner.execute_manifest(manifest)["status"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # An empty batch is the shape a filter-then-edit function produces when it matched
+        # nothing, and letting it through would record an Action run that changed nothing.
+        'return {"edits": []}',
+        'return {"edits": "modifyObject"}',
+        "return {}",
+        'return [{"kind": "modifyObject"}]',
+    ],
+)
+def test_a_malformed_edit_batch_fails_in_the_sandbox(body: str) -> None:
+    """Catching the shape here names the function; catching it host-side names the committer."""
+    manifest = _manifest(f"def compute():\n    {body}\n", output_type="ontology_edit_batch")
+
+    assert _failure(manifest).failure_type == "output_validation_error"

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from foundry_lite.application.ports.action_function_executor import ActionFunctionExecutionRequest
-from foundry_lite.infrastructure.adapters.action_function_executor import LogicDagActionFunctionExecutor
+from foundry_lite.infrastructure.adapters.action_function_executor import InProcessActionFunctionExecutor
 
 
 def test_action_function_executor_contract_returns_typed_edit_batch() -> None:
-    adapter = LogicDagActionFunctionExecutor()
+    adapter = InProcessActionFunctionExecutor()
     adapter.register_driver(
         lambda request: {
             "logicRunId": f"logic:{request.run_id}",
