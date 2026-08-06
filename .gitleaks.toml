@@ -18,6 +18,9 @@ useDefault = true
 # or a manifest. generic-api-key fires on the field name plus the entropy of the path itself.
 #
 # Scope is the value shape, not the file, so the surrounding test keeps being scanned. The
+# The `"?` after the field name covers both spellings the value appears in: a JSON document
+# quotes the key, a TypeScript or JavaScript object literal does not, and the same pointer is
+# written both ways across API payloads and the SDK request-contract tests.
 # character class admits only pointer-shaped values -- no `:`, `@`, or whitespace, so a URL or a
 # `user:password` pair assigned to one of these fields is not allowlisted here. Note that this
 # is containment, not detection: gitleaks' default rules do not flag a bare connection string in
@@ -26,7 +29,7 @@ useDefault = true
 [[allowlists]]
 description = "Vault pointers assigned to *SecretRef fields"
 regexTarget = "match"
-regexes = ['''[A-Za-z]*[Ss]ecretRef"\s*:\s*"[A-Za-z0-9][A-Za-z0-9._/-]*"''']
+regexes = ['''[A-Za-z]*[Ss]ecretRef"?\s*:\s*"[A-Za-z0-9][A-Za-z0-9._/-]*"''']
 
 # Plural `[[allowlists]]` throughout: gitleaks 8.30 refuses to load a config that mixes the
 # deprecated singular `[allowlist]` table with the plural form.

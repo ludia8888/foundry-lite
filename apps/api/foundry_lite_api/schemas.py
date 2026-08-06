@@ -1235,3 +1235,19 @@ class ResourceReconcileRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     project_id: str | None = Field(default=None, alias="projectId")
+
+
+class VirtualTableRegisterRequest(BaseModel):
+    """Register a pointer to one external table.
+
+    `config` is a mapping because the source decides what identifies a table: a SQL source uses
+    schema plus name, object storage a path and format. It must carry `databaseUrlSecretRef` --
+    a reference the vault resolves, never the connection URL itself.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    parent_rid: str = Field(alias="parentRid")
+    config: dict[str, object]
+    markings: list[str] = Field(default_factory=list)

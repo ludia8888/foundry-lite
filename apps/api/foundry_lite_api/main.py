@@ -55,6 +55,7 @@ from foundry_lite_api.routers import (
     resources,
     sources,
     transforms,
+    virtual_tables,
 )
 from foundry_lite_api.routers.aip import (  # noqa: F401
     promote_aip_release,
@@ -366,6 +367,7 @@ for resource_router in (
     pipelines.router,
     resources.router,
     sources.router,
+    virtual_tables.router,
     connectors.router,
     transforms.router,
     actions.router,

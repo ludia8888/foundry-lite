@@ -400,6 +400,12 @@ def run_security(base: str, head: str) -> int:
     violations = security_violations(_added_lines_by_file(base, head))
     report = {"count": len(violations), "violations": violations, "baseline": 0, "gate_pass": not violations}
     _write_report(SECURITY_REPORT_PATH, report)
+    # codeql[py/clear-text-logging-sensitive-data]
+    # The taint is the diff this scan reads; what is printed is not. `_violation` builds each
+    # record from a path, a line number, and the name of the pattern that fired, and never from
+    # the matched text -- printing the match would put the credential in the log of every run
+    # that detects one. CodeQL cannot tell a dict's keys from its values, so the path carries
+    # the taint of the lines beside it.
     print(json.dumps(report, ensure_ascii=False))
     return int(bool(violations))
 

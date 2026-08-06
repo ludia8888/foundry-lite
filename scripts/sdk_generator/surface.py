@@ -64,6 +64,7 @@ class SdkClientSurface:
     interfaces: tuple[OperationClientSurface, ...]
     functions: tuple[OperationClientSurface, ...]
     object_sets: tuple[str, ...]
+    virtual_tables: tuple[str, ...]
     materializations: tuple[str, ...]
     aip: tuple[OperationClientSurface, ...]
     transforms: tuple[str, ...]
@@ -205,6 +206,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             *(OperationClientSurface(item.api_name, ("execute",)) for item in ontology.functions),
         ),
         object_sets=("list", "create", "get"),
+        virtual_tables=("register", "list", "get", "schemaDrift", "delete"),
         materializations=("run", "list"),
         aip=(
             OperationClientSurface("builder", ("validate", "run")),
@@ -347,6 +349,7 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
         "media": _methods_payload(surface.media),
         "materializations": list(surface.materializations),
         "objectSets": list(surface.object_sets),
+        "virtualTables": list(surface.virtual_tables),
         "objects": {
             "generic": ["get", "query", "links", "subscribe", "aggregate"],
             **_methods_payload(surface.objects),
