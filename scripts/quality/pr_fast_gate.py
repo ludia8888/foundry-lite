@@ -360,17 +360,34 @@ def _include_untracked_lines(added: dict[str, list[str]]) -> None:
             added[path] = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
 
 
+# A path that came out of a diff is untrusted text. The report is printed to CI logs, so it is
+# reconstructed through this allowlist rather than interpolated: a filename cannot smuggle diff
+# content, control characters, or a newline that would forge a second finding.
+_REPORTABLE_PATH = re.compile(r"^[A-Za-z0-9._/-]{1,256}$")
+
+
+def _violation(path: str, line_number: int, name: str) -> str:
+    """Where a finding is, never what it matched.
+
+    A secret scan that echoed the secret it found would put the credential in the CI log of
+    every run that detects one, which is worse than the leak it is reporting. The record carries
+    a path, a line number, and the name of the pattern that fired.
+    """
+    reportable = path if _REPORTABLE_PATH.match(path) else "<unprintable-path>"
+    return f"{reportable}:added-{line_number}:{name}"
+
+
 def security_violations(added_lines: dict[str, list[str]]) -> list[str]:
     violations: list[str] = []
     for path, lines in sorted(added_lines.items()):
         for line_number, line in enumerate(lines, start=1):
             for name, pattern in HIGH_CONFIDENCE_SECRET_PATTERNS:
                 if pattern.search(line):
-                    violations.append(f"{path}:added-{line_number}:{name}")
+                    violations.append(_violation(path, line_number, name))
             if path.endswith(".py") and not path.startswith("tests/"):
                 for name, pattern in DANGEROUS_PYTHON_PATTERNS:
                     if pattern.search(line) and "# nosec" not in line:
-                        violations.append(f"{path}:added-{line_number}:{name}")
+                        violations.append(_violation(path, line_number, name))
     return violations
 
 

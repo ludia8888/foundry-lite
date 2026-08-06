@@ -124,13 +124,13 @@ def test_source_that_fails_at_import_time_is_a_user_code_error() -> None:
 
 def test_an_exception_message_leaves_only_as_a_digest() -> None:
     """User code can put tenant data in an exception string; the host gets evidence, not payloads."""
-    secret = "customer 4041 balance 9900"
+    tenant_datum = "customer 4041 balance 9900"
 
-    failure = _failure(_manifest(f"def compute():\n    raise ValueError({secret!r})\n"))
+    failure = _failure(_manifest(f"def compute():\n    raise ValueError({tenant_datum!r})\n"))
     written = json.dumps(runner._failure_result(failure))
 
-    assert secret not in written
-    assert failure.message_sha256 == hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    assert tenant_datum not in written
+    assert failure.message_sha256 == hashlib.sha256(tenant_datum.encode("utf-8")).hexdigest()
     assert failure.exception_type == "ValueError"
 
 
