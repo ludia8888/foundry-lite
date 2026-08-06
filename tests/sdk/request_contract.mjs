@@ -2185,6 +2185,40 @@ responseQueue.push(
     "MISSING_IDEMPOTENCY_KEY",
   );
 }
+await expectSdkCall(
+  "virtual-tables.register",
+  () =>
+    client.virtualTables.register("conn/ongleam", {
+      name: "youtube_videos",
+      parentRid: "folder-1",
+      config: { schema: "public", table: "youtube_videos", databaseUrlSecretRef: "src/ongleam/url" },
+      markings: ["pii"],
+    }),
+  {
+    path: "/api/sources/conn%2Fongleam/virtual-tables",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      name: "youtube_videos",
+      parentRid: "folder-1",
+      config: { schema: "public", table: "youtube_videos", databaseUrlSecretRef: "src/ongleam/url" },
+      markings: ["pii"],
+    },
+  },
+);
+await expectSdkCall("virtual-tables.list", () => client.virtualTables.list("conn/ongleam"), {
+  path: "/api/sources/conn%2Fongleam/virtual-tables",
+});
+await expectSdkCall("virtual-tables.get", () => client.virtualTables.get("vt/1"), {
+  path: "/api/virtual-tables/vt%2F1",
+});
+await expectSdkCall("virtual-tables.schema-drift", () => client.virtualTables.schemaDrift("vt/1"), {
+  path: "/api/virtual-tables/vt%2F1/schema-drift",
+});
+await expectSdkCall("virtual-tables.delete", () => client.virtualTables.delete("vt/1"), {
+  path: "/api/virtual-tables/vt%2F1",
+  method: "DELETE",
+});
 await expectSdkCall("object-sets.list", () => client.objectSets.list({ objectType: "Order Item" }), {
   path: "/api/object-sets?objectType=Order%20Item",
 });

@@ -601,6 +601,16 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
     lines.extend(
         [
             "  };",
+            "  virtualTables: {",
+            (
+                "    register(connectionRid: string, payload: VirtualTableRegisterRequest): "
+                "Promise<VirtualTablePayload>;"
+            ),
+            "    list(connectionRid: string): Promise<VirtualTableList>;",
+            "    get(rid: string): Promise<VirtualTablePayload>;",
+            "    schemaDrift(rid: string): Promise<VirtualTableSchemaDrift>;",
+            "    delete(rid: string): Promise<VirtualTableDeleteResult>;",
+            "  };",
             "  objectSets: {",
             "    list(filters?: { objectType?: string }): Promise<ObjectSetQueryResult>;",
             "    create(payload: ObjectSetCreateRequest): Promise<ObjectSetPayload>;",
@@ -3768,6 +3778,28 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
     lines.extend(["    },", "    functions: {"])
     lines.extend(_ts_function_client_lines(surface))
     lines += [
+        "    },",
+        "    virtualTables: {",
+        "      register: (connectionRid: string, payload: VirtualTableRegisterRequest) =>",
+        "        request<VirtualTablePayload>(",
+        "          `/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "      list: (connectionRid: string) =>",
+        "        request<VirtualTableList>(`/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables`),",
+        "      get: (rid: string) => request<VirtualTablePayload>(`/api/virtual-tables/${encodeURIComponent(rid)}`),",
+        "      schemaDrift: (rid: string) =>",
+        "        request<VirtualTableSchemaDrift>(",
+        "          `/api/virtual-tables/${encodeURIComponent(rid)}/schema-drift`,",
+        "        ),",
+        "      delete: (rid: string) =>",
+        "        request<VirtualTableDeleteResult>(`/api/virtual-tables/${encodeURIComponent(rid)}`, {",
+        '          method: "DELETE",',
+        "        }),",
         "    },",
         "    objectSets: {",
         "      list: (filters: { objectType?: string } = {}) => {",

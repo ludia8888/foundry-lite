@@ -268,7 +268,15 @@ def _parser() -> argparse.ArgumentParser:
         # counts platform capabilities rather than accidental coupling, so it rises by one per
         # capability by construction. The gate still has teeth where it matters — every
         # non-aggregation module stays capped at --max-fan-out (10).
-        default=38,
+        #
+        # 40: two Functions-on-Objects capabilities reach the composition root. The Python
+        # function runtime is a service the ontology function dispatcher delegates to, and the
+        # virtual-table service is the registration surface behind the Data Connection routes.
+        # Both are wired at `core_services`, which is the only place that knows every bounded
+        # context exists -- that is what a composition root is for. Raise this by one per
+        # capability that genuinely needs wiring, and never to silence a module that is not on
+        # the aggregation-root list.
+        default=40,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument("--aggregation-root", action="append", default=_default_aggregation_roots())
