@@ -139,9 +139,9 @@ def test_the_host_module_graph_is_not_reachable_from_user_code(tmp_path: Path) -
 
 def test_an_exception_message_leaves_only_as_a_digest(tmp_path: Path) -> None:
     """Same guarantee as the Python runner: the host records evidence, not payloads."""
-    secret = "customer 4041 balance 9900"
+    tenant_datum = "customer 4041 balance 9900"
 
-    result = _run(f"export function compute(): number {{ throw new Error({secret!r}) }}", tmp_path=tmp_path)
+    result = _run(f"export function compute(): number {{ throw new Error({tenant_datum!r}) }}", tmp_path=tmp_path)
 
-    assert secret not in json.dumps(result)
-    assert result["exceptionMessageSha256"] == hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    assert tenant_datum not in json.dumps(result)
+    assert result["exceptionMessageSha256"] == hashlib.sha256(tenant_datum.encode("utf-8")).hexdigest()

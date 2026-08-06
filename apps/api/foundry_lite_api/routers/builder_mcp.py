@@ -12,9 +12,11 @@ from foundry_lite.application.services.aip.fde_catalog import FDE_MODES
 from foundry_lite.application.services.aip.fde_mcp_service import FdeMcpToolCall
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
+from pydantic import ValidationError as PydanticValidationError
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
+from foundry_lite_api.mcp_envelope import JsonRpcEnvelope
 from foundry_lite_api.request_context import _ctx
 
 router = APIRouter()
@@ -28,7 +30,7 @@ async def builder_mcp_post(application_id: str, request: Request) -> Response:
         payload = await _json_body(request)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
-    rpc_id = payload.get("id")
+    rpc_id = payload.id
     try:
         result, session_id = _dispatch(application_id, request, payload)
     except FoundryLiteError as exc:
@@ -106,10 +108,9 @@ def builder_mcp_authorization_server(request: Request) -> dict[str, object]:
 def _dispatch(
     application_id: str,
     request: Request,
-    payload: Mapping[str, object],
+    payload: JsonRpcEnvelope,
 ) -> tuple[Mapping[str, object], str]:
-    _require_json_rpc(payload)
-    method = payload.get("method")
+    method = payload.method
     session_id = _session_id(application_id, request)
     ctx = _ctx(request)
     if method == "initialize":
@@ -119,7 +120,7 @@ def _dispatch(
         runtime.foundry.aip.fde_mcp_tools(application_id, ctx=ctx)
         return {}, session_id
     if method == "tools/list":
-        params = _mapping(payload.get("params", {}), "params")
+        params = payload.params
         return runtime.foundry.aip.fde_mcp_tools(
             application_id,
             session_id=session_id,
@@ -135,13 +136,13 @@ def _call_tool(
     application_id: str,
     session_id: str,
     request: Request,
-    payload: Mapping[str, object],
+    payload: JsonRpcEnvelope,
     ctx: RequestContext,
 ) -> Mapping[str, object]:
-    params = _mapping(payload.get("params"), "params")
+    params = payload.params
     arguments = _mapping(params.get("arguments"), "params.arguments")
     tool_arguments = _mapping(arguments.get("arguments"), "params.arguments.arguments")
-    rpc_id = payload.get("id")
+    rpc_id = payload.id
     if not isinstance(rpc_id, str | int):
         raise ValidationFailed("Builder MCP tools/call requires a JSON-RPC id")
     call = FdeMcpToolCall(
@@ -186,17 +187,19 @@ async def _ready_events(application_id: str, session_id: str, *, is_list_changed
     yield ": heartbeat\n\n"
 
 
-async def _json_body(request: Request) -> dict[str, object]:
+async def _json_body(request: Request) -> JsonRpcEnvelope:
+    """Parse the fixed part of the protocol into a model; `params` stays for the tool to validate."""
     try:
         payload = await request.json()
     except json.JSONDecodeError as exc:
         raise ValidationFailed("Builder MCP request body must be JSON") from exc
-    return _mapping(payload, "request")
-
-
-def _require_json_rpc(payload: Mapping[str, object]) -> None:
-    if payload.get("jsonrpc") != "2.0" or not isinstance(payload.get("method"), str):
-        raise ValidationFailed("Builder MCP requires a JSON-RPC 2.0 request")
+    try:
+        return JsonRpcEnvelope.model_validate(payload)
+    except PydanticValidationError as exc:
+        raise ValidationFailed(
+            "Builder MCP requires a JSON-RPC 2.0 request",
+            details={"errorCount": exc.error_count()},
+        ) from exc
 
 
 def _require_origin(request: Request) -> None:
