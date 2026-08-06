@@ -186,3 +186,56 @@ def test_a_malformed_edit_batch_fails_in_the_sandbox(body: str) -> None:
     manifest = _manifest(f"def compute():\n    {body}\n", output_type="ontology_edit_batch")
 
     assert _failure(manifest).failure_type == "output_validation_error"
+
+
+# --- the runner is the last line, so its own contract breaches must be typed ----------
+
+
+def test_wrong_argument_count_returns_the_usage_code(tmp_path: Path) -> None:
+    """Exit 64 is EX_USAGE: the container was invoked wrongly, which is not a user-code failure."""
+    assert runner.main([str(tmp_path / "only-one")]) == 64
+
+
+def test_a_manifest_that_is_not_readable_is_a_contract_error(tmp_path: Path) -> None:
+    result_path = tmp_path / "result.json"
+
+    assert runner.main([str(tmp_path / "absent.json"), str(result_path)]) == 1
+    assert json.loads(result_path.read_text(encoding="utf-8"))["failureType"] == "runner_contract_error"
+
+
+def test_a_manifest_field_of_the_wrong_type_is_a_contract_error(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    manifest_path.write_text(json.dumps({"schemaVersion": 1, "entrypoint": 7}), encoding="utf-8")
+
+    assert runner.main([str(manifest_path), str(result_path)]) == 1
+    assert json.loads(result_path.read_text(encoding="utf-8"))["failureType"] == "runner_contract_error"
+
+
+def test_manifest_inputs_that_are_not_an_object_are_a_contract_error() -> None:
+    manifest = _manifest("def compute():\n    return 1\n")
+    manifest["inputs"] = ["positional"]
+
+    assert _failure(manifest).failure_type == "runner_contract_error"
+
+
+def test_a_source_path_that_is_not_importable_is_a_contract_error(tmp_path: Path) -> None:
+    """A directory where a module should be means the workspace was laid out wrong, not that the
+    author wrote bad code, so it must not be reported as a user error."""
+    manifest = _manifest("def compute():\n    return 1\n", root=tmp_path)
+    manifest["sourcePath"] = str(tmp_path)
+
+    assert _failure(manifest).failure_type == "runner_contract_error"
+
+
+def test_a_fatal_exit_inside_user_code_still_leaves_typed_evidence(tmp_path: Path) -> None:
+    """SystemExit does not derive from Exception, so a bare `except Exception` would let the
+    runner die without writing the file the host reads."""
+    manifest_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    manifest_path.write_text(
+        json.dumps(_manifest("import sys\ndef compute():\n    sys.exit(3)\n", root=tmp_path)), encoding="utf-8"
+    )
+
+    assert runner.main([str(manifest_path), str(result_path)]) == 1
+    assert json.loads(result_path.read_text(encoding="utf-8"))["status"] == "failed"

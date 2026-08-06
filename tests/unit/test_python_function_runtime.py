@@ -239,3 +239,109 @@ def test_the_plan_carries_declaration_order_for_positional_languages() -> None:
     service.run(_CTX, definition=definition, inputs={"tables": None, "partySize": 2})
 
     assert adapter.plans[0].argument_order == ("tables", "partySize")
+
+
+# --- single-object inputs and the timeout budget --------------------------------------
+
+
+def test_an_object_input_is_fetched_by_id_through_the_governed_service() -> None:
+    """A single object is a get, not a one-row query, and the caller supplies only its id."""
+    service, adapter, query = _service()
+
+    service.run(
+        _CTX,
+        definition=_definition({"apiName": "table", "type": "object", "objectType": "DiningTable"}),
+        inputs={"table": "T-7"},
+    )
+
+    assert query.calls[0] == {"kind": "get", "objectType": "DiningTable", "objectId": "T-7", "ctx": _CTX}
+    assert adapter.plans[0].inputs_json == {"table": {"objectId": "T-7", "seats": 4}}
+
+
+def test_an_object_input_also_accepts_the_object_id_wrapped_in_an_object() -> None:
+    """OSDK callers pass {objectId}; requiring a bare string would make them unwrap it first."""
+    service, _, query = _service()
+
+    service.run(
+        _CTX,
+        definition=_definition({"apiName": "table", "type": "object", "objectType": "DiningTable"}),
+        inputs={"table": {"objectId": "T-9"}},
+    )
+
+    assert query.calls[0]["objectId"] == "T-9"
+
+
+def test_an_object_input_that_is_neither_an_id_nor_a_reference_is_refused() -> None:
+    service, _, _ = _service()
+
+    with pytest.raises(ValidationFailed, match="must be an object id"):
+        service.run(
+            _CTX,
+            definition=_definition({"apiName": "table", "type": "object", "objectType": "DiningTable"}),
+            inputs={"table": 7},
+        )
+
+
+def test_a_query_that_returns_something_other_than_a_collection_is_refused() -> None:
+    """Failing here names the input; letting it through hands user code a non-iterable."""
+
+    class _Broken(_RecordingObjectQuery):
+        def query_objects(self, object_type_api_name: str, **_kwargs: Any) -> Mapping[str, object]:
+            return {"objects": "not-a-list"}
+
+    service, _, _ = _service(query=_Broken())
+
+    with pytest.raises(ValidationFailed, match="did not return a collection"):
+        service.run(
+            _CTX,
+            definition=_definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"}),
+            inputs={"tables": None},
+        )
+
+
+def test_a_definition_with_no_declared_inputs_sends_nothing() -> None:
+    service, adapter, _ = _service()
+    definition = _definition({"apiName": "unused", "type": "integer"})
+    definition["inputs"] = []
+
+    service.run(_CTX, definition=definition, inputs={"stray": 1})
+
+    assert adapter.plans[0].inputs_json == {}
+    assert adapter.plans[0].argument_order == ()
+
+
+def test_a_definition_without_an_output_type_is_refused() -> None:
+    service, adapter, _ = _service()
+    definition = _definition({"apiName": "threshold", "type": "integer"})
+    definition["output"] = {}
+
+    with pytest.raises(ValidationFailed, match="missing its output type"):
+        service.run(_CTX, definition=definition, inputs={})
+
+    assert adapter.plans == []
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        (None, 60),
+        (True, 60),
+        ("120", 60),
+        (120, 120),
+        (0, 1),
+        (-5, 1),
+        (10_000, 280),
+    ],
+)
+def test_the_plan_timeout_is_clamped_to_the_permitted_range(declared: object, expected: int) -> None:
+    """A definition persisted before per-version timeouts carries none, and a stored value that
+    drifted outside the range is clamped rather than trusted: the sandbox budget is an operator
+    bound, and a definition is authored content."""
+    service, adapter, _ = _service()
+    definition = _definition({"apiName": "threshold", "type": "integer"})
+    if declared is not None:
+        definition["timeoutSeconds"] = declared
+
+    service.run(_CTX, definition=definition, inputs={})
+
+    assert adapter.plans[0].timeout_seconds == expected
