@@ -90,6 +90,10 @@ def test_official_mcp_client_uses_postgres_application_scope_and_action_approval
         "action_run.get",
         "object.Order.get",
         "object.Order.search",
+        # Added when unified search landed. The list is exact on purpose -- an official MCP
+        # client sees precisely these tools, and a tool appearing without anyone deciding it
+        # should is the failure this assertion exists to catch.
+        "object.Order.unifiedSearch",
     ]
     assert evidence["objectId"] == "ORDER-1"
     assert evidence["approvalStatus"] == "approval_required"
