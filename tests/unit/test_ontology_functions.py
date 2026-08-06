@@ -476,3 +476,65 @@ def _ledger(engine: Any, ai_run_id: str) -> dict[str, Any]:
         )
     assert ledger is not None
     return cast(dict[str, Any], ledger)
+
+
+# --- python runtime: source instead of a block graph ---------------------------------
+
+
+def _python_function(**overrides: object) -> dict[str, object]:
+    definition: dict[str, object] = {
+        "apiName": "TotalSeats",
+        "runtime": "python",
+        "inputs": [{"apiName": "tables", "type": "objectSet", "objectType": "DiningTable", "required": True}],
+        "output": {"type": "integer"},
+        "definition": {"source": "def compute(tables):\n    return len(tables)\n"},
+    }
+    definition.update(overrides)
+    return definition
+
+
+def test_a_python_function_carries_source_and_defaults_its_entry_point() -> None:
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    normalized = normalized_function_definition(_python_function())
+
+    assert normalized["runtime"] == "python"
+    assert normalized["definition"]["entrypoint"] == "compute"
+    assert "blocks" not in normalized["definition"]
+
+
+def test_normalizing_a_python_function_is_idempotent() -> None:
+    """Replaying a persisted snapshot must not read as a spurious definition change."""
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    once = normalized_function_definition(_python_function())
+
+    assert normalized_function_definition(once) == once
+
+
+def test_a_python_function_cannot_smuggle_logic_dag_blocks() -> None:
+    """Two runtimes in one definition would leave which one executes ambiguous."""
+    from foundry_lite.domain.errors import ValidationFailed
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    with pytest.raises(ValidationFailed, match="cannot declare Logic DAG blocks"):
+        normalized_function_definition(
+            _python_function(definition={"source": "def compute():\n    return 1\n", "blocks": []})
+        )
+
+
+def test_a_python_function_with_blank_source_is_refused() -> None:
+    from foundry_lite.domain.errors import ValidationFailed
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    with pytest.raises(ValidationFailed, match="must not be blank"):
+        normalized_function_definition(_python_function(definition={"source": "   \n"}))
+
+
+def test_a_logic_dag_function_still_requires_blocks() -> None:
+    """Adding a second runtime must not relax the first one's contract."""
+    from foundry_lite.domain.errors import ValidationFailed
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    with pytest.raises(ValidationFailed, match="must declare blocks"):
+        normalized_function_definition(_python_function(runtime="logic_dag", definition={"blocks": []}))

@@ -16,7 +16,16 @@ from typing import cast
 from foundry_lite.domain.errors import ValidationFailed
 
 FUNCTION_RUNTIME_LOGIC_DAG = "logic_dag"
-SUPPORTED_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_LOGIC_DAG})
+# Palantir authors functions in TypeScript or Python from a code repository, alongside the
+# no-code AIP Logic editor. `logic_dag` is our AIP Logic; `python` is the first code runtime.
+# A code function carries source rather than a block graph, so `definition` is shaped per
+# runtime rather than shared.
+FUNCTION_RUNTIME_PYTHON = "python"
+SUPPORTED_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_LOGIC_DAG, FUNCTION_RUNTIME_PYTHON})
+
+# Palantir's default is 60 seconds, configurable per function version. Version-level
+# configuration is not modelled yet, so the default is the ceiling.
+FUNCTION_DEFAULT_TIMEOUT_SECONDS = 60
 
 #: Function inputs/outputs use the object property type vocabulary (kept in
 #: sync with INTERFACE_PROPERTY_DATA_TYPES / OBJECT_PROPERTY_DATA_TYPES).
@@ -51,14 +60,15 @@ def normalized_function_definition(item: Mapping[str, object]) -> dict[str, obje
     read as a spurious ``function_definition_changed`` migration warning.
     """
     api_name = _required_str(item, "apiName")
+    runtime = _function_runtime(item, api_name)
     normalized: dict[str, object] = {
         "apiName": api_name,
         "displayName": _optional_str(item, "displayName", api_name),
         "version": _optional_str(item, "version", "v1"),
-        "runtime": _function_runtime(item, api_name),
+        "runtime": runtime,
         "inputs": _normalized_inputs(item, api_name),
         "output": _normalized_output(item, api_name),
-        "definition": _normalized_logic(item, api_name),
+        "definition": _normalized_runtime_definition(item, api_name, runtime),
     }
     permissions = _normalized_permissions(item, api_name)
     if permissions is not None:
@@ -128,6 +138,31 @@ def _require_function_data_type(container: Mapping[str, object], api_name: str, 
             "unsupported function data type",
             details={"function": api_name, "path": path, "value": declared, "allowed": sorted(FUNCTION_DATA_TYPES)},
         )
+
+
+def _normalized_runtime_definition(item: Mapping[str, object], api_name: str, runtime: str) -> dict[str, object]:
+    """A code function carries source; a Logic DAG carries blocks. Neither accepts the other."""
+    if runtime == FUNCTION_RUNTIME_PYTHON:
+        return _normalized_source(item, api_name)
+    return _normalized_logic(item, api_name)
+
+
+def _normalized_source(item: Mapping[str, object], api_name: str) -> dict[str, object]:
+    definition = _required_mapping(item, "definition", api_name)
+    source = _required_str(definition, "source")
+    if not source.strip():
+        raise ValidationFailed("function source must not be blank", details={"function": api_name})
+    if "blocks" in definition:
+        raise ValidationFailed(
+            "a code function cannot declare Logic DAG blocks",
+            details={"function": api_name, "runtime": FUNCTION_RUNTIME_PYTHON},
+        )
+    return {
+        "source": source,
+        # Palantir names the exported entry point; ours defaults so single-function modules
+        # need no ceremony, and the runner fails loudly when the name is absent.
+        "entrypoint": _optional_str(definition, "entrypoint", "compute"),
+    }
 
 
 def _normalized_logic(item: Mapping[str, object], api_name: str) -> dict[str, object]:

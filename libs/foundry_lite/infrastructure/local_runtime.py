@@ -393,9 +393,15 @@ def _create_core_dependencies(
         embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
     )
     completion_model_adapter = LocalCompletionAdapter()
+    # One sandbox serves both callers. A Python transform reaches it through the compute
+    # adapter and a Python ontology function through the application layer, and they are the
+    # same threat model, so they must not drift onto separate policies.
+    code_execution_adapter = ContainerCodeExecutionAdapter(
+        is_image_digest_required=runtime_profile.is_protected,
+    )
     compute_adapter = _compute_adapter(
         profiles.compute,
-        is_protected=runtime_profile.is_protected,
+        code_execution_adapter=code_execution_adapter,
     )
     env_secret_provider = secret_provider_from_env()
     secret_vault = local_secret_vault_provider(root, fallback=env_secret_provider)
@@ -488,6 +494,7 @@ def _create_core_dependencies(
             materialization_repository=SqlAlchemyMaterializationRepository(engine),
             dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
             compute_adapter=compute_adapter,
+            code_execution_adapter=code_execution_adapter,
             dataset_repository=SqlAlchemyDatasetRepository(engine),
             dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
             dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
@@ -729,13 +736,14 @@ def _s3_media_storage_config() -> S3MediaStorageConfig:
     )
 
 
-def _compute_adapter(compute_profile: str, *, is_protected: bool = False) -> ComputeAdapter:
+def _compute_adapter(
+    compute_profile: str,
+    *,
+    code_execution_adapter: ContainerCodeExecutionAdapter,
+) -> ComputeAdapter:
     compute_profile = _env_profile(os.environ, "FOUNDRY_LITE_COMPUTE_PROFILE", compute_profile)
     if compute_profile == "fake-storage":
         return FakeComputeAdapter()
-    code_execution_adapter = ContainerCodeExecutionAdapter(
-        is_image_digest_required=is_protected,
-    )
     if compute_profile == "spark":
         return SparkComputeAdapter(code_execution_adapter=code_execution_adapter)
     if compute_profile in {"local", "s3-storage", "iceberg"}:

@@ -9,6 +9,7 @@ import shutil
 import subprocess  # nosec B404
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -25,6 +26,8 @@ from foundry_lite.application.ports.adapter_failure import (
 from foundry_lite.application.ports.code_execution import (
     CodeExecutionFailureEvidence,
     CodeExecutionFailureType,
+    FunctionExecutionPlan,
+    FunctionExecutionResult,
 )
 from foundry_lite.application.ports.compute_adapter import (
     InputFilePaths,
@@ -110,6 +113,30 @@ class ContainerCodeExecutionAdapter:
                 ),
             ),
         )
+
+    def execute_function(self, plan: FunctionExecutionPlan) -> FunctionExecutionResult:
+        """Run one ontology function under the same sandbox policy as a transform.
+
+        The policy is shared deliberately. A function is user code from the same authors under
+        the same threat model, so it gets the same non-root, no-network, read-only-root,
+        capability-dropped container; only the payload shape differs, JSON rather than parquet.
+        """
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(
+            prefix="foundry-lite-function-sandbox-",
+            dir=_workspace_root(self.config),
+        ) as temporary:
+            workspace = _prepare_function_workspace(plan, Path(temporary), self)
+            container_name = f"foundry-lite-function-{uuid4().hex}"
+            command = container_command(self.config, workspace, container_name, "python_function_runner.py")
+            result = self._execute_container(command, container_name)
+            payload = _read_runner_result(workspace.result_path, result, self)
+            output = _require_function_success(payload, result, self)
+            return FunctionExecutionResult(
+                output=output,
+                stderr_byte_count=len(result.stderr),
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
 
     def execute_python_transform(self, plan: PythonTransformPlan) -> TransformExecutionResult:
         workspace_root = _workspace_root(self.config)
@@ -244,6 +271,82 @@ def _container_input_paths(
     input_dir.chmod(0o555)
     mounts = tuple(staged for staged in mounted.values())
     return container_paths, mounts
+
+
+def _prepare_function_workspace(
+    plan: FunctionExecutionPlan,
+    root: Path,
+    adapter: ContainerCodeExecutionAdapter,
+) -> SandboxWorkspace:
+    """Lay out the same job/output pair a transform gets, with a JSON request instead of mounts.
+
+    A function reads nothing from disk, so there are no input mounts: everything it was given is
+    inside request.json, which is why the byte ceiling is checked here rather than in the
+    sandbox. Refusing oversized input before the container starts keeps a large object set from
+    being paid for twice.
+    """
+    job_dir = root / "job"
+    output_dir = root / "output"
+    job_dir.mkdir(mode=0o700)
+    output_dir.mkdir(mode=0o700)
+    result_path = output_dir / RESULT_NAME
+    result_path.touch()
+    result_path.chmod(0o666)
+
+    source_path = job_dir / "function.py"
+    source_path.write_text(plan.source, encoding="utf-8")
+    source_path.chmod(0o444)
+    manifest = json.dumps(
+        {
+            "schemaVersion": 1,
+            "entrypoint": plan.entrypoint,
+            "sourcePath": f"{JOB_DIR}/function.py",
+            "sourceSha256": hashlib.sha256(plan.source.encode()).hexdigest(),
+            "inputs": dict(plan.inputs_json),
+            "outputType": plan.output_type,
+        },
+        sort_keys=True,
+    )
+    if len(manifest.encode("utf-8")) > plan.input_byte_limit:
+        raise adapter._error("resource_limit", "validation", False)
+    request_path = job_dir / "request.json"
+    request_path.write_text(manifest, encoding="utf-8")
+    request_path.chmod(0o444)
+    job_dir.chmod(0o555)
+    return SandboxWorkspace(
+        job_dir=job_dir,
+        output_dir=output_dir,
+        result_path=result_path,
+        output_path=result_path,
+        input_mounts=(),
+    )
+
+
+def _require_function_success(
+    payload: Mapping[str, object],
+    command_result: ContainerCommandResult,
+    adapter: ContainerCodeExecutionAdapter,
+) -> object:
+    if payload.get("status") == "succeeded":
+        return payload.get("output")
+    raise adapter._error(
+        _function_failure_type(payload.get("failureType")),
+        "validation",
+        False,
+        result=command_result,
+    )
+
+
+def _function_failure_type(reported: object) -> CodeExecutionFailureType:
+    """Only the runner's own vocabulary is trusted; anything else is a contract breach.
+
+    The runner is trusted code, but the file it writes lives in a directory the sandbox can
+    write to, so an unrecognised value means the contract was violated rather than that a new
+    failure mode exists.
+    """
+    if reported in {"user_code_error", "output_validation_error", "runner_contract_error"}:
+        return cast(CodeExecutionFailureType, reported)
+    return "runner_contract_error"
 
 
 def _manifest(plan: PythonTransformPlan, input_paths: Mapping[str, Sequence[str]]) -> dict[str, object]:

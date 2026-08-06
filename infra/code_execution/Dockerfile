@@ -10,6 +10,11 @@ RUN python -m pip install --no-cache-dir "pyarrow==${PYARROW_VERSION}" \
 COPY --chown=65532:65532 \
     libs/foundry_lite/infrastructure/runners/python_transform_runner.py \
     /opt/foundry-lite/runner/python_transform_runner.py
+# The ontology-function runner shares this image because it shares the threat model: both run
+# user code under the same non-root, no-network, read-only-root policy.
+COPY --chown=65532:65532 \
+    libs/foundry_lite/infrastructure/runners/python_function_runner.py \
+    /opt/foundry-lite/runner/python_function_runner.py
 COPY --chown=65532:65532 \
     libs/foundry_lite/transforms_sdk \
     /opt/foundry-lite/foundry_lite/transforms_sdk

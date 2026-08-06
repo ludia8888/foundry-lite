@@ -29,6 +29,7 @@ from foundry_lite.application.dependency_compat import (
     preserve_media_processor_override,
     required_dependency,
 )
+from foundry_lite.application.dependency_data import DataDependencies
 from foundry_lite.application.dependency_media import (
     ContentIndexAdapter,
     ExternalMediaReader,
@@ -68,6 +69,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.backup_artifact_store import BackupArtifactStore
 from foundry_lite.application.ports.citation_source import CitationSourceVerifier
+from foundry_lite.application.ports.code_execution import CodeExecutionAdapter
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
@@ -119,23 +121,6 @@ class SecurityDependencies:
     oauth_token_issuer: OAuthTokenIssuer
     secret_provider: SecretProvider
     secret_vault: SecretVault
-
-
-@dataclass(frozen=True)
-class DataDependencies:
-    ontology_repository: OntologyRepository
-    ontology_branch_repository: OntologyBranchRepository
-    pipeline_repository: PipelineRepository
-    pipeline_execution_repository: PipelineExecutionRepository
-    resource_catalog_repository: ResourceCatalogRepository
-    transform_repository: TransformRepository
-    materialization_repository: MaterializationRepository
-    dataset_quality_repository: DatasetQualityRepository
-    compute_adapter: ComputeAdapter
-    dataset_repository: DatasetRepository
-    dataset_transaction_repository: DatasetTransactionRepository
-    dataset_version_repository: DatasetVersionRepository
-    dataset_storage: DatasetStorageAdapter
 
 
 @dataclass(frozen=True)
@@ -296,6 +281,10 @@ class CoreDependencies(ActionDependencyAccessors):
     @property
     def compute_adapter(self) -> ComputeAdapter:
         return self.data.compute_adapter
+
+    @property
+    def code_execution_adapter(self) -> CodeExecutionAdapter:
+        return self.data.code_execution_adapter
 
     @property
     def dataset_repository(self) -> DatasetRepository:
