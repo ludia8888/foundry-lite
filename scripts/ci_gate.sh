@@ -52,6 +52,7 @@ maybe_run_testcontainers_preflight() {
 
 RUNTIME_GATE_STEP=""
 CODE_EXECUTION_IMAGE_READY=0
+NODE_CODE_EXECUTION_IMAGE_READY=0
 TRAINED_MODEL_IMAGE_READY=0
 
 ensure_code_execution_image() {
@@ -71,6 +72,28 @@ ensure_code_execution_image() {
     pnpm --silent quality:code-execution-image
   fi
   CODE_EXECUTION_IMAGE_READY=1
+}
+
+ensure_node_code_execution_image() {
+  if [[ "${NODE_CODE_EXECUTION_IMAGE_READY}" == "1" ]]; then
+    return
+  fi
+
+  # A second image, not a second policy: TypeScript functions need a Node toolchain the pinned
+  # python:slim image does not carry, and adding one would widen the attack surface of every
+  # Python transform for a runtime they never use. Confinement flags come from one place.
+  local configured_image="${FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE:-}"
+  if [[ -n "${configured_image}" ]]; then
+    echo "== Preflight: isolated Node image ${configured_image} =="
+    if ! docker image inspect "${configured_image}" > /dev/null 2>&1; then
+      echo "ERROR: configured FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE is not available locally." >&2
+      exit 1
+    fi
+  else
+    echo "== Preflight: build isolated Node execution image =="
+    pnpm --silent quality:node-code-execution-image
+  fi
+  NODE_CODE_EXECUTION_IMAGE_READY=1
 }
 
 ensure_trained_model_image() {
@@ -137,6 +160,7 @@ run_static_gate() {
 run_coverage_gate() {
   maybe_run_testcontainers_preflight
   ensure_code_execution_image
+  ensure_node_code_execution_image
 
   echo "== Dynamic: pytest with branch coverage =="
   # pytest-randomly is auto-loaded and shuffles test order per run, exposing
@@ -186,6 +210,7 @@ run_coverage_gate() {
 run_flaky_gate() {
   maybe_run_testcontainers_preflight
   ensure_code_execution_image
+  ensure_node_code_execution_image
 
   local iterations="${FOUNDRY_LITE_FLAKY_ITERATIONS:-3}"
   echo "== Dynamic: flaky pytest detector (${iterations} repeated random + parallel runs) =="
@@ -204,6 +229,7 @@ run_flaky_gate() {
 run_impact_gate() {
   maybe_run_testcontainers_preflight
   ensure_code_execution_image
+  ensure_node_code_execution_image
 
   echo "== Local: impact-scoped pytest via Tach =="
   # Local feedback should answer "did this change break its reachable tests?"
@@ -243,6 +269,7 @@ run_runtime_gate() {
 run_runtime_full_gate() {
   maybe_run_testcontainers_preflight
   ensure_code_execution_image
+  ensure_node_code_execution_image
   ensure_trained_model_image
   rm -f artifacts/quality/runtime_lane_failure.json
   run_runtime_contract_gates

@@ -23,6 +23,7 @@ TMP_DIR = "/sandbox-tmp"
 RESULT_NAME = "execution-result.json"
 OUTPUT_NAME = "result.parquet"
 DEFAULT_IMAGE = "foundry-lite-python-transform:py312-v1"
+DEFAULT_NODE_IMAGE = "foundry-lite-node-function:node22-v1"
 DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
 MAX_STDERR_CAPTURE_BYTES = 64 * 1024
@@ -35,6 +36,9 @@ SANDBOX_ENVIRONMENT: Mapping[str, str] = {
     "PYTHONPATH": "/opt/foundry-lite",
     "PYTHONUNBUFFERED": "1",
     "TMPDIR": TMP_DIR,
+    # Resolves `typescript` from the global install in the Node image; the Python image has no
+    # node_modules and ignores it. One allowlist keeps `validate_config` a single comparison.
+    "NODE_PATH": "/usr/local/lib/node_modules",
 }
 _DOCKER_CLIENT_ENV_KEYS = ("DOCKER_CONTEXT", "DOCKER_HOST", "HOME", "PATH")
 
@@ -75,12 +79,14 @@ class ContainerCodeExecutionConfig:
     is_image_digest_required: bool = False
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
     max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
+    node_image_reference: str = DEFAULT_NODE_IMAGE
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ContainerCodeExecutionConfig:
         source = os.environ if environ is None else environ
         return cls(
             image_reference=source.get("FOUNDRY_LITE_CODE_EXECUTION_IMAGE", DEFAULT_IMAGE),
+            node_image_reference=source.get("FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE", DEFAULT_NODE_IMAGE),
             runtime_binary=source.get("FOUNDRY_LITE_CONTAINER_RUNTIME", "docker"),
             policy=_policy_from_env(source),
             workspace_root=_optional_path(source, "FOUNDRY_LITE_CODE_EXECUTION_WORKSPACE_ROOT"),
@@ -132,6 +138,9 @@ def container_command(
     workspace: SandboxWorkspace,
     container_name: str,
     runner_script: str = "python_transform_runner.py",
+    *,
+    interpreter: str = "python",
+    image_reference: str | None = None,
 ) -> tuple[str, ...]:
     policy = config.policy
     command = [
@@ -157,11 +166,11 @@ def container_command(
         "--init",
     ]
     command.extend(_workspace_mount_arguments(workspace))
-    command.extend((config.image_reference, "/usr/bin/env", "-i"))
+    command.extend((image_reference or config.image_reference, "/usr/bin/env", "-i"))
     command.extend(f"{key}={value}" for key, value in SANDBOX_ENVIRONMENT.items())
     command.extend(
         (
-            "python",
+            interpreter,
             f"{RUNTIME_DIR}/{runner_script}",
             f"{JOB_DIR}/request.json",
             f"{OUTPUT_DIR}/{RESULT_NAME}",

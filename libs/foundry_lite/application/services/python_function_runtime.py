@@ -72,9 +72,11 @@ class PythonFunctionRuntimeService(CoreService):
         plan = FunctionExecutionPlan(
             function_api_name=str(definition.get("apiName") or ""),
             function_version=str(definition.get("version") or "v1"),
+            runtime=str(definition.get("runtime") or ""),
             entrypoint=str(source["entrypoint"]),
             source=str(source["source"]),
             inputs_json=self._materialized_inputs(ctx, definition, inputs),
+            argument_order=tuple(str(item["apiName"]) for item in _declared_inputs(definition)),
             output_type=_output_type(definition),
             timeout_seconds=FUNCTION_DEFAULT_TIMEOUT_SECONDS,
             input_byte_limit=MAX_INPUT_BYTES,

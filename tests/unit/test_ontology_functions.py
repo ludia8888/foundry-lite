@@ -538,3 +538,24 @@ def test_a_logic_dag_function_still_requires_blocks() -> None:
 
     with pytest.raises(ValidationFailed, match="must declare blocks"):
         normalized_function_definition(_python_function(runtime="logic_dag", definition={"blocks": []}))
+
+
+def test_typescript_is_a_code_runtime_like_python() -> None:
+    """Palantir offers TypeScript and Python side by side; both carry source, not a block graph."""
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    normalized = normalized_function_definition(
+        _python_function(runtime="typescript", definition={"source": "export function compute() { return 1 }"})
+    )
+
+    assert normalized["runtime"] == "typescript"
+    assert normalized["definition"]["entrypoint"] == "compute"
+
+
+def test_an_unknown_runtime_is_still_refused() -> None:
+    """Adding runtimes must not turn the allowlist into a pass-through."""
+    from foundry_lite.domain.errors import ValidationFailed
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    with pytest.raises(ValidationFailed, match="unsupported function runtime"):
+        normalized_function_definition(_python_function(runtime="rust"))
