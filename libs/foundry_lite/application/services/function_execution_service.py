@@ -37,6 +37,7 @@ from foundry_lite.application.services.python_function_runtime import PythonFunc
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
 from foundry_lite.domain.ontology.function_types import FUNCTION_RUNTIME_PYTHON
+from foundry_lite.domain.ontology.function_versions import is_range, satisfies
 
 
 class FunctionExecutionResult(TypedDict):
@@ -102,16 +103,27 @@ class FunctionExecutionService(CoreService):
         ctx: RequestContext,
         execution_id: str | None = None,
     ) -> FunctionExecutionResult:
-        """Execute the exact function definition frozen into an Action run."""
+        """Execute the function an Action run depends on, pinned exactly or by range.
+
+        `function_version` is a requirement, not always a literal. An exact version is what a
+        caller pins when it cannot tolerate any change; a caret or tilde range is what lets a
+        patched function be published underneath a running Action without redeploying it, which
+        is the whole point of range dependencies. Either way the definition is read from the
+        Action's own ontology version, so the code cannot change out from under a run in flight.
+        """
         with self.engine.begin() as conn:
             row = self.ontology_lookup_service._function_type_for_version(
                 conn, ctx, ontology_version_id, function_api_name
             )
         actual_version = str(row["definition"].get("version") or "v1")
-        if actual_version != function_version:
+        if not satisfies(actual_version, function_version):
             raise ValidationFailed(
-                "pinned function version no longer matches the deployment",
-                details={"expectedVersion": function_version, "actualVersion": actual_version},
+                "deployed function version does not satisfy the dependency",
+                details={
+                    "requirement": function_version,
+                    "actualVersion": actual_version,
+                    "isRange": is_range(function_version),
+                },
             )
         return self._execute_row(ctx, row, inputs, execution_id=execution_id)
 

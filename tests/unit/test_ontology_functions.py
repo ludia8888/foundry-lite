@@ -559,3 +559,26 @@ def test_an_unknown_runtime_is_still_refused() -> None:
 
     with pytest.raises(ValidationFailed, match="unsupported function runtime"):
         normalized_function_definition(_python_function(runtime="rust"))
+
+
+def test_a_function_version_carries_its_own_timeout() -> None:
+    """Palantir configures timeout per function version, not per function.
+
+    A version is immutable once published, so its budget travels with it: raising the limit means
+    publishing a new version, and an Action pinned to the old one keeps the budget it was tested
+    against rather than inheriting a change it never saw.
+    """
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    assert normalized_function_definition(_python_function())["timeoutSeconds"] == 60
+    assert normalized_function_definition(_python_function(timeoutSeconds=120))["timeoutSeconds"] == 120
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 281])
+def test_a_timeout_outside_the_permitted_range_is_refused(timeout: int) -> None:
+    """Authored content must not be able to raise the operator's bound on a sandbox slot."""
+    from foundry_lite.domain.errors import ValidationFailed
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    with pytest.raises(ValidationFailed, match="outside the permitted range"):
+        normalized_function_definition(_python_function(timeoutSeconds=timeout))
