@@ -146,7 +146,7 @@
 | 48  | line ≥ ratchet floor                         | `pytest --cov`                                                    | 93 (floor, 2026-08-05)       | ✅   |
 | 49  | branch ≥ ratchet floor                       | `pytest --cov-branch`                                             | 93 (floor, 2026-08-05)       | ✅   |
 | 50  | function 95%                                 | `check_public_api_coverage`                                       | 95                           | ✅   |
-| 51  | 영역별 (domain/app/infra/api/cli/worker) 95% | `check_tier_coverage_by_layer.py`                                 | 각 계층 95                   | ✅   |
+| 51  | 영역별 (domain/app/infra/api/cli/worker)     | `check_tier_coverage_by_layer.py`                                 | 계층별 floor (2026-08-05)    | ✅   |
 | 52  | 통합 시나리오 7개 100%                       | `check_integration_scenario_markers.py` + marked pytest scenarios | 7/7                          | ✅   |
 | 53  | `pragma: no cover` 남발 금지                 | `check_pragma_no_cover_budget.py`                                 | baseline 0 + reason required | ✅   |
 
@@ -1148,12 +1148,37 @@ coverage가 95% 이상인지 검증한다. `ci_gate.sh`는 이제 coverage 수�
 - 각 계층은 coverage JSON에 반드시 존재해야 한다.
 - 계층별 covered units는 `covered_lines + covered_branches`, total units는
   `num_statements + num_branches`로 계산한다.
-- 어느 한 계층이라도 95% 미만이면 fail한다.
+- 어느 한 계층이라도 자신의 기준선 미만이면 fail한다.
 - 결과는 `artifacts/quality/tier_coverage_by_layer.json`에 남긴다.
 
+#### 계층별 ratchet floor (2026-08-05)
+
+95는 목표치로 남고, 부채를 진 계층은 `LAYER_FLOORS`에 측정값 바로 아래로 고정된다.
+갚는 동안 늘지 못하게 막는 것이 목적이지 95를 포기하는 것이 아니다.
+
+| 계층 | floor | 측정값 (cf601f75) |
+| --- | --- | --- |
+| domain | 92 | 92.38 |
+| application | 93 | 93.14 |
+| infrastructure | 93 | 93.59 |
+| api | 91 | 91.97 |
+| worker | 94 | 94.47 |
+| cli | (없음 → 95) | 목표 충족 |
+
+단일 전역 floor를 쓰지 않은 이유는 그 값이 최솟값 91이어야 하고, 그러면 worker가
+94.47에서 91까지 내려가도 아무도 모르기 때문이다. 계층이 자기 floor를 `RATCHET_SLACK`
+이상 넘기면 게이트가 "floor를 올릴 때"라고 출력한다. 이 출력이 없으면 ratchet은 느슨해지는
+방향으로만 움직인다.
+
+이 수치가 cf601f75에서야 처음 측정된 이유는, 그 전 세 번의 main push가 36분짜리 coverage
+lane을 `cancel-in-progress`로 밀어내 게이트가 여기까지 도달한 적이 없었기 때문이다.
+그 사이 PR #163/#164가 Action/MCP/OSDK 코드 약 7k statement를 테스트 없이 올렸다.
+
 Self-test: `tests/unit/test_quality_tier_coverage_by_layer.py`가 전체 계층 통과,
-낮은 계층 실패, 누락 계층 실패, JSON report 생성을 검증한다. API/CLI 스모크는
-`tests/smoke/test_interfaces.py`에서 endpoint와 CLI command coverage를 보강한다.
+낮은 계층 실패, 누락 계층 실패, JSON report 생성, 계층별 floor 적용, floor 없는 계층의
+목표치 유지, floor가 목표치 미만인지, ratchet 후보 판정, 레포 밖 `--output` 경로에서의
+실패 보고를 검증한다. API/CLI 스모크는 `tests/smoke/test_interfaces.py`에서 endpoint와
+CLI command coverage를 보강한다.
 
 ### Tier P7 — CodeQL data-flow taint analysis (✅ 완료 2026-06-10 P7)
 
