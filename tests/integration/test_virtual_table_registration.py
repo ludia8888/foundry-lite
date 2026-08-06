@@ -390,9 +390,7 @@ def test_a_table_that_disappeared_is_reported_and_not_unregistered(service: Any,
         connection.execute(text("DROP TABLE seasonal"))
     engine.dispose()
 
-    plan = built.preview_auto_registration(
-        connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
-    )
+    plan = built.preview_auto_registration(connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX)
 
     assert "public.seasonal" in plan.missing_tables
     assert any(record.name == "seasonal" for record in built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX))
@@ -402,9 +400,7 @@ def test_preview_changes_nothing(service: Any) -> None:
     """A preview that registered would make the scheduler's dry run a live run."""
     built, _ = service
 
-    plan = built.preview_auto_registration(
-        connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
-    )
+    plan = built.preview_auto_registration(connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX)
 
     assert [ref.qualified_name for ref in plan.new_tables] == ["public.youtube_videos"]
     assert built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX) == ()

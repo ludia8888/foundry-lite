@@ -46,6 +46,20 @@ _PUSHABLE_OPERATORS: Mapping[str, str] = {
 }
 _MAX_ROW_LIMIT = 10_000
 
+_DISCOVER_ALL = text(
+    "SELECT table_schema, table_name FROM information_schema.tables "
+    "WHERE table_type IN ('BASE TABLE', 'VIEW') "
+    "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
+    "ORDER BY table_schema, table_name"
+)
+_DISCOVER_IN_SCHEMAS = text(
+    "SELECT table_schema, table_name FROM information_schema.tables "
+    "WHERE table_type IN ('BASE TABLE', 'VIEW') "
+    "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
+    "AND table_schema = ANY(:schemas) "
+    "ORDER BY table_schema, table_name"
+)
+
 
 class PostgresVirtualTableReader:
     """``VirtualTableReader`` that pushes predicates, projection, and limit into Postgres."""
@@ -103,13 +117,10 @@ class PostgresVirtualTableReader:
         Base tables and views only: a sequence or an index is not something a pointer can read,
         and returning them would put entries in a picker that fail the moment anyone selects one.
         """
-        clause = "AND table_schema = ANY(:schemas)" if schema_names else ""
-        statement = text(
-            "SELECT table_schema, table_name FROM information_schema.tables "
-            "WHERE table_type IN ('BASE TABLE', 'VIEW') "
-            "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
-            f"{clause} ORDER BY table_schema, table_name"
-        )
+        # Two complete statements rather than one assembled from a fragment. The fragment was a
+        # fixed literal and never injectable, but a query built by concatenation reads as one
+        # that could be, and the schema filter is a bound parameter either way.
+        statement = _DISCOVER_IN_SCHEMAS if schema_names else _DISCOVER_ALL
         parameters: dict[str, object] = {"schemas": list(schema_names)} if schema_names else {}
         with self._guard("discover"):
             engine = create_engine(connection_url, future=True)

@@ -311,3 +311,26 @@ def test_a_missing_external_tool_is_dropped_from_the_run_rather_than_failing_it(
 
     assert "gitleaks" not in runnable
     assert "xenon" in runnable
+
+
+def test_the_gate_does_not_put_more_work_on_the_box_than_it_has_cores(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Concurrency is sized against cores, because every command here is a compiler or a test run.
+
+    Five top-level slots each spawning work, plus a static lane running three jobs of its own,
+    put eight processes on a four-core runner. Effective parallelism fell to 1.44 against a
+    configured 3, so a lane whose checks sum to 597s failed to finish inside 415s when its floor
+    is 199s. Two slots keep the heavy lane and everything else at roughly one core each.
+    """
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_gate_concurrency")
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: 4)
+
+    assert gate._TOP_LEVEL_SLOTS + gate._static_jobs() <= 5
+
+
+def test_static_jobs_never_drops_below_one() -> None:
+    """A single-core machine must still run the lane rather than ask for zero workers."""
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_gate_single_core")
+    import unittest.mock
+
+    with unittest.mock.patch.object(gate.os, "cpu_count", return_value=1):
+        assert gate._static_jobs() == 1

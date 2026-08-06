@@ -435,7 +435,7 @@ def _commands(plan: PullRequestPlan, base: str, head: str) -> list[tuple[str, li
     commands.append(
         (
             "static-invariants",
-            [sys.executable, "scripts/quality/run_static_checks.py", "--profile", "pr", "--jobs", "3"],
+            [sys.executable, "scripts/quality/run_static_checks.py", "--profile", "pr", "--jobs", str(_static_jobs())],
         )
     )
     if plan.selected_tests:
@@ -513,9 +513,30 @@ def _print_dropped_linked_tests(plan: PullRequestPlan) -> None:
         print(f"  - {path}")
 
 
+_TOP_LEVEL_SLOTS = 2
+
+
+def _static_jobs() -> int:
+    """Inner parallelism for the static lane, sized against the cores it actually shares.
+
+    The lane runs beside the other gate commands, and each of those is itself a compiler or a
+    test run. Fixed `--jobs 3` on a 4-vCPU runner meant up to five commands times three jobs
+    competing for four cores: a diff touching SDK files added the three frontend commands and
+    the lane went from ~150s to over its 415s ceiling, with the checks themselves summing to
+    597s -- three times the theoretical floor. Leaving a core for everything else costs less
+    wall clock than oversubscribing does.
+    """
+    return max(1, (os.cpu_count() or 4) - 1)
+
+
 def _execute_commands(commands: list[tuple[str, list[str]]], timeout_seconds: float) -> list[CommandResult]:
     results: list[CommandResult] = []
-    with ThreadPoolExecutor(max_workers=min(5, len(commands))) as pool:
+    # Two slots, not five. One command -- the static lane -- is itself parallel and carries most
+    # of the work; the rest sum to a fraction of it and fit inside its wall clock. Five slots on
+    # a 4-vCPU runner put eight processes on four cores and dropped effective parallelism to 1.44
+    # against a configured 3, which is how a lane whose checks sum to 597s failed to finish in
+    # 415s when its floor is 199s.
+    with ThreadPoolExecutor(max_workers=min(_TOP_LEVEL_SLOTS, len(commands))) as pool:
         futures = {pool.submit(_run_command, name, command, timeout_seconds): name for name, command in commands}
         for future in as_completed(futures):
             result = future.result()
