@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -278,3 +280,34 @@ def test_pr_static_profile_excludes_network_and_product_rehearsals() -> None:
     assert "pip-audit" not in names
     assert "pipeline-artifact-execution" not in names
     assert "frontend-foundation" not in names
+
+
+def test_enumerating_a_profile_does_not_depend_on_the_toolchain(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Asking what a profile runs must be answerable anywhere, including where nothing is installed.
+
+    Folding the "gitleaks must exist in CI" assertion into enumeration made the same test pass in
+    the PR lane, which installs gitleaks, and kill the process in the coverage lane, which does
+    not -- so a green PR merged and turned main red. Fail-closed still happens, but at the point
+    the lane actually runs, not when something asks what the lane contains.
+    """
+    static = _load_module(ROOT / "scripts/quality/run_static_checks.py", "pr_static_profile_no_tools")
+    monkeypatch.setattr(static.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("CI", "true")
+
+    names = {name for name, _command in static._all_checks("pr")}
+
+    assert "gitleaks" in names
+    # ...and the run path is what refuses to proceed without the binary.
+    with pytest.raises(SystemExit):
+        static.require_external_tools()
+
+
+def test_a_missing_external_tool_is_dropped_from_the_run_rather_than_failing_it(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Locally there is no CI to fail closed for, so the lane runs what it has."""
+    static = _load_module(ROOT / "scripts/quality/run_static_checks.py", "pr_static_profile_local")
+    monkeypatch.setattr(static.shutil, "which", lambda _name: None)
+
+    runnable = {name for name, _command in static._available_checks(static._all_checks("pr"))}
+
+    assert "gitleaks" not in runnable
+    assert "xenon" in runnable
