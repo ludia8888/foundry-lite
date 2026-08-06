@@ -87,6 +87,40 @@ class CodeExecutionFailureEvidence:
         }
 
 
+@dataclass(frozen=True)
+class FunctionExecutionPlan:
+    """One ontology function to run in the sandbox, with its inputs already resolved.
+
+    Inputs arrive materialized rather than as a query the sandbox could issue. The sandbox has
+    no network, so every object and object set the function reads has already been resolved
+    host-side through the governed object services under the caller's policy. That keeps the
+    security boundary in one place: user code never holds a database handle or a credential,
+    only a JSON document the platform decided it was allowed to see.
+
+    The cost is that an object set is a list here, not the lazy handle Palantir gives a function,
+    so a function cannot stream a collection larger than the host is willing to materialize.
+    ``input_byte_limit`` is where that ceiling is enforced and reported.
+    """
+
+    function_api_name: str
+    function_version: str
+    entrypoint: str
+    source: str
+    inputs_json: Mapping[str, object]
+    output_type: str
+    timeout_seconds: int
+    input_byte_limit: int
+
+
+@dataclass(frozen=True)
+class FunctionExecutionResult:
+    """Sandbox outcome for one function call."""
+
+    output: object
+    stderr_byte_count: int
+    duration_ms: int
+
+
 class CodeExecutionAdapter(Protocol):
     """Boundary that executes untrusted Python outside the API process."""
 
@@ -99,4 +133,8 @@ class CodeExecutionAdapter(Protocol):
 
     def execute_python_transform(self, plan: PythonTransformPlan) -> TransformExecutionResult:
         """Execute a pinned Python transform inside the configured sandbox."""
+        ...
+
+    def execute_function(self, plan: FunctionExecutionPlan) -> FunctionExecutionResult:
+        """Execute one ontology function inside the same sandbox as a transform."""
         ...

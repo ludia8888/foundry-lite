@@ -11,6 +11,8 @@ READ/compute-only, so no idempotency key is required.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from typing import TypedDict
 
@@ -31,8 +33,10 @@ from foundry_lite.application.services.ontology_function_validation import (
     validate_function_inputs,
 )
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
+from foundry_lite.application.services.python_function_runtime import PythonFunctionRuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
+from foundry_lite.domain.ontology.function_types import FUNCTION_RUNTIME_PYTHON
 
 
 class FunctionExecutionResult(TypedDict):
@@ -54,10 +58,12 @@ class FunctionExecutionService(CoreService):
         "builder_runtime_service",
         "ontology_lookup_service",
         "osdk_application_service",
+        "python_function_runtime_service",
         "runtime_service",
     )
     builder_runtime_service: BuilderRuntimeService
     ontology_lookup_service: OntologyLookupService
+    python_function_runtime_service: PythonFunctionRuntimeService
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: SupportsAudit
 
@@ -124,8 +130,35 @@ class FunctionExecutionService(CoreService):
             operation="execute",
         )
         validate_function_inputs(row["definition"], inputs)
+        if row["definition"].get("runtime") == FUNCTION_RUNTIME_PYTHON:
+            return self._execute_python(ctx, row, inputs, execution_id)
         request = _builder_request(ctx, row, inputs, logic_run_id=execution_id)
         return _execution_result(row, request, self.builder_runtime_service.run(ctx, request))
+
+    def _execute_python(
+        self,
+        ctx: RequestContext,
+        row: FunctionTypeRow,
+        inputs: Mapping[str, object],
+        execution_id: str | None,
+    ) -> FunctionExecutionResult:
+        """A code function runs in the sandbox, not the Logic DAG, so it seeds no AI run.
+
+        The Logic DAG path exists to mediate model-driven tool calls through the broker and
+        records an AI run for that reason. Python source calls nothing: its reads were resolved
+        before the sandbox started, so there is no tool traffic to attribute and ``aiRunId`` is
+        absent rather than fabricated.
+        """
+        run_id = execution_id or _new_id("fnrun")
+        output = self.python_function_runtime_service.run(ctx, definition=row["definition"], inputs=inputs)
+        return {
+            "functionApiName": row["api_name"],
+            "logicRunId": run_id,
+            "aiRunId": None,
+            "status": "SUCCEEDED",
+            "output": {"value": output},
+            "resultHash": _result_hash(row, run_id, output),
+        }
 
     def _require_function_roles(self, ctx: RequestContext, row: FunctionTypeRow) -> None:
         """Enforce persisted allowedRoles; admin implicit, missing roles admin-only."""
@@ -189,3 +222,17 @@ def _execution_result(
         "output": dict(result.logic_result.output_json),
         "resultHash": result.logic_result.result_hash,
     }
+
+
+def _result_hash(row: FunctionTypeRow, run_id: str, output: object) -> str:
+    """Same shape as the Logic DAG's hash: identity of the code, the run, and what it produced."""
+    payload = json.dumps(
+        {
+            "functionApiName": row["api_name"],
+            "functionVersion": row["definition"].get("version"),
+            "logicRunId": run_id,
+            "output": output,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

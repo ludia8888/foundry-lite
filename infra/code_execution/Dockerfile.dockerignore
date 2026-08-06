@@ -4,6 +4,7 @@
 !libs/foundry_lite/infrastructure
 !libs/foundry_lite/infrastructure/runners
 !libs/foundry_lite/infrastructure/runners/python_transform_runner.py
+!libs/foundry_lite/infrastructure/runners/python_function_runner.py
 !libs/foundry_lite/transforms_sdk
 !libs/foundry_lite/transforms_sdk/**
 **/__pycache__

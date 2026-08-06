@@ -131,6 +131,7 @@ def container_command(
     config: ContainerCodeExecutionConfig,
     workspace: SandboxWorkspace,
     container_name: str,
+    runner_script: str = "python_transform_runner.py",
 ) -> tuple[str, ...]:
     policy = config.policy
     command = [
@@ -161,7 +162,7 @@ def container_command(
     command.extend(
         (
             "python",
-            f"{RUNTIME_DIR}/python_transform_runner.py",
+            f"{RUNTIME_DIR}/{runner_script}",
             f"{JOB_DIR}/request.json",
             f"{OUTPUT_DIR}/{RESULT_NAME}",
         )

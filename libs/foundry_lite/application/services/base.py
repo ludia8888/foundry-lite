@@ -136,6 +136,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "exact_dataset_version_reader_service": "ExactCommittedDatasetVersionReader",
     "demo_service": "DemoService",
     "function_execution_service": "FunctionExecutionService",
+    "python_function_runtime_service": "PythonFunctionRuntimeService",
     "fde_application_tool_service": "FdeApplicationToolService",
     "fde_context_service": "FdeContextService",
     "fde_data_connection_tool_service": "FdeDataConnectionToolService",

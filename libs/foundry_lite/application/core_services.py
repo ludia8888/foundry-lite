@@ -50,6 +50,7 @@ from foundry_lite.application.services.osdk_application_services import (
 from foundry_lite.application.services.osdk_oauth_client_credentials_service import OsdkOAuthClientCredentialsService
 from foundry_lite.application.services.osdk_oauth_session_service import OsdkOAuthSessionService
 from foundry_lite.application.services.pipeline_services import PipelineServices
+from foundry_lite.application.services.python_function_runtime import PythonFunctionRuntimeService
 from foundry_lite.application.services.runtime_bundle import (
     ErasureService,
     IcebergMaintenanceService,
@@ -159,6 +160,7 @@ class CoreServices:
     fde_platform_tools: FdePlatformToolService
     fde_runtime: FdeRuntimeService
     function_execution: FunctionExecutionService
+    python_function_runtime: PythonFunctionRuntimeService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
@@ -244,7 +246,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: SharedCoreSer
         fde_ontology_tools=shared["fde_ontology_tools"], fde_pilot=shared["fde_pilot"],
         fde_application_tools=shared["fde_application_tools"], fde_context=shared["fde_context"],
         fde_data_connection_tools=shared["fde_data_connection_tools"], fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],  # noqa: E501
-        function_execution=build_service(FunctionExecutionService, dependencies),
+        function_execution=build_service(FunctionExecutionService, dependencies), python_function_runtime=build_service(PythonFunctionRuntimeService, dependencies),  # noqa: E501
         iceberg_maintenance=shared["iceberg_maintenance"],
         materialization=build_service(MaterializationService, dependencies),
         media=shared["media"], citation=build_service(CitationService, dependencies),
@@ -306,6 +308,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.demo,
         services.erasure,
         services.function_execution,
+        services.python_function_runtime,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,
@@ -388,6 +391,7 @@ def _platform_collaborator_map(services: CoreServices) -> dict[str, CoreService]
         "source_onboarding_service": services.source_onboarding,
         "demo_service": services.demo,
         "function_execution_service": services.function_execution,
+        "python_function_runtime_service": services.python_function_runtime,
         "source_connection_test_service": services.source_connection_test,
         "iceberg_maintenance_service": services.iceberg_maintenance,
         "insight_review_service": services.insight_review,
