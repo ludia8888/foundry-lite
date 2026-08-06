@@ -73,3 +73,10 @@ def test_a_range_is_distinguishable_from_a_pin(requirement: str, expected: bool)
     """The distinction is reported on failure, because "your pin is stale" and "nothing in range
     is deployed" are different problems for whoever is reading the error."""
     assert is_range(requirement) is expected
+
+
+def test_a_version_renders_as_semver_regardless_of_how_it_was_written() -> None:
+    """A legacy `v1` must not surface as `v1` in an error after being read as 1.0.0, or the
+    message would contradict the range syntax the reader is being asked to use."""
+    assert str(FunctionVersion.parse("v1")) == "1.0.0"
+    assert str(FunctionVersion.parse("2.1.4")) == "2.1.4"

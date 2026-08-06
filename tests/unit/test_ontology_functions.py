@@ -582,3 +582,29 @@ def test_a_timeout_outside_the_permitted_range_is_refused(timeout: int) -> None:
 
     with pytest.raises(ValidationFailed, match="outside the permitted range"):
         normalized_function_definition(_python_function(timeoutSeconds=timeout))
+
+
+def test_optional_input_facets_survive_normalization() -> None:
+    """Media and struct inputs carry constraints the runtime relies on; dropping them silently
+    would loosen a declared bound rather than fail."""
+    from foundry_lite.domain.ontology.function_types import normalized_function_definition
+
+    normalized = normalized_function_definition(
+        _python_function(
+            inputs=[
+                {
+                    "apiName": "upload",
+                    "type": "media",
+                    "required": True,
+                    "constraints": {"minBytes": 1},
+                    "allowedMimeTypes": ["image/png"],
+                    "maxBytes": 4096,
+                }
+            ]
+        )
+    )
+
+    declared = normalized["inputs"][0]
+    assert declared["constraints"] == {"minBytes": 1}
+    assert declared["allowedMimeTypes"] == ["image/png"]
+    assert declared["maxBytes"] == 4096

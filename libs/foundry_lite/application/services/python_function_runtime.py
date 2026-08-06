@@ -126,7 +126,10 @@ class PythonFunctionRuntimeService(CoreService):
             limit=MAX_MATERIALIZED_OBJECTS + 1,
         )
         rows = result.get("objects")
-        if not isinstance(rows, Sequence):
+        # `str` satisfies Sequence, so a bare isinstance check lets a string through and the
+        # comprehension below quietly yields an empty set -- the same confidently-wrong answer
+        # the size ceiling exists to prevent.
+        if not isinstance(rows, Sequence) or isinstance(rows, str | bytes):
             raise ValidationFailed(
                 "object query did not return a collection",
                 details={"input": api_name, "objectType": object_type},

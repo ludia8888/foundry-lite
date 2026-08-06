@@ -16,6 +16,9 @@ from foundry_lite.infrastructure.adapters.action_file_scanner import (
     ClamAvActionFileScanner,
     LocalSignatureActionFileScanner,
 )
+from foundry_lite.infrastructure.adapters.container_code_execution import (
+    ContainerCodeExecutionAdapter,
+)
 from foundry_lite.infrastructure.adapters.container_trained_model_inference import (
     ContainerTrainedModelInferenceAdapter,
 )
@@ -249,7 +252,7 @@ def test_runtime_profile_factories_reject_unknown_profiles_and_blank_model(
     with pytest.raises(ValueError, match="content index"):
         runtime._content_index_adapter("unknown")
     with pytest.raises(ValueError, match="compute profile"):
-        runtime._compute_adapter("unknown")
+        runtime._compute_adapter("unknown", code_execution_adapter=ContainerCodeExecutionAdapter())
     monkeypatch.setenv("FOUNDRY_LITE_TRAINED_MODEL_PROFILE", "local")
     with pytest.raises(ValueError, match="protected runtimes"):
         runtime._trained_model_inference_adapter(RuntimeProfile.from_value("production"))

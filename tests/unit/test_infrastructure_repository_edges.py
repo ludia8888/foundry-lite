@@ -16,6 +16,9 @@ from foundry_lite.application.services.runtime_run_cursors import (
     OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV,
 )
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure.adapters.container_code_execution import (
+    ContainerCodeExecutionAdapter,
+)
 from foundry_lite.infrastructure.local_runtime import (
     _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
     RuntimeAdapterProfiles,
@@ -62,7 +65,7 @@ def test_runtime_adapter_factories_fail_closed_for_unknown_profiles(tmp_path: Pa
     with pytest.raises(ValueError, match="unknown adapter profile"):
         _dataset_storage_adapter("typo-profile", tmp_path)
     with pytest.raises(ValueError, match="unknown compute profile"):
-        _compute_adapter("typo-profile")
+        _compute_adapter("typo-profile", code_execution_adapter=ContainerCodeExecutionAdapter())
     with pytest.raises(ValueError, match="unknown connector profile"):
         _connector_adapter("typo-profile", EnvSecretProvider())
     with pytest.raises(ValueError, match="unknown adapter profile"):
