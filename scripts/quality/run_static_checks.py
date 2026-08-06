@@ -249,28 +249,46 @@ def _safe_check_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-") or "check"
 
 
-def _gitleaks_check() -> tuple[str, list[str]] | None:
+def require_external_tools() -> None:
+    """Fail closed when a lane that must scan for secrets cannot.
+
+    Kept apart from check enumeration on purpose. Enumeration answers "what does this profile
+    run", which is a question about configuration and must be answerable anywhere -- a test, a
+    docs generator, a lane that never invokes the tools. Folding a fatal environment assertion
+    into it made the same test pass in the PR lane, which installs gitleaks, and kill the
+    process in the coverage lane, which does not.
+    """
     if shutil.which("gitleaks"):
-        return (
-            "gitleaks",
-            [
-                "gitleaks",
-                "dir",
-                "--no-banner",
-                "--redact",
-                "--config",
-                ".gitleaks.toml",
-                "--report-path",
-                "artifacts/quality/gitleaks.json",
-                "--report-format",
-                "json",
-            ],
-        )
+        return
     if os.environ.get("CI") == "true" or os.environ.get("FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS") == "1":
         print("ERROR: gitleaks not on PATH; CI/release evidence cannot skip the P9 secret scan.", file=sys.stderr)
         raise SystemExit(1)
     print("WARN: gitleaks not on PATH; install with 'brew install gitleaks' (P9 gate skipped locally only).")
-    return None
+
+
+def _gitleaks_check() -> tuple[str, list[str]]:
+    return (
+        "gitleaks",
+        [
+            "gitleaks",
+            "dir",
+            "--no-banner",
+            "--redact",
+            "--config",
+            ".gitleaks.toml",
+            "--report-path",
+            "artifacts/quality/gitleaks.json",
+            "--report-format",
+            "json",
+        ],
+    )
+
+
+def _available_checks(checks: list[tuple[str, list[str]]]) -> list[tuple[str, list[str]]]:
+    """Drop checks whose tool is absent. Only reachable locally: CI refused to start without it."""
+    if shutil.which("gitleaks"):
+        return checks
+    return [check for check in checks if check[0] != "gitleaks"]
 
 
 def _all_checks(profile: str = "full") -> list[tuple[str, list[str]]]:
@@ -279,9 +297,7 @@ def _all_checks(profile: str = "full") -> list[tuple[str, list[str]]]:
     else:
         checks = list(HEAVY_CHECKS)
     # Both profiles: the scan is worth far more before the merge than after it.
-    gitleaks = _gitleaks_check()
-    if gitleaks is not None:
-        checks.insert(0, gitleaks)
+    checks.insert(0, _gitleaks_check())
     checks.extend((name, [PYTHON, *script]) for name, script in PYTHON_CHECKS)
     return checks
 
@@ -363,8 +379,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     (ROOT / "artifacts" / "quality").mkdir(parents=True, exist_ok=True)
+    require_external_tools()
     started = time.perf_counter()
-    results = _run_checks(_all_checks(args.profile), _check_env(), args.jobs)
+    results = _run_checks(_available_checks(_all_checks(args.profile)), _check_env(), args.jobs)
     return _report(results, args.jobs, time.perf_counter() - started)
 
 
