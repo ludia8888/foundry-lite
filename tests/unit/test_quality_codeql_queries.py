@@ -17,6 +17,7 @@ checks still run; only the optional full-DB build is skipped.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -157,5 +158,37 @@ def test_a_pydantic_validation_call_is_excluded_from_the_sinks() -> None:
     """
     query = (QUERIES_DIR / "raw-json-to-service.ql").read_text(encoding="utf-8")
 
-    assert "not _isPydanticValidationCall(call)" in query
+    assert "not isPydanticValidationCall(call)" in query
     assert '"model_validate", "parse_obj", "model_validate_json"' in query
+
+
+def test_no_declaration_starts_with_an_underscore() -> None:
+    """QL identifiers cannot begin with `_`; the database build fails to parse the query.
+
+    Python habits carry over badly here. Naming a helper `_isPydanticValidationCall` produced
+    `extraneous input '_'` and killed the whole analysis, which surfaces as "CodeQL failure" with
+    no findings rather than as a syntax error anyone would look for. There is no CodeQL CLI in
+    this toolchain, so a query's syntax is only ever exercised on a push -- this check is the
+    substitute for the compiler we do not have locally.
+    """
+    offenders: list[str] = []
+    declaration = re.compile(r"^\s*(?:private\s+)?(?:predicate|class|module|bindingset\[[^]]*\]\s*predicate)\s+(_\w+)")
+    for query in sorted(QUERIES_DIR.glob("*.ql")):
+        for number, line in enumerate(query.read_text(encoding="utf-8").splitlines(), start=1):
+            match = declaration.match(line)
+            if match:
+                offenders.append(f"{query.name}:{number} {match.group(1)}")
+
+    assert not offenders, f"QL declarations cannot start with an underscore: {offenders}"
+
+
+def test_no_call_targets_an_underscore_prefixed_name() -> None:
+    """Catches the call site too, in case a rename leaves one behind."""
+    offenders: list[str] = []
+    for query in sorted(QUERIES_DIR.glob("*.ql")):
+        text = query.read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if re.search(r"(?<![\w.])_[a-z]\w*\s*\(", line):
+                offenders.append(f"{query.name}:{number}")
+
+    assert not offenders, f"QL cannot call an underscore-prefixed name: {offenders}"

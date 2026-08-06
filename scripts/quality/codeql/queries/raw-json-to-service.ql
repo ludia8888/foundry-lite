@@ -36,7 +36,7 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
     exists(DataFlow::CallCfgNode call |
       call.getLocation().getFile().getRelativePath().matches("apps/api/%") and
       exists(int i | sink = call.getArg(i)) and
-      not _isPydanticValidationCall(call)
+      not isPydanticValidationCall(call)
     )
   }
 
@@ -67,7 +67,7 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
  * subclass declared elsewhere, and `model_validate` / `parse_obj` / `model_validate_json` are not
  * names that appear outside Pydantic.
  */
-predicate _isPydanticValidationCall(DataFlow::CallCfgNode call) {
+predicate isPydanticValidationCall(DataFlow::CallCfgNode call) {
   exists(string name |
     name = call.getFunction().asCfgNode().(AttrNode).getName() and
     name in ["model_validate", "parse_obj", "model_validate_json"]
