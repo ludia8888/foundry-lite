@@ -15,6 +15,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+#: Reviewed false positives from CodeQL's built-in queries, which this repository cannot edit.
+#:
+#: An inline `# codeql[rule]` comment does not work here: `codeql database analyze` never writes
+#: a `suppressions` entry into the SARIF -- GitHub applies inline suppressions when it renders
+#: alerts, not when the CLI produces them. Verified against the artifact from run 31087775875,
+#: where all three results carried no `suppressions` field at all.
+#:
+#: Each entry names the rule, the exact path, and why the finding is wrong. A path is required so
+#: an allowance cannot silently widen to a whole rule, and the reason is required so the next
+#: reader can re-judge it rather than inherit it.
+REVIEWED_FALSE_POSITIVES: dict[tuple[str, str], str] = {
+    ("py/clear-text-logging-sensitive-data", "scripts/quality/pr_fast_gate.py"): (
+        "The taint is the diff this secret scan reads; what it prints is not. `_violation` builds "
+        "each record from a path, a line number, and the name of the pattern that fired, never "
+        "from the matched text -- printing the match would put the credential in the log of every "
+        "run that detects one. CodeQL cannot tell a dict's keys from its values, so the path "
+        "carries the taint of the lines beside it."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class SarifFinding:
@@ -76,8 +96,10 @@ def partitioned_findings(
                 rule_id = str(result.get("ruleId", ""))
                 if rule_id_prefix and not rule_id.startswith(rule_id_prefix):
                     continue
-                target = suppressed if result.get("suppressions") else blocking
-                target.append(_finding_from_result(result))
+                finding = _finding_from_result(result)
+                is_allowed = (rule_id, finding.path) in REVIEWED_FALSE_POSITIVES or result.get("suppressions")
+                target = suppressed if is_allowed else blocking
+                target.append(finding)
     return blocking, suppressed
 
 

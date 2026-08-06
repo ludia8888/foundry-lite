@@ -123,3 +123,34 @@ def test_partitioning_reports_both_sides(tmp_path: Path) -> None:
 
     assert [finding.rule_id for finding in blocking] == ["b/rule"]
     assert [finding.rule_id for finding in suppressed] == ["a/rule"]
+
+
+def test_a_reviewed_false_positive_is_allowed_without_an_inline_comment(tmp_path: Path) -> None:
+    """`codeql database analyze` never writes `suppressions`; GitHub applies them when rendering.
+
+    Verified against the artifact from run 31087775875: all three results carried no
+    `suppressions` field, so an inline `# codeql[rule]` comment could not have worked. The
+    allowlist is the only mechanism that reaches this gate.
+    """
+    (rule_id, path), _reason = next(iter(fail_on_sarif_findings.REVIEWED_FALSE_POSITIVES.items()))
+    result = _result(rule_id)
+    result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = path
+    sarif = _write_sarif(tmp_path / "results.sarif", [result])
+
+    assert fail_on_sarif_findings.main([str(sarif)]) == 0
+
+
+def test_the_allowance_is_scoped_to_one_path(tmp_path: Path) -> None:
+    """A rule-wide allowance would hide the next occurrence somewhere nobody reviewed."""
+    (rule_id, _path), _reason = next(iter(fail_on_sarif_findings.REVIEWED_FALSE_POSITIVES.items()))
+    result = _result(rule_id)
+    result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = "apps/api/somewhere_else.py"
+    sarif = _write_sarif(tmp_path / "results.sarif", [result])
+
+    assert fail_on_sarif_findings.main([str(sarif)]) == 1
+
+
+def test_every_allowance_carries_a_reason() -> None:
+    """An entry without one is inherited rather than re-judged."""
+    for key, reason in fail_on_sarif_findings.REVIEWED_FALSE_POSITIVES.items():
+        assert len(reason) > 80, key
