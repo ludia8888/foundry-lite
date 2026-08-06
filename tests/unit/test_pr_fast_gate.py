@@ -261,13 +261,20 @@ def test_pr_security_report_has_quantitative_gate_contract(monkeypatch, tmp_path
 
 
 def test_pr_static_profile_excludes_network_and_product_rehearsals() -> None:
+    """What the PR lane drops is network round trips and product rehearsals, nothing else.
+
+    gitleaks used to be dropped here too, which read as a latency decision but was really a
+    coverage one: it scans local files and needs no network, and a credential it catches after
+    the merge is already in history permanently. xenon was dropped on the same reasoning at 6.8s.
+    Both then let a regression through on one push and turned main red, so both now run here.
+    """
     static = _load_module(ROOT / "scripts/quality/run_static_checks.py", "pr_static_profile")
 
     names = {name for name, _command in static._all_checks("pr")}
 
     assert {"pyright", "mypy", "bandit", "ruff-lint", "ruff-format", "tach"} <= names
+    assert {"gitleaks", "xenon"} <= names
     assert "semgrep" not in names
     assert "pip-audit" not in names
-    assert "gitleaks" not in names
     assert "pipeline-artifact-execution" not in names
     assert "frontend-foundation" not in names
