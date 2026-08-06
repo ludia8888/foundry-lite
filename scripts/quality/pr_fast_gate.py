@@ -481,6 +481,10 @@ def _run_command(name: str, command: list[str], timeout_seconds: float) -> Comma
 
 
 def run_gate(base: str, head: str, budget_seconds: float) -> int:
+    # Printed because two attempts at tuning this were guesses. `os.cpu_count()` is what the
+    # formula reads, and a runner that reports a different number than assumed is the whole
+    # difference between a lane that finishes and one that hits its ceiling.
+    print(f"gate concurrency: cores={os.cpu_count()} slots={_TOP_LEVEL_SLOTS} static_jobs={_static_jobs()}")
     """Run independent PR checks in parallel and persist one bounded report."""
     started = time.perf_counter()
     plan = build_plan(changed_files(base, head))
@@ -514,6 +518,7 @@ def _print_dropped_linked_tests(plan: PullRequestPlan) -> None:
 
 
 _TOP_LEVEL_SLOTS = 2
+_MINIMUM_STATIC_JOBS = 3
 
 
 def _static_jobs() -> int:

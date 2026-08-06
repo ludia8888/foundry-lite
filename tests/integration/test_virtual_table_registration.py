@@ -340,34 +340,50 @@ def test_a_bulk_run_over_already_registered_tables_reports_them_rather_than_dupl
 
 def test_a_scheduled_pass_registers_only_what_appeared_since_the_last_one(service: Any, source_url: str) -> None:
     """Diffing first is what makes a pass over a stable source silent instead of one conflict
-    per existing table."""
+    per existing table.
+
+    Runs against its own schema. Scoping to `public` would make the assertion depend on which
+    other tests had already created a table there, which under a shuffled order is a failure
+    whose cause is in a different test.
+    """
     built, _ = service
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE SCHEMA scheduled_pass"))
+        connection.execute(text("CREATE TABLE scheduled_pass.first_table (id integer)"))
+    engine.dispose()
+
     first = built.run_auto_registration(
-        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("scheduled_pass",), ctx=_CTX
     )
-    assert [record.name for record in first.registered] == ["youtube_videos"]
+    assert [record.name for record in first.registered] == ["first_table"]
 
     engine = create_engine(source_url, future=True)
     with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE instagram_posts (id integer)"))
+        connection.execute(text("CREATE TABLE scheduled_pass.second_table (id integer)"))
     engine.dispose()
 
     second = built.run_auto_registration(
-        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("scheduled_pass",), ctx=_CTX
     )
 
-    assert [record.name for record in second.registered] == ["instagram_posts"]
+    assert [record.name for record in second.registered] == ["second_table"]
     assert second.failures == ()
 
 
-def test_a_pass_over_an_unchanged_source_does_nothing(service: Any) -> None:
+def test_a_pass_over_an_unchanged_source_does_nothing(service: Any, source_url: str) -> None:
     built, _ = service
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE SCHEMA unchanged_pass"))
+        connection.execute(text("CREATE TABLE unchanged_pass.only (id integer)"))
+    engine.dispose()
     built.run_auto_registration(
-        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("unchanged_pass",), ctx=_CTX
     )
 
     again = built.run_auto_registration(
-        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("unchanged_pass",), ctx=_CTX
     )
 
     assert again.registered == ()
