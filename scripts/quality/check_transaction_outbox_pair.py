@@ -82,7 +82,13 @@ class TransactionEvidence:
 
 
 MethodCallKey = tuple[str, str, str]
-EvidenceCacheKey = tuple[MethodCallKey, frozenset[MethodCallKey]]
+# Keyed on the method alone, not on the path that reached it. Including `seen` made the cache
+# miss once per distinct route to the same method, so the walk cost grew with the number of
+# paths rather than the number of methods. A call like `self.runtime_service._audit(...)` cannot
+# be resolved to one class, so it fans out to every method of that name; adding one more `_audit`
+# to the codebase took this check from 5s to over 415s. Evidence for a method under a given
+# transaction parameter does not depend on who called it, so the path does not belong in the key.
+EvidenceCacheKey = MethodCallKey
 
 
 def _repo_relative(path: Path, project_root: Path = ROOT) -> str:
@@ -269,7 +275,7 @@ def _nested_transaction_evidence(
         key = (callee.class_name, callee.name, callee_transaction_name)
         if key in seen:
             continue
-        cache_key = (key, seen)
+        cache_key = key
         if cache_key not in evidence_cache:
             evidence_cache[cache_key] = _analyze_statements(
                 class_name=callee.class_name,
