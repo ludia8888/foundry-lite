@@ -142,18 +142,33 @@ run_coverage_gate() {
   # pytest-randomly is auto-loaded and shuffles test order per run, exposing
   # hidden inter-test dependencies (state leaks across fixtures, shared module
   # globals, etc.). A consistent --randomly-seed is logged so failures can be
-  # reproduced exactly. This lane runs serially on purpose: per-layer coverage
-  # is the gate's output, and sharding the suite across xdist workers shifted
-  # measured domain-layer coverage below threshold (import-time-only lines are
-  # attributed to whichever worker imports the module first), so the layer
-  # thresholds are only trustworthy from a single-process run. Wall-clock
-  # parallelism comes from the separate CI lanes, not from sharding this one.
+  # reproduced exactly.
+  #
+  # This lane used to run serially, on the theory that sharding shifted per-layer coverage below
+  # threshold because import-time-only lines are attributed to whichever worker imports the
+  # module first. Measured on tests/unit (3071 tests), that is not what happens: pytest-cov
+  # writes one data file per worker and combines them, and a combine is a union, so serial and
+  # sharded runs agree exactly -- 64110/78271 lines, 10287/15966 branches, 2135 partial, and
+  # identical per-file summaries across all 949 files. Wall clock went 5m30s -> 2m16s.
+  #
+  # The one line that did differ before this change was apps/api runtime.py:125, the engine
+  # dispose inside reset_api_runtime_for_tests. It was never covered by a test: the lifespan
+  # suite builds runtimes whose engine is a bare object() with no dispose, so the branch was
+  # reached only when some unrelated test left a real engine in the process-global singleton.
+  # Serial execution was reporting a test-isolation leak as coverage; sharding exposed it. A
+  # test now covers it deliberately, so the difference is gone rather than tolerated.
+  #
+  # --dist loadfile, not the default per-test distribution: integration tests own module-scoped
+  # testcontainers, and scattering one file's tests across workers would build a container per
+  # worker. Keeping a file on one worker also measured fastest of the three configurations.
   # 93 is a RATCHET FLOOR, not a target. Measured 93.20% on af2e228a (4763 passed, 36m56s)
   # after PRs #163/#164 landed ~7k statements of Action/MCP/OSDK code without matching tests.
   # The floor exists so the debt cannot grow while it is being paid down; raise it as coverage
   # recovers rather than treating 93 as the standard. The per-layer and public-API gates below
   # still hold their own thresholds.
   uv run pytest tests \
+    -n auto \
+    --dist loadfile \
     --cov=libs/foundry_lite \
     --cov=apps/api \
     --cov=apps/cli \

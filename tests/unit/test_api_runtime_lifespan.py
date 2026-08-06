@@ -39,6 +39,41 @@ def test_initialize_api_runtime_builds_once(monkeypatch) -> None:  # type: ignor
     assert len(calls) == 1
 
 
+def test_reset_disposes_the_engine_before_clearing_the_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Dropping the runtime without disposing the engine leaks its connection pool.
+
+    Nothing asserted this. Every test that reset a runtime built one whose engine was a bare
+    ``object()``, which has no ``dispose``, so the disposing branch was only ever reached when
+    an unrelated test left a real engine behind in the process-global singleton. That made the
+    line look covered in a single-process run and uncovered the moment the suite was sharded --
+    the coverage was a test-isolation leak, not a test.
+    """
+    disposals: list[str] = []
+
+    class _Engine:
+        @staticmethod
+        def dispose() -> None:
+            disposals.append("engine")
+
+    class _Foundry:
+        engine = _Engine()
+
+        def __init__(self, *, dependencies: object) -> None:
+            del dependencies
+
+    monkeypatch.setattr(runtime, "FoundryLite", _Foundry)
+    monkeypatch.setattr(runtime, "create_runtime_core_dependencies", lambda **kwargs: SimpleNamespace(kwargs=kwargs))
+    monkeypatch.setattr(runtime, "auth_provider_from_env", lambda source=None: SimpleNamespace(name="auth"))
+
+    runtime.initialize_api_runtime({})
+    assert runtime.is_api_runtime_initialized()
+
+    runtime.reset_api_runtime_for_tests()
+
+    assert disposals == ["engine"]
+    assert not runtime.is_api_runtime_initialized()
+
+
 def test_fastapi_lifespan_initializes_and_instruments(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     fake_engine = object()
     pipelines = SimpleNamespace(recover_preview_runs=lambda: {"processed": 0})
