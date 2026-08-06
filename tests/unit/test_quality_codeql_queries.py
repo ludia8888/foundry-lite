@@ -132,3 +132,16 @@ def test_run_script_blocks_missing_codeql_in_strict_mode() -> None:
     )
     assert result.returncode == 1
     assert "cannot skip the P7 data-flow gate" in result.stderr
+
+
+def test_the_raw_json_barrier_matches_subclasses_of_base_model() -> None:
+    """Nobody calls `pydantic.BaseModel.model_validate` directly.
+
+    A bare BaseModel declares no fields and validates nothing, so validation is always
+    `MyModel.model_validate(payload)`. Matching only the base class left the barrier unreachable,
+    and the rule flagged the very call that satisfies it: a router that added an envelope model
+    kept its finding count while gaining a new one for the `model_validate` call itself.
+    """
+    query = (QUERIES_DIR / "raw-json-to-service.ql").read_text(encoding="utf-8")
+
+    assert 'getMember("BaseModel").getASubclass*()' in query

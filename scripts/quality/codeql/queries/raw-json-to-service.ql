@@ -34,15 +34,21 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
   }
 
   predicate isBarrier(DataFlow::Node node) {
-    // Pydantic BaseModel.model_validate / parse_obj sanitises the value
-    exists(API::Node bm |
-      bm = API::moduleImport("pydantic").getMember("BaseModel") and
+    // Pydantic validation sanitises the value.
+    //
+    // `getASubclass*()` and not `BaseModel` alone: nobody calls
+    // `pydantic.BaseModel.model_validate` directly, because a bare BaseModel declares no fields
+    // and validates nothing. Validation is always `MyModel.model_validate(payload)`. Matching
+    // only the base class made the barrier unreachable, so the rule flagged the very call that
+    // satisfies it -- a router that added a model went from one finding to two.
+    exists(API::Node model |
+      model = API::moduleImport("pydantic").getMember("BaseModel").getASubclass*() and
       (
-        node = bm.getMember("model_validate").getACall()
+        node = model.getMember("model_validate").getACall()
         or
-        node = bm.getMember("parse_obj").getACall()
+        node = model.getMember("parse_obj").getACall()
         or
-        node = bm.getMember("model_validate_json").getACall()
+        node = model.getMember("model_validate_json").getACall()
       )
     )
   }

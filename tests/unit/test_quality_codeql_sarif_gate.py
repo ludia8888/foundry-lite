@@ -77,3 +77,49 @@ def test_codeql_sarif_gate_can_scope_to_custom_rules(tmp_path: Path) -> None:
     findings = fail_on_sarif_findings.collect_findings(sarif, rule_id_prefix="foundry-lite/")
 
     assert [finding.rule_id for finding in findings] == ["foundry-lite/raw-json-flows-to-service"]
+
+
+def _suppressed_result(rule_id: str) -> dict:
+    """CodeQL emits `suppressions` only for a result the source suppressed inline."""
+    return {**_result(rule_id), "suppressions": [{"kind": "inSource", "justification": "reviewed"}]}
+
+
+def test_a_suppressed_finding_does_not_block(tmp_path: Path) -> None:
+    """A gate with no way to record a reviewed false positive gets fixed or gets ignored.
+
+    This one was ignored: it stayed red for three days across every push, because the only way
+    to clear the board was to change code that was already correct.
+    """
+    sarif = _write_sarif(tmp_path / "results.sarif", [_suppressed_result("py/clear-text-logging")])
+
+    assert fail_on_sarif_findings.main([str(sarif)]) == 0
+
+
+def test_a_suppressed_finding_is_still_printed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """An allowance that disappears from the output is an allowance nobody revisits."""
+    sarif = _write_sarif(tmp_path / "results.sarif", [_suppressed_result("py/clear-text-logging")])
+
+    fail_on_sarif_findings.main([str(sarif)])
+
+    output = capsys.readouterr().out
+    assert "suppressed in source: 1" in output
+    assert "py/clear-text-logging" in output
+
+
+def test_an_unsuppressed_finding_still_blocks_beside_a_suppressed_one(tmp_path: Path) -> None:
+    """Suppressing one result must not excuse the next; they are partitioned, not merged."""
+    sarif = _write_sarif(
+        tmp_path / "results.sarif",
+        [_suppressed_result("py/clear-text-logging"), _result("foundry-lite/raw-json-flows-to-service")],
+    )
+
+    assert fail_on_sarif_findings.main([str(sarif)]) == 1
+
+
+def test_partitioning_reports_both_sides(tmp_path: Path) -> None:
+    sarif = _write_sarif(tmp_path / "results.sarif", [_suppressed_result("a/rule"), _result("b/rule")])
+
+    blocking, suppressed = fail_on_sarif_findings.partitioned_findings(sarif)
+
+    assert [finding.rule_id for finding in blocking] == ["b/rule"]
+    assert [finding.rule_id for finding in suppressed] == ["a/rule"]
