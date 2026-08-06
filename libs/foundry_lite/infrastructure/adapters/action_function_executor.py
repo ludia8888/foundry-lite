@@ -1,4 +1,4 @@
-"""Logic DAG adapter for compute-only, version-pinned Action functions."""
+"""In-process adapter for compute-only, version-pinned Action functions."""
 
 from __future__ import annotations
 
@@ -13,10 +13,16 @@ from foundry_lite.domain.action_runtime.ontology_edit_batch import OntologyEditB
 ActionFunctionDriver = Callable[[ActionFunctionExecutionRequest], Mapping[str, object]]
 
 
-class LogicDagActionFunctionExecutor:
-    """Adapter that delegates reads/compute to the existing Logic DAG runtime."""
+class InProcessActionFunctionExecutor:
+    """Adapter that delegates compute to the function execution service.
 
-    profile_name = "logic-dag-action-function"
+    Named for where it runs rather than how, because it no longer picks the runtime: the service
+    dispatches on the function's declared `runtime`, so an Action can be backed by a Logic DAG or
+    by Python source and this adapter cannot tell the difference. Either way the function returns
+    an edit batch and only the Action committer writes.
+    """
+
+    profile_name = "in-process-action-function"
 
     def __init__(self) -> None:
         self._driver: ActionFunctionDriver | None = None

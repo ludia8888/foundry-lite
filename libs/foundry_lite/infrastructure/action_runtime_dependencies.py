@@ -12,7 +12,7 @@ from foundry_lite.infrastructure.adapters.action_file_scanner import (
     ClamAvActionFileScannerConfig,
     LocalSignatureActionFileScanner,
 )
-from foundry_lite.infrastructure.adapters.action_function_executor import LogicDagActionFunctionExecutor
+from foundry_lite.infrastructure.adapters.action_function_executor import InProcessActionFunctionExecutor
 from foundry_lite.infrastructure.adapters.action_notification_recipient_directory import (
     action_notification_directory_from_json,
 )
@@ -55,7 +55,7 @@ def action_notification_recipient_directory_adapter(*, is_protected: bool) -> Ac
 __all__ = [
     "LocalActionRunOrchestrator",
     "ConnectorActionEffectExecutor",
-    "LogicDagActionFunctionExecutor",
+    "InProcessActionFunctionExecutor",
     "TemporalActionRunConfig",
     "TemporalActionRunOrchestrator",
     "action_file_scanner_adapter",

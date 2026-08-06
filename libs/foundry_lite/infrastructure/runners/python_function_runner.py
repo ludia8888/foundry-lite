@@ -23,8 +23,9 @@ from pathlib import Path
 _RESULT_SCHEMA_VERSION = 1
 
 # The value shapes a function may return, keyed by the declared ontology output type. `object`
-# and `objectSet` are absent on purpose: returning objects is an Ontology edit, which is a
-# separate contract with provenance and a write path, not a value handed back to the caller.
+# and `objectSet` are absent on purpose: a function does not hand objects back to its caller.
+# Editing them is `ontology_edit_batch`, which is a proposal the Action committer re-validates
+# and applies -- the function itself never holds a write path.
 _OUTPUT_VALIDATORS: Mapping[str, Callable[[object], bool]] = {
     "boolean": lambda value: isinstance(value, bool),
     "string": lambda value: isinstance(value, str),
@@ -36,7 +37,21 @@ _OUTPUT_VALIDATORS: Mapping[str, Callable[[object], bool]] = {
     "timestamp": lambda value: isinstance(value, str),
     "struct": lambda value: isinstance(value, dict),
     "array": lambda value: isinstance(value, list),
+    "ontology_edit_batch": lambda value: _is_edit_batch(value),
 }
+
+
+def _is_edit_batch(value: object) -> bool:
+    """Shape only. The host re-parses through OntologyEditBatch, which owns the real contract.
+
+    Checking here anyway turns "the function returned the wrong thing" into a typed sandbox
+    failure naming the function, rather than a parse error surfacing from the Action committer
+    one layer away from the code that caused it.
+    """
+    if not isinstance(value, dict):
+        return False
+    edits = value.get("edits")
+    return isinstance(edits, list) and bool(edits)
 
 
 @dataclass(frozen=True)

@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.adapters.action_function_executor import LogicDagActionFunctionExecutor
+from foundry_lite.infrastructure.adapters.action_function_executor import InProcessActionFunctionExecutor
 from foundry_lite.infrastructure.adapters.action_run_orchestrator import ACTION_RUN_TASK_QUEUE
 from foundry_lite.infrastructure.adapters.action_temporal_workflows import (
     ACTION_RUN_RESULT_PREFIX,
@@ -61,7 +61,7 @@ def run_activity() -> None:
         should_initialize_schema=False,
     )
     executor = cast(
-        LogicDagActionFunctionExecutor,
+        InProcessActionFunctionExecutor,
         foundry._services.action.distributed.action_function_executor,
     )
     executor.register_driver(lambda request: _function_result(foundry, request.run_id, request.inputs, worker_id))
