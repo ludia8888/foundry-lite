@@ -24,6 +24,7 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureMode,
 )
 from foundry_lite.application.ports.virtual_table import (
+    ExternalTableRef,
     VirtualTableColumn,
     VirtualTablePredicate,
     VirtualTableQuery,
@@ -95,6 +96,29 @@ class PostgresVirtualTableReader:
                 AdapterFailure(self.profile_name, "describe", "not_found", False, f"external table not found: {table}")
             )
         return VirtualTableSchema(columns=columns)
+
+    def discover(self, *, connection_url: str, schema_names: tuple[str, ...] = ()) -> tuple[ExternalTableRef, ...]:
+        """List reachable tables, excluding the system catalogs nobody registers a pointer to.
+
+        Base tables and views only: a sequence or an index is not something a pointer can read,
+        and returning them would put entries in a picker that fail the moment anyone selects one.
+        """
+        clause = "AND table_schema = ANY(:schemas)" if schema_names else ""
+        statement = text(
+            "SELECT table_schema, table_name FROM information_schema.tables "
+            "WHERE table_type IN ('BASE TABLE', 'VIEW') "
+            "AND table_schema NOT IN ('pg_catalog', 'information_schema') "
+            f"{clause} ORDER BY table_schema, table_name"
+        )
+        parameters: dict[str, object] = {"schemas": list(schema_names)} if schema_names else {}
+        with self._guard("discover"):
+            engine = create_engine(connection_url, future=True)
+            with engine.connect() as connection:
+                rows = connection.execute(statement, parameters).mappings()
+                return tuple(
+                    ExternalTableRef(schema_name=str(row["table_schema"]), table_name=str(row["table_name"]))
+                    for row in rows
+                )
 
     def read(
         self,

@@ -206,7 +206,17 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             *(OperationClientSurface(item.api_name, ("execute",)) for item in ontology.functions),
         ),
         object_sets=("list", "create", "get"),
-        virtual_tables=("register", "list", "get", "schemaDrift", "delete"),
+        virtual_tables=(
+            "register",
+            "discover",
+            "registerMany",
+            "previewAutoRegistration",
+            "runAutoRegistration",
+            "list",
+            "get",
+            "schemaDrift",
+            "delete",
+        ),
         materializations=("run", "list"),
         aip=(
             OperationClientSurface("builder", ("validate", "run")),

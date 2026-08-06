@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.virtual_table import ExternalTableRef
 from foundry_lite.application.services.virtual_table_service import VirtualTableService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
@@ -244,3 +245,166 @@ def test_the_audit_trail_records_the_pointer_and_not_the_way_behind_it(service: 
     assert event["event_type"] == "virtual_table.register"
     assert event["after_ref"]["name"] == "youtube_videos"
     assert "hunter2" not in str(event) and "databaseUrlSecretRef" not in str(event["after_ref"])
+
+
+# --- discovery and bulk registration --------------------------------------------------
+
+
+def test_discovery_lists_reachable_tables_and_skips_system_catalogs(service: Any) -> None:
+    """A picker full of pg_catalog entries is a picker nobody can use."""
+    built, _ = service
+
+    found = built.discover_external_tables(config=_CONFIG, ctx=_CTX)
+
+    names = {ref.qualified_name for ref in found}
+    assert "public.youtube_videos" in names
+    assert not any(ref.schema_name in {"pg_catalog", "information_schema"} for ref in found)
+
+
+def test_discovery_can_be_narrowed_to_named_schemas(service: Any, source_url: str) -> None:
+    built, _ = service
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS analytics"))
+        connection.execute(text("CREATE TABLE IF NOT EXISTS analytics.rollups (id integer)"))
+    engine.dispose()
+
+    found = built.discover_external_tables(config=_CONFIG, schema_names=("analytics",), ctx=_CTX)
+
+    assert {ref.qualified_name for ref in found} == {"analytics.rollups"}
+
+
+def test_bulk_registration_mirrors_the_source_hierarchy(service: Any, source_url: str) -> None:
+    """A flat folder of hundreds of pointers is unusable; the source's schema is a grouping
+    the people who built it already chose."""
+    built, _ = service
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS analytics"))
+        connection.execute(text("CREATE TABLE IF NOT EXISTS analytics.rollups (id integer)"))
+    engine.dispose()
+
+    result = built.register_virtual_tables(
+        parent_rid="folder-1",
+        connection_rid="conn-1",
+        config=_CONFIG,
+        tables=[
+            ExternalTableRef(schema_name="public", table_name="youtube_videos"),
+            ExternalTableRef(schema_name="analytics", table_name="rollups"),
+        ],
+        ctx=_CTX,
+    )
+
+    assert result.failures == ()
+    assert {record.parent_rid for record in result.registered} == {"folder-1/public", "folder-1/analytics"}
+
+
+def test_one_unregistrable_table_does_not_abandon_the_others(service: Any) -> None:
+    """A source that renamed one table between listing and registering should not cost the rest."""
+    built, _ = service
+
+    result = built.register_virtual_tables(
+        parent_rid="folder-1",
+        connection_rid="conn-1",
+        config=_CONFIG,
+        tables=[
+            ExternalTableRef(schema_name="public", table_name="youtube_videos"),
+            ExternalTableRef(schema_name="public", table_name="renamed_away"),
+        ],
+        ctx=_CTX,
+    )
+
+    assert [record.name for record in result.registered] == ["youtube_videos"]
+    assert [failure.table for failure in result.failures] == ["public.renamed_away"]
+
+
+def test_a_bulk_run_over_already_registered_tables_reports_them_rather_than_duplicating(service: Any) -> None:
+    """Re-running a bulk registration is the normal case once auto-registration exists."""
+    built, _ = service
+    tables = [ExternalTableRef(schema_name="public", table_name="youtube_videos")]
+    built.register_virtual_tables(
+        parent_rid="folder-1", connection_rid="conn-1", config=_CONFIG, tables=tables, ctx=_CTX
+    )
+
+    second = built.register_virtual_tables(
+        parent_rid="folder-1", connection_rid="conn-1", config=_CONFIG, tables=tables, ctx=_CTX
+    )
+
+    assert second.registered == ()
+    assert [failure.reason for failure in second.failures] == ["ConflictDetected"]
+    assert len(built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX)) == 1
+
+
+# --- automatic registration -----------------------------------------------------------
+
+
+def test_a_scheduled_pass_registers_only_what_appeared_since_the_last_one(service: Any, source_url: str) -> None:
+    """Diffing first is what makes a pass over a stable source silent instead of one conflict
+    per existing table."""
+    built, _ = service
+    first = built.run_auto_registration(
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+    assert [record.name for record in first.registered] == ["youtube_videos"]
+
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE instagram_posts (id integer)"))
+    engine.dispose()
+
+    second = built.run_auto_registration(
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+
+    assert [record.name for record in second.registered] == ["instagram_posts"]
+    assert second.failures == ()
+
+
+def test_a_pass_over_an_unchanged_source_does_nothing(service: Any) -> None:
+    built, _ = service
+    built.run_auto_registration(
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+
+    again = built.run_auto_registration(
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+
+    assert again.registered == ()
+    assert again.failures == ()
+
+
+def test_a_table_that_disappeared_is_reported_and_not_unregistered(service: Any, source_url: str) -> None:
+    """The platform cannot tell a dropped table from a source that is briefly unreachable, and
+    removing the pointer would break every consumer built on it."""
+    built, _ = service
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE seasonal (id integer)"))
+    engine.dispose()
+    built.run_auto_registration(
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE seasonal"))
+    engine.dispose()
+
+    plan = built.preview_auto_registration(
+        connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+
+    assert "public.seasonal" in plan.missing_tables
+    assert any(record.name == "seasonal" for record in built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX))
+
+
+def test_preview_changes_nothing(service: Any) -> None:
+    """A preview that registered would make the scheduler's dry run a live run."""
+    built, _ = service
+
+    plan = built.preview_auto_registration(
+        connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+    )
+
+    assert [ref.qualified_name for ref in plan.new_tables] == ["public.youtube_videos"]
+    assert built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX) == ()
