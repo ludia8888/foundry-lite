@@ -26,10 +26,17 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
   }
 
   predicate isSink(DataFlow::Node sink) {
-    // The 'core' or any service in the application layer being called
+    // Any application-layer call argument, except the argument to a Pydantic validation call.
+    //
+    // The exclusion belongs here and not in `isBarrier`. A barrier stops flow *at a node*, but
+    // the sink is the argument, and taint reaches an argument before it reaches the call that
+    // consumes it. Marking `model_validate` as a barrier therefore never prevented the finding:
+    // the very call that satisfies the rule was reported as violating it, which is why adding an
+    // envelope model to a router raised its count instead of clearing it.
     exists(DataFlow::CallCfgNode call |
       call.getLocation().getFile().getRelativePath().matches("apps/api/%") and
-      exists(int i | sink = call.getArg(i))
+      exists(int i | sink = call.getArg(i)) and
+      not _isPydanticValidationCall(call)
     )
   }
 
@@ -52,6 +59,19 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
       )
     )
   }
+}
+
+/**
+ * A Pydantic validation call. Matched by member name on any receiver rather than through the API
+ * graph from `pydantic.BaseModel`: validation is always `MyModel.model_validate(...)` on a
+ * subclass declared elsewhere, and `model_validate` / `parse_obj` / `model_validate_json` are not
+ * names that appear outside Pydantic.
+ */
+predicate _isPydanticValidationCall(DataFlow::CallCfgNode call) {
+  exists(string name |
+    name = call.getFunction().asCfgNode().(AttrNode).getName() and
+    name in ["model_validate", "parse_obj", "model_validate_json"]
+  )
 }
 
 module RawJsonToServiceFlow = TaintTracking::Global<RawJsonToServiceConfig>;

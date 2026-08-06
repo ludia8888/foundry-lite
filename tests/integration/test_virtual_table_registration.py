@@ -396,27 +396,42 @@ def test_a_table_that_disappeared_is_reported_and_not_unregistered(service: Any,
     built, _ = service
     engine = create_engine(source_url, future=True)
     with engine.begin() as connection:
-        connection.execute(text("CREATE TABLE seasonal (id integer)"))
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS vanishing"))
+        connection.execute(text("CREATE TABLE vanishing.seasonal (id integer)"))
     engine.dispose()
     built.run_auto_registration(
-        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX
+        parent_rid="auto", connection_rid="conn-1", config=_CONFIG, schema_names=("vanishing",), ctx=_CTX
     )
     engine = create_engine(source_url, future=True)
     with engine.begin() as connection:
-        connection.execute(text("DROP TABLE seasonal"))
+        connection.execute(text("DROP TABLE vanishing.seasonal"))
     engine.dispose()
 
-    plan = built.preview_auto_registration(connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX)
+    plan = built.preview_auto_registration(
+        connection_rid="conn-1", config=_CONFIG, schema_names=("vanishing",), ctx=_CTX
+    )
 
-    assert "public.seasonal" in plan.missing_tables
+    assert "vanishing.seasonal" in plan.missing_tables
     assert any(record.name == "seasonal" for record in built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX))
 
 
-def test_preview_changes_nothing(service: Any) -> None:
-    """A preview that registered would make the scheduler's dry run a live run."""
+def test_preview_changes_nothing(service: Any, source_url: str) -> None:
+    """A preview that registered would make the scheduler's dry run a live run.
+
+    Owns a schema like the other passes. Scoping to `public` made the assertion depend on which
+    other tests had already created a table there, so it held only when this test ran first --
+    which it did locally and did not on CI.
+    """
     built, _ = service
+    engine = create_engine(source_url, future=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS preview_only"))
+        connection.execute(text("CREATE TABLE IF NOT EXISTS preview_only.candidate (id integer)"))
+    engine.dispose()
 
-    plan = built.preview_auto_registration(connection_rid="conn-1", config=_CONFIG, schema_names=("public",), ctx=_CTX)
+    plan = built.preview_auto_registration(
+        connection_rid="conn-1", config=_CONFIG, schema_names=("preview_only",), ctx=_CTX
+    )
 
-    assert [ref.qualified_name for ref in plan.new_tables] == ["public.youtube_videos"]
+    assert [ref.qualified_name for ref in plan.new_tables] == ["preview_only.candidate"]
     assert built.list_virtual_tables(connection_rid="conn-1", ctx=_CTX) == ()

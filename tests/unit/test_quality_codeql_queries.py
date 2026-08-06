@@ -145,3 +145,17 @@ def test_the_raw_json_barrier_matches_subclasses_of_base_model() -> None:
     query = (QUERIES_DIR / "raw-json-to-service.ql").read_text(encoding="utf-8")
 
     assert 'getMember("BaseModel").getASubclass*()' in query
+
+
+def test_a_pydantic_validation_call_is_excluded_from_the_sinks() -> None:
+    """The exclusion belongs in `isSink`, not `isBarrier`.
+
+    A barrier stops flow at a node, but the sink is the call's argument, and taint reaches an
+    argument before the call that consumes it. Marking `model_validate` as a barrier therefore
+    never prevented the finding: the call that satisfies the rule was reported as violating it,
+    which is why adding an envelope model to a router raised its count instead of clearing it.
+    """
+    query = (QUERIES_DIR / "raw-json-to-service.ql").read_text(encoding="utf-8")
+
+    assert "not _isPydanticValidationCall(call)" in query
+    assert '"model_validate", "parse_obj", "model_validate_json"' in query
