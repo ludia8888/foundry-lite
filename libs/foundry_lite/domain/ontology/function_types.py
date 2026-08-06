@@ -28,9 +28,14 @@ SUPPORTED_FUNCTION_RUNTIMES = frozenset(
 #: Runtimes whose definition is source text rather than a block graph.
 CODE_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_PYTHON, FUNCTION_RUNTIME_TYPESCRIPT})
 
-# Palantir's default is 60 seconds, configurable per function version. Version-level
-# configuration is not modelled yet, so the default is the ceiling.
+# Palantir's default is 60 seconds and, unlike their other deployment settings, timeout is
+# configured per function version rather than per function. A version is immutable once
+# published, so its timeout travels with it: raising the limit means publishing a new version,
+# and an Action pinned to the old one keeps the budget it was tested against.
 FUNCTION_DEFAULT_TIMEOUT_SECONDS = 60
+# Palantir allows up to 280 seconds in live preview. The ceiling exists so one function cannot
+# hold a sandbox slot indefinitely; the container policy timeout remains the outer bound.
+FUNCTION_MAX_TIMEOUT_SECONDS = 280
 
 #: Function inputs/outputs use the object property type vocabulary (kept in
 #: sync with INTERFACE_PROPERTY_DATA_TYPES / OBJECT_PROPERTY_DATA_TYPES).
@@ -74,11 +79,22 @@ def normalized_function_definition(item: Mapping[str, object]) -> dict[str, obje
         "inputs": _normalized_inputs(item, api_name),
         "output": _normalized_output(item, api_name),
         "definition": _normalized_runtime_definition(item, api_name, runtime),
+        "timeoutSeconds": _function_timeout_seconds(item, api_name),
     }
     permissions = _normalized_permissions(item, api_name)
     if permissions is not None:
         normalized["permissions"] = permissions
     return normalized
+
+
+def _function_timeout_seconds(item: Mapping[str, object], api_name: str) -> int:
+    timeout = _optional_int(item, "timeoutSeconds", FUNCTION_DEFAULT_TIMEOUT_SECONDS)
+    if timeout < 1 or timeout > FUNCTION_MAX_TIMEOUT_SECONDS:
+        raise ValidationFailed(
+            "function timeout is outside the permitted range",
+            details={"function": api_name, "value": timeout, "max": FUNCTION_MAX_TIMEOUT_SECONDS},
+        )
+    return timeout
 
 
 def _function_runtime(item: Mapping[str, object], api_name: str) -> str:

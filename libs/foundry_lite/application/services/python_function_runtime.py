@@ -25,7 +25,10 @@ from foundry_lite.application.ports.code_execution import (
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.domain.ontology.function_types import FUNCTION_DEFAULT_TIMEOUT_SECONDS
+from foundry_lite.domain.ontology.function_types import (
+    FUNCTION_DEFAULT_TIMEOUT_SECONDS,
+    FUNCTION_MAX_TIMEOUT_SECONDS,
+)
 
 # A function reads what it was given, so the ceiling bounds host memory and the sandbox payload
 # rather than the query itself. Palantir's object sets stay lazy and have no equivalent cap;
@@ -78,7 +81,7 @@ class PythonFunctionRuntimeService(CoreService):
             inputs_json=self._materialized_inputs(ctx, definition, inputs),
             argument_order=tuple(str(item["apiName"]) for item in _declared_inputs(definition)),
             output_type=_output_type(definition),
-            timeout_seconds=FUNCTION_DEFAULT_TIMEOUT_SECONDS,
+            timeout_seconds=_timeout_seconds(definition),
             input_byte_limit=MAX_INPUT_BYTES,
         )
         return self.code_execution_adapter.execute_function(plan).output
@@ -196,3 +199,11 @@ def _filter_ast(declared: Mapping[str, object], value: object) -> Mapping[str, o
         "objectSet input must be a filter object",
         details={"input": str(declared.get("apiName") or "")},
     )
+
+
+def _timeout_seconds(definition: Mapping[str, object]) -> int:
+    """A definition persisted before per-version timeouts existed carries none; it gets the default."""
+    declared = definition.get("timeoutSeconds")
+    if not isinstance(declared, int) or isinstance(declared, bool):
+        return FUNCTION_DEFAULT_TIMEOUT_SECONDS
+    return min(max(declared, 1), FUNCTION_MAX_TIMEOUT_SECONDS)

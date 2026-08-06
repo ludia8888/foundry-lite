@@ -139,7 +139,7 @@ class ContainerCodeExecutionAdapter:
                 interpreter=runner.interpreter,
                 image_reference=runner.image(self.config),
             )
-            result = self._execute_container(command, container_name)
+            result = self._execute_container(command, container_name, plan.timeout_seconds)
             payload = _read_runner_result(workspace.result_path, result, self)
             output = _require_function_success(payload, result, self)
             return FunctionExecutionResult(
@@ -171,9 +171,22 @@ class ContainerCodeExecutionAdapter:
             )
             return TransformExecutionResult(dead_letters=dead_letters)
 
-    def _execute_container(self, command: Sequence[str], container_name: str) -> ContainerCommandResult:
+    def _execute_container(
+        self,
+        command: Sequence[str],
+        container_name: str,
+        timeout_seconds: float | None = None,
+    ) -> ContainerCommandResult:
+        # A per-call budget cannot exceed the sandbox policy: the policy is the operator's bound
+        # on how long any one container may hold a slot, and a function definition is authored
+        # content that must not be able to raise it.
+        budget = (
+            min(timeout_seconds, self.config.policy.timeout_seconds)
+            if timeout_seconds
+            else (self.config.policy.timeout_seconds)
+        )
         try:
-            return self._command_runner(command, self.config.policy.timeout_seconds, self._client_environment)
+            return self._command_runner(command, budget, self._client_environment)
         except subprocess.TimeoutExpired as exc:
             cleanup = self._force_remove(container_name)
             raise self._error(
