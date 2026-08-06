@@ -241,21 +241,21 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "timeout: 120_000" in foundry_api_server
 
 
-def test_github_coverage_lane_keeps_serial_layer_coverage_from_timing_out() -> None:
+def test_github_coverage_lane_keeps_sharded_coverage_from_timing_out() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     coverage_job = workflow.split("quality_coverage:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
-    # 60, not 45: a completed run took 39m31s and the next push timed out at 45m18s. A timeout
-    # that fires on runner variance destroys the measurement it protects — three consecutive
-    # main pushes produced no coverage number. The lane must keep real headroom over observed
-    # runtime rather than sitting at 88% of its own cap.
-    assert "timeout-minutes: 60" in coverage_job
+    # 40, not 60: 45 was breached at 45m18s after a completed run at 39m31s, so the cap went to
+    # 60 to stop a timeout from destroying the measurement it protects. Sharding then took the
+    # lane to 20m12s, which leaves 60 loose enough for a hang to burn 40 idle minutes.
+    assert "timeout-minutes: 40" in coverage_job
     assert "run: pnpm ci:gate:coverage" in coverage_job
-    assert "Coverage runs the full backend suite serially" in coverage_job
-    # Sharding is the tempting alternative and is explicitly ruled out: layer coverage is only
-    # trustworthy from a single process, so the lane buys time with wall clock, not with xdist.
+    # The lane is sharded, and the comment must say so. It claimed the opposite for one commit
+    # after the change landed, which is how a rationale outlives the measurement that killed it.
+    assert "sharded across xdist workers" in coverage_job
     gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     assert "--cov-fail-under=93" in gate
+    assert "-n auto" in gate and "--dist loadfile" in gate
     # The floor is a ratchet, so the comment carrying its measurement and intent must travel
     # with it — a bare number invites someone to read 93 as the standard and lower it again.
     assert "RATCHET FLOOR" in gate
@@ -1831,3 +1831,67 @@ def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> Non
     assert result.returncode == 1
     findings = json.loads(result.stdout)
     assert findings[0]["ruleId"] == "foundry-lite-no-facade-magic-dispatch"
+
+
+# --- step conditions must be reachable from their job -------------------------------
+
+
+def _workflow_jobs(name: str) -> dict:
+    import yaml
+
+    # `on:` parses to the boolean True under YAML 1.1; irrelevant here, but it is why the
+    # workflow is read for its jobs rather than round-tripped.
+    return yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))["jobs"]
+
+
+def _event_names(condition: str | None) -> set[str] | None:
+    """The github.event_name values a condition admits, or None if it does not constrain them."""
+    if not condition:
+        return None
+    matches = re.findall(r"github\.event_name\s*==\s*'([a-z_]+)'", condition)
+    return set(matches) if matches else None
+
+
+def test_no_step_condition_contradicts_its_job_condition() -> None:
+    """An unsatisfiable step is a gate that silently enforces nothing.
+
+    `quality-static` became push-only when the budgeted PR lane landed, but it still carried a
+    "Check PR root-cause evidence" step gated on `pull_request`. The two conditions cannot both
+    hold, so for two days every PR merged without the root-cause check running -- and nothing
+    reported it, because a step that never runs never fails.
+    """
+    unreachable: list[str] = []
+    for workflow in ("ci.yml", "release.yml"):
+        for job_name, job in _workflow_jobs(workflow).items():
+            job_events = _event_names(job.get("if"))
+            if job_events is None:
+                continue
+            for step in job.get("steps", []):
+                step_events = _event_names(step.get("if"))
+                if step_events is not None and not (step_events & job_events):
+                    unreachable.append(f"{workflow}:{job_name}:{step.get('name')}")
+
+    assert not unreachable, f"steps that can never run: {unreachable}"
+
+
+def test_the_pull_request_lane_runs_the_checks_that_last_broke_main() -> None:
+    """xenon and gitleaks were main-only, and both let a regression through on the same push."""
+    driver = _load_python_module(ROOT / "scripts" / "quality" / "run_static_checks.py", "run_static_checks_pr")
+
+    assert "xenon" in driver.PR_HEAVY_CHECK_NAMES
+    assert [name for name, _ in driver._all_checks("pr")].count("gitleaks") == 1
+
+
+def test_the_pull_request_job_installs_gitleaks_before_the_gate_needs_it() -> None:
+    """`_gitleaks_check` exits 1 rather than skipping when CI=true, so a missing binary is fatal."""
+    steps = [step.get("name", "") for step in _workflow_jobs("ci.yml")["quality_pr"]["steps"]]
+
+    assert steps.index("Install gitleaks") < steps.index("Run budgeted pull-request gate")
+
+
+def test_the_root_cause_check_lives_in_a_job_that_runs_on_pull_requests() -> None:
+    jobs = _workflow_jobs("ci.yml")
+    owner = [name for name, job in jobs.items() if any("root-cause" in (s.get("name") or "") for s in job["steps"])]
+
+    assert owner == ["quality_pr"]
+    assert _event_names(jobs["quality_pr"]["if"]) == {"pull_request"}

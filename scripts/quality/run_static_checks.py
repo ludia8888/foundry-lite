@@ -162,10 +162,17 @@ HEAVY_CHECKS: tuple[tuple[str, list[str]], ...] = (
 )
 
 # The PR profile must fit inside the budgeted PR workflow window, including a
-# cold dependency restore. Full Semgrep/pip-audit/gitleaks, product test
-# bundles, and broad complexity/documentation coverage remain mandatory on
-# main/release/nightly. Pull requests get Bandit, both type checkers, Ruff,
-# dependency boundaries, schema/SDK drift, and every focused Python invariant.
+# cold dependency restore. Full Semgrep/pip-audit, product test bundles, and
+# broad documentation coverage remain mandatory on main/release/nightly.
+# Pull requests get Bandit, both type checkers, Ruff, dependency boundaries,
+# schema/SDK drift, and every focused Python invariant.
+#
+# xenon and gitleaks were main-only until both let a regression through on the same push:
+# extending the action-condition operator set pushed `_compare` to complexity rank C, and a
+# virtual-table test's vault pointer read as a generic API key. Neither was visible on the PR,
+# so both landed and turned main red. They earn their place here on cost as much as on value --
+# xenon is 6.8s and needs nothing installed, and a secret caught after the merge is already in
+# history permanently, where reverting the commit does not remove it.
 PR_HEAVY_CHECK_NAMES = frozenset(
     {
         "pyright",
@@ -176,6 +183,7 @@ PR_HEAVY_CHECK_NAMES = frozenset(
         "ruff-format",
         "import-linter",
         "tach",
+        "xenon",
     }
 )
 
@@ -267,10 +275,10 @@ def _gitleaks_check() -> tuple[str, list[str]] | None:
 
 def _all_checks(profile: str = "full") -> list[tuple[str, list[str]]]:
     if profile == "pr":
-        pr_checks = [check for check in HEAVY_CHECKS if check[0] in PR_HEAVY_CHECK_NAMES]
-        pr_checks.extend((name, [PYTHON, *script]) for name, script in PYTHON_CHECKS)
-        return pr_checks
-    checks: list[tuple[str, list[str]]] = list(HEAVY_CHECKS)
+        checks = [check for check in HEAVY_CHECKS if check[0] in PR_HEAVY_CHECK_NAMES]
+    else:
+        checks = list(HEAVY_CHECKS)
+    # Both profiles: the scan is worth far more before the merge than after it.
     gitleaks = _gitleaks_check()
     if gitleaks is not None:
         checks.insert(0, gitleaks)

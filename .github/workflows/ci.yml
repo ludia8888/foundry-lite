@@ -59,6 +59,22 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-groups --frozen
 
+      # The secret scan belongs before the merge, not after it. A credential caught on the main
+      # push is already in history permanently, where reverting the commit does not remove it.
+      - name: Set up Go for gitleaks
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Install gitleaks
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Check PR root-cause evidence
+        run: uv run python scripts/quality/check_pr_root_cause_section.py --event-path "$GITHUB_EVENT_PATH"
+
       - name: Set up pnpm
         if: steps.scope.outputs.should_install_node == 'true'
         uses: pnpm/action-setup@v6
@@ -141,10 +157,6 @@ jobs:
           go install github.com/zricethezav/gitleaks/v8@v8.30.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Check PR root-cause evidence
-        if: github.event_name == 'pull_request'
-        run: uv run python scripts/quality/check_pr_root_cause_section.py --event-path "$GITHUB_EVENT_PATH"
-
       - name: Run static quality lane
         run: pnpm ci:gate:static
 
@@ -160,18 +172,20 @@ jobs:
     name: quality-coverage
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # Coverage runs the full backend suite serially so layer coverage remains
-    # trustworthy. Keep the timeout above observed PR runtime instead of
-    # sharding this lane and weakening the per-layer signal.
+    # Coverage runs the full backend suite sharded across xdist workers, one file per worker.
+    # This lane was serial until the claim behind that choice was measured: sharding was said to
+    # misattribute import-time lines and weaken the per-layer signal, but pytest-cov combines one
+    # data file per worker and a combine is a union, so serial and sharded runs agree exactly —
+    # identical lines, branches, partial branches, and per-file summaries across 949 files.
+    # scripts/ci_gate.sh carries the full measurement.
     #
-    # 60 (was 45): the last completed run took 39m31s — 88% of a 45-minute cap — and the very
-    # next push timed out at exactly 45m18s. Runner speed on this repo swings by roughly a
-    # third (the PR lane reached 80% and then 61% of the same work in the same 205s on the same
-    # commit), so a 14% slow day was always going to breach 45. A timeout that fires on runner
-    # variance destroys the measurement it exists to protect: three consecutive main pushes
-    # produced no coverage number at all. Sharding would buy time but the comment above explains
-    # why it cannot — layer coverage is only trustworthy from a single process.
-    timeout-minutes: 60
+    # 40 (was 60, was 45): 45 was breached at 45m18s after a completed run at 39m31s, so the cap
+    # went to 60 to stop a timeout from destroying the measurement it protects — three
+    # consecutive main pushes had produced no coverage number at all. Sharding then took the
+    # lane to 20m12s (run 31062709490), so 60 is now loose enough to let a hang burn 40 idle
+    # minutes. 40 keeps roughly double the one sharded observation, which covers the ~⅓ runner
+    # variance this repo shows without sitting close to the cap.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v6
