@@ -3863,6 +3863,54 @@
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
       "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.preview-auto-registration",
+      "route": "POST /api/sources/{connection_rid}/virtual-tables/auto-registration/preview",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.previewAutoRegistration",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Shows what a scheduled pass would add and which registered tables the source no longer has, without changing either -- a preview that registered would make the dry run a live run.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.run-auto-registration",
+      "route": "POST /api/sources/{connection_rid}/virtual-tables/auto-registration/run",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.runAutoRegistration",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Registers only tables that appeared since the last pass, so a pass over an unchanged source reports nothing rather than one conflict per existing pointer.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.register-many",
+      "route": "POST /api/sources/{connection_rid}/virtual-tables/bulk",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.registerMany",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Registers many pointers under a hierarchy mirroring the source's schemas, and reports per-table failures so one renamed table does not cost the rest of the batch.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "virtual-tables.discover",
+      "route": "POST /api/sources/{connection_rid}/virtual-tables/discover",
+      "productArea": "source-onboarding",
+      "sdkSurface": "virtualTables.discover",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Lists only what the configured credential can reach and skips system catalogs, so a picker never offers a table the connection cannot read. POST because the vault reference travels in the body rather than a logged query string.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
     }
   ],
   "sdkHelpers": [

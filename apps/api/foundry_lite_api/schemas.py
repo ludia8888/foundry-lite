@@ -1251,3 +1251,43 @@ class VirtualTableRegisterRequest(BaseModel):
     parent_rid: str = Field(alias="parentRid")
     config: dict[str, object]
     markings: list[str] = Field(default_factory=list)
+
+
+class VirtualTableDiscoverRequest(BaseModel):
+    """Ask a connection what tables it can reach."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    config: dict[str, object]
+    schema_names: list[str] = Field(default_factory=list, alias="schemaNames")
+
+
+class ExternalTableRefRequest(BaseModel):
+    """One table chosen from a discovery listing."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_name: str = Field(alias="schema")
+    table_name: str = Field(alias="table")
+
+
+class VirtualTableBulkRegisterRequest(BaseModel):
+    """Register several pointers under one parent, mirroring the source's own hierarchy."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    parent_rid: str = Field(alias="parentRid")
+    config: dict[str, object]
+    tables: list[ExternalTableRefRequest]
+    markings: list[str] = Field(default_factory=list)
+
+
+class VirtualTableAutoRegisterRequest(BaseModel):
+    """One scheduled pass over a connection."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    parent_rid: str = Field(alias="parentRid")
+    config: dict[str, object]
+    schema_names: list[str] = Field(default_factory=list, alias="schemaNames")
+    markings: list[str] = Field(default_factory=list)

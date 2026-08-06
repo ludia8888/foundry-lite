@@ -606,6 +606,22 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 "    register(connectionRid: string, payload: VirtualTableRegisterRequest): "
                 "Promise<VirtualTablePayload>;"
             ),
+            (
+                "    discover(connectionRid: string, payload: VirtualTableDiscoverRequest): "
+                "Promise<VirtualTableDiscoverResult>;"
+            ),
+            (
+                "    registerMany(connectionRid: string, payload: VirtualTableBulkRegisterRequest): "
+                "Promise<VirtualTableBulkRegisterResult>;"
+            ),
+            (
+                "    previewAutoRegistration(connectionRid: string, payload: VirtualTableAutoRegisterRequest): "
+                "Promise<VirtualTableAutoRegistrationPlan>;"
+            ),
+            (
+                "    runAutoRegistration(connectionRid: string, payload: VirtualTableAutoRegisterRequest): "
+                "Promise<VirtualTableBulkRegisterResult>;"
+            ),
             "    list(connectionRid: string): Promise<VirtualTableList>;",
             "    get(rid: string): Promise<VirtualTablePayload>;",
             "    schemaDrift(rid: string): Promise<VirtualTableSchemaDrift>;",
@@ -3783,6 +3799,42 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "      register: (connectionRid: string, payload: VirtualTableRegisterRequest) =>",
         "        request<VirtualTablePayload>(",
         "          `/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "      discover: (connectionRid: string, payload: VirtualTableDiscoverRequest) =>",
+        "        request<VirtualTableDiscoverResult>(",
+        "          `/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables/discover`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "      registerMany: (connectionRid: string, payload: VirtualTableBulkRegisterRequest) =>",
+        "        request<VirtualTableBulkRegisterResult>(",
+        "          `/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables/bulk`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "      previewAutoRegistration: (connectionRid: string, payload: VirtualTableAutoRegisterRequest) =>",
+        "        request<VirtualTableAutoRegistrationPlan>(",
+        "          `/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables/auto-registration/preview`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "      runAutoRegistration: (connectionRid: string, payload: VirtualTableAutoRegisterRequest) =>",
+        "        request<VirtualTableBulkRegisterResult>(",
+        "          `/api/sources/${encodeURIComponent(connectionRid)}/virtual-tables/auto-registration/run`,",
         "          {",
         '            method: "POST",',
         '            headers: { "Content-Type": "application/json" },',
