@@ -50,7 +50,25 @@ def _finding_from_result(result: dict[str, Any]) -> SarifFinding:
 
 
 def collect_findings(path: Path, *, rule_id_prefix: str | None = None) -> list[SarifFinding]:
-    findings: list[SarifFinding] = []
+    """Findings that block the gate. Suppressed results are reported separately, never silently."""
+    blocking, _suppressed = partitioned_findings(path, rule_id_prefix=rule_id_prefix)
+    return blocking
+
+
+def partitioned_findings(
+    path: Path, *, rule_id_prefix: str | None = None
+) -> tuple[list[SarifFinding], list[SarifFinding]]:
+    """Split results into blocking and suppressed.
+
+    A gate with no way to record a reviewed false positive is a gate that gets ignored, and this
+    one was: it stayed red for three days across every push. CodeQL only emits a `suppressions`
+    entry when the source carries an inline `# codeql[rule-id]` comment, so a suppression has to
+    be written next to the code, in the diff, where a reviewer sees the justification. They are
+    still printed on every run -- an allowance that disappears from the output is an allowance
+    nobody revisits.
+    """
+    blocking: list[SarifFinding] = []
+    suppressed: list[SarifFinding] = []
     for sarif_file in _sarif_files(path):
         sarif = json.loads(sarif_file.read_text(encoding="utf-8"))
         for run in sarif.get("runs", []):
@@ -58,8 +76,17 @@ def collect_findings(path: Path, *, rule_id_prefix: str | None = None) -> list[S
                 rule_id = str(result.get("ruleId", ""))
                 if rule_id_prefix and not rule_id.startswith(rule_id_prefix):
                     continue
-                findings.append(_finding_from_result(result))
-    return findings
+                target = suppressed if result.get("suppressions") else blocking
+                target.append(_finding_from_result(result))
+    return blocking, suppressed
+
+
+def _print_suppressed(findings: list[SarifFinding]) -> None:
+    if not findings:
+        return
+    print(f"CodeQL suppressed in source: {len(findings)} finding(s). Each carries its reason at the call site.")
+    for finding in findings:
+        print(f"~ {finding.path}:{finding.line} [{finding.rule_id}]")
 
 
 def _print_findings(findings: list[SarifFinding]) -> None:
@@ -78,11 +105,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    findings = collect_findings(args.sarif_path, rule_id_prefix=args.rule_id_prefix)
+    findings, suppressed = partitioned_findings(args.sarif_path, rule_id_prefix=args.rule_id_prefix)
+    _print_suppressed(suppressed)
     if findings:
         _print_findings(findings)
         return 1
-    print("CodeQL hard gate OK: 0 findings.")
+    print(f"CodeQL hard gate OK: 0 findings ({len(suppressed)} suppressed in source).")
     return 0
 
 
