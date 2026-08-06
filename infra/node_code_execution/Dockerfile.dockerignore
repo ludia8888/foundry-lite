@@ -1,0 +1,6 @@
+*
+!libs
+!libs/foundry_lite
+!libs/foundry_lite/infrastructure
+!libs/foundry_lite/infrastructure/runners
+!libs/foundry_lite/infrastructure/runners/typescript_function_runner.mjs

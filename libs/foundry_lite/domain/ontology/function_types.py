@@ -21,7 +21,12 @@ FUNCTION_RUNTIME_LOGIC_DAG = "logic_dag"
 # A code function carries source rather than a block graph, so `definition` is shaped per
 # runtime rather than shared.
 FUNCTION_RUNTIME_PYTHON = "python"
-SUPPORTED_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_LOGIC_DAG, FUNCTION_RUNTIME_PYTHON})
+FUNCTION_RUNTIME_TYPESCRIPT = "typescript"
+SUPPORTED_FUNCTION_RUNTIMES = frozenset(
+    {FUNCTION_RUNTIME_LOGIC_DAG, FUNCTION_RUNTIME_PYTHON, FUNCTION_RUNTIME_TYPESCRIPT}
+)
+#: Runtimes whose definition is source text rather than a block graph.
+CODE_FUNCTION_RUNTIMES = frozenset({FUNCTION_RUNTIME_PYTHON, FUNCTION_RUNTIME_TYPESCRIPT})
 
 # Palantir's default is 60 seconds, configurable per function version. Version-level
 # configuration is not modelled yet, so the default is the ceiling.
@@ -142,7 +147,7 @@ def _require_function_data_type(container: Mapping[str, object], api_name: str, 
 
 def _normalized_runtime_definition(item: Mapping[str, object], api_name: str, runtime: str) -> dict[str, object]:
     """A code function carries source; a Logic DAG carries blocks. Neither accepts the other."""
-    if runtime == FUNCTION_RUNTIME_PYTHON:
+    if runtime in CODE_FUNCTION_RUNTIMES:
         return _normalized_source(item, api_name)
     return _normalized_logic(item, api_name)
 
@@ -155,7 +160,7 @@ def _normalized_source(item: Mapping[str, object], api_name: str) -> dict[str, o
     if "blocks" in definition:
         raise ValidationFailed(
             "a code function cannot declare Logic DAG blocks",
-            details={"function": api_name, "runtime": FUNCTION_RUNTIME_PYTHON},
+            details={"function": api_name},
         )
     return {
         "source": source,

@@ -73,11 +73,11 @@ def _service(
     return service, adapter, query
 
 
-def _definition(input_def: dict[str, Any], output_type: str = "integer") -> dict[str, Any]:
+def _definition(input_def: dict[str, Any], output_type: str = "integer", runtime: str = "python") -> dict[str, Any]:
     return {
         "apiName": "TotalSeats",
         "version": "v3",
-        "runtime": "python",
+        "runtime": runtime,
         "inputs": [input_def],
         "output": {"type": output_type},
         "definition": {"source": "def compute(tables):\n    return 6\n", "entrypoint": "compute"},
@@ -212,3 +212,30 @@ def test_a_definition_without_source_is_refused_before_the_sandbox_starts() -> N
         service.run(_CTX, definition=definition, inputs={})
 
     assert adapter.plans == []
+
+
+# --- the plan tells the sandbox which runtime it is serving ---------------------------
+
+
+def test_the_plan_carries_the_runtime_so_the_adapter_can_pick_an_image() -> None:
+    """Python and TypeScript run in different images; the plan is where that choice comes from."""
+    service, adapter, _ = _service()
+
+    service.run(
+        _CTX,
+        definition=_definition({"apiName": "threshold", "type": "integer"}, runtime="typescript"),
+        inputs={"threshold": 4},
+    )
+
+    assert adapter.plans[0].runtime == "typescript"
+
+
+def test_the_plan_carries_declaration_order_for_positional_languages() -> None:
+    """TypeScript has no keyword arguments, so argument order is the host's to own, not the runner's."""
+    service, adapter, _ = _service()
+    definition = _definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"})
+    definition["inputs"].append({"apiName": "partySize", "type": "integer"})
+
+    service.run(_CTX, definition=definition, inputs={"tables": None, "partySize": 2})
+
+    assert adapter.plans[0].argument_order == ("tables", "partySize")

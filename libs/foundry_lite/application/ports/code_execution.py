@@ -104,9 +104,13 @@ class FunctionExecutionPlan:
 
     function_api_name: str
     function_version: str
+    runtime: str
     entrypoint: str
     source: str
     inputs_json: Mapping[str, object]
+    # TypeScript has no keyword arguments, so the host owns argument order and the runner applies
+    # it positionally. Python binds by name and ignores this.
+    argument_order: tuple[str, ...]
     output_type: str
     timeout_seconds: int
     input_byte_limit: int

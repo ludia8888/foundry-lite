@@ -10,8 +10,8 @@ import subprocess  # nosec B404
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -128,7 +128,17 @@ class ContainerCodeExecutionAdapter:
         ) as temporary:
             workspace = _prepare_function_workspace(plan, Path(temporary), self)
             container_name = f"foundry-lite-function-{uuid4().hex}"
-            command = container_command(self.config, workspace, container_name, "python_function_runner.py")
+            runner = _FUNCTION_RUNNERS.get(plan.runtime)
+            if runner is None:
+                raise self._error("runner_contract_error", "validation", False)
+            command = container_command(
+                self.config,
+                workspace,
+                container_name,
+                runner.script,
+                interpreter=runner.interpreter,
+                image_reference=runner.image(self.config),
+            )
             result = self._execute_container(command, container_name)
             payload = _read_runner_result(workspace.result_path, result, self)
             output = _require_function_success(payload, result, self)
@@ -273,6 +283,29 @@ def _container_input_paths(
     return container_paths, mounts
 
 
+@dataclass(frozen=True)
+class _FunctionRunner:
+    """Which image and entry command serve one function runtime."""
+
+    script: str
+    interpreter: str
+    source_name: str
+    image: Callable[[ContainerCodeExecutionConfig], str]
+
+
+# Two images, one policy. They differ in what is installed, not in how they are confined: the
+# run-time flags -- non-root, no network, read-only root, capabilities dropped -- come from the
+# same `container_command` for both.
+_FUNCTION_RUNNERS: Mapping[str, _FunctionRunner] = {
+    "python": _FunctionRunner(
+        "python_function_runner.py", "python", "function.py", lambda config: config.image_reference
+    ),
+    "typescript": _FunctionRunner(
+        "typescript_function_runner.mjs", "node", "function.ts", lambda config: config.node_image_reference
+    ),
+}
+
+
 def _prepare_function_workspace(
     plan: FunctionExecutionPlan,
     root: Path,
@@ -293,16 +326,19 @@ def _prepare_function_workspace(
     result_path.touch()
     result_path.chmod(0o666)
 
-    source_path = job_dir / "function.py"
+    runner = _FUNCTION_RUNNERS[plan.runtime]
+    source_path = job_dir / runner.source_name
     source_path.write_text(plan.source, encoding="utf-8")
     source_path.chmod(0o444)
     manifest = json.dumps(
         {
             "schemaVersion": 1,
             "entrypoint": plan.entrypoint,
-            "sourcePath": f"{JOB_DIR}/function.py",
+            "sourcePath": f"{JOB_DIR}/{runner.source_name}",
+            "source": plan.source,
             "sourceSha256": hashlib.sha256(plan.source.encode()).hexdigest(),
             "inputs": dict(plan.inputs_json),
+            "argumentOrder": list(plan.argument_order),
             "outputType": plan.output_type,
         },
         sort_keys=True,
