@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 
@@ -84,18 +84,22 @@ def _required_row(row: tuple[object, ...] | None, operation: str) -> tuple[objec
 
 
 def _json_ready(value: object) -> object:
-    if isinstance(value, Decimal):
-        if value == value.to_integral_value():
-            return int(value)
-        return float(value)
-    if isinstance(value, datetime | date):
-        return value.isoformat()
     if isinstance(value, Mapping):
         return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, list | tuple):
         return [_json_ready(item) for item in value]
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
+    return _json_ready_scalar(value)
+
+
+def _json_ready_scalar(value: object) -> object:
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        # A UUID primary key is the common case for an external table, and its canonical
+        # string form round-trips, so carrying it as text keeps the row hashable.
+        return str(value)
     return value
 
 

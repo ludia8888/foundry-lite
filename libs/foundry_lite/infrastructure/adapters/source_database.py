@@ -142,9 +142,11 @@ def _read_batch_rows(
     tunnel: SourceDatabaseTunnel | None = None
     try:
         with _database_engine(database_url, network_route) as (engine, tunnel), engine.connect() as conn:
-            rows = conn.execute(
-                _select_statement(table_name, checkpoint_column, batch_limit), {"after": after_value}
-            ).mappings()
+            statement = _select_statement(
+                table_name, checkpoint_column, batch_limit, has_checkpoint=after_value is not None
+            )
+            parameters = {"after": after_value} if after_value is not None else {}
+            rows = conn.execute(statement, parameters).mappings()
             values = tuple({str(key): value for key, value in row.items()} for row in rows)
             return values, _success_evidence(tunnel, connection_id)
     except SQLAlchemyError as exc:
@@ -224,14 +226,22 @@ def _table_summary(table_name: str, columns: Sequence[Mapping[str, object]]) -> 
     }
 
 
-def _select_statement(table_name: str, checkpoint_column: str | None, batch_limit: int) -> Any:
+def _select_statement(table_name: str, checkpoint_column: str | None, batch_limit: int, *, has_checkpoint: bool) -> Any:
+    """Build the batch read.
+
+    The checkpoint predicate is omitted rather than neutralised on the first batch. A
+    ``:after IS NULL OR ...`` form reads naturally but leaves the parameter's type
+    underdetermined, which PostgreSQL rejects outright, and even where it is accepted the
+    disjunction stops the checkpoint index from bounding the scan.
+    """
     quoted_table = _quoted_table_name(table_name)
     if checkpoint_column is None:
         return text(f"SELECT * FROM {quoted_table} LIMIT {batch_limit}")  # nosec B608 - identifier and limit validated.
     quoted_column = _quoted_identifier(checkpoint_column)
+    predicate = f"WHERE {quoted_column} > :after " if has_checkpoint else ""
     return text(  # nosec B608 - identifiers and limit are validated before SQL text construction.
         f"SELECT * FROM {quoted_table} "  # nosec B608 - validated quoted identifier only.
-        f"WHERE (:after IS NULL OR {quoted_column} > :after) "
+        f"{predicate}"
         f"ORDER BY {quoted_column} ASC LIMIT {batch_limit}"
     )
 

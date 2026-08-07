@@ -7,6 +7,7 @@ import os
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from foundry_lite.application.core_services import CoreServices
@@ -58,6 +59,18 @@ DEMO_ROOT = _demo_root()
 class ExplodingCsvComputeAdapter(DuckDBComputeAdapter):
     def csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         raise RuntimeError("duckdb exploded")
+
+
+def test_json_ready_carries_a_uuid_as_its_canonical_string() -> None:
+    """A UUID primary key is the common case for an external table.
+
+    Left unhandled it reaches ``json.dumps`` and raises, so a source row keyed by UUID
+    could not be persisted at all.
+    """
+    key = UUID("008b41de-174c-4c6e-81c3-41c1a7ccba26")
+
+    assert _json_ready({"id": key}) == {"id": "008b41de-174c-4c6e-81c3-41c1a7ccba26"}
+    assert json.dumps(_json_ready({"id": key, "children": [key]}))
 
 
 def test_helper_normalization_and_dataset_ref_validation() -> None:

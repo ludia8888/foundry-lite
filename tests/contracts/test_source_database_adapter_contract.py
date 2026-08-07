@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.infrastructure.adapters.source_database import SqlAlchemySourceDatabaseAdapter
+from foundry_lite.infrastructure.adapters.source_database import (
+    SqlAlchemySourceDatabaseAdapter,
+    _select_statement,
+)
 from sqlalchemy import create_engine, text
 
 
@@ -72,3 +75,26 @@ def test_source_database_adapter_failure_contract_names_operations(adapter: Sour
 
     assert contract.adapter_profile == adapter.profile_name
     assert {mode.operation for mode in contract.modes} == {"test_connection", "list_tables", "read_table_batch"}
+
+
+def test_source_database_first_batch_omits_the_checkpoint_parameter() -> None:
+    """The opening batch carries no checkpoint parameter at all.
+
+    Neutralising the predicate with ``:after IS NULL OR ...`` leaves the parameter's type
+    underdetermined, which PostgreSQL refuses to prepare — so the first batch of every
+    ``postgres_jdbc`` sync would fail before reading a row.
+    """
+    statement = _select_statement("orders", "id", 10, has_checkpoint=False)
+    sql = str(statement)
+
+    assert ":after" not in sql
+    assert "IS NULL" not in sql
+    assert 'ORDER BY "id" ASC' in sql
+
+
+def test_source_database_resumed_batch_bounds_the_scan_by_the_checkpoint() -> None:
+    statement = _select_statement("orders", "id", 10, has_checkpoint=True)
+    sql = str(statement)
+
+    assert '"id" > :after' in sql
+    assert "IS NULL" not in sql
