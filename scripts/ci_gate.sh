@@ -260,7 +260,7 @@ run_runtime_gate() {
 
   run_runtime_step "ratchet manifest inventory" uv run python scripts/quality/check_ratchet_manifest.py
 
-  run_runtime_step "browser SDK request contract" node tests/sdk/request_contract.mjs
+  run_runtime_step "SDK request contract" node --experimental-strip-types tests/sdk/request_contract.mjs
 
   run_runtime_dynamic_steps
   trap - ERR
@@ -484,7 +484,7 @@ run_e2e_gate() {
   echo "== Dynamic: Playwright E2E =="
   ensure_trained_model_image
   export FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY="${FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY:-ci-prompt-artifact-key}"
-  pnpm exec playwright test
+  pnpm exec playwright test -c playwright.foundry.config.ts
   pnpm --silent quality:pipeline-builder-e2e
 }
 

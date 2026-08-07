@@ -14,11 +14,11 @@
 |---|---|
 | `apps/api/foundry_lite_api/main.py` | 실제 FastAPI route 목록 |
 | `packages/sdk-ts/src/generated.ts` | package용 generated TypeScript SDK |
-| `apps/web/generated-sdk.js` | browser용 generated SDK |
+| `packages/sdk-ts/src/generated.ts` | generated TypeScript SDK (프론트엔드가 소비) |
 | `docs/frontend-api-sdk-surface-matrix.json` | route -> SDK -> proof test -> operator evidence 매핑 |
 | `tests/sdk/request_contract.mjs` | browser SDK가 실제로 보내는 method/path/header/body 계약 |
 
-`scripts/quality/check_frontend_backend_surface.py`는 위 source of truth와 `apps/web/index.html`을
+`scripts/quality/check_frontend_backend_surface.py`는 위 source of truth와 `apps/foundry/src`를
 함께 검사한다. 실패하면 `artifacts/quality/frontend_backend_surface.json`과
 `artifacts/quality/frontend_backend_surface.md`에 어떤 route, SDK method, proof test,
 SDK helper, 파일을 봐야 하는지 남긴다.

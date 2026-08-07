@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import cast
 
@@ -419,15 +420,12 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "OSDK_SDK_REGENERATION_REQUIRED" in generated
 
 
-def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
+def test_sdk_package_output_matches_the_ontology_client_surface() -> None:
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     expected_surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
     ts_surface = _client_surface_payload(sdk.DEFAULT_TS_OUTPUT.read_text(encoding="utf-8"))
-    browser_surface = _client_surface_payload(sdk.DEFAULT_WEB_OUTPUT.read_text(encoding="utf-8"))
 
     assert ts_surface == expected_surface
-    assert browser_surface == expected_surface
-    assert ts_surface == browser_surface
     assert ts_surface["system"] == ["health"]
     assert ts_surface["datasets"] == {
         "_self": ["list", "versions", "preview", "inspect", "aggregate"],
@@ -605,7 +603,6 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     """S65: ontology governance, aggregate, batch-apply, interface/function, and materialization list surfaces."""
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     generated = sdk.render_typescript(ontology)
-    browser_sdk = sdk.render_web_javascript(ontology)
     surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
 
     # SDK_CLIENT_SURFACE registry carries every new method.
@@ -732,181 +729,24 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
     assert '"ApproveOrder.applyBatch",' in generated
 
     # Browser output: same named methods with matching paths and header conventions.
-    web_fragments = [
-        "apply: (payload) => request(`/api/ontology/apply`, {",
-        "rollback: (payload) => request(`/api/ontology/rollback`, {",
-        "${encodeURIComponent(apiName)}/usage${suffix}`",
-        "${encodeURIComponent(apiName)}/dependents`",
-        'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit")',
-        "return request(`/api/ontology/proposals${suffix}`);",
-        "get: (proposalId) => request(`/api/ontology/proposals/${encodeURIComponent(proposalId)}`)",
-        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/update`",
-        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/assign`",
-        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/decide`",
-        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/execute`",
-        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/withdraw`",
-        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create")',
-        "return request(`/api/ontology/branches${suffix}`);",
-        "get: (branchId) => request(`/api/ontology/branches/${encodeURIComponent(branchId)}`)",
-        "`/api/ontology/branches/${encodeURIComponent(branchId)}/update`",
-        "diff: (branchId) => request(`/api/ontology/branches/${encodeURIComponent(branchId)}/diff`)",
-        "`/api/ontology/branches/${encodeURIComponent(branchId)}/rebase`",
-        "`/api/ontology/branches/${encodeURIComponent(branchId)}/propose`",
-        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose")',
-        "`/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`",
-        "actionTypes: {",
-        "list: (branchId) => request(",
-        'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.create")',
-        'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.update")',
-        'requireIdempotencyKey(actionOptions?.idempotencyKey, "ontology.branches.actionTypes.delete")',
-        "`/api/objects/${encodeURIComponent(objectType)}/aggregate`",
-        "aggregate: (payload) => request(`/api/objects/Order/aggregate`, {",
-        "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",
-        "return request(`/api/actions${suffix}`);",
-        "get: (actionApiName) => request(`/api/actions/${encodeURIComponent(actionApiName)}`)",
-        "`/api/actions/${encodeURIComponent(actionApiName)}/validate`",
-        "`/api/actions/${encodeURIComponent(actionApiName)}/apply`",
-        'requireIdempotencyKey(applyOptions?.idempotencyKey, "actions.apply")',
-        "return request(`/api/actions/logs${suffix}`);",
-        "`/api/actions/branches/${encodeURIComponent(branchId)}/diff`",
-        "${encodeURIComponent(branchId)}/links/${encodeURIComponent(linkType)}/",
-        "revertEligibility: (runId) =>",
-        'requireIdempotencyKey(revertOptions?.idempotencyKey, "actions.runs.revert")',
-        "startBatch: (actionApiName, payload, runOptions) => request(",
-        "${encodeURIComponent(actionApiName)}/batch-runs",
-        'runOptions?.idempotencyKey, "actions.runs.startBatch"',
-        'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
-        "`/api/interfaces/${encodeURIComponent(interfaceType)}/query`",
-        "query: (payload = {}) => request(`/api/interfaces/Asset/query`, {",
-        "`/api/functions/${encodeURIComponent(functionType)}/execute`",
-        "execute: (payload = {}) => request(`/api/functions/orderRiskSummary/execute`, {",
-        "list: () => request(`/api/materializations`)",
-    ]
-    for fragment in web_fragments:
-        assert fragment in browser_sdk, fragment
 
 
-def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
+def test_generated_sdk_exports_every_declared_frontend_foundation_helper() -> None:
+    """Every helper the surface advertises has to be importable from the package.
+
+    The surface list is what the frontend and the request-contract proof both read,
+    so a helper named there but never exported would fail only at the call site.
+    """
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
-    browser_sdk = sdk.render_web_javascript(ontology)
+    generated = sdk.render_typescript(ontology)
+    helpers = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))["helpers"]
 
-    expected_fragments = [
-        "export class FoundryLiteApiError extends Error",
-        'export function createRequestId(scope = "sdk")',
-        "export function requestContextHeaders(context = {})",
-        "export function createSessionTokenProvider(sessionProvider)",
-        "export function normalizeFoundryLiteError(error)",
-        "export function isRetryableFoundryLiteError(error)",
-        "insights: {",
-        "reviews: {",
-        "aip: {",
-        "builder: {",
-        "validate: (payload) => request(`/api/aip/builder/validate`, {",
-        "run: (payload) => request(`/api/aip/builder/run`, {",
-        "agent: {",
-        "run: (payload) => request(`/api/aip/agent/run`, {",
-        "catalog: () => request(`/api/aip/fde/catalog`),",
-        "run: (payload) => request(`/api/aip/fde/run`, {",
-        "evals: {",
-        "releases: {",
-        "mediaUploadFormData(payload)",
-        "export const Order = Object.freeze({",
-        'titleProperty: "orderId",',
-        "export const $Objects = Object.freeze({ Order, Customer });",
-        "export const OrderCustomer = Object.freeze({",
-        "export const $Links = Object.freeze({ OrderCustomer });",
-        "export const ApproveOrder = Object.freeze({",
-        "function createOsdkObjectSet(client, objectType, base = {})",
-        "function decorateOsdkInstance(client, objectType, item)",
-        "function createOsdkLinkSet(client, sourceObjectType, source, entry)",
-        "function createOsdkBoundAction(client, actionType, source)",
-        "function normalizeOsdkFilterInput(objectType, filter)",
-        "function normalizeOsdkOrderBy(objectType, orderBy)",
-        "function normalizeOsdkAggregateInput(objectType, request)",
-        "async function aggregateOsdkObjectSet(client, objectType, base, request)",
-        "orderBy(orderBy) {",
-        "aggregate(request) {",
-        "INVALID_OSDK_FILTER_OPERATOR",
-        "INVALID_OSDK_AGGREGATE_GROUPBY_PROPERTY",
-        "$pageSize",
-        "function createOsdkActionInvoker(client, actionType)",
-        "validateAction(payload) {",
-        "/api/actions/ApproveOrder/validate",
-        "onCacheRefresh",
-        "uploadAndCommit(mediaSetId, payload, options)",
-        "export function createFoundryLiteOsdkClient(client)",
-        "export function createFoundryLiteOntologyIndex(catalog = null)",
-        "export const SDK_PACKAGE_MANIFEST =",
-        "export function sdkPackageManifest()",
-        "export function sdkOntologyDriftReport(catalog = null)",
-        "export function assertFoundryLiteSdkFresh(catalog = null)",
-        "OSDK_SDK_REGENERATION_REQUIRED",
-        "media: {",
-        "processors: {",
-        "list: () => request(`/api/media/processors`)",
-        "upload: (mediaSetId, mediaTransactionId, payload) => request(",
-        'requireIdempotencyKey(requestOptions?.idempotencyKey, "media.transactions.open")',
-        'requireIdempotencyKey(requestOptions?.idempotencyKey, "media.references.bind")',
-        "transforms: {",
-        "registerSql: (payload) => request(`/api/transforms/sql`, {",
-        "previewDue: (options = {}) => {",
-        "request(`/api/transforms/scheduler/due${suffix}`)",
-        "tick: (payload = {}) => request(`/api/transforms/scheduler/tick`, {",
-        "nodeTypes: () => request(`/api/pipelines/node-types`)",
-        "resolveNavigation: (payload) => request(`/api/aip/citations/navigation/resolve`",
-        "deployments: {",
-        "deployments${suffix}",
-        "previewRuns: {",
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.previewRuns.create")',
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.deploy")',
-        'runOptions?.idempotencyKey, "pipelines.runs.start"',
-        'cancelOptions?.idempotencyKey, "pipelines.runs.cancel"',
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.upsert")',
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.pause")',
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.resume")',
-        'requireIdempotencyKey(options?.idempotencyKey, "pipelines.schedules.delete")',
-        "export function classifyFoundryLiteError(error)",
-        "export function actionLockKey(actionName, objectId)",
-        "export function createInFlightActionLock()",
-        "function requireIdempotencyKey(value, operationName)",
-        'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")',
-        'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retry")',
-        'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retryTransform")',
-        'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.workflows.startConnectorSync")',
-        "cancel: (workflowRunId, payload = {}) =>",
-        "encodeURIComponent(workflowRunId)}/cancel",
-        '"MISSING_IDEMPOTENCY_KEY"',
-        "export function groupAdminCapabilities(overview)",
-        "export function adminCapabilityView(capability)",
-        "export function adminOperationsBoard(overview, plan)",
-        "capability.canStartFromBrowser !== false",
-        "operatorChecklist: capability.operatorChecklist ?? []",
-        "export function adminReadinessScreen(overview)",
-        "export function adminTaskView(task)",
-        "export function adminTaskPlanScreen(plan)",
-        "taskPlan: () => request(`/api/operations/admin/task-plan`)",
-        "export async function retryWithBackoff(operation, options = {})",
-        "export async function collectCursorPages(fetchPage, options = {})",
-        "export async function* streamFoundryLiteOperationEvents(path, options = {})",
-        'Accept: "text/event-stream"',
-        "parseFoundryLiteEventFrames",
-        "requestIdFactory",
-        "onResponse",
-        '"X-Request-ID": requestId',
-        "await authorizationHeader(options)",
-        "export const $Ontology = Object.freeze({",
-        "export function getObjectType(apiName)",
-        "export function getActionType(apiName)",
-        "export function createFoundryLiteOntologyIndex(catalog = null)",
-        "options.onResponse?.({",
-        "ok: false",
-        "errorCode: error.code",
-        "return {",
-        "    request,",
+    missing = [
+        helper
+        for helper in helpers
+        if not re.search(rf"export (?:async function\*?|function\*?|const|class) {re.escape(helper)}\b", generated)
     ]
-
-    for fragment in expected_fragments:
-        assert fragment in browser_sdk
+    assert missing == [], missing
 
     react_helpers = (sdk.DEFAULT_TS_OUTPUT.parent / "react.ts").read_text(encoding="utf-8")
     assert "export function useFoundryLiteQuery" in react_helpers
@@ -1418,7 +1258,6 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
 def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:
     ontology_path = tmp_path / "ontology.yaml"
     ts_output = tmp_path / "generated.ts"
-    web_output = tmp_path / "generated-sdk.js"
     python_output = tmp_path / "generated.py"
     python_init_output = tmp_path / "__init__.py"
     ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
@@ -1428,7 +1267,6 @@ def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:
         sdk.write_or_check_outputs(
             ontology_path=ontology_path,
             ts_output=ts_output,
-            web_output=web_output,
             python_output=python_output,
             python_init_output=python_init_output,
             should_check=False,
@@ -1441,7 +1279,6 @@ def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:
         sdk.write_or_check_outputs(
             ontology_path=ontology_path,
             ts_output=ts_output,
-            web_output=web_output,
             python_output=python_output,
             python_init_output=python_init_output,
             should_check=True,
@@ -1455,7 +1292,6 @@ def test_generated_sdk_files_match_active_ontology() -> None:
         sdk.write_or_check_outputs(
             ontology_path=sdk.DEFAULT_ONTOLOGY,
             ts_output=sdk.DEFAULT_TS_OUTPUT,
-            web_output=sdk.DEFAULT_WEB_OUTPUT,
             python_output=sdk.DEFAULT_PYTHON_OUTPUT,
             python_init_output=sdk.DEFAULT_PYTHON_INIT_OUTPUT,
             should_check=True,
@@ -1479,7 +1315,7 @@ def test_python_sdk_generator_emits_typed_action_and_matches_active_ontology() -
     compile(generated, str(sdk.DEFAULT_PYTHON_OUTPUT), "exec")
 
 
-def test_action_parameter_types_and_interface_target_are_generated_for_both_osdks(tmp_path: Path) -> None:
+def test_action_parameter_types_and_interface_target_are_generated_for_the_generated_osdk(tmp_path: Path) -> None:
     ontology_path = tmp_path / "typed-actions.yaml"
     ontology_path.write_text(
         """
@@ -1522,7 +1358,6 @@ actionTypes:
 
     generated_ts = sdk.render_typescript(ontology)
     generated_python = sdk.render_python(ontology)
-    browser_sdk = sdk.render_web_javascript(ontology)
 
     assert "export type UpdateAssetGuestContactStruct" in generated_ts
     assert "assets?: ReadonlyArray<string | ObjectReference>;" in generated_ts
@@ -1530,7 +1365,6 @@ actionTypes:
     assert 'targetKind: "interface"' in generated_ts
     assert "updateAsset: OsdkBoundAction<typeof UpdateAsset>" in generated_ts
     assert "target: { objectType: payload.objectType" in generated_ts
-    assert "target: { objectType: payload.objectType" in browser_sdk
     assert "class UpdateAssetGuestContactStruct(TypedDict):" in generated_python
     assert "amount: Decimal" in generated_python
     assert "serviceDate: NotRequired[date]" in generated_python
@@ -1543,7 +1377,6 @@ actionTypes:
 def test_sdk_generator_emits_interface_constants() -> None:
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     generated = sdk.render_typescript(ontology)
-    browser_sdk = sdk.render_web_javascript(ontology)
 
     assert "export type OsdkInterfaceType = {" in generated
     assert "export const Asset = {" in generated
@@ -1553,10 +1386,6 @@ def test_sdk_generator_emits_interface_constants() -> None:
     assert "export const $Interfaces = { Asset } as const;" in generated
     assert "interfaces?: OntologyCatalogInterface[];" in _type_block(generated, "OntologyCatalog")
     assert "implements?: string[];" in _type_block(generated, "OntologyCatalogObject")
-    assert "export const Asset = Object.freeze({" in browser_sdk
-    assert 'properties: Object.freeze(["riskScore"]),' in browser_sdk
-    assert 'implementers: Object.freeze(["Order", "Customer"]),' in browser_sdk
-    assert "export const $Interfaces = Object.freeze({ Asset });" in browser_sdk
 
 
 def test_interface_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
@@ -1615,7 +1444,6 @@ def test_sdk_generator_rejects_dangling_title_property(tmp_path: Path) -> None:
 def test_sdk_generator_emits_function_constants() -> None:
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     generated = sdk.render_typescript(ontology)
-    browser_sdk = sdk.render_web_javascript(ontology)
 
     assert "export type OsdkFunctionType = {" in generated
     assert "export const orderRiskSummary = {" in generated
@@ -1625,9 +1453,6 @@ def test_sdk_generator_emits_function_constants() -> None:
     assert "export const $Functions = { orderRiskSummary } as const;" in generated
     assert 'functionApiNames: ["orderRiskSummary"],' in generated
     assert "functionTypes?: OntologyCatalogFunction[];" in _type_block(generated, "OntologyCatalog")
-    assert "export const orderRiskSummary = Object.freeze({" in browser_sdk
-    assert "export const $Functions = Object.freeze({ orderRiskSummary });" in browser_sdk
-    assert 'functionApiNames: Object.freeze(["orderRiskSummary"]),' in browser_sdk
 
 
 def test_function_signature_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:

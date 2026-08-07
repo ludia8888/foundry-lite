@@ -24,7 +24,6 @@ from scripts.sdk_generator.paths import (  # noqa: E402
     DEFAULT_PYTHON_INIT_OUTPUT,
     DEFAULT_PYTHON_OUTPUT,
     DEFAULT_TS_OUTPUT,
-    DEFAULT_WEB_OUTPUT,
     _display_path,
 )
 from scripts.sdk_generator.python import render_python, render_python_init  # noqa: E402
@@ -33,14 +32,12 @@ from scripts.sdk_generator.surface import (  # noqa: E402,F401  (re-exported tes
     render_client_surface_json,
 )
 from scripts.sdk_generator.typescript import render_typescript  # noqa: E402
-from scripts.sdk_generator.web import render_web_javascript  # noqa: E402
 
 
 def write_or_check_outputs(
     *,
     ontology_path: Path,
     ts_output: Path,
-    web_output: Path,
     python_output: Path | None = None,
     python_init_output: Path | None = None,
     should_check: bool,
@@ -48,7 +45,6 @@ def write_or_check_outputs(
     ontology = load_ontology(ontology_path)
     outputs = {
         ts_output: render_typescript(ontology),
-        web_output: render_web_javascript(ontology),
     }
     if python_output is not None:
         outputs[python_output] = render_python(ontology)
@@ -78,7 +74,6 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Foundry-lite TypeScript SDK from ontology YAML.")
     parser.add_argument("--ontology", type=Path, default=DEFAULT_ONTOLOGY)
     parser.add_argument("--ts-output", type=Path, default=DEFAULT_TS_OUTPUT)
-    parser.add_argument("--web-output", type=Path, default=DEFAULT_WEB_OUTPUT)
     parser.add_argument("--python-output", type=Path, default=DEFAULT_PYTHON_OUTPUT)
     parser.add_argument("--python-init-output", type=Path, default=DEFAULT_PYTHON_INIT_OUTPUT)
     parser.add_argument("--check", action="store_true")
@@ -90,7 +85,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     return write_or_check_outputs(
         ontology_path=args.ontology,
         ts_output=args.ts_output,
-        web_output=args.web_output,
         python_output=args.python_output,
         python_init_output=args.python_init_output,
         should_check=args.check,

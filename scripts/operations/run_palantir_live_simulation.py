@@ -174,7 +174,7 @@ def _command_probes(config: SimulationConfig) -> list[CommandProbe]:
     commands.extend(
         [
             ("product-all-infra-e2e", ["pnpm", "--silent", "quality:product-all-infra-e2e"]),
-            ("sdk-request-contract", ["node", "tests/sdk/request_contract.mjs"]),
+            ("sdk-request-contract", ["node", "--experimental-strip-types", "tests/sdk/request_contract.mjs"]),
         ]
     )
     if config.is_cdc_enabled:

@@ -103,7 +103,7 @@ REQUIRED_CROSS_CHECK_COMMANDS = (
     "pnpm --silent quality:source-of-truth",
     "pnpm --silent quality:operator-evidence",
     "pnpm --silent quality:frontend-backend-surface",
-    "node tests/sdk/request_contract.mjs",
+    "node --experimental-strip-types tests/sdk/request_contract.mjs",
     "pnpm --silent quality:sdk-generated",
     "pnpm --silent quality:frontend-foundation",
     "pnpm --silent quality:insight-review",
@@ -962,8 +962,10 @@ def _pnpm_command_findings(
 
 
 def _node_command_findings(root: Path, map_path: Path, command: str) -> list[DocumentationMapFinding]:
-    parts = command.split()
-    if len(parts) < 2 or (root / parts[1]).exists():
+    # The script is the first non-flag argument, so a runtime flag such as
+    # --experimental-strip-types does not read as a missing file.
+    parts = [part for part in command.split()[1:] if not part.startswith("-")]
+    if not parts or (root / parts[0]).exists():
         return []
     return [
         _command_finding(

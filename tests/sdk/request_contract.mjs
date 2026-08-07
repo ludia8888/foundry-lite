@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -11,11 +10,11 @@ const RESPONSE_REQUEST_ID = "api-response-id";
 const REQUIRED_TEST_NAME = "test_sdk_request_contract_covers_all_frontend_surface_routes";
 const REQUIRED_HELPER_TEST_NAME = "test_sdk_request_contract_covers_frontend_foundation_helpers";
 
-const tempDir = mkdtempSync(join(tmpdir(), "foundry-lite-sdk-"));
-const modulePath = join(tempDir, "generated-sdk.mjs");
-copyFileSync(join(ROOT, "apps/web/generated-sdk.js"), modulePath);
-
-const sdk = await import(pathToFileURL(modulePath).href);
+// The generated TypeScript source is imported directly under Node's type
+// stripping. Exercising the shipped source keeps this proof on the artifact the
+// frontend actually consumes, with no build step to drift from it.
+const sdkSource = join(ROOT, "packages/sdk-ts/src/generated.ts");
+const sdk = await import(pathToFileURL(sdkSource).href);
 const matrix = JSON.parse(readFileSync(join(ROOT, "docs/frontend-api-sdk-surface-matrix.json"), "utf8"));
 const calls = [];
 const telemetry = [];
@@ -6003,7 +6002,6 @@ for (const row of helperContractRows) {
 }
 assert.equal(coveredHelperIds.size, helperContractRows.length);
 
-rmSync(tempDir, { recursive: true, force: true });
 console.log(
   `SDK request contract covered ${coveredSurfaceIds.size} frontend surfaces and ${coveredHelperIds.size} SDK helpers.`,
 );

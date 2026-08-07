@@ -19,7 +19,9 @@ def _node_executable() -> str:
 
 def _run_request_contract() -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        [_node_executable(), "tests/sdk/request_contract.mjs"],
+        # The proof imports the generated TypeScript source directly, so Node has to
+        # strip its types rather than refuse an unknown ".ts" extension.
+        [_node_executable(), "--experimental-strip-types", "tests/sdk/request_contract.mjs"],
         cwd=ROOT,
         check=False,
         capture_output=True,

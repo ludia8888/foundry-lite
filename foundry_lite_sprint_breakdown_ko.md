@@ -187,7 +187,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 **반드시 완성해야 하는 것**
 
 - pnpm workspace, uv workspace, Turborepo 기본 구조를 만든다.
-- Python 백엔드 앱 `apps/api`, `apps/worker`, `apps/cli`와 TypeScript Web 앱 `apps/web`을 생성한다.
+- Python 백엔드 앱 `apps/api`, `apps/worker`, `apps/cli`와 TypeScript Web 앱 `apps/foundry`을 생성한다.
 - Python 라이브러리 `libs/foundry_lite/domain`, `application`, `infrastructure`, `interfaces`, `observability`, `security` 골격을 생성한다.
 - TypeScript generated SDK 패키지 `packages/sdk-ts` 골격을 생성한다.
 - Docker Compose로 PostgreSQL, MinIO, Temporal dev server를 띄운다. Redpanda/Elasticsearch는 full profile에만 둔다.
@@ -200,7 +200,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `uv sync && pnpm install && pnpm dev`가 성공한다. 최신 로컬 확인에서 API는 `127.0.0.1:8000`, Web은 `127.0.0.1:4173`로 실행된다.
 - [x] `curl localhost:8000/healthz`가 `{"status":"ok"}`를 반환한다. (로컬 E2E 확인, 2026-06-16)
 - [x] 최초 MVP core에서는 Temporal worker 연결을 제외했지만, 이후 Pipeline Builder는 `worker:pipeline-dag`/`worker:pipeline-control`과 실제 PostgreSQL·Temporal 2-worker 장애 인계 gate까지 current로 확장했다. Transform·connector 등 다른 workload의 managed Temporal 전환은 각 sprint 경계를 따른다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [VERIFY-PIPELINE-ASYNC-DAG](./docs/sprint-evidence-ledger.md#verify-pipeline-async-dag))
-- [x] Web이 API health 상태를 화면에 표시한다. (`apps/web/index.html`, `#healthBtn`, `#statusText`; 최신 로컬 E2E 확인)
+- [x] Web이 API health 상태를 화면에 표시한다. (`apps/foundry/src`, `#healthBtn`, `#statusText`; 최신 로컬 E2E 확인)
 - [x] CI에서 `ruff`, `mypy` 또는 `pyright`, `pytest`가 성공한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), 최신 `main` Foundry-lite CI)
 
 **Demo / Proof**
@@ -1382,7 +1382,7 @@ webhook endpoint를 끄고 action 실행 → side effect failed → endpoint 켜
 
 **Acceptance Gate**
 
-- [x] Order detail에서 ApproveOrder 버튼이 보인다. (`apps/web/index.html`, `#approveBtn`, [S35-A4](./docs/sprint-evidence-ledger.md#s35-a4))
+- [x] Order detail에서 ApproveOrder 버튼이 보인다. (`apps/foundry/src`, `#approveBtn`, [S35-A4](./docs/sprint-evidence-ledger.md#s35-a4))
 - [x] reason 입력 후 실행하면 status가 APPROVED로 바뀐다. 최신 로컬 E2E에서 `O-1002`가 `REVIEW`에서 `APPROVED`로 변경됨을 확인했다. ([S25-A1](./docs/sprint-evidence-ledger.md#s25-a1))
 - [x] 다른 탭에서 object가 먼저 변경되면 expectedObjectVersion conflict로 막힌다. ([S25-A3](./docs/sprint-evidence-ledger.md#s25-a3), [S26-A3](./docs/sprint-evidence-ledger.md#s26-a3))
 - [x] Action log panel/Operations run detail에 방금 실행한 action이 보인다. 최신 로컬 E2E에서 `action_run_e39c8aba...`와 `ops.action_log` row를 확인했다. ([S26-A4](./docs/sprint-evidence-ledger.md#s26-a4), [S30-A5](./docs/sprint-evidence-ledger.md#s30-a5))
@@ -1620,8 +1620,8 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 - [x] `client.objects.Order.get('O-1001')`가 typed Order를 반환한다. (`packages/sdk-ts/src/generated.ts`, `tests/unit/test_sdk_ts_generation.py`) ([S35-A1](./docs/sprint-evidence-ledger.md#s35-a1))
 - [x] `client.actions.ApproveOrder.apply(...)`가 parameter type check를 받는다. (`ApproveOrderParams`, `ApproveOrderApplyRequest`, `examples/sdk-demo.ts`) ([S35-A2](./docs/sprint-evidence-ledger.md#s35-a2))
 - [x] ontology apiName 변경/삭제 시 SDK generation이 breaking change를 감지한다. (`pnpm quality:sdk-generated`, `test_sdk_generator_check_detects_api_name_drift`) ([S35-A3](./docs/sprint-evidence-ledger.md#s35-a3))
-- [x] SDK smoke test가 generated client로 end-to-end action을 실행한다. (`tests/e2e/foundry-lite.spec.ts`) ([S35-A4](./docs/sprint-evidence-ledger.md#s35-a4))
-- [x] Web이 최소 한 화면에서 raw fetch 대신 SDK를 사용한다. (`apps/web/index.html`, `apps/web/generated-sdk.js`) ([S35-A5](./docs/sprint-evidence-ledger.md#s35-a5))
+- [x] SDK smoke test가 generated client로 end-to-end action을 실행한다. (`tests/e2e-foundry/object-explorer-flow.spec.ts`) ([S35-A4](./docs/sprint-evidence-ledger.md#s35-a4))
+- [x] Web이 최소 한 화면에서 raw fetch 대신 SDK를 사용한다. (`apps/foundry/src`, `packages/sdk-ts/src/generated.ts`) ([S35-A5](./docs/sprint-evidence-ledger.md#s35-a5))
 
 **Demo / Proof**
 

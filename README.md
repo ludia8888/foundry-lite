@@ -36,10 +36,10 @@ pnpm demo:supply-chain
 pnpm dev
 ```
 
-API 서버는 `pnpm dev`로 뜹니다. 정적 web shell은 별도 터미널에서 아래처럼 볼 수 있습니다.
+API 서버는 `pnpm dev`로 뜹니다. 프론트엔드는 별도 터미널에서 아래처럼 띄웁니다.
 
 ```bash
-pnpm web:static
+pnpm dev:foundry
 ```
 
 기본 품질 확인은 아래 명령입니다.
@@ -173,7 +173,7 @@ foundry.demo
 | `apps/api/foundry_lite_api/main.py` | FastAPI route surface |
 | `apps/cli/foundry_lite_cli/main.py` | `flite` CLI |
 | `apps/worker/foundry_lite_worker` | stream archive and outbox publisher worker entrypoints |
-| `apps/web` | static web shell and browser SDK bundle |
+| `apps/foundry` | React frontend (Vite) |
 | `packages/sdk-ts/src/generated.ts` | generated TypeScript SDK |
 | `packages/sdk-python/src/foundry_lite_sdk` | fingerprint-pinned generated Python Action OSDK package |
 | `packages/sdk-ts/src/screen-recipes.ts` | screen-level SDK recipes |
@@ -279,7 +279,7 @@ pnpm worker:pipeline-control
 | `pnpm demo:supply-chain` | 공급망 폐루프 데모를 fresh local runtime에서 실행합니다. |
 | `pnpm demo:media-multimodal` | OCR/ASR/video/semantic media demo를 실행합니다. |
 | `pnpm dev` | FastAPI app을 로컬에서 실행합니다. |
-| `pnpm web:static` | static web shell을 4173 포트에서 서빙합니다. |
+| `pnpm dev:foundry` | React 프론트엔드를 4173 포트에서 띄웁니다. |
 | `pnpm ci:gate` | 빠른 local static plus impact gate입니다. |
 | `pnpm ci:gate:pr` | diff security, 직접 연관 테스트, focused static/type 검사를 420초 budget으로 실행합니다. |
 | `pnpm ci:gate:all` | 로컬에서 release lane을 직렬로 넓게 확인합니다. |
