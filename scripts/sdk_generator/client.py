@@ -3708,7 +3708,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             ),
             (
                 "          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/runs` + "
-                "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+                "`${options?.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
             ),
             '            method: "POST",',
             "            headers: {",
@@ -3723,7 +3723,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             ),
             (
                 "          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/batch-runs` + "
-                "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+                "`${options?.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
             ),
             '            method: "POST",',
             "            headers: {",
@@ -4343,7 +4343,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         ),
         (
             "          request<PipelineRun>(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs` + "
-            "`${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
+            "`${options?.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {"
         ),
         '            method: "POST",',
         "            headers: {",

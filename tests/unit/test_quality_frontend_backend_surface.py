@@ -37,8 +37,8 @@ def test_frontend_backend_surface_requires_named_sdk_method(tmp_path: Path) -> N
 
 def test_frontend_backend_surface_rejects_raw_web_api_request(tmp_path: Path) -> None:
     _write_surface_tree(tmp_path)
-    web_path = tmp_path / "apps" / "web" / "index.html"
-    web_path.write_text("sdkClient().request('/api/object-sets')\n", encoding="utf-8")
+    raw_call_path = tmp_path / "apps" / "foundry" / "src" / "RawCall.tsx"
+    raw_call_path.write_text('const rows = await fetch("/api/object-sets");\n', encoding="utf-8")
 
     findings = _collect(tmp_path)
 
@@ -286,7 +286,7 @@ def _collect(root: Path) -> list[gate.FrontendBackendSurfaceFinding]:
         api_path=root / "apps" / "api" / "foundry_lite_api" / "main.py",
         matrix_path=root / "docs" / "frontend-api-sdk-surface-matrix.json",
         sdk_path=root / "packages" / "sdk-ts" / "src" / "generated.ts",
-        web_path=root / "apps" / "web" / "index.html",
+        web_path=root / "apps" / "foundry" / "src",
         tests_root=root / "tests",
         frontend_cookbook_path=root / "docs" / "sdk-frontend-cookbook.md",
         screen_recipe_path=root / "packages" / "sdk-ts" / "src" / "screen-recipes.ts",
@@ -296,7 +296,7 @@ def _collect(root: Path) -> list[gate.FrontendBackendSurfaceFinding]:
 
 def _write_surface_tree(root: Path) -> None:
     (root / "apps" / "api" / "foundry_lite_api").mkdir(parents=True)
-    (root / "apps" / "web").mkdir(parents=True)
+    (root / "apps" / "foundry" / "src").mkdir(parents=True)
     (root / "docs").mkdir(parents=True)
     (root / "packages" / "sdk-ts" / "src").mkdir(parents=True)
     (root / "tests" / "unit").mkdir(parents=True)
@@ -433,8 +433,8 @@ def _write_surface_tree(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (root / "apps" / "web" / "index.html").write_text(
-        "const client = sdkClient(); client.datasets.preview('clean', 'orders');\n",
+    (root / "apps" / "foundry" / "src" / "DatasetPreview.tsx").write_text(
+        "const rows = client.datasets.preview('clean', 'orders');\n",
         encoding="utf-8",
     )
     (root / "tests" / "unit" / "test_surface_proof.py").write_text(

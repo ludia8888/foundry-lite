@@ -128,7 +128,7 @@ def _is_backend_path(path: str) -> bool:
 
 def _is_frontend_path(path: str) -> bool:
     return (
-        path.startswith(("apps/foundry/", "apps/web/", "packages/sdk-ts/", "tests/sdk/"))
+        path.startswith(("apps/foundry/", "packages/sdk-ts/", "tests/sdk/"))
         or path.endswith((".ts", ".tsx", ".js", ".mjs", ".css"))
         or path in {"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"}
     )
@@ -453,7 +453,9 @@ def _commands(plan: PullRequestPlan, base: str, head: str) -> list[tuple[str, li
             )
         )
     if plan.has_sdk_contract:
-        commands.append(("sdk-request-contract", ["node", "tests/sdk/request_contract.mjs"]))
+        commands.append(
+            ("sdk-request-contract", ["node", "--experimental-strip-types", "tests/sdk/request_contract.mjs"])
+        )
     return commands
 
 

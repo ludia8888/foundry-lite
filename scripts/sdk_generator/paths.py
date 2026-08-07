@@ -14,9 +14,6 @@ DEFAULT_ONTOLOGY = ROOT / "examples" / "supply-chain-demo" / "ontology" / "order
 DEFAULT_TS_OUTPUT = ROOT / "packages" / "sdk-ts" / "src" / "generated.ts"
 
 
-DEFAULT_WEB_OUTPUT = ROOT / "apps" / "web" / "generated-sdk.js"
-
-
 DEFAULT_PYTHON_OUTPUT = ROOT / "packages" / "sdk-python" / "src" / "foundry_lite_sdk" / "generated.py"
 
 

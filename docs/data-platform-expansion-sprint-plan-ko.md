@@ -359,7 +359,7 @@ quality:record-dlq-replay
 - [x] `test_transform_record_dlq_retry_rebuilds_snapshot_after_fix`
 - [x] `test_transform_record_dlq_retry_fails_without_fix_and_does_not_commit_output`
 - [x] `test_transform_record_dlq_retry_rejects_append_mode_fail_closed`
-- [x] `test_operations_ui_record_dlq_retry_shows_result`
+- [x] `test_api_operations_record_dead_letter_records_retry_bulk_and_discard`
 - [x] `test_concurrent_replay_requests_create_one_replay_run`
 - [x] `test_same_replay_idempotency_key_returns_existing_result`
 

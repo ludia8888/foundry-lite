@@ -7962,7 +7962,7 @@ export function createFoundryLiteClient(clientOptions: FoundryLiteClientOptions)
       },
       runs: {
         start: (actionApiName: string, payload: ActionPlanRequest, options: { idempotencyKey: string; waitSeconds?: number }) =>
-          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/runs` + `${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {
+          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/runs` + `${options?.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -7971,7 +7971,7 @@ export function createFoundryLiteClient(clientOptions: FoundryLiteClientOptions)
             body: JSON.stringify(payload),
           }),
         startBatch: (actionApiName: string, payload: ActionFunctionBatchRunRequest, options: { idempotencyKey: string; waitSeconds?: number }) =>
-          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/batch-runs` + `${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {
+          request<ActionRun>(`/api/actions/${encodeURIComponent(actionApiName)}/batch-runs` + `${options?.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -8637,7 +8637,7 @@ export function createFoundryLiteClient(clientOptions: FoundryLiteClientOptions)
         ),
       runs: {
         start: (pipelineId: string, payload: PipelineRunStartRequest = {}, options: { idempotencyKey: string; waitSeconds?: number }) =>
-          request<PipelineRun>(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs` + `${options.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {
+          request<PipelineRun>(`/api/pipelines/${encodeURIComponent(pipelineId)}/runs` + `${options?.waitSeconds === undefined ? '' : `?waitSeconds=${options.waitSeconds}`}`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

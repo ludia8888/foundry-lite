@@ -230,7 +230,7 @@
         "test_operations_record_dead_letter_replay_failure_is_visible",
         "test_api_operations_record_dead_letter_records_retry_bulk_and_discard",
         "test_python_transform_row_errors_are_quarantined_without_failing_run",
-        "test_operations_ui_record_dlq_retry_shows_result",
+        "test_api_operations_record_dead_letter_records_retry_bulk_and_discard",
         "test_concurrent_replay_requests_create_one_replay_run",
         "test_same_replay_idempotency_key_returns_existing_result",
         "test_sdk_generator_emits_typed_order_and_action_contract",
@@ -419,7 +419,7 @@
         "test_product_workflow_cancel_rejects_terminal_non_cancelled_adapter_result",
         "test_product_connector_sync_workflow_runs_through_temporal_and_audits",
         "test_api_operations_workflow_start_status_and_audit",
-        "test_sdk_package_and_browser_outputs_share_client_surface"
+        "test_sdk_package_output_matches_the_ontology_client_surface"
       ],
       "futureTests": [
         "test_continue_as_new_preserves_business_idempotency",
@@ -528,7 +528,7 @@
       "activeInfraRefs": [],
       "proofLevel": "L1",
       "evidenceRefs": [
-        "test_sdk_package_and_browser_outputs_share_client_surface"
+        "test_sdk_package_output_matches_the_ontology_client_surface"
       ],
       "futureTests": [
         "test_frontend_workspace_uses_generated_sdk_only_for_object_actions"

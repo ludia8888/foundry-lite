@@ -212,7 +212,6 @@ def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> Non
 
 def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    playwright_config = (ROOT / "playwright.config.ts").read_text(encoding="utf-8")
     foundry_playwright_config = (ROOT / "playwright.foundry.config.ts").read_text(encoding="utf-8")
 
     e2e_job = workflow.split("quality_e2e:", maxsplit=1)[1].split("quality_gate:", maxsplit=1)[0]
@@ -230,10 +229,6 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "run: pnpm exec playwright install --with-deps chromium" in e2e_job
     assert "run: pnpm ci:gate:e2e" in e2e_job
     assert e2e_job.index("Pre-fetch fastembed CLIP vision/text models") < e2e_job.index("run: pnpm ci:gate:e2e")
-    api_server = playwright_config.split('command: "bash scripts/e2e_start_api.sh"', maxsplit=1)[1].split(
-        "},", maxsplit=1
-    )[0]
-    assert "timeout: 120_000" in api_server
     foundry_api_server = foundry_playwright_config.split(
         'FOUNDRY_LITE_HOME="$PWD/.foundry-lite-foundry-e2e" bash scripts/e2e_start_api.sh',
         maxsplit=1,
@@ -1136,7 +1131,7 @@ def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
     assert '"quality:frontend-foundation"' in package_json
     assert "tests/unit/test_quality_frontend_backend_surface.py" in package_json
     assert "tests/unit/test_sdk_ts_generation.py" in package_json
-    assert "tests/unit/test_web_operations_ui.py" in package_json
+    assert "tests/unit/test_sdk_request_contract.py" in package_json
     assert "tests/unit/test_python_osdk.py" in package_json
 
 
@@ -1638,7 +1633,11 @@ def test_agent_inline_citation_gate_runs_after_source_preview_before_ai_evidence
     assert script.index(agent_source_preview_step) < script.index(agent_inline_citation_step)
     assert script.index(agent_inline_citation_step) < script.index(ai_evidence_step)
     assert '"quality:agent-inline-citations"' in package_json
-    assert "citationAnchorButton" in (ROOT / "apps" / "web" / "index.html").read_text(encoding="utf-8")
+    # The inline citation anchor now lives in the React answer renderer.
+    answer_view = (
+        ROOT / "apps" / "foundry" / "src" / "features" / "aip" / "components" / "AnswerWithCitations.tsx"
+    ).read_text(encoding="utf-8")
+    assert "onSelectCitation" in answer_view
     assert "agent_inline_citation_gate" in package_json
 
 

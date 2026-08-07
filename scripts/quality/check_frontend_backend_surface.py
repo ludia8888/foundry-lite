@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_API = ROOT / "apps" / "api" / "foundry_lite_api"
 DEFAULT_MATRIX = ROOT / "docs" / "frontend-api-sdk-surface-matrix.json"
 DEFAULT_SDK = ROOT / "packages" / "sdk-ts" / "src" / "generated.ts"
-DEFAULT_WEB = ROOT / "apps" / "web" / "index.html"
+DEFAULT_FRONTEND_SRC = ROOT / "apps" / "foundry" / "src"
 DEFAULT_TESTS = ROOT / "tests"
 DEFAULT_FRONTEND_CONTRACT = ROOT / "docs" / "frontend-backend-surface-contract.md"
 DEFAULT_FRONTEND_COOKBOOK = ROOT / "docs" / "sdk-frontend-cookbook.md"
@@ -43,6 +43,16 @@ IGNORED_DOC_PARTS = {
     "node_modules",
     "__pycache__",
 }
+# The frontend must reach the backend through named SDK methods only. Matching on
+# the network primitives rather than on "/api/" string literals keeps the check
+# honest in a React tree, where a backend-supplied operationsPath is parsed and
+# rendered as text without any request being made.
+FRONTEND_RAW_REQUEST_PATTERNS = (
+    re.compile(r"\bfetch\s*\("),
+    re.compile(r"\bnew\s+XMLHttpRequest\b"),
+    re.compile(r"\baxios\b"),
+    re.compile(r"\bnew\s+EventSource\s*\("),
+)
 WEB_RAW_API_PATTERNS = (
     "sdkClient().request(",
     "async function request(",
@@ -1025,19 +1035,32 @@ def _sdk_helper_proof_findings(
     return findings
 
 
-def _web_raw_request_findings(web_path: Path) -> list[FrontendBackendSurfaceFinding]:
-    source = web_path.read_text(encoding="utf-8")
+def _web_raw_request_findings(frontend_src: Path) -> list[FrontendBackendSurfaceFinding]:
+    """Hold the frontend to named SDK methods.
+
+    The check walks the app sources rather than one bundled page, so a raw
+    ``fetch("/api/...")`` cannot slip in through a newly added screen.
+    """
     findings: list[FrontendBackendSurfaceFinding] = []
-    for pattern in WEB_RAW_API_PATTERNS:
-        if pattern in source:
-            findings.append(
-                FrontendBackendSurfaceFinding(
-                    code="web_uses_raw_api_request",
-                    route="apps/web/index.html",
-                    message=f"Web app still contains raw API request pattern {pattern!r}; use named SDK methods.",
-                    suggested_file="apps/web/index.html",
+    if not frontend_src.exists():
+        return findings
+    for path in sorted(frontend_src.rglob("*")):
+        if path.suffix not in {".ts", ".tsx"} or not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8")
+        relative = _repo_relative(path, root=ROOT)
+        for pattern in FRONTEND_RAW_REQUEST_PATTERNS:
+            if pattern.search(source):
+                findings.append(
+                    FrontendBackendSurfaceFinding(
+                        code="web_uses_raw_api_request",
+                        route=relative,
+                        message=(
+                            f"Frontend source issues a request through {pattern.pattern!r}; use named SDK methods."
+                        ),
+                        suggested_file=relative,
+                    )
                 )
-            )
     return findings
 
 
@@ -1308,7 +1331,7 @@ def collect_findings(
     api = _path_or(api_path, root / "apps" / "api" / "foundry_lite_api")
     matrix_file = _path_or(matrix_path, root / "docs" / "frontend-api-sdk-surface-matrix.json")
     sdk = _path_or(sdk_path, root / "packages" / "sdk-ts" / "src" / "generated.ts")
-    web = _path_or(web_path, root / "apps" / "web" / "index.html")
+    web = _path_or(web_path, root / "apps" / "foundry" / "src")
     tests = _path_or(tests_root, root / "tests")
     frontend_contract = _path_or(frontend_contract_path, root / "docs" / "frontend-backend-surface-contract.md")
     frontend_cookbook = _path_or(frontend_cookbook_path, root / "docs" / "sdk-frontend-cookbook.md")
@@ -1392,7 +1415,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--api", type=Path, default=DEFAULT_API)
     parser.add_argument("--matrix", type=Path, default=DEFAULT_MATRIX)
     parser.add_argument("--sdk", type=Path, default=DEFAULT_SDK)
-    parser.add_argument("--web", type=Path, default=DEFAULT_WEB)
+    parser.add_argument("--web", type=Path, default=DEFAULT_FRONTEND_SRC)
     parser.add_argument("--tests", type=Path, default=DEFAULT_TESTS)
     parser.add_argument("--frontend-contract", type=Path, default=DEFAULT_FRONTEND_CONTRACT)
     parser.add_argument("--frontend-cookbook", type=Path, default=DEFAULT_FRONTEND_COOKBOOK)

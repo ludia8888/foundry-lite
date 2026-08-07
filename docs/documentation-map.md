@@ -130,7 +130,7 @@ pnpm --silent quality:proof-matrix
 pnpm --silent quality:source-of-truth
 pnpm --silent quality:operator-evidence
 pnpm --silent quality:frontend-backend-surface
-node tests/sdk/request_contract.mjs
+node --experimental-strip-types tests/sdk/request_contract.mjs
 pnpm --silent quality:sdk-generated
 pnpm --silent quality:frontend-foundation
 pnpm --silent quality:insight-review
