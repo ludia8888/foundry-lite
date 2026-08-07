@@ -484,7 +484,9 @@ run_e2e_gate() {
   echo "== Dynamic: Playwright E2E =="
   ensure_trained_model_image
   export FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY="${FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY:-ci-prompt-artifact-key}"
-  pnpm exec playwright test -c playwright.foundry.config.ts
+  # Only the suites that bring their own runtime env run here. Sweeping in
+  # playwright.foundry.config.ts wholesale also collects specs whose fixtures and
+  # env are set up inside a dedicated quality script, and those fail bare.
   pnpm --silent quality:pipeline-builder-e2e
 }
 
