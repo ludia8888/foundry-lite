@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     OsdkMcpServerRow,
     OsdkMcpSessionEventRow,
     OsdkMcpSessionRow,
+    OsdkMcpStreamLease,
     OsdkResourceOperation,
     OsdkResourceType,
     OsdkSdkCompatibilityWindowRow,
@@ -135,6 +136,11 @@ class OsdkApplicationService(CoreService):
     ) -> OsdkMcpSessionRow:
         return self.osdk_mcp_server_service.open_session(ctx, app_id, session_id, origin=origin)
 
+    def resume_mcp_session(
+        self, ctx: RequestContext, app_id: str, session_id: str, *, origin: str | None = None
+    ) -> OsdkMcpSessionRow:
+        return self.osdk_mcp_server_service.resume_session(ctx, app_id, session_id, origin=origin)
+
     def record_mcp_session_event(
         self,
         ctx: RequestContext,
@@ -152,6 +158,14 @@ class OsdkApplicationService(CoreService):
         self, ctx: RequestContext, app_id: str, session_id: str, *, after_sequence: int = 0
     ) -> list[OsdkMcpSessionEventRow]:
         return self.osdk_mcp_server_service.list_session_events(ctx, app_id, session_id, after_sequence=after_sequence)
+
+    def claim_mcp_session_stream(
+        self, ctx: RequestContext, app_id: str, session_id: str, *, origin: str | None = None
+    ) -> OsdkMcpStreamLease:
+        return self.osdk_mcp_server_service.claim_session_stream(ctx, app_id, session_id, origin=origin)
+
+    def release_mcp_session_stream(self, ctx: RequestContext, app_id: str, session_id: str, lease_id: str) -> bool:
+        return self.osdk_mcp_server_service.release_session_stream(ctx, app_id, session_id, lease_id)
 
     def close_mcp_session(self, ctx: RequestContext, app_id: str, session_id: str) -> OsdkMcpSessionRow:
         return self.osdk_mcp_server_service.close_session(ctx, app_id, session_id)

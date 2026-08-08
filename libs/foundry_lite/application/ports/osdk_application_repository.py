@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, NotRequired, Protocol, TypedDict
 
+from foundry_lite.application.ports.osdk_mcp_repository import (
+    OsdkMcpServerRecord,
+    OsdkMcpServerRow,
+    OsdkMcpSessionEventRow,
+    OsdkMcpSessionRecord,
+    OsdkMcpSessionRow,
+)
 from foundry_lite.application.ports.osdk_security_repository import OsdkSecurityRepository
 from foundry_lite.application.ports.runtime_repository import RuntimeJsonObject
 from foundry_lite.application.ports.transaction_context import TransactionContext
@@ -49,42 +56,6 @@ class OsdkApplicationResourceRow(TypedDict):
     resource_type: OsdkResourceType
     resource_api_name: str
     scopes: list[str]
-    created_at: str
-
-
-class OsdkMcpServerRow(TypedDict):
-    id: str
-    tenant_id: str
-    app_id: str
-    status: str
-    description_markdown: str
-    allowed_origins: list[str]
-    last_activity_at: str | None
-    updated_by_user_id: str
-    created_at: str
-    updated_at: str
-
-
-class OsdkMcpSessionRow(TypedDict):
-    id: str
-    tenant_id: str
-    app_id: str
-    client_id: str
-    actor_user_id: str
-    status: str
-    last_sequence: int
-    created_at: str
-    last_seen_at: str
-    terminated_at: str | None
-
-
-class OsdkMcpSessionEventRow(TypedDict):
-    id: str
-    tenant_id: str
-    session_id: str
-    sequence: int
-    event_type: str
-    payload_json: RuntimeJsonObject
     created_at: str
 
 
@@ -214,32 +185,6 @@ class OsdkApplicationResourceRecord:
     resource_api_name: str
     scopes: tuple[str, ...]
     created_at: str
-
-
-@dataclass(frozen=True)
-class OsdkMcpServerRecord:
-    server_id: str
-    tenant_id: str
-    app_id: str
-    status: str
-    description_markdown: str
-    allowed_origins: tuple[str, ...]
-    last_activity_at: str | None
-    updated_by_user_id: str
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class OsdkMcpSessionRecord:
-    session_id: str
-    tenant_id: str
-    app_id: str
-    client_id: str
-    actor_user_id: str
-    status: str
-    created_at: str
-    last_seen_at: str
 
 
 @dataclass(frozen=True)
@@ -401,6 +346,27 @@ class OsdkApplicationRepository(OsdkSecurityRepository, Protocol):
     def mcp_session_by_id(
         self, *, transaction: TransactionContext, tenant_id: str, session_id: str
     ) -> OsdkMcpSessionRow | None: ...
+
+    def claim_mcp_session_stream_lease(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        session_id: str,
+        lease_id: str,
+        claimed_at: str,
+        lease_expires_at: str,
+    ) -> OsdkMcpSessionRow | None: ...
+
+    def release_mcp_session_stream_lease(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        session_id: str,
+        lease_id: str,
+        released_at: str,
+    ) -> bool: ...
 
     def append_mcp_session_event(
         self,

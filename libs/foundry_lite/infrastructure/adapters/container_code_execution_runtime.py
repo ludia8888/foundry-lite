@@ -36,8 +36,11 @@ SANDBOX_ENVIRONMENT: Mapping[str, str] = {
     "PYTHONPATH": "/opt/foundry-lite",
     "PYTHONUNBUFFERED": "1",
     "TMPDIR": TMP_DIR,
-    # Resolves `typescript` from the global install in the Node image; the Python image has no
-    # node_modules and ignores it. One allowlist keeps `validate_config` a single comparison.
+}
+NODE_SANDBOX_ENVIRONMENT: Mapping[str, str] = {
+    **SANDBOX_ENVIRONMENT,
+    # Resolves `typescript` from the global install in the Node image. Keep this runtime-only so
+    # the Python sandbox does not receive environment capabilities it cannot use.
     "NODE_PATH": "/usr/local/lib/node_modules",
 }
 _DOCKER_CLIENT_ENV_KEYS = ("DOCKER_CONTEXT", "DOCKER_HOST", "HOME", "PATH")
@@ -65,7 +68,7 @@ def default_policy() -> CodeExecutionSandboxPolicy:
         is_root_filesystem_read_only=True,
         is_capability_set_dropped=True,
         has_no_new_privileges=True,
-        allowed_environment_keys=tuple(SANDBOX_ENVIRONMENT),
+        allowed_environment_keys=tuple(NODE_SANDBOX_ENVIRONMENT),
     )
 
 
@@ -129,7 +132,7 @@ def validate_config(config: ContainerCodeExecutionConfig) -> None:
     )
     if not all(required_controls):
         raise ValueError("container code execution security controls cannot be disabled")
-    if tuple(policy.allowed_environment_keys) != tuple(SANDBOX_ENVIRONMENT):
+    if tuple(policy.allowed_environment_keys) != tuple(NODE_SANDBOX_ENVIRONMENT):
         raise ValueError("container code execution environment allowlist cannot be expanded")
 
 
@@ -167,7 +170,8 @@ def container_command(
     ]
     command.extend(_workspace_mount_arguments(workspace))
     command.extend((image_reference or config.image_reference, "/usr/bin/env", "-i"))
-    command.extend(f"{key}={value}" for key, value in SANDBOX_ENVIRONMENT.items())
+    environment = NODE_SANDBOX_ENVIRONMENT if interpreter == "node" else SANDBOX_ENVIRONMENT
+    command.extend(f"{key}={value}" for key, value in environment.items())
     command.extend(
         (
             interpreter,
@@ -230,7 +234,7 @@ def _policy_from_env(environ: Mapping[str, str]) -> CodeExecutionSandboxPolicy:
         is_root_filesystem_read_only=True,
         is_capability_set_dropped=True,
         has_no_new_privileges=True,
-        allowed_environment_keys=tuple(SANDBOX_ENVIRONMENT),
+        allowed_environment_keys=tuple(NODE_SANDBOX_ENVIRONMENT),
     )
 
 

@@ -129,6 +129,10 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipAgentRunRequest = {" in generated
     assert "export type AipFdeRunRequest = {" in generated
     assert "export type AipFdeCatalog = {" in generated
+    assert "export type AipFdeMcpConfirmationApproval = {" in generated
+    assert "tenantId?: string;" in _type_block(generated, "OsdkOAuthTokenRequest")
+    assert "resource?: string;" in _type_block(generated, "OsdkOAuthTokenRequest")
+    assert "refreshToken?: string;" in _type_block(generated, "OsdkOAuthTokenRequest")
     assert "export type AipAgentRunResult = {" in generated
     assert "export type AipEvalRunRequest = {" in generated
     assert "export type AipReleasePromotionRequest = {" in generated
@@ -223,6 +227,9 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;" in generated
     assert "catalog(): Promise<AipFdeCatalog>;" in generated
     assert "run(payload: AipFdeRunRequest): Promise<AipFdeRunResult>;" in generated
+    assert (
+        "approveMcpConfirmation(applicationId: string, challengeId: string): Promise<AipFdeMcpConfirmationApproval>;"
+    ) in generated
     assert "run(payload: AipEvalRunRequest): Promise<AipEvalRunResult>;" in generated
     assert "promote(payload: AipReleasePromotionRequest): Promise<AipReleasePromotionResult>;" in generated
     assert (
@@ -457,7 +464,7 @@ def test_sdk_package_output_matches_the_ontology_client_surface() -> None:
     assert ts_surface["aip"] == {
         "builder": ["validate", "run"],
         "agent": ["run"],
-        "fde": ["catalog", "run"],
+        "fde": ["catalog", "run", "approveMcpConfirmation"],
         "pilot": ["plan", "generate", "get"],
         "citations": ["resolveNavigation"],
         "evals": ["run"],

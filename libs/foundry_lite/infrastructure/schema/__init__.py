@@ -98,6 +98,7 @@ from foundry_lite.infrastructure.schema.ontology import (
     property_types,
 )
 from foundry_lite.infrastructure.schema.osdk import (
+    mcp_rate_limit_windows,
     osdk_application_clients,
     osdk_application_resources,
     osdk_applications,
@@ -221,6 +222,7 @@ __all__ = [
     "ontology_branches",
     "ontology_versions",
     "property_types",
+    "mcp_rate_limit_windows",
     "osdk_application_clients",
     "osdk_client_secret_versions",
     "osdk_application_resources",

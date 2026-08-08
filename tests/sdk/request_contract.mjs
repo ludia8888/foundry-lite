@@ -1123,6 +1123,15 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.fde.approveMcpConfirmation",
+  () => client.aip.fde.approveMcpConfirmation("app/build tools", "challenge/1"),
+  {
+    path: "/api/aip/fde/mcp/app%2Fbuild%20tools/confirmations/challenge%2F1/approve",
+    method: "POST",
+    headers: {},
+  },
+);
+await expectSdkCall(
   "aip.pilot.plan",
   () => client.aip.pilot.plan({ applicationName: "Dining Concierge", domainDescription: "Booking operations" }),
   {
@@ -4213,12 +4222,14 @@ await expectSdkCall(
       codeChallenge: "challenge",
       scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
       state: "abc",
+      resource: "https://foundry.example/mcp/ontology/orders-app",
     }),
   {
     path:
       "/api/auth/osdk/oauth/authorize?clientId=orders-web&redirectUri=https%3A%2F%2Forders.example.test%2Fcallback" +
       "&codeChallenge=challenge&codeChallengeMethod=S256" +
-      "&scope=osdk%3Aobject%3AOrder%3Aread+osdk%3Aobject%3AOrder%3Asubscribe&state=abc",
+      "&scope=osdk%3Aobject%3AOrder%3Aread+osdk%3Aobject%3AOrder%3Asubscribe&state=abc" +
+      "&resource=https%3A%2F%2Ffoundry.example%2Fmcp%2Fontology%2Forders-app",
   },
 );
 await expectSdkCall(
@@ -4239,6 +4250,52 @@ await expectSdkCall(
       code: "code-1",
       redirectUri: "https://orders.example.test/callback",
       codeVerifier: "verifier",
+    },
+  },
+);
+await expectSdkCall(
+  "auth.osdkOAuth.token",
+  () =>
+    client.auth.osdkOAuth.token({
+      grantType: "client_credentials",
+      clientId: "orders-service",
+      clientSecret: "service-secret",
+      tenantId: "tenant-service",
+      resource: "https://foundry.example/mcp/ontology/orders-app",
+      scope: "osdk:object:Order:read",
+    }),
+  {
+    path: "/api/auth/osdk/oauth/token",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      grantType: "client_credentials",
+      clientId: "orders-service",
+      clientSecret: "service-secret",
+      tenantId: "tenant-service",
+      resource: "https://foundry.example/mcp/ontology/orders-app",
+      scope: "osdk:object:Order:read",
+    },
+  },
+);
+await expectSdkCall(
+  "auth.osdkOAuth.token",
+  () =>
+    client.auth.osdkOAuth.token({
+      grantType: "refresh_token",
+      clientId: "orders-web",
+      refreshToken: "refresh-standard-1",
+      resource: "https://foundry.example/mcp/ontology/orders-app",
+    }),
+  {
+    path: "/api/auth/osdk/oauth/token",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      grantType: "refresh_token",
+      clientId: "orders-web",
+      refreshToken: "refresh-standard-1",
+      resource: "https://foundry.example/mcp/ontology/orders-app",
     },
   },
 );

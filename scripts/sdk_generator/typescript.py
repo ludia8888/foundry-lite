@@ -799,6 +799,12 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  toolDiscovery: string[];",
         "  safetyBoundary: { writes: string; productionMerge: string; identity: string };",
         "};",
+        "export type AipFdeMcpConfirmationApproval = {",
+        '  status: "approved";',
+        "  challengeId: string;",
+        "  confirmationReceipt: string;",
+        "  expiresAt: string;",
+        "};",
         "export type AipFdeRunRequest = {",
         "  userMessage: string;",
         "  workspaceRef?: string;",
@@ -1242,13 +1248,17 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  codeChallengeMethod?: 'S256' | 'plain' | string;",
         "  scopes?: string[];",
         "  state?: string | null;",
+        "  resource?: string;",
         "};",
         "export type OsdkOAuthTokenRequest = {",
-        "  grantType?: 'authorization_code' | 'client_credentials';",
+        "  grantType?: 'authorization_code' | 'client_credentials' | 'refresh_token';",
         "  clientId: string;",
         "  clientSecret?: string;",
+        "  tenantId?: string;",
+        "  resource?: string;",
         "  scope?: string;",
         "  code?: string;",
+        "  refreshToken?: string;",
         "  redirectUri?: string;",
         "  codeVerifier?: string;",
         "};",
@@ -3631,7 +3641,7 @@ def render_typescript(ontology: OntologyDef) -> str:
     lines.extend(_osdk_registry_lines(ontology))
     lines.extend(_client_type_lines(surface))
     lines.extend(_client_runtime_lines(surface))
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _object_type_lines(object_def: ObjectDef) -> list[str]:

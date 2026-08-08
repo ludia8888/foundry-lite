@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 from fastapi import Header, Request, WebSocket
+from foundry_lite.application.ports.auth_provider import Credentials, Principal
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import RateLimited
+from foundry_lite.domain.errors import PermissionDenied, RateLimited
 from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER
 
 from foundry_lite_api import runtime
@@ -35,10 +38,31 @@ def _ctx(
     )
     auth_provider = runtime.get_auth_provider()
     principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
+    return _principal_context(principal, request, defaults.request_id)
+
+
+def _ctx_for_audience(request: Request, audience: str) -> RequestContext:
+    """Build a context from a token issued for one exact protected resource."""
+
+    authorization = request.headers.get(AUTHORIZATION_HEADER)
+    credentials: Credentials = {"Authorization": authorization} if authorization else {}
+    provider = runtime.get_auth_provider()
+    if not isinstance(provider, _AudienceBoundAuthProvider):
+        raise PermissionDenied("MCP authorization requires an audience-bound bearer verifier")
+    principal = provider.authenticate_for_audience(credentials, audience)
+    return _principal_context(principal, request, RequestContext().request_id)
+
+
+@runtime_checkable
+class _AudienceBoundAuthProvider(Protocol):
+    def authenticate_for_audience(self, credentials: Credentials, audience: str) -> Principal: ...
+
+
+def _principal_context(principal: Principal, request: Request | None, default_request_id: str) -> RequestContext:
     return RequestContext(
         tenant_id=principal.tenant_id,
         actor_user_id=principal.actor_user_id,
-        request_id=_request_id(request, defaults.request_id),
+        request_id=_request_id(request, default_request_id),
         roles=principal.roles,
         application_id=principal.application_id,
         client_id=principal.client_id,

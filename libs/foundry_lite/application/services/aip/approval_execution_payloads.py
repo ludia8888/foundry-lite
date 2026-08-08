@@ -116,6 +116,7 @@ def prepared_execution(row: InsightReviewRow, proposal: Mapping[str, object]) ->
         expected_object_version=required_int(proposal, "expectedObjectVersion"),
         parameters=required_mapping(proposal, "parameters"),
         policy_version=policy_version,
+        originating_actor_user_id=row["created_by_user_id"],
         source=optional_text(proposal, "source"),
         application_id=optional_text(proposal, "applicationId"),
         client_id=optional_text(proposal, "clientId"),

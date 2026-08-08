@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 
 class JsonRpcEnvelope(BaseModel):
@@ -29,9 +29,13 @@ class JsonRpcEnvelope(BaseModel):
     jsonrpc: Literal["2.0"]
     method: str
     # Absent on a notification, which is how JSON-RPC distinguishes "no reply expected".
-    id: str | int | None = None
+    id: StrictStr | StrictInt | None = None
     params: dict[str, object] = Field(default_factory=dict[str, object])
 
     @property
     def is_notification(self) -> bool:
-        return self.id is None
+        return "id" not in self.model_fields_set
+
+    @property
+    def has_explicit_id(self) -> bool:
+        return "id" in self.model_fields_set

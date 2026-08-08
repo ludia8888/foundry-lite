@@ -221,7 +221,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         aip=(
             OperationClientSurface("builder", ("validate", "run")),
             OperationClientSurface("agent", ("run",)),
-            OperationClientSurface("fde", ("catalog", "run")),
+            OperationClientSurface("fde", ("catalog", "run", "approveMcpConfirmation")),
             OperationClientSurface("pilot", ("plan", "generate", "get")),
             OperationClientSurface("citations", ("resolveNavigation",)),
             OperationClientSurface("evals", ("run",)),

@@ -14,6 +14,7 @@ from foundry_lite.application.action_async_execution_types import (
 from foundry_lite.application.ports import ActionTypeRow
 from foundry_lite.application.ports.action_run_orchestrator import ActionRunDispatchRequest
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.action_apply_support import action_authority_snapshot
 from foundry_lite.domain.action_runtime.action_contract import action_contract_payload, compile_action_contract
 from foundry_lite.domain.context import RequestContext
 
@@ -47,14 +48,7 @@ def action_execution_snapshot(
     return {
         **dict(plan),
         "contract": action_contract_payload(compile_action_contract(action_type["definition"])),
-        "principal": {
-            "actorUserId": ctx.actor_user_id,
-            "roles": list(ctx.roles),
-            "applicationId": ctx.application_id,
-            "clientId": ctx.client_id,
-            "tokenScopes": list(ctx.token_scopes),
-            "userAttributes": dict(ctx.user_attributes),
-        },
+        **action_authority_snapshot(ctx),
     }
 
 

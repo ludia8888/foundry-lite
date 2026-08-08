@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, Column, Integer, String, Table, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, CheckConstraint, Column, Index, Integer, String, Table, UniqueConstraint
 
 from foundry_lite.infrastructure.schema.base import metadata
 
@@ -117,6 +117,8 @@ osdk_mcp_sessions = Table(
     Column("created_at", String, nullable=False),
     Column("last_seen_at", String, nullable=False),
     Column("terminated_at", String),
+    Column("stream_lease_id", String),
+    Column("stream_lease_expires_at", String),
 )
 
 
@@ -155,6 +157,47 @@ osdk_mcp_tool_activations = Table(
         "tool_id",
         name="uq_osdk_mcp_tool_activation",
     ),
+)
+
+
+mcp_rate_limit_windows = Table(
+    "mcp_rate_limit_windows",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("plane", String, nullable=False),
+    Column("application_id", String, nullable=False),
+    Column("client_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("limit_scope", String, nullable=False),
+    Column("window_started_at_epoch", BigInteger, nullable=False),
+    Column("window_expires_at_epoch", BigInteger, nullable=False),
+    Column("limit_value", Integer, nullable=False),
+    Column("window_seconds", Integer, nullable=False),
+    Column("request_count", Integer, nullable=False),
+    Column("denied_count", Integer, nullable=False),
+    Column("last_request_id", String, nullable=False),
+    Column("last_denied_at", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    CheckConstraint("limit_value > 0", name="ck_mcp_rate_limit_positive_limit"),
+    CheckConstraint("window_seconds > 0", name="ck_mcp_rate_limit_positive_window"),
+    CheckConstraint("request_count >= 1", name="ck_mcp_rate_limit_request_count"),
+    CheckConstraint(
+        "denied_count >= 0 AND denied_count <= request_count",
+        name="ck_mcp_rate_limit_denied_count",
+    ),
+    UniqueConstraint(
+        "tenant_id",
+        "plane",
+        "application_id",
+        "client_id",
+        "actor_user_id",
+        "limit_scope",
+        "window_started_at_epoch",
+        name="uq_mcp_rate_limit_window_identity",
+    ),
+    Index("ix_mcp_rate_limit_window_expiry", "tenant_id", "window_expires_at_epoch"),
 )
 
 

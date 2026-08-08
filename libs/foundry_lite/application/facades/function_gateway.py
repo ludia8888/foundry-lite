@@ -29,3 +29,15 @@ class FunctionGateway:
 
     def describe(self, function_api_name: str, *, ctx: RequestContext | None = None) -> FunctionTypeRow:
         return self._function_execution_service.describe_function(function_api_name, ctx=ctx)
+
+    def describe_external_mcp(self, function_api_name: str, *, ctx: RequestContext) -> FunctionTypeRow:
+        return self._function_execution_service.describe_external_mcp_function(function_api_name, ctx=ctx)
+
+    def execute_external_mcp(
+        self,
+        function_api_name: str,
+        *,
+        inputs: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> FunctionExecutionResult:
+        return self._function_execution_service.execute_external_mcp_function(function_api_name, inputs=inputs, ctx=ctx)

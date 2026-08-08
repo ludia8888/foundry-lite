@@ -26,6 +26,9 @@ from foundry_lite.application.services.action_distributed_contracts import (
     ActionAsyncRunRecord,
     ActionAsyncRunRow,
     ActionExecutionRepository,
+    ActionOntologyLookup,
+    ActionOsdkScopeBoundary,
+    ActionPlanningBoundary,
     ActionRunOrchestrator,
     ConflictDetected,
     MetadataRepository,
@@ -39,9 +42,8 @@ from foundry_lite.application.services.action_function_batch import (
     parse_action_function_batch_items,
 )
 from foundry_lite.application.services.action_permission_guards import require_action_permission
-from foundry_lite.application.services.action_planning_service import ActionPlanningService
-from foundry_lite.application.services.action_protocols import ActionOntologyLookup
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.osdk_service_principal_authorization import ServicePrincipalAccessSessionBoundary
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3, compile_action_contract
 from foundry_lite.domain.errors import NotFound, ValidationFailed
@@ -62,12 +64,20 @@ class ActionAsyncRunService(CoreService):
         "action_execution_repository",
         "action_run_orchestrator",
     )
-    required_collaborators = ("action_planning_service", "ontology_lookup_service", "runtime_service")
+    required_collaborators = (
+        "action_planning_service",
+        "ontology_lookup_service",
+        "osdk_access_session_service",
+        "osdk_application_service",
+        "runtime_service",
+    )
     action_execution_repository: ActionExecutionRepository
     action_run_orchestrator: ActionRunOrchestrator
     metadata_repository: MetadataRepository
-    action_planning_service: ActionPlanningService
+    action_planning_service: ActionPlanningBoundary
     ontology_lookup_service: ActionOntologyLookup
+    osdk_access_session_service: ServicePrincipalAccessSessionBoundary
+    osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: RuntimeEvidenceBoundary
 
     def start(
@@ -193,18 +203,8 @@ class ActionAsyncRunService(CoreService):
 
     def get(self, run_id: str, *, ctx: RequestContext) -> dict[str, object]:
         self.policy.require(ctx, "action:run:read")
-        with self.engine.begin() as transaction:
-            row = self._required_run(transaction, ctx, run_id)
-            steps = self.action_execution_repository.steps_for_run(
-                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
-            )
-            attempts = self.action_execution_repository.attempts_for_run(
-                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
-            )
-            effects = self.action_execution_repository.effect_receipts_for_run(
-                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
-            )
-        return action_run_snapshot(row, steps, attempts, effects)
+        _, snapshot = self._external_run_snapshot(ctx, run_id)
+        return snapshot
 
     def list_runs(self, *, cursor: str | None, limit: int, ctx: RequestContext) -> dict[str, object]:
         self.policy.require(ctx, "action:run:read")
@@ -303,6 +303,11 @@ class ActionAsyncRunService(CoreService):
             action_api_name,
             action="start",
         )
+        return self._existing_run_unchecked(ctx, action_api_name, idempotency_key)
+
+    def _existing_run_unchecked(
+        self, ctx: RequestContext, action_api_name: str, idempotency_key: str
+    ) -> ActionAsyncRunRow | None:
         with self.engine.begin() as transaction:
             action_type = self.ontology_lookup_service._active_action_type(transaction, ctx, action_api_name)
             return self.action_execution_repository.run_by_idempotency_key(
@@ -312,6 +317,19 @@ class ActionAsyncRunService(CoreService):
                 actor_user_id=ctx.actor_user_id,
                 idempotency_key=idempotency_key,
             )
+
+    def _external_mcp_authorizers(
+        self,
+    ) -> tuple[ServicePrincipalAccessSessionBoundary, ActionOsdkScopeBoundary]:
+        return self.osdk_access_session_service, self.osdk_application_service
+
+    def _require_external_write_open(self, ctx: RequestContext, action_api_name: str) -> None:
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="start_external_mcp_action_run",
+            resource_type="action_type",
+            resource_id=action_api_name,
+        )
 
     def _idempotent_winner(
         self, transaction: TransactionContext, ctx: RequestContext, record: ActionAsyncRunRecord
@@ -424,6 +442,20 @@ class ActionAsyncRunService(CoreService):
         if row is None or (is_async_required and row["execution_mode"] != "async"):
             raise NotFound("Action run not found", details={"actionRunId": run_id})
         return row
+
+    def _external_run_snapshot(self, ctx: RequestContext, run_id: str) -> tuple[ActionAsyncRunRow, dict[str, object]]:
+        with self.engine.begin() as transaction:
+            row = self._required_run(transaction, ctx, run_id)
+            steps = self.action_execution_repository.steps_for_run(
+                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
+            )
+            attempts = self.action_execution_repository.attempts_for_run(
+                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
+            )
+            effects = self.action_execution_repository.effect_receipts_for_run(
+                transaction=transaction, tenant_id=ctx.tenant_id, run_id=run_id
+            )
+        return row, action_run_snapshot(row, steps, attempts, effects)
 
     def _wait_for_snapshot(self, ctx: RequestContext, run_id: str, wait_seconds: int) -> dict[str, object]:
         deadline = time.monotonic() + wait_seconds

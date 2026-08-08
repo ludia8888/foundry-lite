@@ -22,6 +22,7 @@ from foundry_lite.application.facades import (
     MaterializationRunner,
     MediaWorkspace,
     ObjectStore,
+    OntologyMcpActionRuntimeAdapter,
     OntologyMcpGateway,
     OntologyRegistry,
     OperationsConsole,
@@ -177,10 +178,11 @@ class FoundryLite:
             applications=services.osdk_applications.entrypoint,
             objects=self.objects,
             unified_search=services.ontology_search,
-            actions=self.actions,
+            actions=OntologyMcpActionRuntimeAdapter(self.actions, services.action.entrypoint),
             functions=self.functions,
             approvals=services.action_proposal,
             access_sessions=services.osdk_access_sessions,
+            rate_limits=services.mcp_rate_limits,
         )
         fde_mcp = FdeMcpGateway(
             engine=self.engine,
@@ -191,6 +193,7 @@ class FoundryLite:
             application_reader=services.osdk_applications.entrypoint,
             application_repository=self.osdk_application_repository,
             access_session_validator=services.osdk_access_sessions,
+            rate_limits=services.mcp_rate_limits,
         )
         self.aip = AipWorkspace(
             services.agent_runtime,

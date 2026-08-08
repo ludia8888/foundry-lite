@@ -574,6 +574,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.fde.approveMcpConfirmation",
+      "route": "POST /api/aip/fde/mcp/{application_id}/confirmations/{challenge_id}/approve",
+      "productArea": "ai-fde-builder-mcp-control-plane",
+      "sdkSurface": "aip.fde.approveMcpConfirmation",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "An authenticated human control-plane principal approves one short-lived Builder MCP challenge only after the application, session, tool, arguments fingerprint, and required permission are durably bound; the returned confirmationReceipt is single-use and must be supplied inside the matching JSON-RPC tool arguments.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.pilot.plan",
       "route": "POST /api/aip/pilot/plan",
       "productArea": "ai-fde-pilot",

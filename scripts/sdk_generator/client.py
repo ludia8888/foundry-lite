@@ -647,6 +647,10 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    fde: {",
             "      catalog(): Promise<AipFdeCatalog>;",
             "      run(payload: AipFdeRunRequest): Promise<AipFdeRunResult>;",
+            (
+                "      approveMcpConfirmation(applicationId: string, challengeId: string): "
+                "Promise<AipFdeMcpConfirmationApproval>;"
+            ),
             "    };",
             "    pilot: {",
             "      plan(payload: AipPilotPlanRequest): Promise<AipPilotPlan>;",
@@ -1966,6 +1970,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "  params.set('codeChallengeMethod', payload.codeChallengeMethod ?? 'S256');",
         "  if (payload.scopes?.length) params.set('scope', payload.scopes.join(' '));",
         "  if (payload.state !== undefined && payload.state !== null) params.set('state', payload.state);",
+        "  if (payload.resource) params.set('resource', payload.resource);",
         "  return params.toString();",
         "}",
         "",
@@ -3903,6 +3908,14 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         '            headers: { "Content-Type": "application/json" },',
         "            body: JSON.stringify(payload),",
         "          }),",
+        "        approveMcpConfirmation: (applicationId: string, challengeId: string) =>",
+        "          request<AipFdeMcpConfirmationApproval>(",
+        (
+            "            `/api/aip/fde/mcp/${encodeURIComponent(applicationId)}/confirmations/"
+            "${encodeURIComponent(challengeId)}/approve`,"
+        ),
+        '            { method: "POST" },',
+        "          ),",
         "      },",
         "      pilot: {",
         "        plan: (payload: AipPilotPlanRequest) =>",

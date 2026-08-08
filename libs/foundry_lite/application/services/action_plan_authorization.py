@@ -86,6 +86,30 @@ def authorize_action_edit_plan(
     return sensitive_by_type
 
 
+def inspect_action_edit_plan(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    ontology: OntologyLookupService,
+    contract: ActionDefinitionV3,
+    plan: EditPlan,
+) -> Mapping[str, frozenset[str]]:
+    """Validate a read-only plan without granting its caller mutation permissions."""
+
+    touched_types = _touched_object_types(plan)
+    _require_declared_resource_entries(contract.permissions, "objectTypeRoles", touched_types)
+    sensitive_by_type: dict[str, frozenset[str]] = {}
+    for object_type in sorted(touched_types):
+        type_row = ontology._active_object_type(conn, ctx, object_type)
+        properties = ontology._properties_for_object_type(conn, type_row["id"])
+        sensitive_by_type[object_type] = _inspect_editable_properties(
+            object_type, type_row["primary_key_property"], properties, plan
+        )
+    links = {item.link_type for item in plan.links_to_create}
+    links.update(item.link_type for item in plan.links_to_delete)
+    _require_declared_resource_entries(contract.permissions, "linkTypeRoles", links)
+    return sensitive_by_type
+
+
 def _require_editable_properties(
     ctx: RequestContext,
     policy: PolicyService,
@@ -95,6 +119,23 @@ def _require_editable_properties(
     properties: Sequence[PropertyTypeRow],
     plan: EditPlan,
 ) -> None:
+    sensitive = _inspect_editable_properties(object_type, primary_key_property, properties, plan)
+    if sensitive:
+        policy.require(ctx, "object:edit:sensitive")
+    _require_declared_resource_roles(
+        ctx,
+        contract.permissions,
+        "propertyRoles",
+        {f"{object_type}.{name}" for name in _edited_properties(plan, object_type)},
+    )
+
+
+def _inspect_editable_properties(
+    object_type: str,
+    primary_key_property: str,
+    properties: Sequence[PropertyTypeRow],
+    plan: EditPlan,
+) -> frozenset[str]:
     by_name = {row["api_name"]: row for row in properties}
     edited = _edited_properties(plan, object_type)
     modified = _modified_properties(plan, object_type)
@@ -106,15 +147,7 @@ def _require_editable_properties(
             "action plan edits non-editable properties",
             details={"objectType": object_type, "properties": sorted(non_editable)},
         )
-    sensitive = {name for name in edited if by_name[name]["classification"] in {"finance", "pii"}}
-    if sensitive:
-        policy.require(ctx, "object:edit:sensitive")
-    _require_declared_resource_roles(
-        ctx,
-        contract.permissions,
-        "propertyRoles",
-        {f"{object_type}.{name}" for name in edited},
-    )
+    return frozenset(name for name in edited if by_name[name]["classification"] in {"finance", "pii"})
 
 
 def _require_known_properties(
@@ -182,6 +215,20 @@ def _require_declared_resource_roles(
                 "action resource permission denied",
                 details={"field": field, "resource": resource},
             )
+
+
+def _require_declared_resource_entries(permissions: Mapping[str, object], field: str, resources: set[str]) -> None:
+    declarations = permissions.get(field)
+    if declarations is None:
+        return
+    if not isinstance(declarations, Mapping):
+        raise PermissionDenied("action resource permission policy is invalid", details={"field": field})
+    missing = sorted(resource for resource in resources if declarations.get(resource) is None)
+    if missing:
+        raise PermissionDenied(
+            "action resource permission policy is missing",
+            details={"field": field, "resources": missing},
+        )
 
 
 def _has_declared_role(ctx: RequestContext, raw: object) -> bool:

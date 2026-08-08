@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, desc, insert, select, update
+from sqlalchemy import and_, delete, desc, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -93,6 +93,41 @@ class SqlAlchemyOsdkApplicationRepository:
             .first()
         )
         return cast(OsdkApplicationRow, dict(row)) if row else None
+
+    def public_active_application_tenant(self, *, transaction: Any, app_id: str) -> str | None:
+        """Return the opaque app's tenant only to the OAuth bootstrap boundary."""
+
+        return cast(
+            str | None,
+            transaction.execute(
+                select(db.osdk_applications.c.tenant_id).where(
+                    and_(db.osdk_applications.c.id == app_id, db.osdk_applications.c.status == "active")
+                )
+            ).scalar_one_or_none(),
+        )
+
+    def public_active_application_client_tenant(self, *, transaction: Any, app_id: str, client_id: str) -> str | None:
+        """Resolve an exact active pair before its tenant-scoped secret is checked."""
+
+        statement = (
+            select(db.osdk_application_clients.c.tenant_id)
+            .join(
+                db.osdk_applications,
+                and_(
+                    db.osdk_applications.c.id == db.osdk_application_clients.c.app_id,
+                    db.osdk_applications.c.tenant_id == db.osdk_application_clients.c.tenant_id,
+                ),
+            )
+            .where(
+                and_(
+                    db.osdk_applications.c.id == app_id,
+                    db.osdk_applications.c.status == "active",
+                    db.osdk_application_clients.c.client_id == client_id,
+                    db.osdk_application_clients.c.status == "active",
+                )
+            )
+        )
+        return cast(str | None, transaction.execute(statement).scalar_one_or_none())
 
     def list_applications(self, *, transaction: Any, tenant_id: str) -> list[OsdkApplicationRow]:
         rows = (
@@ -458,6 +493,67 @@ class SqlAlchemyOsdkApplicationRepository:
         )
         return cast(OsdkMcpSessionRow, dict(row)) if row else None
 
+    def claim_mcp_session_stream_lease(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        session_id: str,
+        lease_id: str,
+        claimed_at: str,
+        lease_expires_at: str,
+    ) -> OsdkMcpSessionRow | None:
+        available = or_(
+            db.osdk_mcp_sessions.c.stream_lease_id.is_(None),
+            db.osdk_mcp_sessions.c.stream_lease_expires_at.is_(None),
+            db.osdk_mcp_sessions.c.stream_lease_expires_at <= claimed_at,
+        )
+        row = (
+            transaction.execute(
+                update(db.osdk_mcp_sessions)
+                .where(
+                    and_(
+                        db.osdk_mcp_sessions.c.tenant_id == tenant_id,
+                        db.osdk_mcp_sessions.c.id == session_id,
+                        db.osdk_mcp_sessions.c.status == "active",
+                        available,
+                    )
+                )
+                .values(
+                    stream_lease_id=lease_id,
+                    stream_lease_expires_at=lease_expires_at,
+                    last_seen_at=claimed_at,
+                )
+                .returning(*db.osdk_mcp_sessions.c)
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OsdkMcpSessionRow, dict(row)) if row else None
+
+    def release_mcp_session_stream_lease(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        session_id: str,
+        lease_id: str,
+        released_at: str,
+    ) -> bool:
+        released = transaction.execute(
+            update(db.osdk_mcp_sessions)
+            .where(
+                and_(
+                    db.osdk_mcp_sessions.c.tenant_id == tenant_id,
+                    db.osdk_mcp_sessions.c.id == session_id,
+                    db.osdk_mcp_sessions.c.stream_lease_id == lease_id,
+                )
+            )
+            .values(stream_lease_id=None, stream_lease_expires_at=None, last_seen_at=released_at)
+            .returning(db.osdk_mcp_sessions.c.id)
+        ).scalar_one_or_none()
+        return released == session_id
+
     def append_mcp_session_event(
         self,
         *,
@@ -530,14 +626,21 @@ class SqlAlchemyOsdkApplicationRepository:
     def terminate_mcp_session(
         self, *, transaction: Any, tenant_id: str, session_id: str, terminated_at: str
     ) -> OsdkMcpSessionRow | None:
-        cas_status_update(
+        is_terminated = cas_status_update(
             transaction,
             db.osdk_mcp_sessions,
             tenant_id=tenant_id,
             row_id=session_id,
             transition=OSDK_MCP_SESSION_TERMINATED,
-            values={"terminated_at": terminated_at, "last_seen_at": terminated_at},
+            values={
+                "terminated_at": terminated_at,
+                "last_seen_at": terminated_at,
+                "stream_lease_id": None,
+                "stream_lease_expires_at": None,
+            },
         )
+        if not is_terminated:
+            return None
         return self.mcp_session_by_id(transaction=transaction, tenant_id=tenant_id, session_id=session_id)
 
     def activate_mcp_tool(self, *, transaction: Any, record: OsdkMcpToolActivationRecord) -> bool:
@@ -1072,6 +1175,8 @@ def _mcp_session_values(record: OsdkMcpSessionRecord) -> dict[str, object]:
         "created_at": record.created_at,
         "last_seen_at": record.last_seen_at,
         "terminated_at": None,
+        "stream_lease_id": None,
+        "stream_lease_expires_at": None,
     }
 
 

@@ -78,6 +78,7 @@ from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.language_model import GovernedSemanticModelPort, LanguageModelAdapter
+from foundry_lite.application.ports.mcp_rate_limiter import McpRateLimiter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
@@ -121,6 +122,7 @@ class SecurityDependencies:
     oauth_token_issuer: OAuthTokenIssuer
     secret_provider: SecretProvider
     secret_vault: SecretVault
+    mcp_rate_limiter: McpRateLimiter
 
 
 @dataclass(frozen=True)
@@ -245,6 +247,10 @@ class CoreDependencies(ActionDependencyAccessors):
     @property
     def secret_vault(self) -> SecretVault:
         return self.security.secret_vault
+
+    @property
+    def mcp_rate_limiter(self) -> McpRateLimiter:
+        return self.security.mcp_rate_limiter
 
     @property
     def ontology_repository(self) -> OntologyRepository:

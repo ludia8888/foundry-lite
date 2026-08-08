@@ -105,6 +105,7 @@ from foundry_lite.infrastructure.adapters import (
     S3MediaStorageAdapter,
     S3MediaStorageConfig,
     SparkComputeAdapter,
+    SqlAlchemyMcpRateLimiter,
     SqlAlchemySourceDatabaseAdapter,
     TemporalPipelineDagConfig,
     TemporalPipelineDagOrchestrator,
@@ -137,6 +138,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffprobe_video_probe_runner,
 )
 from foundry_lite.infrastructure.auth import LocalOAuthTokenIssuer
+from foundry_lite.infrastructure.auth.oauth_token_issuer import OAUTH_AUDIENCE_ENV, OAUTH_ISSUER_ENV
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionBranchRepository,
@@ -464,9 +466,14 @@ def _create_core_dependencies(
             ),
             osdk_application_repository=SqlAlchemyOsdkApplicationRepository(engine),
             oauth_session_repository=SqlAlchemyOAuthSessionRepository(engine),
-            oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(root / "oauth-private-key.pem"),
+            oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(
+                root / "oauth-private-key.pem",
+                issuer=os.getenv(OAUTH_ISSUER_ENV),
+                audience=os.getenv(OAUTH_AUDIENCE_ENV),
+            ),
             secret_provider=secret_provider,
             secret_vault=secret_vault,
+            mcp_rate_limiter=SqlAlchemyMcpRateLimiter(),
         ),
         action=ActionDependencies(
             action_repository=SqlAlchemyActionRepository(engine),

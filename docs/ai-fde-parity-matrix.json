@@ -74,20 +74,22 @@
         "fde_tool_catalog",
         "FdePlatformToolService",
         "libs/foundry_lite/application/services/aip/fde_palantir_mcp_catalog.py",
-        "tests/integration/test_ai_fde_platform.py"
+        "tests/integration/test_ai_fde_platform.py",
+        "tests/integration/test_builder_mcp_full_surface.py"
       ],
-      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits. There are 68 server-owned tools: 43 exact-name tools from Palantir's public 72-tool catalog are wired to real Compass, Dataset, lineage, Ontology branch, Object Query, OSDK/Platform SDK, Developer Console, governed Data Connection, and documentation services; 25 are Foundry-lite-specific branch/test/proposal/Pilot tools. The remaining official 29 are not advertised until their underlying Code Repository, Global Branching, Compute Module, Dataset build/SQL, Developer Console conversion, or versioned webhook-update product foundation exists."
+      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits. There are 68 server-owned tools: 43 exact-name tools from Palantir's public 72-tool catalog are wired to real Compass, Dataset, lineage, Ontology branch, Object Query, OSDK/Platform SDK, Developer Console, governed Data Connection, and documentation services; 25 are Foundry-lite-specific branch/test/proposal/Pilot tools. A catalog-derived integration ratchet executes all 68 through real Builder MCP JSON-RPC and checks one succeeded durable tool row per call. The remaining official 29 are not advertised until their underlying Code Repository, Global Branching, Compute Module, Dataset build/SQL, Developer Console conversion, or versioned webhook-update product foundation exists."
     },
     {
       "id": "explicit-mutation-confirmation",
       "status": "current",
       "palantirContract": "Mutating tools require explicit user confirmation while read-only tools can run without confirmation.",
       "foundryLiteEvidence": [
-        "require_tool_approval",
-        "AiFdePanel",
-        "test_builder_mcp_requires_out_of_band_confirmation_and_rejects_untrusted_origin"
+        "FdeMcpSecurityLedger",
+        "POST /api/aip/fde/mcp/{application_id}/confirmations/{challenge_id}/approve",
+        "client.aip.fde.approveMcpConfirmation",
+        "tests/integration/builder_mcp_postgres_live.py"
       ],
-      "boundary": "Confirmation is named-tool and single-run scoped; Builder MCP requires a separate X-FDE-Confirm-Tool signal."
+      "boundary": "Each Builder MCP mutation first returns a fingerprint-bound challenge. A separate strict-OIDC human control-plane principal approves it, and the matching call can consume the short-lived confirmationReceipt exactly once from its outer JSON-RPC arguments; reusable environment or header confirmation is not accepted."
     },
     {
       "id": "branch-by-default",
@@ -129,9 +131,11 @@
         "ai_sessions",
         "ai_execution_runs",
         "ai_tool_calls.result_json",
-        "migrations/versions/e8a0c2d4f6b9_ai_fde_tool_results.py"
+        "migrations/versions/e8a0c2d4f6b9_ai_fde_tool_results.py",
+        "tests/integration/test_mcp_tool_result_contract.py",
+        "tests/integration/test_mcp_rate_limits.py"
       ],
-      "boundary": "Every model/tool/event/result is durable and JSON-RPC retransmission returns the original Builder MCP result."
+      "boundary": "Every model/tool/event/result is durable. After transport admission, a matching JSON-RPC retransmission returns the original Builder MCP success or business-error result without consuming tool quota again; an exhausted endpoint quota can first return HTTP 429 with Retry-After."
     },
     {
       "id": "validation-and-diff-evidence",
@@ -142,7 +146,7 @@
         "pipeline.branch.validate",
         "pipeline.branch.run_tests"
       ],
-      "boundary": "Ontology migration and Pipeline graph/test evidence are returned from native validation services before human proposal review."
+      "boundary": "Ontology migration evidence and Pipeline validation are returned before human proposal review. pipeline.branch.run_tests is explicitly static persisted-graph/output-contract proof with isDataExecution=false; it is not row execution or an output Dataset commit."
     },
     {
       "id": "lazy-tool-search",
@@ -189,9 +193,13 @@
         "test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope",
         "test_builder_mcp_is_oauth_app_restricted_and_idempotent",
         "test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session",
-        "tests/integration/test_ai_fde_platform.py"
+        "tests/integration/test_ai_fde_platform.py",
+        "tests/integration/test_builder_mcp_full_surface.py",
+        "tests/integration/builder_mcp_postgres_live.py",
+        "tests/integration/test_mcp_rate_limits.py",
+        "tests/contracts/test_mcp_rate_limiter_postgres_contract.py"
       ],
-      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, app/client/resource-scope intersection, Origin checks, structured content, durable session-scoped lazy discovery, out-of-band mutation confirmation, and no approval/merge/deploy tools. The current native breadth is 43 exact-name tools out of the official 72; the other 25 catalog entries are product-specific rather than false parity claims."
+      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, an exact Builder resource audience, app/client/resource-scope intersection, Origin checks, strict lifecycle and typed JSON-RPC IDs, canonical structured/text results, durable session-scoped lazy discovery, a single SSE lease with resume/termination, durable endpoint/tool admission, and fingerprint-bound one-time human confirmation receipts, with no approval/merge/deploy tools exposed on the Builder plane. The catalog-derived integration ratchet executes 49 reads and 19 separately confirmed mutations through JSON-RPC tools/call; the official Python ClientSession live gate keeps one session across branch reads and five confirmed writes against a separate strict-OIDC Uvicorn process and PostgreSQL. The current native breadth is 43 exact-name tools out of the official 72; the other 25 catalog entries are product-specific rather than false parity claims. Hosted ChatGPT SaaS and external IdP/DCR interoperability remain outside current live evidence."
     },
     {
       "id": "pilot-application-generation",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from typing import NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.runtime_repository import RuntimeJsonObject
 from foundry_lite.application.ports.transaction_context import TransactionContext
@@ -182,6 +182,7 @@ class OAuthAccessTokenClaims(TypedDict):
     client_id: str
     scopes: list[str]
     session_id: str
+    resource: NotRequired[str]
 
 
 class OAuthIssuedAccessToken(TypedDict):
@@ -193,6 +194,12 @@ class OAuthIssuedAccessToken(TypedDict):
 
 class OAuthTokenIssuer(Protocol):
     """Issue access tokens that strict JWT/OIDC auth can verify."""
+
+    @property
+    def issuer(self) -> str: ...
+
+    @property
+    def audience(self) -> str: ...
 
     def issue_access_token(self, claims: OAuthAccessTokenClaims, *, ttl_seconds: int) -> OAuthIssuedAccessToken: ...
 

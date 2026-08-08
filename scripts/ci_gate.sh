@@ -340,6 +340,10 @@ run_runtime_full_gate() {
 
   run_runtime_step "Consumer Ontology MCP official-client PostgreSQL ratchet" pnpm --silent quality:ontology-mcp-live
 
+  run_runtime_step "Builder MCP official-client strict-OAuth PostgreSQL ratchet" pnpm --silent quality:builder-mcp-live
+
+  run_runtime_step "MCP durable rate-limit PostgreSQL concurrency and RLS ratchet" pnpm --silent quality:mcp-rate-limits-live
+
   run_runtime_step "Action Types two-worker Temporal fault ratchet" pnpm --silent quality:action-types-palantir-live
 
   run_runtime_step "Action notification policy PostgreSQL and RLS ratchet" pnpm --silent quality:action-notification-policies-live

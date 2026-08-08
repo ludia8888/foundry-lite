@@ -18,12 +18,15 @@ from foundry_lite.infrastructure.adapters import container_code_execution as cod
 from foundry_lite.infrastructure.adapters.container_code_execution import ContainerCodeExecutionAdapter
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
     MAX_STDERR_CAPTURE_BYTES,
+    NODE_SANDBOX_ENVIRONMENT,
     RUNTIME_DIR,
     SANDBOX_ENVIRONMENT,
     SDK_DIR,
     ContainerCodeExecutionConfig,
     ContainerCommandResult,
+    SandboxWorkspace,
     _docker_bind_source,
+    container_command,
     default_policy,
     run_command,
 )
@@ -89,6 +92,28 @@ def test_code_execution_contract_enforces_sandbox_controls_and_env_allowlist(tmp
     _assert_mount_permissions(command)
     mounts = _mount_values(command)
     assert not any(f"target={RUNTIME_DIR}" in mount or f"target={SDK_DIR}" in mount for mount in mounts)
+
+
+def test_code_execution_contract_limits_node_path_to_the_node_runtime(tmp_path: Path) -> None:
+    workspace = SandboxWorkspace(
+        job_dir=tmp_path / "job",
+        output_dir=tmp_path / "output",
+        result_path=tmp_path / "result.json",
+        output_path=tmp_path / "result.parquet",
+        input_mounts=(),
+    )
+
+    python_command = container_command(ContainerCodeExecutionConfig(), workspace, "python-sandbox")
+    node_command = container_command(
+        ContainerCodeExecutionConfig(),
+        workspace,
+        "node-sandbox",
+        interpreter="node",
+    )
+
+    assert _sandbox_environment(python_command) == dict(SANDBOX_ENVIRONMENT)
+    assert "NODE_PATH" not in _sandbox_environment(python_command)
+    assert _sandbox_environment(node_command, interpreter="node") == dict(NODE_SANDBOX_ENVIRONMENT)
 
 
 def test_code_execution_contract_timeout_is_typed_and_force_cleans_container(tmp_path: Path) -> None:
@@ -518,9 +543,9 @@ def _mounted_source(command: Sequence[str], target: str) -> Path:
     raise AssertionError(f"mount target not found: {target}")
 
 
-def _sandbox_environment(command: Sequence[str]) -> dict[str, str]:
+def _sandbox_environment(command: Sequence[str], *, interpreter: str = "python") -> dict[str, str]:
     start = command.index("-i") + 1
-    end = command.index("python", start)
+    end = command.index(interpreter, start)
     return dict(value.split("=", 1) for value in command[start:end])
 
 

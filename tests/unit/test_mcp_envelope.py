@@ -32,6 +32,13 @@ def test_a_notification_has_no_id() -> None:
     assert envelope.params == {}
 
 
+def test_explicit_null_id_is_not_a_notification() -> None:
+    envelope = JsonRpcEnvelope.model_validate({"jsonrpc": "2.0", "method": "ping", "id": None, "params": {}})
+
+    assert envelope.has_explicit_id is True
+    assert envelope.is_notification is False
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -41,6 +48,7 @@ def test_a_notification_has_no_id() -> None:
         {"jsonrpc": "2.0", "method": 7},
         {"jsonrpc": "2.0", "method": "tools/call", "params": "not-an-object"},
         {"jsonrpc": "2.0", "method": "tools/call", "id": {"nested": True}},
+        {"jsonrpc": "2.0", "method": "tools/call", "id": True},
     ],
 )
 def test_a_malformed_envelope_is_refused(payload: dict[str, object]) -> None:

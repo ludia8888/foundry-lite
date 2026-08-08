@@ -277,6 +277,8 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
     assert validation["normalizedFingerprint"] == updated["graphFingerprint"]
     assert preview["noCommit"] is True
     assert test_result["status"] == "passed"
+    assert test_result["proofKind"] == "static_graph_output_contract"
+    assert test_result["isDataExecution"] is False
     assert replayed_proposal["id"] == proposal["id"]
     assert assigned["assignedTo"] == "reviewer-a"
     assert approved["status"] == "approved"

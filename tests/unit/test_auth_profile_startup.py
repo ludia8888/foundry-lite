@@ -192,6 +192,38 @@ def test_jwt_oidc_rejects_revoked_and_missing_tokens() -> None:
         provider.anonymous()
 
 
+def test_jwt_oidc_audience_bound_auth_requires_one_exact_resource() -> None:
+    private_key, jwks = _jwt_key_material("kid-exact-audience")
+    resource = "https://foundry.example.test/mcp/ontology/app-a"
+    other_resource = "https://foundry.example.test/mcp/builder/app-a"
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer="https://issuer.example.test",
+            audience="foundry-lite",
+            jwks=jwks,
+        )
+    )
+    claims = {
+        "sub": "user-123",
+        "tenant_id": "tenant-demo",
+        "roles": ["ops_manager"],
+    }
+    exact = _jwt_token(private_key, "kid-exact-audience", aud=resource, **claims)
+    multiple = _jwt_token(
+        private_key,
+        "kid-exact-audience",
+        aud=[resource, other_resource],
+        **claims,
+    )
+
+    principal = provider.authenticate_for_audience({AUTHORIZATION_HEADER: f"Bearer {exact}"}, resource)
+
+    assert principal.actor_user_id == "user-123"
+    for audience in (resource, other_resource):
+        with pytest.raises(PermissionDenied, match="authentication failed"):
+            provider.authenticate_for_audience({AUTHORIZATION_HEADER: f"Bearer {multiple}"}, audience)
+
+
 def test_jwt_oidc_provider_from_env_uses_discovery_and_revoked_ids() -> None:
     _, jwks = _jwt_key_material("kid-env")
 

@@ -23,6 +23,8 @@ class RequestContext:
     token_scopes: tuple[str, ...] = ()
     oauth_session_id: str | None = None
     user_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
+    originating_service_principal_id: str | None = None
+    originating_mcp_review_id: str | None = None
 
     def has_role(self, role: str) -> bool:
         return role in self.roles

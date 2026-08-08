@@ -34,6 +34,8 @@ class AuthGateway:
         code_challenge_method: str = "S256",
         scopes: Sequence[str] = (),
         state: str | None = None,
+        resource: str | None = None,
+        resource_application_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> RuntimeJsonObject:
         return self._osdk_oauth_sessions.authorize(
@@ -44,6 +46,8 @@ class AuthGateway:
             code_challenge_method=code_challenge_method,
             scopes=scopes,
             state=state,
+            resource=resource,
+            resource_application_id=resource_application_id,
         )
 
     def osdk_oauth_token(
@@ -53,6 +57,8 @@ class AuthGateway:
         code: str,
         redirect_uri: str,
         code_verifier: str,
+        resource: str | None = None,
+        resource_application_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> RuntimeJsonObject:
         return self._osdk_oauth_sessions.exchange_authorization_code(
@@ -61,10 +67,37 @@ class AuthGateway:
             code=code,
             redirect_uri=redirect_uri,
             code_verifier=code_verifier,
+            resource=resource,
+            resource_application_id=resource_application_id,
         )
 
-    def osdk_oauth_refresh(self, *, refresh_token: str, ctx: RequestContext | None = None) -> RuntimeJsonObject:
-        return self._osdk_oauth_sessions.refresh_access_token(ctx=ctx, refresh_token=refresh_token)
+    def osdk_oauth_refresh(
+        self,
+        *,
+        refresh_token: str,
+        client_id: str | None = None,
+        resource: str | None = None,
+        resource_application_id: str | None = None,
+        should_reevaluate_roles: bool = True,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject:
+        return self._osdk_oauth_sessions.refresh_access_token(
+            ctx=ctx,
+            refresh_token=refresh_token,
+            client_id=client_id,
+            resource=resource,
+            resource_application_id=resource_application_id,
+            should_reevaluate_roles=should_reevaluate_roles,
+        )
+
+    def osdk_oauth_resource_tenant(self, application_id: str, client_id: str) -> str:
+        return self._osdk_oauth_sessions.resolve_resource_tenant(application_id, client_id)
+
+    def osdk_oauth_application_scopes(self, application_id: str) -> tuple[str, ...]:
+        return self._osdk_oauth_sessions.application_scopes(application_id)
+
+    def osdk_oauth_issuer(self) -> str:
+        return str(self._osdk_oauth_sessions.oauth_token_issuer.issuer)
 
     def osdk_oauth_client_credentials(
         self,
@@ -72,12 +105,27 @@ class AuthGateway:
         client_id: str,
         client_secret: str,
         scopes: Sequence[str] = (),
+        resource: str | None = None,
         ctx: RequestContext | None = None,
     ) -> RuntimeJsonObject:
         return self._osdk_oauth_client_credentials.exchange(
             client_id=client_id,
             client_secret=client_secret,
             scopes=scopes,
+            resource=resource,
+            ctx=ctx,
+        )
+
+    def verify_osdk_oauth_client_credentials(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        ctx: RequestContext,
+    ) -> None:
+        self._osdk_oauth_client_credentials.verify_client_credentials(
+            client_id=client_id,
+            client_secret=client_secret,
             ctx=ctx,
         )
 

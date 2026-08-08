@@ -130,6 +130,14 @@ class JwtOidcAuthProvider:
         )
 
     def authenticate(self, credentials: Credentials) -> Principal:
+        return self._authenticate(credentials, self.config.audience, is_exact_audience=False)
+
+    def authenticate_for_audience(self, credentials: Credentials, audience: str) -> Principal:
+        """Validate a token for one exact RFC 8707 protected resource."""
+
+        return self._authenticate(credentials, audience, is_exact_audience=True)
+
+    def _authenticate(self, credentials: Credentials, audience: str, *, is_exact_audience: bool) -> Principal:
         token = _bearer_token(credentials)
         if token is None:
             raise _permission_denied(self.profile_name, "missing_bearer_token")
@@ -137,7 +145,9 @@ class JwtOidcAuthProvider:
         _require_algorithm(header, self.config.algorithm, self.profile_name)
         kid = _required_header(header, "kid", self.profile_name)
         key = self._key_for_kid(kid)
-        payload = self._decode(token, key)
+        payload = self._decode(token, key, audience)
+        if is_exact_audience and payload.get("aud") != audience:
+            raise _permission_denied(self.profile_name, "invalid_token", "ExactAudienceRequired")
         _reject_revoked_token(payload, self.config.revoked_token_ids, self.profile_name)
         return Principal(
             tenant_id=_required_payload_string(payload, self.config.tenant_claim, self.profile_name),
@@ -157,13 +167,13 @@ class JwtOidcAuthProvider:
     def anonymous(self) -> Principal:
         raise _permission_denied(self.profile_name, "anonymous_not_allowed")
 
-    def _decode(self, token: str, key: Any) -> dict[str, object]:
+    def _decode(self, token: str, key: Any, audience: str) -> dict[str, object]:
         try:
             payload = jwt.decode(
                 token,
                 key=key,
                 algorithms=[self.config.algorithm],
-                audience=self.config.audience,
+                audience=audience,
                 issuer=self.config.issuer,
                 leeway=self.config.leeway_seconds,
                 options={"require": ["exp", "iat", "iss", "aud"]},

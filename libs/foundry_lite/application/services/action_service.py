@@ -25,6 +25,11 @@ from foundry_lite.application.services.action_execution_service_registry import 
     ActionLogRevertService,
     ActionWritebackService,
 )
+from foundry_lite.application.services.action_external_mcp_run import (
+    get_external_mcp_action_run,
+    resume_external_mcp_action_run,
+    start_external_mcp_action_run,
+)
 from foundry_lite.application.services.action_service_registry import (
     ActionBranchService,
     ActionDefinitionService,
@@ -76,6 +81,9 @@ class ActionService(CoreService):
 
     def get_action(self, action_api_name: str, *, ctx: RequestContext | None = None) -> ActionCatalogItem:
         return self.action_definition_service.get_action(action_api_name, ctx=ctx)
+
+    def get_external_mcp_action(self, action_api_name: str, *, ctx: RequestContext) -> ActionCatalogItem:
+        return self.action_definition_service.get_external_mcp_action(action_api_name, ctx=ctx)
 
     def action_schema(self, action_api_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.action_definition_service.action_schema(action_api_name, ctx=ctx)
@@ -138,6 +146,25 @@ class ActionService(CoreService):
             params=params,
             ctx=ctx,
             is_dry_run=is_dry_run,
+        )
+
+    def plan_external_mcp_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> ActionExecutionPlanResponse:
+        return self.action_planning_service.plan_external_mcp_action(
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            ctx=ctx,
         )
 
     def execute_branch_action(
@@ -240,6 +267,30 @@ class ActionService(CoreService):
             ctx=ctx or RequestContext(),
         )
 
+    def start_external_mcp_action_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        wait_seconds: int,
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        return start_external_mcp_action_run(
+            self.action_async_run_service,
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=ctx,
+        )
+
     def resume_idempotent_action_run(
         self,
         action_api_name: str,
@@ -259,6 +310,28 @@ class ActionService(CoreService):
             params=params,
             idempotency_key=idempotency_key,
             ctx=ctx or RequestContext(),
+        )
+
+    def resume_external_mcp_action_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext,
+    ) -> dict[str, object] | None:
+        return resume_external_mcp_action_run(
+            self.action_async_run_service,
+            action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
         )
 
     def start_action_batch_run(
@@ -282,6 +355,9 @@ class ActionService(CoreService):
 
     def get_action_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.action_async_run_service.get(run_id, ctx=ctx or RequestContext())
+
+    def get_external_mcp_action_run(self, run_id: str, *, ctx: RequestContext) -> dict[str, object]:
+        return get_external_mcp_action_run(self.action_async_run_service, run_id, ctx=ctx)
 
     def list_action_runs(
         self, *, cursor: str | None = None, limit: int = 50, ctx: RequestContext | None = None

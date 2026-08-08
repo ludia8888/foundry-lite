@@ -30,6 +30,8 @@ def external_mcp_execution_context(ctx: RequestContext, prepared: PreparedExecut
         application_id=prepared.application_id,
         client_id=prepared.client_id,
         token_scopes=prepared.token_scopes,
+        originating_service_principal_id=prepared.originating_actor_user_id,
+        originating_mcp_review_id=prepared.review_id,
     )
 
 

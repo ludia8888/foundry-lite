@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.action_notification_policy_repository import (
     ActionNotificationPolicyIdempotencyRecord,
     ActionNotificationPolicyIdempotencyRow,
+    ActionNotificationPolicyIntegrityError,
     ActionNotificationPolicyRecord,
     ActionNotificationPolicyRepository,
     ActionNotificationPolicyRow,
@@ -79,7 +80,21 @@ class SqlAlchemyActionNotificationPolicyRepository(ActionNotificationPolicyRepos
         values = _policy_values(record)
         inserted_id = transaction.execute(_insert_policy_or_ignore(transaction, values)).scalar_one_or_none()
         if inserted_id is None:
-            return None
+            name_conflict = self.policy_by_name(
+                transaction=transaction,
+                tenant_id=record.tenant_id,
+                policy_name=record.policy_name,
+            )
+            target_conflict = self.policy_by_target(
+                transaction=transaction,
+                tenant_id=record.tenant_id,
+                target_ref=record.target_ref,
+            )
+            if name_conflict is not None or target_conflict is not None:
+                return None
+            raise ActionNotificationPolicyIntegrityError(
+                "policy insert was ignored without a matching business-key conflict"
+            )
         return self.policy_by_name(
             transaction=transaction,
             tenant_id=record.tenant_id,
@@ -182,18 +197,10 @@ def _one_policy(transaction: Any, *clauses: Any) -> ActionNotificationPolicyRow 
 
 def _insert_policy_or_ignore(transaction: Any, values: dict[str, object]) -> Any:
     table = db.action_notification_policies
-    conflict = ("tenant_id", "policy_name")
     if transaction.dialect.name == "postgresql":
-        return (
-            postgres_insert(table)
-            .values(**values)
-            .on_conflict_do_nothing(index_elements=conflict)
-            .returning(table.c.id)
-        )
+        return postgres_insert(table).values(**values).on_conflict_do_nothing().returning(table.c.id)
     if transaction.dialect.name == "sqlite":
-        return (
-            sqlite_insert(table).values(**values).on_conflict_do_nothing(index_elements=conflict).returning(table.c.id)
-        )
+        return sqlite_insert(table).values(**values).on_conflict_do_nothing().returning(table.c.id)
     return insert(table).values(**values).returning(table.c.id)
 
 

@@ -301,7 +301,7 @@ _FDE_TOOLS = (
     ),
     _tool(
         "pipeline.branch.run_tests",
-        "Run persisted validation tests on the selected Pipeline branch.",
+        "Run persisted static graph and output-contract checks without executing Pipeline data.",
         "pipeline:write",
         effect="WRITE",
         confirmation="USER",

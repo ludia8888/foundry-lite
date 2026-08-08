@@ -67,6 +67,16 @@ class OsdkClientSecretVersionRecord:
 class OsdkSecurityRepository(Protocol):
     """Persist the current credential pointer and session-scoped MCP activations."""
 
+    def public_active_application_tenant(self, *, transaction: TransactionContext, app_id: str) -> str | None:
+        """Resolve only the tenant coordinate needed for public OAuth discovery."""
+        ...
+
+    def public_active_application_client_tenant(
+        self, *, transaction: TransactionContext, app_id: str, client_id: str
+    ) -> str | None:
+        """Resolve an exact active app/client pair for OAuth token bootstrap."""
+        ...
+
     def activate_client_secret(
         self, *, transaction: TransactionContext, record: OsdkClientSecretVersionRecord
     ) -> OsdkClientSecretVersionRow: ...

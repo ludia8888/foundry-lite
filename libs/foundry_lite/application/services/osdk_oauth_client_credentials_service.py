@@ -8,17 +8,18 @@ from datetime import datetime, timedelta
 from typing import cast
 
 from foundry_lite.application.ports import OAuthAccessTokenClaims, OAuthSessionRecord, RuntimeJsonObject
+from foundry_lite.application.ports.osdk_security_repository import OsdkClientSecretVersionRow
 from foundry_lite.application.ports.secret_provider import SecretValue
 from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_oauth_session_support import _OAuthAuditBoundary, _OAuthRateLimiter
+from foundry_lite.application.services.osdk_service_principal_authorization import OSDK_SERVICE_PRINCIPAL_ROLE
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied
 
 _DEFAULT_ACCESS_TTL_SECONDS = 120
 _MAX_ACCESS_TTL_SECONDS = 900
-_EXECUTE_SUFFIX = ":execute"
 
 
 class OsdkOAuthClientCredentialsService(CoreService):
@@ -44,25 +45,15 @@ class OsdkOAuthClientCredentialsService(CoreService):
         client_id: str,
         client_secret: str,
         scopes: Sequence[str] = (),
+        resource: str | None = None,
         ctx: RequestContext | None = None,
     ) -> RuntimeJsonObject:
         request_ctx = ctx or RequestContext()
         self._rate_limiter.check(request_ctx, "client_credentials", client_id)
         with self.engine.begin() as conn:
             client = self._require_machine_client(conn, request_ctx, client_id)
-            secret_row = self.osdk_application_repository.current_client_secret(
-                transaction=conn,
-                tenant_id=request_ctx.tenant_id,
-                client_row_id=cast(str, client["id"]),
-            )
-            resolved_secret = self._resolved_secret(secret_row)
+            secret_row, resolved_secret = self._verified_secret(conn, request_ctx, client, client_secret)
             granted_scopes = self._authorized_scopes(conn, request_ctx, client, scopes)
-            if (
-                secret_row is None
-                or resolved_secret is None
-                or not secrets.compare_digest(resolved_secret.value, client_secret)
-            ):
-                raise PermissionDenied("OSDK OAuth client credentials are invalid")
             self.osdk_application_repository.mark_client_secret_used(
                 transaction=conn,
                 tenant_id=request_ctx.tenant_id,
@@ -72,9 +63,34 @@ class OsdkOAuthClientCredentialsService(CoreService):
             service_ctx = _service_context(request_ctx, client, granted_scopes)
             session = self._create_session(conn, service_ctx, client)
             self._audit_issued(conn, service_ctx, session, resolved_secret.version)
-        claims = _service_claims(session)
+        claims = _service_claims(session, resource=resource)
         access = self.oauth_token_issuer.issue_access_token(claims, ttl_seconds=_access_ttl(client))
         return {**access, "sessionId": session["id"], "grantType": "client_credentials"}
+
+    def verify_client_credentials(self, client_id: str, client_secret: str, ctx: RequestContext) -> None:
+        """Authenticate a confidential client without minting or mutating token state."""
+
+        self._rate_limiter.check(ctx, "refresh_client_auth", client_id)
+        with self.engine.begin() as conn:
+            client = self._require_machine_client(conn, ctx, client_id)
+            self._verified_secret(conn, ctx, client, client_secret)
+
+    def _verified_secret(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        client: Mapping[str, object],
+        client_secret: str,
+    ) -> tuple[OsdkClientSecretVersionRow, SecretValue]:
+        row = self.osdk_application_repository.current_client_secret(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            client_row_id=cast(str, client["id"]),
+        )
+        resolved = self._resolved_secret(row)
+        if row is None or resolved is None or not secrets.compare_digest(resolved.value, client_secret):
+            raise PermissionDenied("OSDK OAuth client credentials are invalid")
+        return row, resolved
 
     def _resolved_secret(self, secret_row: Mapping[str, object] | None) -> SecretValue | None:
         if secret_row is None:
@@ -177,20 +193,19 @@ def _service_context(
     request_ctx: RequestContext, client: Mapping[str, object], scopes: tuple[str, ...]
 ) -> RequestContext:
     client_id = cast(str, client["client_id"])
-    roles = ("ops_manager",) if any(scope.endswith(_EXECUTE_SUFFIX) for scope in scopes) else ("viewer",)
     return RequestContext(
         tenant_id=request_ctx.tenant_id,
         actor_user_id=f"service-principal:{client_id}",
         request_id=request_ctx.request_id,
-        roles=roles,
+        roles=(OSDK_SERVICE_PRINCIPAL_ROLE,),
         application_id=cast(str, client["app_id"]),
         client_id=client_id,
         token_scopes=scopes,
     )
 
 
-def _service_claims(session: Mapping[str, object]) -> OAuthAccessTokenClaims:
-    return {
+def _service_claims(session: Mapping[str, object], *, resource: str | None = None) -> OAuthAccessTokenClaims:
+    claims: OAuthAccessTokenClaims = {
         "tenant_id": cast(str, session["tenant_id"]),
         "actor_user_id": cast(str, session["actor_user_id"]),
         "roles": list(_string_sequence(session["roles"])),
@@ -199,6 +214,9 @@ def _service_claims(session: Mapping[str, object]) -> OAuthAccessTokenClaims:
         "scopes": list(_string_sequence(session["scopes"])),
         "session_id": cast(str, session["id"]),
     }
+    if resource is not None:
+        claims["resource"] = resource
+    return claims
 
 
 def _resource_scopes(resources: Sequence[Mapping[str, object]]) -> set[str]:

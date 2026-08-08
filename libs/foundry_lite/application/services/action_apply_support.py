@@ -37,6 +37,30 @@ from foundry_lite.application.services.object_store.row_policies import visible_
 from foundry_lite.security.policy import PolicyService
 
 
+def action_authority_snapshot(ctx: RequestContext) -> dict[str, object]:
+    """Seal the authenticated principal and reviewed MCP origin into a run plan."""
+    snapshot: dict[str, object] = {
+        "principal": {
+            "actorUserId": ctx.actor_user_id,
+            "roles": list(ctx.roles),
+            "applicationId": ctx.application_id,
+            "clientId": ctx.client_id,
+            "oauthSessionId": ctx.oauth_session_id,
+            "tokenScopes": list(ctx.token_scopes),
+            "userAttributes": dict(ctx.user_attributes),
+        },
+    }
+    if ctx.originating_service_principal_id and ctx.originating_mcp_review_id:
+        snapshot["externalMcpApproval"] = {
+            "source": "ontology_mcp",
+            "reviewId": ctx.originating_mcp_review_id,
+            "servicePrincipalId": ctx.originating_service_principal_id,
+            "applicationId": ctx.application_id,
+            "clientId": ctx.client_id,
+        }
+    return snapshot
+
+
 def action_request_error(
     policy: PolicyService,
     ctx: RequestContext,
@@ -72,6 +96,7 @@ __all__ = [
     "_new_id",
     "_now",
     "action_command",
+    "action_authority_snapshot",
     "action_failure_transition",
     "action_replay_response",
     "action_request_error",

@@ -87,8 +87,8 @@ Foundry-lite는 사람이 말로 설명한 업무를 AI FDE와 Pilot이 안전�
 | Action Types | 비교표 18축 중 `current` 12, `partial` 6이다. 독립 View/Edit/Apply 권한, typed parameters/defaults/overrides/criteria, before/after effect fencing, 모호한 외부 결과 무재호출, 병렬 fan-out, durable run state machine, Action Log/revert/branch/interface와 실제 Kafka 경보에 더해 Function-backed Action의 순차/collection batch, 단일 atomic commit, PostgreSQL+Temporal worker kill/takeover까지 제품 경로로 닫았다. 나머지 축은 남은 제품 surface와 외부 인프라 증거 때문에 과장 승격하지 않는다. | 18축 모두 API·DB·SDK·UI·브라우저·live evidence를 갖춘 `current` |
 | Action runtime | atomic EditPlan, unified sync/async run history, durable effect/log/revert/branch/interface, typed before-webhook response→rule assignment, 30일 failure taxonomy/alert evaluation, concrete Interface 해석, DB-native Action Log, edited-object→Object Explorer deep link, dynamic browser OSDK fallback, compiler-gated inline object-table edit, fingerprint-pinned Python `TypedDict`, upload/retention/권한 상속/lifetime holder/malware scan과 protected-runtime ClamAV 강제가 있다. PostgreSQL+실제 Temporal+worker 2개에서 kill/takeover, 취소, dispatch 복구와 정확히 한 번의 커밋을 증명했고, 활성 경보를 시간·정책별로 dedupe한 뒤 실제 Kafka로 전달했다. | revert/branch 전용 race, virtual Ontology log link type과 실제 ClamAV 증거까지 폐쇄 |
 | AI FDE | 9 modes, 68 server-owned tools, bounded loop, Builder MCP, Pilot slice가 있다. 68개 중 43개는 공개 Palantir MCP 72개와 exact-name이며 실제 native service에 연결되고, 25개는 Foundry-lite 고유 branch/test/proposal/Pilot 도구다. | 남은 공식 29개를 실제 product foundation과 함께 구현하고 context UX, eval loop, 운영 budget까지 확장 |
-| Builder MCP | Streamable HTTP/OAuth/branch-first 도구 plane, bearer/session을 보존하는 local stdio proxy, session-scoped `search_tools` lazy activation, `tools/list_changed`, eager fallback, 43개 exact-name native tool이 있음 | 남은 공식 29개를 Code Repository·Global Branch·Compute·Dataset Build 등 실제 원장과 함께 구현하고 repository-aware context와 proposal evidence를 닫음 |
-| Ontology MCP | `partial`: consumer Streamable HTTP, app-restricted tool projection, 표준 form PKCE와 managed Client Credentials, one-time secret 회전·폐기, 발급된 durable access session 즉시 철회와 rotation race lock, typed query function, low-risk run, high-risk AIP proposal→사람 승인→원 앱 권한 재검증→실행→read-only 상태 추적, fail-closed enablement와 visual Developer Console/MCP Hub, Origin policy, stdio HTTP proxy, durable session/event resume가 통합 테스트로 연결됐다. 브라우저는 MCP application/client/scope, plan hash, Action/object version, risk를 고정한 요청을 사람이 승인·실행하고 외부 MCP가 동일 Action run을 다시 읽는 경로까지 증명한다. 공식 Python MCP client가 별도 Uvicorn 프로세스와 PostgreSQL에 연결하는 live test도 통과한다. | production cloud secret manager/KMS와 실제 ChatGPT SaaS tenant 연결 증거까지 완성 |
+| Builder MCP | Streamable HTTP/OAuth/branch-first 도구 plane, strict initialize/version/notification/ping lifecycle, typed JSON-RPC ID, canonical structured/text result, fingerprint-bound challenge→별도 human control-plane 승인→single-use `confirmationReceipt`, durable replay·endpoint/tool rate limit·단일 SSE lease, bearer/session/SSE/clean-EOF DELETE를 보존하는 local stdio proxy, session-scoped `search_tools` lazy activation, `tools/list_changed`, eager fallback, 실제 68개 wire 호출 ratchet, 공식 MCP client+별도 strict-OIDC Uvicorn+PostgreSQL live gate, 43개 exact-name native tool이 있음. `pipeline.branch.run_tests`는 static graph/output-contract proof이며 row 실행은 아님 | 남은 공식 29개를 Code Repository·Global Branch·Compute·Dataset Build 등 실제 원장과 함께 구현하고 repository-aware context와 proposal evidence를 닫음 |
+| Ontology MCP | `partial`: consumer Streamable HTTP, app-restricted tool projection, 표준 form PKCE와 managed Client Credentials, one-time secret 회전·폐기, 발급된 durable access session 즉시 철회와 rotation race lock, typed query function, low-risk run, high-risk AIP proposal→사람 승인→원 앱 권한 재검증→실행→read-only 상태 추적, execution error `isError`, strict lifecycle, durable session/event resume·단일 SSE lease·종료 후 404, POST/GET/DELETE와 tool rate limit, fail-closed enablement와 visual Developer Console/MCP Hub, Origin policy, stdio HTTP proxy가 통합 테스트로 연결됐다. 브라우저는 MCP application/client/scope, plan hash, Action/object version, risk를 고정한 요청을 사람이 승인·실행하고 외부 MCP가 동일 Action run을 다시 읽는 경로까지 증명한다. 공식 Python MCP client가 별도 Uvicorn 프로세스와 PostgreSQL에 연결하는 live test와 PostgreSQL rate-limit concurrency/RLS gate도 통과한다. | production cloud secret manager/KMS, external IdP/DCR interoperability와 실제 ChatGPT SaaS tenant 연결 증거까지 완성 |
 | No-code Action Builder | 브랜치 전용 Builder가 typed parameter/default, recursive struct, section/visibility, override, criteria, object/link/interface rule, function, effect, risk, Action Log/revert 정책을 작성한다. 브라우저가 attachment upload→branch 저장→proposal→독립 승인→activation→SDK 재생성 없는 동적 실행→log→revert, compiler-gated inline object-table edit와 runtime SSE/takeover/effect를 증명하고, 실제 PostgreSQL/Temporal worker 경로도 별도 live gate로 통과한다. | 전용 overlay data diff, compensation authoring과 live ClamAV/effect 전용 증거 |
 | Pilot | Project, seed Dataset, branch, OSDK app, React/CI bundle의 bounded slice | isolated workspace, design system, multi-agent artifacts, live preview, guided production promotion |
 
@@ -367,16 +367,20 @@ approval policy, maximum output, timeout, audit classification을 가진다.
 - 검색은 tool name, family, description, curated keyword를 local ranking하며 별도 model call을 만들지 않는다.
 - 활성화된 tool은 session 동안 유지하고 `notifications/tools/list_changed`를 보낸다.
 - 동적 refresh를 지원하지 않는 client에는 eager 또는 bounded family preload를 제공한다.
-- reconnect는 activation state를 초기화하되 durable tool execution ledger는 보존한다.
+- 같은 `Mcp-Session-Id`로 reconnect하면 durable activation state와 tool execution ledger를 모두 보존한다.
+  새 session은 이전 activation을 상속하지 않아 session 간 tool 노출이 격리된다.
 
 ### MCP-BLD-004 Transport와 보안
 
 - 외부 연동은 MCP Streamable HTTP, local IDE는 `pnpm mcp:builder:stdio -- --application-id <id>` stdio proxy를 지원한다. proxy는 short-lived OAuth bearer와 MCP session을 보존하되 토큰을 로그나 `repr`에 노출하지 않는다.
+- mutation은 먼저 application/session/tool/workspace/arguments fingerprint에 묶인 `challengeId`를 반환한다. 별도 human control-plane bearer만 그 challenge를 승인할 수 있고, client는 반환된 short-lived single-use `confirmationReceipt`를 같은 session의 동일 tool outer arguments에 넣어 재호출한다. 고정 환경변수나 재사용 가능한 confirmation header는 허용하지 않는다.
+- stdio proxy는 finite SSE notification batch를 JSON-RPC line으로 전달하고 `Last-Event-ID`를 이어가며, stdin clean EOF에는 MCP session DELETE를 보낸다.
 - principal과 application restriction을 가진 OAuth token을 사용하고 token passthrough를 금지한다.
 - Origin, Host, DNS rebinding, session fixation, audience, expiry/revocation, tenant crossover를 차단한다.
 - external provider로 전송될 수 있는 data classification과 disclosure를 client 연결 화면에 표시한다.
 - destructive production write는 tool catalog에 존재하지 않는다.
 - Ontology 삭제를 포함한 구조 변경은 branch에만 기록되고 proposal review 없이는 main에 들어가지 않는다.
+- `pipeline.branch.run_tests`는 persisted graph validation과 declared output contract를 확인하는 static proof다. 실제 Pipeline row 실행·output Dataset commit 증거로 표기하지 않는다.
 
 ### MCP-BLD-005 Repository-aware context와 closed loop
 
@@ -575,7 +579,7 @@ event sequence는 run row CAS 또는 database sequence allocation으로 중복 �
 - tool result는 object/property masking을 우회하지 않는다.
 - prompt injection이 tool schema, policy, system-owned argument를 변경할 수 없게 context와 control instruction을 분리한다.
 - arbitrary URL, DNS rebinding, redirect-to-private-IP, alternate IP resolution을 connector network policy로 차단한다.
-- MCP Origin/Host/session/audience/tenant 검증과 rate limit을 적용한다.
+- MCP Origin/Host/session/audience/tenant 검증을 적용하고 POST/GET/DELETE endpoint와 tool invocation을 durable tenant/plane/application/client/actor quota로 제한한다. 거부는 정확한 `Retry-After`와 audit/outbox evidence를 남기며, durable replay는 tool quota를 다시 소비하지 않는다.
 - media/attachment는 malware scan, content type/size, object permission inheritance, deletion/retention policy를 통과한다.
 - audit에는 model/provider/version, prompt/tool manifest hash, user, app/client, request, plan, approval, result가 남는다.
 - high-risk Action의 human approval을 모델이 대신 수행하거나 self-approve할 수 없다.

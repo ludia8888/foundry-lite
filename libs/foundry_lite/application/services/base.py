@@ -58,6 +58,7 @@ from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.language_model import LanguageModelAdapter
+from foundry_lite.application.ports.mcp_rate_limiter import McpRateLimiter
 from foundry_lite.application.ports.media_access_cache_repository import MediaAccessCacheRepository
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
 from foundry_lite.application.ports.media_preview_renderer import MediaPreviewRendererAdapter
@@ -162,6 +163,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
     "object_subscription_service": "ObjectSubscriptionService",
+    "osdk_access_session_service": "OsdkAccessSessionService",
     "osdk_application_client_service": "OsdkApplicationClientService",
     "osdk_application_idempotency_service": "OsdkApplicationIdempotencyService",
     "osdk_application_scope_service": "OsdkApplicationScopeService",
@@ -276,6 +278,7 @@ class CoreService:
     engine: TransactionManager
     policy: PolicyService
     metadata_repository: MetadataRepository
+    mcp_rate_limiter: McpRateLimiter
     insight_review_service: object
     action_repository: ActionRepository
     action_notification_policy_repository: ActionNotificationPolicyRepository

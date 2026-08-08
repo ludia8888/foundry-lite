@@ -2,42 +2,113 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
+from uuid import uuid4
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from foundry_lite.application.services.ontology_mcp_gateway import OntologyMcpToolCall
-from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, RateLimited, ValidationFailed
 from pydantic import ValidationError as PydanticValidationError
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
+from foundry_lite_api.mcp_authorization import (
+    mcp_permission_failure,
+    protected_resource_metadata,
+    require_mcp_context,
+)
 from foundry_lite_api.mcp_envelope import JsonRpcEnvelope
-from foundry_lite_api.request_context import _ctx
+from foundry_lite_api.mcp_protocol import (
+    McpInvalidRequest,
+    McpMethodNotFound,
+    method_not_found,
+    reject_initialize_session_id,
+    require_mcp_protocol_version,
+    require_mcp_session_id,
+    validate_mcp_message,
+)
+from foundry_lite_api.mcp_rate_limit import mcp_rate_limit_http_error, mcp_result_headers
 
 router = APIRouter()
-_PROTOCOL_VERSION = "2025-06-18"
 
 
 @router.post("/mcp/ontology/{application_id}")
 async def ontology_mcp_post(application_id: str, request: Request) -> Response:
+    ctx, payload = await _ontology_mcp_admission(application_id, request)
+    return _ontology_mcp_post_response(application_id, request, ctx, payload)
+
+
+async def _ontology_mcp_admission(application_id: str, request: Request) -> tuple[RequestContext, JsonRpcEnvelope]:
     try:
         _require_origin(request)
+        ctx = require_mcp_context(request, "ontology", application_id)
+        runtime.foundry.ontology_mcp.consume_endpoint_rate_limit(ctx, application_id)
         payload = await _json_body(request)
+        require_mcp_protocol_version(request, is_initialization=payload.method == "initialize")
+    except RateLimited as exc:
+        raise mcp_rate_limit_http_error(exc, request) from exc
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+    return ctx, payload
+
+
+def _ontology_mcp_post_response(
+    application_id: str,
+    request: Request,
+    ctx: RequestContext,
+    payload: JsonRpcEnvelope,
+) -> Response:
     rpc_id = payload.id
+    session_id: str | None = None
     try:
-        result, session_id = _dispatch(application_id, request, payload)
+        negotiated_protocol = validate_mcp_message(payload)
+        session_id = _request_session_id(request, payload)
+        result = _dispatch(application_id, session_id, request, payload, negotiated_protocol, ctx)
     except FoundryLiteError as exc:
-        return JSONResponse(_rpc_error(rpc_id, exc), status_code=200)
-    if rpc_id is None:
+        return _ontology_mcp_domain_failure(application_id, request, payload, session_id, rpc_id, exc)
+    except Exception:
+        return _ontology_mcp_internal_failure(request, payload, session_id, rpc_id)
+    return _ontology_mcp_success(payload, session_id, rpc_id, result)
+
+
+def _ontology_mcp_domain_failure(
+    application_id: str,
+    request: Request,
+    payload: JsonRpcEnvelope,
+    session_id: str | None,
+    rpc_id: object,
+    exc: FoundryLiteError,
+) -> Response:
+    if isinstance(exc, PermissionDenied):
+        raise mcp_permission_failure(exc, request, "ontology", application_id) from exc
+    if exc.details.get("resource") == "mcp_session":
+        raise _handle_error(exc, request) from exc
+    if payload.is_notification:
+        return Response(status_code=400, headers=_session_response_headers(session_id))
+    return JSONResponse(_rpc_error(rpc_id, exc, request), status_code=200)
+
+
+def _ontology_mcp_internal_failure(
+    request: Request, payload: JsonRpcEnvelope, session_id: str | None, rpc_id: object
+) -> Response:
+    if payload.is_notification:
+        return Response(status_code=500, headers=_session_response_headers(session_id))
+    return JSONResponse(_internal_error(rpc_id, request), status_code=200)
+
+
+def _ontology_mcp_success(
+    payload: JsonRpcEnvelope, session_id: str | None, rpc_id: object, result: Mapping[str, object]
+) -> Response:
+    if session_id is None:
+        raise RuntimeError("Ontology MCP session id was not resolved")
+    if payload.is_notification:
         return Response(status_code=202, headers={"Mcp-Session-Id": session_id})
     return JSONResponse(
         {"jsonrpc": "2.0", "id": rpc_id, "result": result},
-        headers={"Mcp-Session-Id": session_id},
+        headers=mcp_result_headers(result, {"Mcp-Session-Id": session_id}),
     )
 
 
@@ -45,71 +116,105 @@ async def ontology_mcp_post(application_id: str, request: Request) -> Response:
 async def ontology_mcp_get(application_id: str, request: Request) -> StreamingResponse:
     try:
         _require_origin(request)
-        ctx = _ctx(request)
-        session_id = _session_id(application_id, request)
-        runtime.foundry.ontology_mcp.open_session(ctx, application_id, session_id, origin=request.headers.get("origin"))
-        events = runtime.foundry.ontology_mcp.session_events(
+        require_mcp_protocol_version(request)
+        ctx = require_mcp_context(request, "ontology", application_id)
+        session_id = _required_existing_session_id(request)
+        runtime.foundry.ontology_mcp.consume_endpoint_rate_limit(ctx, application_id)
+        runtime.foundry.ontology_mcp.resume_session(
             ctx,
             application_id,
             session_id,
-            after_sequence=_last_event_sequence(request, session_id),
+            origin=request.headers.get("origin"),
         )
+        lease = runtime.foundry.ontology_mcp.claim_session_stream(
+            ctx, application_id, session_id, origin=request.headers.get("origin")
+        )
+        try:
+            events = runtime.foundry.ontology_mcp.session_events(
+                ctx,
+                application_id,
+                session_id,
+                after_sequence=_last_event_sequence(request, session_id),
+            )
+        except Exception:
+            runtime.foundry.ontology_mcp.release_session_stream(ctx, application_id, session_id, lease.lease_id)
+            raise
+    except RateLimited as exc:
+        raise mcp_rate_limit_http_error(exc, request) from exc
     except FoundryLiteError as exc:
+        if isinstance(exc, PermissionDenied):
+            raise mcp_permission_failure(exc, request, "ontology", application_id) from exc
         raise _handle_error(exc, request) from exc
-    return StreamingResponse(
-        _session_events(events, session_id),
-        media_type="text/event-stream",
-        headers={"Mcp-Session-Id": session_id, "Cache-Control": "no-cache"},
-    )
+    try:
+        response = StreamingResponse(
+            _session_events(events, session_id, ctx, application_id, lease.lease_id),
+            media_type="text/event-stream",
+            headers={"Mcp-Session-Id": session_id, "Cache-Control": "no-cache"},
+        )
+    except Exception:
+        runtime.foundry.ontology_mcp.release_session_stream(ctx, application_id, session_id, lease.lease_id)
+        raise
+    return response
 
 
 @router.delete("/mcp/ontology/{application_id}")
 def ontology_mcp_delete(application_id: str, request: Request) -> Response:
     try:
         _require_origin(request)
-        runtime.foundry.ontology_mcp.close_session(
-            _ctx(request), application_id, _required_existing_session_id(request)
-        )
+        require_mcp_protocol_version(request)
+        ctx = require_mcp_context(request, "ontology", application_id)
+        session_id = _required_existing_session_id(request)
+        runtime.foundry.ontology_mcp.consume_endpoint_rate_limit(ctx, application_id)
+        runtime.foundry.ontology_mcp.close_session(ctx, application_id, session_id)
+    except RateLimited as exc:
+        raise mcp_rate_limit_http_error(exc, request) from exc
     except FoundryLiteError as exc:
+        if isinstance(exc, PermissionDenied):
+            raise mcp_permission_failure(exc, request, "ontology", application_id) from exc
         raise _handle_error(exc, request) from exc
     return Response(status_code=204)
 
 
 @router.get("/.well-known/oauth-protected-resource/mcp/ontology/{application_id}")
 def ontology_mcp_protected_resource(application_id: str, request: Request) -> dict[str, object]:
-    base = str(request.base_url).rstrip("/")
-    return {
-        "resource": f"{base}/mcp/ontology/{application_id}",
-        "authorization_servers": [base],
-        "bearer_methods_supported": ["header"],
-        "scopes_supported": [
-            "osdk:object:*:read",
-            "osdk:action:*:validate",
-            "osdk:action:*:execute",
-            "osdk:function:*:execute",
-        ],
-    }
+    return protected_resource_metadata(request, "ontology", application_id)
 
 
 def _dispatch(
     application_id: str,
+    session_id: str,
     request: Request,
     payload: JsonRpcEnvelope,
-) -> tuple[Mapping[str, object], str]:
+    negotiated_protocol: str | None,
+    ctx: RequestContext,
+) -> Mapping[str, object]:
     method = payload.method
-    session_id = _session_id(application_id, request)
-    ctx = _ctx(request)
-    runtime.foundry.ontology_mcp.open_session(ctx, application_id, session_id, origin=request.headers.get("origin"))
     if method == "initialize":
-        return _initialize_result(), session_id
+        if negotiated_protocol is None:
+            raise ValidationFailed("Ontology MCP protocol negotiation is missing")
+        runtime.foundry.ontology_mcp.open_session(
+            ctx,
+            application_id,
+            session_id,
+            origin=request.headers.get("origin"),
+        )
+        return _initialize_result(negotiated_protocol)
+    runtime.foundry.ontology_mcp.resume_session(
+        ctx,
+        application_id,
+        session_id,
+        origin=request.headers.get("origin"),
+    )
     if method == "notifications/initialized":
-        return {}, session_id
+        return {}
+    if method == "ping":
+        return {}
     if method == "tools/list":
         tools = runtime.foundry.ontology_mcp.list_tools(ctx, application_id, origin=request.headers.get("origin"))
-        return tools, session_id
+        return tools
     if method == "tools/call":
-        return _call_tool(application_id, session_id, request, payload), session_id
-    raise ValidationFailed("unsupported Ontology MCP JSON-RPC method", details={"method": method})
+        return _call_tool(application_id, session_id, request, payload, ctx)
+    raise method_not_found("Ontology", method)
 
 
 def _call_tool(
@@ -117,6 +222,7 @@ def _call_tool(
     session_id: str,
     request: Request,
     payload: JsonRpcEnvelope,
+    ctx: RequestContext,
 ) -> Mapping[str, object]:
     params = payload.params
     rpc_id = payload.id
@@ -125,17 +231,17 @@ def _call_tool(
     call = OntologyMcpToolCall(
         application_id=application_id,
         session_id=session_id,
-        json_rpc_id=str(rpc_id),
+        json_rpc_id=rpc_id,
         tool_name=_text(params, "name"),
         arguments=_mapping(params.get("arguments", {}), "params.arguments"),
         origin=request.headers.get("origin"),
     )
-    return runtime.foundry.ontology_mcp.execute_tool(_ctx(request), call)
+    return runtime.foundry.ontology_mcp.execute_tool(ctx, call)
 
 
-def _initialize_result() -> dict[str, object]:
+def _initialize_result(protocol_version: str) -> dict[str, object]:
     return {
-        "protocolVersion": _PROTOCOL_VERSION,
+        "protocolVersion": protocol_version,
         "capabilities": {"tools": {"listChanged": False}},
         "serverInfo": {"name": "foundry-lite-ontology-mcp", "version": "1.0.0"},
         "instructions": (
@@ -145,29 +251,47 @@ def _initialize_result() -> dict[str, object]:
     }
 
 
-async def _session_events(events: Sequence[Mapping[str, object]], session_id: str) -> AsyncIterator[str]:
-    for event in events:
-        sequence = event["sequence"]
-        if not isinstance(sequence, int):
-            raise ValidationFailed("Ontology MCP event sequence is invalid")
-        event_type = str(event["event_type"])
-        data = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "notifications/message",
-                "params": {"level": "info", "data": event["payload_json"]},
-            },
-            sort_keys=True,
-        )
-        yield f"id: {session_id}:{sequence}\nevent: {event_type}\ndata: {data}\n\n"
-    yield ": heartbeat\n\n"
+async def _session_events(
+    events: Sequence[Mapping[str, object]],
+    session_id: str,
+    ctx: RequestContext,
+    application_id: str,
+    lease_id: str,
+) -> AsyncIterator[str]:
+    try:
+        for event in events:
+            sequence = event["sequence"]
+            if not isinstance(sequence, int):
+                raise ValidationFailed("Ontology MCP event sequence is invalid")
+            method = _session_notification_method(event.get("event_type"))
+            params = event.get("payload_json")
+            if not isinstance(params, Mapping):
+                raise ValidationFailed("Ontology MCP event payload is invalid")
+            data = json.dumps({"jsonrpc": "2.0", "method": method, "params": dict(params)}, sort_keys=True)
+            yield f"id: {session_id}:{sequence}\nevent: message\ndata: {data}\n\n"
+        yield ": heartbeat\n\n"
+    finally:
+        runtime.foundry.ontology_mcp.release_session_stream(ctx, application_id, session_id, lease_id)
+
+
+def _session_notification_method(event_type: object) -> str:
+    method = str(event_type)
+    legacy_methods = {
+        "session.ready": "notifications/session.ready",
+        "tool.completed": "notifications/tool.completed",
+    }
+    if method in legacy_methods:
+        return legacy_methods[method]
+    if method.startswith("notifications/"):
+        return method
+    raise ValidationFailed("Ontology MCP session event type is invalid")
 
 
 async def _json_body(request: Request) -> JsonRpcEnvelope:
     """Parse the fixed part of the protocol into a model; `params` stays for the tool to validate."""
     try:
         payload = await request.json()
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValidationFailed("Ontology MCP request body must be JSON") from exc
     try:
         return JsonRpcEnvelope.model_validate(payload)
@@ -184,19 +308,15 @@ def _require_origin(request: Request) -> None:
         raise ValidationFailed("Ontology MCP Origin is not allowed")
 
 
-def _session_id(application_id: str, request: Request) -> str:
-    provided = request.headers.get("Mcp-Session-Id")
-    if provided:
-        return provided[:255]
-    raw = f"{application_id}:{request.state.request_id}"
-    return f"ontology-mcp-{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
+def _request_session_id(request: Request, payload: JsonRpcEnvelope) -> str:
+    if payload.method != "initialize":
+        return _required_existing_session_id(request)
+    reject_initialize_session_id(request)
+    return f"ontology-mcp-{uuid4().hex}"
 
 
 def _required_existing_session_id(request: Request) -> str:
-    session_id = request.headers.get("Mcp-Session-Id")
-    if not session_id:
-        raise ValidationFailed("Ontology MCP DELETE requires Mcp-Session-Id")
-    return session_id
+    return require_mcp_session_id(request, "Ontology")
 
 
 def _last_event_sequence(request: Request, session_id: str) -> int:
@@ -228,10 +348,38 @@ def _text(value: Mapping[str, object], key: str) -> str:
     return item.strip()
 
 
-def _rpc_error(rpc_id: object, exc: FoundryLiteError) -> dict[str, object]:
-    code = -32602 if exc.code == "VALIDATION_FAILED" else -32001
+def _rpc_error(rpc_id: object, exc: FoundryLiteError, request: Request) -> dict[str, object]:
+    code = _rpc_error_code(exc)
     return {
         "jsonrpc": "2.0",
         "id": rpc_id,
-        "error": {"code": code, "message": exc.message, "data": {"type": exc.code, **exc.details}},
+        "error": {
+            "code": code,
+            "message": exc.message,
+            "data": {"type": exc.code, **exc.details, "requestId": _request_id(request)},
+        },
     }
+
+
+def _rpc_error_code(exc: FoundryLiteError) -> int:
+    if isinstance(exc, McpInvalidRequest):
+        return -32600
+    if isinstance(exc, McpMethodNotFound):
+        return -32601
+    return -32602 if exc.code == "VALIDATION_FAILED" else -32001
+
+
+def _internal_error(rpc_id: object, request: Request) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "error": {"code": -32603, "message": "Internal error", "data": {"requestId": _request_id(request)}},
+    }
+
+
+def _request_id(request: Request) -> str:
+    return str(getattr(request.state, "request_id", "unknown"))
+
+
+def _session_response_headers(session_id: str | None) -> dict[str, str]:
+    return {"Mcp-Session-Id": session_id} if session_id is not None else {}

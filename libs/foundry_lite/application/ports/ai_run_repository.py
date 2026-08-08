@@ -233,6 +233,12 @@ class AiRunRepository(Protocol):
         """Persist run intent before any provider call."""
         ...
 
+    def insert_execution_run_or_get_existing(
+        self, *, transaction: TransactionContext, record: AiExecutionRunRecord
+    ) -> AiLedgerRow | None:
+        """Insert deterministic run intent, returning the existing row on a concurrent duplicate."""
+        ...
+
     def update_execution_run_status(
         self,
         *,

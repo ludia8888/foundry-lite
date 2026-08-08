@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import cast
 
-from foundry_lite.application.ports import RuntimeJsonObject, TransactionContext
+from foundry_lite.application.ports import OsdkMcpStreamLease, RuntimeJsonObject, TransactionContext
 from foundry_lite.application.ports.osdk_application_repository import (
     OsdkMcpServerRecord,
     OsdkMcpServerRow,
@@ -16,6 +16,7 @@ from foundry_lite.application.ports.osdk_application_repository import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.mcp_stream_lease import mcp_stream_conflict, new_mcp_stream_lease
 from foundry_lite.application.services.osdk_application_idempotency import OsdkApplicationIdempotencyService
 from foundry_lite.application.services.osdk_application_records import _require_idempotency_key
 from foundry_lite.application.services.osdk_application_scope import OsdkApplicationScopeService
@@ -103,7 +104,7 @@ class OsdkMcpServerService(CoreService):
                 transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id, observed_at=now
             )
             if existing is None:
-                self._append_session_event(conn, ctx, row, "session.ready", {"applicationId": app_id})
+                self._append_session_event(conn, ctx, row, "notifications/session.ready", {"applicationId": app_id})
                 self.osdk_application_scope_service._audit(conn, ctx, "osdk.mcp_session.opened", row)
             return row
 
@@ -121,6 +122,19 @@ class OsdkMcpServerService(CoreService):
             _require_session_owner(ctx, app_id, row)
             return self._append_session_event(conn, ctx, row, event_type, payload)
 
+    def resume_session(
+        self, ctx: RequestContext, app_id: str, session_id: str, *, origin: str | None = None
+    ) -> OsdkMcpSessionRow:
+        self.require_enabled(ctx, app_id, origin=origin)
+        _require_session_identity(ctx, session_id)
+        with self.engine.begin() as conn:
+            row = self._required_session(conn, ctx, session_id)
+            _require_session_owner(ctx, app_id, row)
+            self.osdk_application_repository.touch_mcp_server_activity(
+                transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id, observed_at=_now()
+            )
+            return row
+
     def list_session_events(
         self, ctx: RequestContext, app_id: str, session_id: str, *, after_sequence: int = 0
     ) -> list[OsdkMcpSessionEventRow]:
@@ -134,17 +148,51 @@ class OsdkMcpServerService(CoreService):
                 after_sequence=max(0, after_sequence),
             )
 
+    def claim_session_stream(
+        self, ctx: RequestContext, app_id: str, session_id: str, *, origin: str | None = None
+    ) -> OsdkMcpStreamLease:
+        self.require_enabled(ctx, app_id, origin=origin)
+        _require_session_identity(ctx, session_id)
+        claimed_at, lease = new_mcp_stream_lease()
+        with self.engine.begin() as conn:
+            before = self._required_session(conn, ctx, session_id)
+            _require_session_owner(ctx, app_id, before)
+            claimed = self.osdk_application_repository.claim_mcp_session_stream_lease(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                session_id=session_id,
+                lease_id=lease.lease_id,
+                claimed_at=claimed_at,
+                lease_expires_at=lease.expires_at,
+            )
+            if claimed is None:
+                current = self._required_session(conn, ctx, session_id)
+                _require_session_owner(ctx, app_id, current)
+                raise mcp_stream_conflict(current)
+        return lease
+
+    def release_session_stream(self, ctx: RequestContext, app_id: str, session_id: str, lease_id: str) -> bool:
+        with self.engine.begin() as conn:
+            row = self._required_session(conn, ctx, session_id)
+            _require_session_owner(ctx, app_id, row, allow_terminated=True)
+            return self.osdk_application_repository.release_mcp_session_stream_lease(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                released_at=_now(),
+            )
+
     def close_session(self, ctx: RequestContext, app_id: str, session_id: str) -> OsdkMcpSessionRow:
         with self.engine.begin() as conn:
             before = self._required_session(conn, ctx, session_id)
-            _require_session_owner(ctx, app_id, before, allow_terminated=True)
+            _require_session_owner(ctx, app_id, before)
             row = self.osdk_application_repository.terminate_mcp_session(
                 transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id, terminated_at=_now()
             )
             if row is None:
-                raise PermissionDenied("Ontology MCP session is invalid")
-            if before["status"] == "active":
-                self.osdk_application_scope_service._audit(conn, ctx, "osdk.mcp_session.terminated", row, before, row)
+                raise NotFound("Ontology MCP session is not found", details={"resource": "mcp_session"})
+            self.osdk_application_scope_service._audit(conn, ctx, "osdk.mcp_session.terminated", row, before, row)
             return row
 
     def _configure_json(
@@ -200,7 +248,7 @@ class OsdkMcpServerService(CoreService):
             transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id
         )
         if row is None:
-            raise PermissionDenied("Ontology MCP session is invalid")
+            raise NotFound("Ontology MCP session is not found", details={"resource": "mcp_session"})
         return row
 
     def _append_session_event(
@@ -270,21 +318,41 @@ def _session_record(ctx: RequestContext, app_id: str, session_id: str, now: str)
 
 def _require_session_identity(ctx: RequestContext, session_id: str) -> None:
     if not ctx.client_id or _SESSION_ID_PATTERN.fullmatch(session_id) is None:
-        raise PermissionDenied("Ontology MCP session identity is invalid")
+        raise NotFound("Ontology MCP session is not found", details={"resource": "mcp_session"})
 
 
 def _require_session_owner(
     ctx: RequestContext, app_id: str, row: OsdkMcpSessionRow, *, allow_terminated: bool = False
 ) -> None:
-    identity_matches = (
+    if not _session_identity_matches(ctx, app_id, row):
+        _raise_session_not_found()
+    if row["status"] == "active":
+        return
+    if row["status"] == "terminated":
+        _require_terminated_session(allow_terminated)
+        return
+    _raise_session_not_found()
+
+
+def _session_identity_matches(ctx: RequestContext, app_id: str, row: OsdkMcpSessionRow) -> bool:
+    return (
         row["tenant_id"] == ctx.tenant_id
         and row["app_id"] == app_id
         and row["client_id"] == ctx.client_id
         and row["actor_user_id"] == ctx.actor_user_id
     )
-    status_allowed = row["status"] == "active" or (allow_terminated and row["status"] == "terminated")
-    if not identity_matches or not status_allowed:
-        raise PermissionDenied("Ontology MCP session is invalid")
+
+
+def _require_terminated_session(is_allowed: bool) -> None:
+    if not is_allowed:
+        raise NotFound(
+            "Ontology MCP session is terminated",
+            details={"resource": "mcp_session", "isSessionTerminated": True},
+        )
+
+
+def _raise_session_not_found() -> None:
+    raise NotFound("Ontology MCP session is not found", details={"resource": "mcp_session"})
 
 
 def _safe_origin(origin: str) -> bool:

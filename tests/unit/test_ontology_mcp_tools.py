@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import cast
 
+import pytest
+from foundry_lite.application.services.ontology_mcp_schema import validate_tool_arguments
 from foundry_lite.application.services.ontology_mcp_tools import approval_status_tool, function_tools
+from foundry_lite.domain.errors import ValidationFailed
 
 
 def test_ontology_mcp_function_tool_uses_version_pinned_typed_input_contract() -> None:
@@ -73,3 +76,54 @@ def test_ontology_mcp_function_tool_projects_nested_batch_input_schema() -> None
     assert requests["type"] == "array"
     assert item["required"] == ["objectId"]
     assert cast(dict[str, object], item["properties"])["priority"] == {"type": "integer"}
+
+
+def test_ontology_mcp_argument_validator_enforces_nested_advertised_constraints() -> None:
+    schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["mode", "refs"],
+        "properties": {
+            "mode": {"type": "string", "enum": ["safe"], "minLength": 4, "maxLength": 4},
+            "refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "uniqueItems": True,
+                "items": {
+                    "oneOf": [
+                        {"type": "string", "pattern": "^obj-"},
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["referenceKind", "version"],
+                            "properties": {
+                                "referenceKind": {"const": "object"},
+                                "version": {"type": "integer", "minimum": 1, "maximum": 3},
+                            },
+                        },
+                    ]
+                },
+            },
+        },
+    }
+
+    validate_tool_arguments(
+        {"mode": "safe", "refs": ["obj-1", {"referenceKind": "object", "version": 2}]},
+        schema,
+    )
+    invalid_values = (
+        ({"mode": "safe", "refs": ["wrong"]}, "oneOf", "$.refs[0]"),
+        ({"mode": "safe", "refs": ["obj-1", "obj-1"]}, "uniqueItems", "$.refs"),
+        (
+            {"mode": "safe", "refs": [{"referenceKind": "media", "version": 2}]},
+            "oneOf",
+            "$.refs[0]",
+        ),
+        ({"mode": "safe", "refs": [{"referenceKind": "object", "version": True}]}, "oneOf", "$.refs[0]"),
+    )
+    for arguments, rule, path in invalid_values:
+        with pytest.raises(ValidationFailed) as caught:
+            validate_tool_arguments(arguments, schema)
+        assert caught.value.details["schemaRule"] == rule
+        assert caught.value.details["path"] == path
