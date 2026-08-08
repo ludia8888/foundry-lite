@@ -6,12 +6,19 @@ import os
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypeVar, cast
 
 from foundry_lite.application.dependencies import RuntimeProfile
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.infrastructure.auth import AuthProvider, auth_provider_from_env
+from foundry_lite.application.ports.oauth_session_repository import OAuthTokenIssuer
+from foundry_lite.infrastructure.auth import (
+    AuthProvider,
+    HeaderTrustAuthProvider,
+    JwtOidcAuthConfig,
+    JwtOidcAuthProvider,
+    auth_provider_from_env,
+)
 from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 from foundry_lite.observability.tracing import configure_observability
 
@@ -89,11 +96,29 @@ def initialize_api_runtime(environ: Mapping[str, str] | None = None) -> ApiRunti
                 storage_root=source.get("FOUNDRY_LITE_HOME", ".foundry-lite"),
                 adapter_profile=source.get("FOUNDRY_LITE_ADAPTER_PROFILE", "local"),
             )
+            auth_provider = auth_provider_from_env(source)
+            if isinstance(auth_provider, HeaderTrustAuthProvider):
+                auth_provider = _runtime_auth_provider(auth_provider, dependencies.oauth_token_issuer)
             _api_runtime = ApiRuntime(
                 foundry=FoundryLite(dependencies=dependencies),
-                auth_provider=auth_provider_from_env(source),
+                auth_provider=auth_provider,
             )
         return _api_runtime
+
+
+def _runtime_auth_provider(auth_provider: AuthProvider, oauth_token_issuer: OAuthTokenIssuer) -> AuthProvider:
+    """Attach the runtime's own OAuth verifier to local header-trust auth."""
+
+    if not isinstance(auth_provider, HeaderTrustAuthProvider):
+        return auth_provider
+    verifier = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer=oauth_token_issuer.issuer,
+            audience=oauth_token_issuer.audience,
+            jwks=oauth_token_issuer.public_jwks(),
+        )
+    )
+    return replace(auth_provider, mcp_bearer_verifier=verifier)
 
 
 def get_api_runtime() -> ApiRuntime:

@@ -50,6 +50,27 @@ def run_aip_fde(request: Request, payload: AipFdeRunRequest) -> JsonObject:
         raise _handle_error(exc, request) from exc
 
 
+@router.post("/api/aip/fde/mcp/{application_id}/confirmations/{challenge_id}/approve")
+def approve_aip_fde_mcp_confirmation(
+    request: Request,
+    application_id: str,
+    challenge_id: str,
+) -> JsonObject:
+    """Let an authenticated human approve one fingerprint-bound Builder MCP mutation."""
+
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.aip.approve_fde_mcp_confirmation(
+                application_id,
+                challenge_id,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @router.post("/api/aip/pilot/plan")
 def plan_aip_pilot(request: Request, payload: AipPilotPlanRequest) -> JsonObject:
     try:

@@ -14,6 +14,7 @@ from foundry_lite.application.facades.insight_review_workspace import InsightRev
 from foundry_lite.application.facades.materialization_runner import MaterializationRunner
 from foundry_lite.application.facades.media_workspace import MediaWorkspace
 from foundry_lite.application.facades.object_store import ObjectStore
+from foundry_lite.application.facades.ontology_mcp_action_runtime import OntologyMcpActionRuntimeAdapter
 from foundry_lite.application.facades.ontology_registry import OntologyRegistry
 from foundry_lite.application.facades.operations_console import OperationsConsole
 from foundry_lite.application.facades.pipeline_workspace import PipelineWorkspace
@@ -39,6 +40,7 @@ __all__ = [
     "MaterializationRunner",
     "MediaWorkspace",
     "ObjectStore",
+    "OntologyMcpActionRuntimeAdapter",
     "OntologyRegistry",
     "OntologyMcpGateway",
     "OperationsConsole",

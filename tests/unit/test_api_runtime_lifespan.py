@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider
 from foundry_lite_api import main, runtime
 
 
@@ -17,6 +18,19 @@ def _reset_runtime_state():
 
 def test_runtime_import_stays_uninitialized() -> None:
     assert not runtime.is_api_runtime_initialized()
+
+
+def test_local_api_runtime_attaches_its_oauth_verifier_to_header_trust(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    initialized = runtime.initialize_api_runtime(
+        {
+            "FOUNDRY_LITE_HOME": str(tmp_path / "runtime"),
+            "FOUNDRY_LITE_AUTH_PROFILE": "header-trust",
+            "FOUNDRY_LITE_RUNTIME_PROFILE": "local",
+        }
+    )
+
+    assert isinstance(initialized.auth_provider, HeaderTrustAuthProvider)
+    assert initialized.auth_provider.mcp_bearer_verifier is not None
 
 
 def test_initialize_api_runtime_builds_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]

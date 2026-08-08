@@ -236,7 +236,16 @@ def _test_result(row: PipelineBranchRow) -> dict[str, object]:
     failures = [] if validation["valid"] else [{"test": "graph_validation", "errors": validation["errors"]}]
     failures.extend(_output_contract_test_failures(graph))
     status = "passed" if not failures else "failed"
-    return {"status": status, "testCount": len(tests) + 1, "failures": failures, "validation": validation}
+    return {
+        "status": status,
+        "testCount": len(tests) + 1,
+        "declaredTestCount": len(tests),
+        "proofKind": "static_graph_output_contract",
+        "isDataExecution": False,
+        "evaluatedChecks": ["graph_validation", "output_dataset_and_contract"],
+        "failures": failures,
+        "validation": validation,
+    }
 
 
 def _output_contract_test_failures(graph: Mapping[str, object]) -> list[dict[str, object]]:

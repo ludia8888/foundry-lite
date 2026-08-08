@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Barrier
 
+import pytest
 from foundry_lite.application.ports.action_notification_policy_repository import (
     ActionNotificationPolicyIdempotencyRecord,
+    ActionNotificationPolicyIntegrityError,
     ActionNotificationPolicyRecord,
 )
 from foundry_lite.infrastructure import schema as db
@@ -54,7 +57,8 @@ def test_notification_policy_repository_contract_cas_directory_and_idempotency()
     assert policy is not None and policy.recipients[0].user_id == "user-1"
 
 
-def test_postgres_notification_policy_concurrent_create_has_one_winner(postgres_fixture) -> None:
+@pytest.mark.parametrize("is_same_name", (True, False))
+def test_postgres_notification_policy_concurrent_create_has_one_winner(postgres_fixture, *, is_same_name: bool) -> None:
     repository = SqlAlchemyActionNotificationPolicyRepository(postgres_fixture.engine)
     barrier = Barrier(2)
 
@@ -63,12 +67,69 @@ def test_postgres_notification_policy_concurrent_create_has_one_winner(postgres_
             barrier.wait()
             return repository.insert_policy_if_absent(
                 transaction=transaction,
-                record=_policy(f"policy-{index}", tenant_id="tenant-demo"),
+                record=replace(
+                    _policy(f"policy-{index}", tenant_id="tenant-demo"),
+                    policy_name="operations" if is_same_name else f"operations-{index}",
+                ),
             )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         rows = list(executor.map(create, (1, 2)))
     assert sum(row is not None for row in rows) == 1
+
+
+def test_notification_policy_insert_ignores_either_business_key_conflict() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    db.metadata.create_all(engine)
+    repository = SqlAlchemyActionNotificationPolicyRepository(engine)
+    with engine.begin() as transaction:
+        assert repository.insert_policy_if_absent(transaction=transaction, record=_policy()) is not None
+        same_name = replace(_policy("policy-2"), target_ref="notification-policy:other")
+        same_target = replace(_policy("policy-3"), policy_name="other")
+        assert repository.insert_policy_if_absent(transaction=transaction, record=same_name) is None
+        assert repository.insert_policy_if_absent(transaction=transaction, record=same_target) is None
+
+
+def test_notification_policy_insert_does_not_hide_policy_id_collision() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    db.metadata.create_all(engine)
+    repository = SqlAlchemyActionNotificationPolicyRepository(engine)
+    with engine.begin() as transaction:
+        assert repository.insert_policy_if_absent(transaction=transaction, record=_policy()) is not None
+        id_collision = replace(
+            _policy(),
+            policy_name="other",
+            target_ref="notification-policy:other",
+        )
+        with pytest.raises(
+            ActionNotificationPolicyIntegrityError,
+            match="without a matching business-key conflict",
+        ):
+            repository.insert_policy_if_absent(transaction=transaction, record=id_collision)
+        assert (
+            repository.policy_by_name(
+                transaction=transaction,
+                tenant_id="tenant-a",
+                policy_name="operations",
+            )
+            is not None
+        )
+        assert (
+            repository.policy_by_name(
+                transaction=transaction,
+                tenant_id="tenant-a",
+                policy_name="other",
+            )
+            is None
+        )
+        assert (
+            repository.policy_by_target(
+                transaction=transaction,
+                tenant_id="tenant-a",
+                target_ref="notification-policy:other",
+            )
+            is None
+        )
 
 
 def _policy(policy_id: str = "policy-1", *, tenant_id: str = "tenant-a") -> ActionNotificationPolicyRecord:

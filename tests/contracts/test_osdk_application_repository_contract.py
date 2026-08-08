@@ -137,6 +137,17 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
         )
 
         app = repository.application_by_id(transaction=conn, tenant_id="tenant-a", app_id="app-1")
+        public_app_tenant = repository.public_active_application_tenant(transaction=conn, app_id="app-1")
+        public_client_tenant = repository.public_active_application_client_tenant(
+            transaction=conn,
+            app_id="app-1",
+            client_id="orders-web",
+        )
+        mismatched_public_client_tenant = repository.public_active_application_client_tenant(
+            transaction=conn,
+            app_id="app-1",
+            client_id="missing-client",
+        )
         apps = repository.list_applications(transaction=conn, tenant_id="tenant-a")
         client = repository.active_client(transaction=conn, tenant_id="tenant-a", client_id="orders-web")
         clients = repository.clients_for_application(transaction=conn, tenant_id="tenant-a", app_id="app-1")
@@ -184,6 +195,9 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
     assert client_duplicate is not None and client_duplicate["id"] == "client-row-1"
     assert sdk_duplicate is not None and sdk_duplicate["id"] == "sdk-1"
     assert app is not None and app["app_api_name"] == "OrdersApp"
+    assert public_app_tenant == "tenant-a"
+    assert public_client_tenant == "tenant-a"
+    assert mismatched_public_client_tenant is None
     assert [row["id"] for row in apps] == ["app-1"]
     assert client is not None and client["client_id"] == "orders-web"
     assert len(clients) == 1

@@ -7,6 +7,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.code_execution import FunctionExecutionPlan
 from foundry_lite.application.ports.compute_adapter import PythonTransformPlan
 from foundry_lite.infrastructure.adapters.container_code_execution import ContainerCodeExecutionAdapter
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
@@ -49,6 +50,25 @@ def test_live_container_python_transform_enforces_process_sandbox(tmp_path: Path
     assert row["outputDirectoryWriteBlocked"] is True
     assert row["effectiveCapabilities"] == "0000000000000000"
     assert row["noNewPrivileges"] == "1"
+
+
+def test_live_container_typescript_function_resolves_its_runtime_only_dependency() -> None:
+    result = ContainerCodeExecutionAdapter().execute_function(
+        FunctionExecutionPlan(
+            function_api_name="increment",
+            function_version="v1",
+            runtime="typescript",
+            entrypoint="compute",
+            source="export function compute(value: number) { return value + 1; }",
+            inputs_json={"value": 41},
+            argument_order=("value",),
+            output_type="integer",
+            timeout_seconds=30,
+            input_byte_limit=1024,
+        )
+    )
+
+    assert result.output == 42
 
 
 def test_live_container_python_failure_is_typed_and_redacted(tmp_path: Path) -> None:

@@ -5,15 +5,22 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
+from uuid import uuid4
 
+import jwt
 from fastapi.testclient import TestClient
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider
+from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider, JwtOidcAuthConfig, JwtOidcAuthProvider
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
+from foundry_lite_api.routers import builder_mcp as builder_mcp_router
 from sqlalchemy import func, select
 
 FDE_USER = RequestContext(
@@ -149,20 +156,12 @@ def test_builder_mcp_is_oauth_app_restricted_and_idempotent(foundry: Any, monkey
     app_id = str(application["application"]["id"])
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
-    headers = {
-        "X-Tenant-ID": "tenant-demo",
-        "X-User-ID": "fde-platform-user",
-        "X-Roles": "data_engineer",
-        "X-Foundry-Lite-App-ID": app_id,
-        "X-Foundry-Lite-Client-ID": "client-fde-mcp-docs",
-        "X-Foundry-Lite-Scopes": scope,
-        "X-Request-ID": "req-fde-mcp",
-    }
+    headers = _builder_user_oauth_headers(foundry, monkeypatch, app_id, (scope,), "docs")
 
     initialized = client.post(
         f"/mcp/builder/{app_id}",
         headers=headers,
-        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
     )
     session_id = initialized.headers["Mcp-Session-Id"]
     listed = client.post(
@@ -197,16 +196,33 @@ def test_builder_mcp_is_oauth_app_restricted_and_idempotent(foundry: Any, monkey
 
 
 def test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session(foundry: Any, monkeypatch: Any) -> None:
-    app_id, headers = _builder_mcp_application(foundry, "platform_qa")
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     initialized = client.post(
         f"/mcp/builder/{app_id}",
         headers=headers,
-        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
     )
     session_id = initialized.headers["Mcp-Session-Id"]
     session_headers = {**headers, "Mcp-Session-Id": session_id}
+    resource = f"http://testserver/mcp/builder/{app_id}"
+    principal = api_runtime.get_auth_provider().authenticate_for_audience(headers, resource)
+    pure_read = foundry.aip.fde_mcp_tools(
+        app_id,
+        session_id=session_id,
+        discovery_mode="lazy",
+        ctx=principal,
+    )
+    with foundry.engine.begin() as transaction:
+        activations_before_negotiation = foundry.osdk_application_repository.mcp_tool_activations(
+            transaction=transaction,
+            tenant_id=principal.tenant_id,
+            app_id=app_id,
+            session_id=session_id,
+            client_id=principal.client_id or "",
+            actor_user_id=principal.actor_user_id,
+        )
     before = client.post(
         f"/mcp/builder/{app_id}",
         headers=session_headers,
@@ -232,9 +248,14 @@ def test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session(fou
         headers=session_headers,
         json={"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {"discoveryMode": "lazy"}},
     )
+    new_session_headers = _builder_session_headers(
+        client,
+        app_id,
+        {**headers, "X-Request-ID": "req-new-builder-session"},
+    )
     new_session = client.post(
         f"/mcp/builder/{app_id}",
-        headers={**headers, "X-Request-ID": "req-new-builder-session"},
+        headers=new_session_headers,
         json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {"discoveryMode": "lazy"}},
     )
     events = client.get(
@@ -242,6 +263,8 @@ def test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session(fou
         headers=session_headers,
     )
 
+    assert {tool["name"] for tool in pure_read["tools"]} == {"search_tools"}
+    assert activations_before_negotiation == []
     assert {tool["name"] for tool in before.json()["result"]["tools"]} == {"search_tools"}
     activated = searched.json()["result"]["structuredContent"]["activatedTools"]
     assert "platform.docs.search" in {tool["toolId"] for tool in activated}
@@ -281,6 +304,7 @@ def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any,
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     verifier_text = "builder-mcp-oauth-verifier"
+    resource = f"http://testserver/mcp/builder/{app_id}"
     authorized = client.get(
         "/api/auth/osdk/oauth/authorize",
         params={
@@ -288,6 +312,7 @@ def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any,
             "redirectUri": "https://chat.example.test/oauth/callback",
             "codeChallenge": _s256(verifier_text),
             "scope": scope,
+            "resource": resource,
         },
         headers=_api_headers(),
     )
@@ -299,6 +324,7 @@ def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any,
             "code": authorized.json()["code"],
             "redirectUri": "https://chat.example.test/oauth/callback",
             "codeVerifier": verifier_text,
+            "resource": resource,
         },
     )
     issuer = foundry._services.osdk_oauth_sessions.oauth_token_issuer
@@ -306,10 +332,20 @@ def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any,
         JwtOidcAuthConfig(issuer=issuer.issuer, audience=issuer.audience, jwks=issuer.public_jwks())
     )
     monkeypatch.setattr(api_runtime, "get_auth_provider", lambda: provider)
+    oauth_headers = {
+        "Authorization": f"Bearer {token.json()['accessToken']}",
+        "MCP-Protocol-Version": "2025-06-18",
+        "X-Request-ID": "mcp-oauth",
+    }
+    initialized = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=oauth_headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
     listed = client.post(
         f"/mcp/builder/{app_id}",
-        headers={"Authorization": f"Bearer {token.json()['accessToken']}", "X-Request-ID": "mcp-oauth"},
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={**oauth_headers, "Mcp-Session-Id": initialized.headers["Mcp-Session-Id"]},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
     )
 
     assert authorized.status_code == 200
@@ -320,16 +356,918 @@ def test_builder_mcp_accepts_pkce_oauth_bearer_with_resource_scope(foundry: Any,
     assert "ontology.branch.apply_patch" not in names
 
 
+def test_http_mcp_rejects_header_trust_even_with_dummy_bearer(monkeypatch: Any) -> None:
+    monkeypatch.setattr(api_runtime, "get_auth_provider", lambda: HeaderTrustAuthProvider())
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer dummy",
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "attacker",
+        "X-Foundry-Lite-App-ID": "app-under-test",
+        "X-Foundry-Lite-Client-ID": "client-under-test",
+        "X-Foundry-Lite-Scopes": "osdk:connector:fde_platform_qa:execute",
+    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()}
+
+    builder = client.post("/mcp/builder/app-under-test", headers=headers, json=payload)
+    ontology = client.post("/mcp/ontology/app-under-test", headers=headers, json=payload)
+
+    assert builder.status_code == 401
+    assert ontology.status_code == 401
+    assert "resource_metadata=" in builder.headers["WWW-Authenticate"]
+    assert "resource_metadata=" in ontology.headers["WWW-Authenticate"]
+
+
+def test_standard_oauth_code_resource_redirect_refresh_and_cross_plane_denial(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    scope = "osdk:connector:fde_platform_qa:execute"
+    created = foundry.developer_console.create_osdk_application(
+        app_api_name="StandardBuilderOAuth",
+        display_name="Standard Builder OAuth",
+        client_id="standard-builder-bootstrap",
+        resources=[{"resourceType": "connector", "resourceApiName": "fde_platform_qa", "scopes": [scope]}],
+        idempotency_key="standard-builder-oauth-app",
+        ctx=FDE_USER,
+    )
+    app_id = str(created["application"]["id"])
+    redirect_uri = "https://chat.example.test/oauth/standard-builder"
+    client_id = "standard-builder-public"
+    foundry.developer_console.create_osdk_application_client(
+        app_id,
+        client_id=client_id,
+        redirect_uris=(redirect_uri,),
+        allowed_scopes=(scope,),
+        idempotency_key="standard-builder-public-client",
+        ctx=FDE_USER,
+    )
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    resource = f"http://testserver/mcp/builder/{app_id}"
+    wrong_resource = f"http://testserver/mcp/ontology/{app_id}"
+    verifier = "standard-builder-oauth-verifier"
+    authorized = client.get(
+        "/api/auth/osdk/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_challenge": _s256(verifier),
+            "code_challenge_method": "S256",
+            "scope": scope,
+            "state": "opaque-state",
+            "resource": resource,
+        },
+        headers=_api_headers(),
+        follow_redirects=False,
+    )
+    code = parse_qs(urlsplit(authorized.headers["location"]).query)["code"][0]
+    token_form = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "code_verifier": verifier,
+    }
+    wrong_plane = client.post("/api/auth/osdk/oauth/token", data={**token_form, "resource": wrong_resource})
+    assert wrong_plane.status_code == 403, wrong_plane.text
+    token = client.post("/api/auth/osdk/oauth/token", data={**token_form, "resource": resource})
+    assert token.status_code == 200, token.text
+    wrong_refresh = client.post(
+        "/api/auth/osdk/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": token.json()["refresh_token"],
+            "resource": wrong_resource,
+        },
+    )
+    refreshed = client.post(
+        "/api/auth/osdk/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": token.json()["refresh_token"],
+            "resource": resource,
+        },
+    )
+    metadata = client.get("/.well-known/oauth-authorization-server").json()
+    protected = client.get(f"/.well-known/oauth-protected-resource/mcp/builder/{app_id}").json()
+    claims = jwt.decode(refreshed.json()["access_token"], options={"verify_signature": False})
+    issuer = foundry._services.osdk_oauth_sessions.oauth_token_issuer
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(issuer=issuer.issuer, audience=issuer.audience, jwks=issuer.public_jwks())
+    )
+    monkeypatch.setattr(api_runtime, "get_auth_provider", lambda: provider)
+    cross_plane = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+
+    assert authorized.status_code == 302
+    assert parse_qs(urlsplit(authorized.headers["location"]).query)["state"] == ["opaque-state"]
+    assert wrong_plane.status_code == 403
+    assert wrong_refresh.status_code == 403
+    assert token.status_code == 200
+    assert refreshed.status_code == 200
+    assert refreshed.json()["refresh_token"] != token.json()["refresh_token"]
+    assert claims["aud"] == resource
+    assert claims["iss"] == metadata["issuer"] == protected["authorization_servers"][0]
+    assert protected["resource"] == resource
+    assert protected["scopes_supported"] == [scope]
+    assert cross_plane.status_code == 401
+    assert "resource_metadata=" in cross_plane.headers["WWW-Authenticate"]
+
+
+def test_builder_mcp_replay_schema_lazy_and_legacy_header_fail_closed(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _builder_session_headers(client, app_id, headers)
+    original = _mcp_tool_call_payload(
+        "bound-request", "platform_qa", "tenant:tenant-demo", "platform.docs.search", {"query": "Action Types"}
+    )
+    first = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=original)
+
+    changed_arguments = _mcp_tool_call_payload(
+        "bound-request", "platform_qa", "tenant:tenant-demo", "platform.docs.search", {"query": "Datasets"}
+    )
+    changed_workspace = _mcp_tool_call_payload(
+        "bound-request", "platform_qa", "docs:other", "platform.docs.search", {"query": "Action Types"}
+    )
+    changed_tool = _mcp_tool_call_payload(
+        "bound-request", "platform_qa", "tenant:tenant-demo", "get_documentation_summaries", {}
+    )
+    conflicts = [
+        client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()
+        for payload in (changed_arguments, changed_workspace, changed_tool)
+    ]
+    replay_outer_extra = _mcp_tool_call_payload(
+        "bound-request", "platform_qa", "tenant:tenant-demo", "platform.docs.search", {"query": "Action Types"}
+    )
+    replay_outer_extra["params"]["arguments"]["unexpected"] = True
+    outer_extra = _mcp_tool_call_payload(
+        "schema-outer", "platform_qa", "tenant:tenant-demo", "platform.docs.search", {"query": "docs"}
+    )
+    outer_extra["params"]["arguments"]["unexpected"] = True
+    wrong_nested = _mcp_tool_call_payload(
+        "schema-type",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "platform.docs.search",
+        {"query": "docs", "maxResults": "five"},
+    )
+    schema_errors = [
+        client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()
+        for payload in (outer_extra, wrong_nested, replay_outer_extra)
+    ]
+
+    lazy_headers = _builder_session_headers(client, app_id, {**headers, "X-Request-ID": "lazy-direct-deny"})
+    lazy_list = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=lazy_headers,
+        json={"jsonrpc": "2.0", "id": "lazy-list", "method": "tools/list", "params": {"discoveryMode": "lazy"}},
+    )
+    lazy_denied_response = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=lazy_headers,
+        json=_mcp_tool_call_payload(
+            "lazy-direct", "platform_qa", "tenant:tenant-demo", "platform.docs.search", {"query": "docs"}
+        ),
+    )
+    lazy_denied = lazy_denied_response.json()
+
+    governance_app, governance_headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    governance_session = _builder_session_headers(client, governance_app, governance_headers)
+    governance_tools = client.post(
+        f"/mcp/builder/{governance_app}",
+        headers=governance_session,
+        json={"jsonrpc": "2.0", "id": "schema-list", "method": "tools/list", "params": {}},
+    ).json()["result"]["tools"]
+    legacy_header = client.post(
+        f"/mcp/builder/{governance_app}",
+        headers={**governance_session, "X-FDE-Confirm-Tool": "create_foundry_project"},
+        json=_mcp_tool_call_payload(
+            "legacy-header",
+            "governance",
+            "tenant:tenant-demo",
+            "create_foundry_project",
+            {"displayName": "Must Not Exist", "idempotencyKey": "legacy-header-project"},
+        ),
+    ).json()
+
+    assert first.json()["result"]["structuredContent"]["count"] >= 1
+    assert lazy_headers["Mcp-Session-Id"] != session_headers["Mcp-Session-Id"]
+    assert lazy_list.status_code == 200, lazy_list.text
+    assert all(payload["error"]["data"]["type"] == "CONFLICT" and "result" not in payload for payload in conflicts)
+    assert all(payload["error"]["data"]["type"] == "VALIDATION_FAILED" for payload in schema_errors)
+    assert lazy_denied_response.status_code == 403
+    assert lazy_denied["detail"]["details"]["reason"] == "tool_not_activated"
+    assert legacy_header["result"]["structuredContent"]["status"] == "approval_required"
+    schemas = {tool["name"]: tool["inputSchema"] for tool in governance_tools}
+    write_schema = schemas["create_foundry_project"]
+    assert "confirmationReceipt" in write_schema["properties"]
+    assert "confirmationReceipt" not in write_schema["properties"]["arguments"]["properties"]
+    assert "confirmationReceipt" not in schemas["search_foundry_projects"]["properties"]
+
+
+def test_builder_mcp_durable_session_protocol_and_sse_contract(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    invalid_protocol = client.post(
+        f"/mcp/builder/{app_id}",
+        headers={**headers, "MCP-Protocol-Version": "2024-01-01"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    initialized = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    session_id = initialized.headers["Mcp-Session-Id"]
+    session_headers = {**headers, "Mcp-Session-Id": session_id}
+    accepted_notification = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+    )
+    ping = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "ping", "method": "ping", "params": {}},
+    )
+    rejected_notification = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "method": "notifications/unsupported", "params": {}},
+    )
+    client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {"discoveryMode": "lazy"}},
+    )
+    client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json=_mcp_tool_call_payload(
+            "session-search", "platform_qa", "tenant:tenant-demo", "search_tools", {"query": "documentation"}
+        ),
+    )
+    resource = f"http://testserver/mcp/builder/{app_id}"
+    stream_ctx = api_runtime.get_auth_provider().authenticate_for_audience(headers, resource)
+    active_lease = foundry.aip.claim_fde_mcp_session_stream(app_id, session_id, ctx=stream_ctx)
+    concurrent_stream = client.get(f"/mcp/builder/{app_id}", headers=session_headers)
+    assert foundry.aip.release_fde_mcp_session_stream(app_id, session_id, active_lease.lease_id, ctx=stream_ctx)
+    events = client.get(f"/mcp/builder/{app_id}", headers=session_headers)
+    released_lease = foundry.aip.claim_fde_mcp_session_stream(app_id, session_id, ctx=stream_ctx)
+    assert foundry.aip.release_fde_mcp_session_stream(app_id, session_id, released_lease.lease_id, ctx=stream_ctx)
+    original_session_events = foundry.aip.fde_mcp_session_events
+
+    def fail_session_events(*args: object, **kwargs: object) -> list[object]:
+        raise ValidationFailed("forced event read failure")
+
+    monkeypatch.setattr(foundry.aip, "fde_mcp_session_events", fail_session_events)
+    failed_event_read = client.get(f"/mcp/builder/{app_id}", headers=session_headers)
+    monkeypatch.setattr(foundry.aip, "fde_mcp_session_events", original_session_events)
+    guard_lease = foundry.aip.claim_fde_mcp_session_stream(app_id, session_id, ctx=stream_ctx)
+    assert foundry.aip.release_fde_mcp_session_stream(app_id, session_id, guard_lease.lease_id, ctx=stream_ctx)
+    response_class = builder_mcp_router.StreamingResponse
+
+    def fail_streaming_response(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("forced response setup failure")
+
+    monkeypatch.setattr(builder_mcp_router, "StreamingResponse", fail_streaming_response)
+    failed_response_setup = TestClient(app, raise_server_exceptions=False).get(
+        f"/mcp/builder/{app_id}", headers=session_headers
+    )
+    monkeypatch.setattr(builder_mcp_router, "StreamingResponse", response_class)
+    response_guard_lease = foundry.aip.claim_fde_mcp_session_stream(app_id, session_id, ctx=stream_ctx)
+    assert foundry.aip.release_fde_mcp_session_stream(app_id, session_id, response_guard_lease.lease_id, ctx=stream_ctx)
+    resumed = client.get(
+        f"/mcp/builder/{app_id}",
+        headers={**session_headers, "Last-Event-ID": f"{session_id}:1"},
+    )
+    wrong_owner_ctx = RequestContext(
+        tenant_id=FDE_USER.tenant_id,
+        actor_user_id="different-builder-user",
+        roles=FDE_USER.roles,
+        request_id="different-builder-user",
+    )
+    wrong_owner_token = _builder_oauth_token(
+        foundry,
+        app_id=app_id,
+        client_id="builder-user-platform-qa",
+        redirect_uri="https://chat.example.test/oauth/platform-qa",
+        scopes=("osdk:connector:fde_platform_qa:execute",),
+        verifier="different-builder-user-verifier",
+        resource=f"http://testserver/mcp/builder/{app_id}",
+        ctx=wrong_owner_ctx,
+    )
+    wrong_owner = client.post(
+        f"/mcp/builder/{app_id}",
+        headers={**session_headers, "Authorization": f"Bearer {wrong_owner_token['accessToken']}"},
+        json={"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}},
+    )
+    wrong_owner_get = client.get(
+        f"/mcp/builder/{app_id}",
+        headers={**session_headers, "Authorization": f"Bearer {wrong_owner_token['accessToken']}"},
+    )
+    missing = client.post(
+        f"/mcp/builder/{app_id}",
+        headers={**headers, "Mcp-Session-Id": "mcp-session-that-does-not-exist"},
+        json={"jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {}},
+    )
+    closed = client.delete(f"/mcp/builder/{app_id}", headers=session_headers)
+    post_close = client.post(
+        f"/mcp/builder/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {}},
+    )
+    get_close = client.get(f"/mcp/builder/{app_id}", headers=session_headers)
+
+    assert invalid_protocol.status_code == 400
+    assert accepted_notification.status_code == 202 and not accepted_notification.content
+    assert ping.status_code == 200
+    assert ping.json() == {"jsonrpc": "2.0", "id": "ping", "result": {}}
+    assert rejected_notification.status_code == 400
+    assert "jsonrpc" not in rejected_notification.text
+    assert initialized.json()["result"]["capabilities"] == {"tools": {"listChanged": True}}
+    assert concurrent_stream.status_code == 409
+    assert concurrent_stream.json()["detail"]["code"] == "CONFLICT"
+    assert concurrent_stream.json()["detail"]["details"]["resource"] == "mcp_session_stream"
+    assert failed_event_read.status_code == 400
+    assert failed_response_setup.status_code == 500
+    assert "notifications/tools/list_changed" in events.text
+    assert "notifications/foundry-lite/session_ready" in events.text
+    assert "notifications/message" not in events.text
+    assert f"id: {session_id}:1" not in resumed.text
+    assert f"id: {session_id}:2" in resumed.text
+    assert wrong_owner.status_code == wrong_owner_get.status_code == missing.status_code == 404
+    assert closed.status_code == 204
+    assert post_close.status_code == get_close.status_code == 404
+
+
+def test_builder_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    path = f"/mcp/builder/{app_id}"
+
+    invalid_params = client.post(
+        path,
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": "invalid-params", "method": "initialize", "params": {}},
+    )
+    null_id = client.post(
+        path,
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": None, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    missing_id = client.post(
+        path,
+        headers=headers,
+        json={"jsonrpc": "2.0", "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    negotiated = client.post(
+        path,
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "negotiated",
+            "method": "initialize",
+            "params": _mcp_initialize_params("2099-01-01"),
+        },
+    )
+    session_headers = {**headers, "Mcp-Session-Id": negotiated.headers["Mcp-Session-Id"]}
+    reinitialized = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "reinitialize", "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    initialized = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+    )
+    initialized_with_null_id = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": None, "method": "notifications/initialized", "params": {}},
+    )
+    unknown_request = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "unknown", "method": "resources/list", "params": {}},
+    )
+    unknown_notification = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "method": "notifications/unsupported", "params": {}},
+    )
+    invalid_cursor = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "cursor", "method": "tools/list", "params": {"cursor": 7}},
+    )
+    complete_list = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "complete", "method": "tools/list", "params": {}},
+    )
+    missing_protocol_headers = {
+        key: value for key, value in session_headers.items() if key.lower() != "mcp-protocol-version"
+    }
+    missing_protocol = client.post(
+        path,
+        headers=missing_protocol_headers,
+        json={"jsonrpc": "2.0", "id": "missing-version", "method": "ping", "params": {}},
+    )
+    overlong_session = client.post(
+        path,
+        headers={
+            **session_headers,
+            "Mcp-Session-Id": f"{session_headers['Mcp-Session-Id']}{'x' * 256}",
+        },
+        json={"jsonrpc": "2.0", "id": "overlong-session", "method": "ping", "params": {}},
+    )
+
+    assert invalid_params.json()["error"]["code"] == -32602
+    assert null_id.json()["error"]["code"] == -32600
+    assert missing_id.status_code == 400 and missing_id.content == b""
+    assert all("Mcp-Session-Id" not in response.headers for response in (invalid_params, null_id, missing_id))
+    assert negotiated.json()["result"]["protocolVersion"] == "2025-06-18"
+    assert reinitialized.json()["error"]["code"] == -32600
+    assert "Mcp-Session-Id" not in reinitialized.headers
+    assert initialized.status_code == 202 and initialized.content == b""
+    assert initialized_with_null_id.json()["error"]["code"] == -32600
+    assert unknown_request.json()["error"]["code"] == -32601
+    assert unknown_notification.status_code == 400 and unknown_notification.content == b""
+    assert invalid_cursor.json()["error"]["code"] == -32602
+    assert "nextCursor" not in complete_list.json()["result"]
+    assert len(complete_list.json()["result"]["tools"]) > 0
+    assert missing_protocol.status_code == 400
+    assert overlong_session.status_code == 400
+    assert overlong_session.json()["detail"]["details"] == {"resource": "mcp_session"}
+
+    original_dispatch = builder_mcp_router._dispatch
+
+    def explode(*args: object, **kwargs: object) -> dict[str, object]:
+        raise RuntimeError("sensitive downstream failure")
+
+    monkeypatch.setattr(builder_mcp_router, "_dispatch", explode)
+    internal_request = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "internal", "method": "ping", "params": {}},
+    )
+    internal_notification = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+    )
+    monkeypatch.setattr(builder_mcp_router, "_dispatch", original_dispatch)
+
+    assert internal_request.json() == {
+        "jsonrpc": "2.0",
+        "id": "internal",
+        "error": {
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"requestId": "builder-platform-qa"},
+        },
+    }
+    assert internal_notification.status_code == 500 and internal_notification.content == b""
+
+
+def test_builder_mcp_confirmation_receipt_is_human_idempotent_and_one_time(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _builder_session_headers(client, app_id, headers)
+    payload = _mcp_tool_call_payload(
+        "receipt-once",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Receipt Once", "idempotencyKey": "receipt-once-project"},
+    )
+
+    first = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()["result"]
+    repeated = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()["result"]
+    challenge_id = str(first["structuredContent"]["challengeId"])
+    machine_approval = client.post(
+        f"/api/aip/fde/mcp/{app_id}/confirmations/{challenge_id}/approve",
+        headers=session_headers,
+    )
+    approver_headers = _control_headers(headers)
+    approval_one = client.post(
+        f"/api/aip/fde/mcp/{app_id}/confirmations/{challenge_id}/approve",
+        headers=approver_headers,
+    )
+    approval_two = client.post(
+        f"/api/aip/fde/mcp/{app_id}/confirmations/{challenge_id}/approve",
+        headers=approver_headers,
+    )
+    receipt = str(approval_one.json()["confirmationReceipt"])
+    payload["params"]["arguments"]["confirmationReceipt"] = receipt
+    completed = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()
+    exact_replay = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()
+    reuse_payload = _mcp_tool_call_payload(
+        "receipt-reuse",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Receipt Once", "idempotencyKey": "receipt-once-project"},
+    )
+    reuse_payload["params"]["arguments"]["confirmationReceipt"] = receipt
+    receipt_reuse = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=reuse_payload).json()
+    approval_after_consumption = client.post(
+        f"/api/aip/fde/mcp/{app_id}/confirmations/{challenge_id}/approve",
+        headers=approver_headers,
+    )
+    events = client.get(f"/mcp/builder/{app_id}", headers=session_headers).text
+
+    assert first["structuredContent"]["status"] == "approval_required"
+    assert repeated["structuredContent"]["challengeId"] == challenge_id
+    assert repeated["isReplayed"] is True
+    assert machine_approval.status_code == 403
+    assert approval_one.status_code == approval_two.status_code == 200
+    assert approval_two.json()["confirmationReceipt"] == receipt
+    assert completed["result"]["structuredContent"]["project"]["displayName"] == "Receipt Once"
+    assert exact_replay["result"]["isReplayed"] is True
+    assert receipt_reuse["error"]["data"]["type"] == "CONFLICT"
+    assert receipt_reuse["error"]["data"]["reason"] == "receipt_already_consumed"
+    assert approval_after_consumption.status_code == 409
+    assert len(_tool_rows(foundry, completed["result"]["aiRunId"])) == 1
+    assert events.count("notifications/foundry-lite/approval_required") == 1
+    assert events.count("notifications/foundry-lite/tool_completed") == 1
+
+
+def test_builder_mcp_receipt_consumption_rolls_back_with_run_claim(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _builder_session_headers(client, app_id, headers)
+    payload = _mcp_tool_call_payload(
+        "receipt-atomic-claim",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Atomic Receipt", "idempotencyKey": "atomic-receipt-project"},
+    )
+    challenged = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()
+    challenge_id = str(challenged["result"]["structuredContent"]["challengeId"])
+    approved = client.post(
+        f"/api/aip/fde/mcp/{app_id}/confirmations/{challenge_id}/approve",
+        headers=_control_headers(headers),
+    ).json()
+    payload["params"]["arguments"]["confirmationReceipt"] = approved["confirmationReceipt"]
+
+    repository = foundry.aip._fde_mcp.ai_run_repository
+    append_event = repository.append_execution_event
+    injected = False
+
+    def fail_after_receipt_consumption(*, transaction: Any, record: Any) -> bool:
+        nonlocal injected
+        if record.event_type == "mcp_tool_running" and not injected:
+            injected = True
+            raise RuntimeError("injected run-claim failure")
+        return append_event(transaction=transaction, record=record)
+
+    monkeypatch.setattr(repository, "append_execution_event", fail_after_receipt_consumption)
+    failed = TestClient(app, raise_server_exceptions=False).post(
+        f"/mcp/builder/{app_id}", headers=session_headers, json=payload
+    )
+    monkeypatch.setattr(repository, "append_execution_event", append_event)
+    retried = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload).json()
+
+    assert failed.status_code == 200
+    assert failed.json() == {
+        "jsonrpc": "2.0",
+        "id": "receipt-atomic-claim",
+        "error": {
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"requestId": "builder-governance"},
+        },
+    }
+    assert injected is True
+    assert retried["result"]["structuredContent"]["project"]["displayName"] == "Atomic Receipt"
+    assert len(_tool_rows(foundry, retried["result"]["aiRunId"])) == 1
+
+
+def test_builder_mcp_concurrent_initial_calls_have_one_durable_winner(foundry: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    write_app, write_headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    write_session = _builder_session_headers(client, write_app, write_headers)
+    challenge_payload = _mcp_tool_call_payload(
+        "concurrent-challenge",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Concurrent Challenge", "idempotencyKey": "concurrent-challenge"},
+    )
+    challenge_responses = _concurrent_mcp_posts(client, write_app, write_session, challenge_payload)
+    challenge_bodies = [response.json() for response in challenge_responses]
+    challenge_ids = {body["result"]["structuredContent"]["challengeId"] for body in challenge_bodies}
+    write_events = client.get(f"/mcp/builder/{write_app}", headers=write_session).text
+
+    read_app, read_headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
+    read_session = _builder_session_headers(client, read_app, read_headers)
+    read_payload = _mcp_tool_call_payload(
+        "concurrent-read",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "platform.docs.search",
+        {"query": "quality gate"},
+    )
+    read_responses = _concurrent_mcp_posts(client, read_app, read_session, read_payload)
+    read_run_id = _assert_concurrent_result_or_conflict(read_responses)
+    read_replay = client.post(f"/mcp/builder/{read_app}", headers=read_session, json=read_payload).json()
+
+    search_payload = _mcp_tool_call_payload(
+        "concurrent-search",
+        "platform_qa",
+        "tenant:tenant-demo",
+        "search_tools",
+        {"query": "documentation", "maxResults": 5},
+    )
+    search_responses = _concurrent_mcp_posts(client, read_app, read_session, search_payload)
+    search_run_id = _assert_concurrent_result_or_conflict(search_responses)
+    search_replay = client.post(f"/mcp/builder/{read_app}", headers=read_session, json=search_payload).json()
+
+    assert all(response.status_code == 200 for response in challenge_responses)
+    assert len(challenge_ids) == 1
+    assert sum(body["result"]["isReplayed"] is True for body in challenge_bodies) == 1
+    assert write_events.count("notifications/foundry-lite/approval_required") == 1
+    assert read_replay["result"]["isReplayed"] is True
+    assert search_replay["result"]["isReplayed"] is True
+    assert len(_tool_rows(foundry, read_run_id)) == 1
+    assert len(_tool_rows(foundry, search_run_id)) == 1
+
+
+def test_builder_mcp_executes_previously_uncovered_ontology_mutations(
+    foundry: Any, monkeypatch: Any, tmp_path: Any
+) -> None:
+    orders_path = tmp_path / "mcp-mutation-orders.csv"
+    customers_path = tmp_path / "mcp-mutation-customers.csv"
+    orders_path.write_text("order_id,customer_id,status\nO-1,C-1,PENDING\n", encoding="utf-8")
+    customers_path.write_text("customer_id,name\nC-1,Seoul Table\n", encoding="utf-8")
+    foundry.datasets.ensure("clean.mcp_mutation_orders", primary_key=["order_id"], ctx=FDE_USER)
+    foundry.datasets.ensure("clean.mcp_mutation_customers", primary_key=["customer_id"], ctx=FDE_USER)
+    foundry.datasets.upload_csv("clean.mcp_mutation_orders", str(orders_path), ctx=FDE_USER)
+    foundry.datasets.upload_csv("clean.mcp_mutation_customers", str(customers_path), ctx=FDE_USER)
+    foundry.ontology.apply_text(_mcp_mutation_base_ontology(), ctx=FDE_USER)
+    branch = foundry.ontology.create_branch(
+        name="mcp-uncovered-ontology", idempotency_key="mcp-uncovered-ontology", ctx=FDE_USER
+    )
+    branch_id = str(branch["id"])
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "ontology_editing")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    workspace = f"ontology-branch:{branch_id}"
+
+    created_link = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "uncovered-create-link",
+        "ontology_editing",
+        workspace,
+        "create_or_update_foundry_link_type",
+        {"definition": _mcp_link_definition(), "changeSummary": "Create OrderCustomer"},
+    )
+    created_action = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "uncovered-create-action",
+        "ontology_editing",
+        workspace,
+        "create_or_update_foundry_action_type",
+        {"definition": _mcp_action_definition(), "changeSummary": "Create ApproveOrder"},
+    )
+    deleted_link = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "uncovered-delete-link",
+        "ontology_editing",
+        workspace,
+        "delete_foundry_link_type",
+        {"apiName": "OrderCustomer", "changeSummary": "Delete OrderCustomer"},
+    )
+    deleted_action = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "uncovered-delete-action",
+        "ontology_editing",
+        workspace,
+        "delete_foundry_action_type",
+        {"apiName": "ApproveOrder", "changeSummary": "Delete ApproveOrder"},
+    )
+    _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "uncovered-marker-object",
+        "ontology_editing",
+        workspace,
+        "create_or_update_foundry_object_type",
+        {"definition": _mcp_marker_object_definition(), "changeSummary": "Leave reviewable branch diff"},
+    )
+    proposed = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "uncovered-ontology-propose",
+        "ontology_editing",
+        workspace,
+        "ontology.branch.propose",
+        {
+            "title": "Uncovered Ontology mutations",
+            "description": "Direct Builder MCP regression proof.",
+            "idempotencyKey": "uncovered-ontology-proposal",
+        },
+    )
+
+    assert created_link["validation"]["status"] == "valid"
+    assert created_action["validation"]["status"] == "valid"
+    assert deleted_link["changeSummary"] == "Delete OrderCustomer"
+    assert deleted_action["changeSummary"] == "Delete ApproveOrder"
+    assert proposed["status"] == "open"
+    assert not _active_object_type_exists(foundry, "McpMutationMarker")
+
+
+def test_builder_mcp_executes_uncovered_pipeline_source_osdk_and_pilot_mutations(
+    foundry: Any, monkeypatch: Any, tmp_path: Any
+) -> None:
+    foundry.ontology.apply_text("objectTypes: []\nactionTypes: []\nlinkTypes: []\n", ctx=FDE_USER)
+    raw_path = tmp_path / "mcp-pipeline-orders.csv"
+    raw_path.write_text("order_id,amount\nO-1,10\n", encoding="utf-8")
+    foundry.datasets.ensure("raw.mcp_pipeline_orders", primary_key=["order_id"], ctx=FDE_USER)
+    foundry.datasets.upload_csv("raw.mcp_pipeline_orders", str(raw_path), ctx=FDE_USER)
+    pipeline_branch = foundry.pipelines.create_branch(
+        pipeline_id="mcp-uncovered-pipeline",
+        name="mcp-uncovered-pipeline",
+        idempotency_key="mcp-uncovered-pipeline",
+        ctx=FDE_USER,
+    )
+    pipeline_id = str(pipeline_branch["id"])
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    pipeline_app, pipeline_headers = _builder_mcp_application(foundry, monkeypatch, "data_integration")
+    pipeline_workspace = f"pipeline-branch:{pipeline_id}"
+    updated = _mcp_native_call(
+        client,
+        pipeline_app,
+        pipeline_headers,
+        "uncovered-pipeline-update",
+        "data_integration",
+        pipeline_workspace,
+        "pipeline.branch.update_graph",
+        {
+            "graph": _mcp_pipeline_graph(),
+            "expectedFingerprint": pipeline_branch["graphFingerprint"],
+        },
+    )
+    tested = _mcp_native_call(
+        client,
+        pipeline_app,
+        pipeline_headers,
+        "uncovered-pipeline-test",
+        "data_integration",
+        pipeline_workspace,
+        "pipeline.branch.run_tests",
+        {},
+    )
+    pipeline_proposal = _mcp_native_call(
+        client,
+        pipeline_app,
+        pipeline_headers,
+        "uncovered-pipeline-propose",
+        "data_integration",
+        pipeline_workspace,
+        "pipeline.branch.propose",
+        {
+            "title": "Uncovered Pipeline mutations",
+            "description": "Direct Builder MCP regression proof.",
+            "idempotencyKey": "uncovered-pipeline-proposal",
+        },
+    )
+
+    foundry.datasets.ensure("raw.mcp_probe_events", primary_key=["id"], ctx=FDE_USER)
+    source = foundry.sources.create_webhook_listener(
+        source_name="mcp_probe_source",
+        display_name="MCP probe Source",
+        dataset_ref="raw.mcp_probe_events",
+        connector_name="mcp_probe_connector",
+        resource_name="events",
+        signing_secret_ref="MCP_PROBE_SIGNING_SECRET",
+        inbound_url="https://foundry-lite.example.test/hooks/mcp-probe",
+        idempotency_key="mcp-probe-source",
+        ctx=FDE_USER,
+    )
+    source_row = source["source"]
+    source_calls: list[tuple[str, str, str]] = []
+
+    def fake_source_test(
+        source_name: str,
+        *,
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        source_calls.append((source_name, expected_config_fingerprint, idempotency_key))
+        return {"sourceName": source_name, "status": "succeeded", "connectionTestId": "mcp-probe-test"}
+
+    monkeypatch.setattr(
+        foundry._services.fde_platform_tools.source_connection_test_service,
+        "test_source_connection",
+        fake_source_test,
+    )
+    source_app, source_headers = _builder_mcp_application(foundry, monkeypatch, "data_connection")
+    source_test = _mcp_native_call(
+        client,
+        source_app,
+        source_headers,
+        "uncovered-source-test",
+        "data_connection",
+        "source:mcp_probe_source",
+        "source.test_connection",
+        {
+            "expectedConfigFingerprint": source_row["configFingerprint"],
+            "idempotencyKey": "uncovered-source-test",
+        },
+    )
+
+    osdk_app, osdk_headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    osdk_scope = "osdk:connector:fde_osdk_react:execute"
+    osdk_update = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "uncovered-osdk-update",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "osdk.application.update_resources",
+        {
+            "resources": [
+                {
+                    "resourceType": "connector",
+                    "resourceApiName": "fde_osdk_react",
+                    "scopes": [osdk_scope],
+                }
+            ],
+            "idempotencyKey": "uncovered-osdk-update",
+        },
+    )
+
+    pilot_plan = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "uncovered-pilot-plan",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "pilot.application.plan",
+        {"applicationName": "MCP Pilot", "domainDescription": "Direct mutation regression"},
+    )
+    pilot = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "uncovered-pilot-generate",
+        "osdk_react",
+        f"osdk-app:{osdk_app}",
+        "pilot.application.generate",
+        {"plan": pilot_plan, "idempotencyKey": "uncovered-pilot-generate"},
+    )
+
+    assert updated["graphFingerprint"] != pipeline_branch["graphFingerprint"]
+    assert tested["proofKind"] == "static_graph_output_contract"
+    assert pipeline_proposal["status"] == "submitted"
+    assert source_test["connectionTestId"] == "mcp-probe-test"
+    assert source_calls == [("mcp_probe_source", source_row["configFingerprint"], "uncovered-source-test")]
+    assert osdk_update["application"]["id"] == osdk_app
+    assert pilot["status"] == "generated_on_branch"
+
+
 def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk_services(
     foundry: Any, monkeypatch: Any, tmp_path: Any
 ) -> None:
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
-    governance_app, governance_headers = _builder_mcp_application(foundry, "governance")
+    governance_app, governance_headers = _builder_mcp_application(foundry, monkeypatch, "governance")
     created = _mcp_native_call(
         client,
         governance_app,
-        {**governance_headers, "X-FDE-Confirm-Tool": "create_foundry_project"},
+        governance_headers,
         "create-project",
         "governance",
         "tenant:tenant-demo",
@@ -360,6 +1298,7 @@ def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk
     _seed_official_mcp_objects(foundry, tmp_path)
     exploration_app, exploration_headers = _builder_mcp_application(
         foundry,
+        monkeypatch,
         "exploration",
         additional_resources=(
             {
@@ -429,7 +1368,7 @@ def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk
         "get_resource_graph",
         {"resourceId": dataset_schema["version"]["id"], "maxDepth": 3},
     )
-    docs_app, docs_headers = _builder_mcp_application(foundry, "platform_qa")
+    docs_app, docs_headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
     summaries = _mcp_native_call(
         client,
         docs_app,
@@ -480,7 +1419,7 @@ def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk
         "get_python_transforms_documentation",
         {"topic": "transactions"},
     )
-    osdk_app, osdk_headers = _builder_mcp_application(foundry, "osdk_react")
+    osdk_app, osdk_headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
     definition = _mcp_native_call(
         client,
         osdk_app,
@@ -504,7 +1443,7 @@ def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk
     generated = _mcp_native_call(
         client,
         osdk_app,
-        {**osdk_headers, "X-FDE-Confirm-Tool": "generate_new_ontology_sdk_version"},
+        osdk_headers,
         "generate-osdk",
         "osdk_react",
         f"osdk-app:{osdk_app}",
@@ -585,7 +1524,7 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(f
     assert response.json()["applicationPath"].startswith("/projects/")
 
 
-def test_builder_mcp_requires_out_of_band_confirmation_and_rejects_untrusted_origin(
+def test_builder_mcp_requires_human_confirmation_receipt_and_rejects_untrusted_origin(
     foundry: Any, monkeypatch: Any, tmp_path: Any
 ) -> None:
     csv_path = tmp_path / "mcp-restaurants.csv"
@@ -594,17 +1533,18 @@ def test_builder_mcp_requires_out_of_band_confirmation_and_rejects_untrusted_ori
     foundry.datasets.upload_csv("clean.restaurants", str(csv_path), ctx=FDE_USER)
     foundry.ontology.apply_text("objectTypes: []\nactionTypes: []\nlinkTypes: []\n", ctx=FDE_USER)
     branch = foundry.ontology.create_branch(name="mcp-write", idempotency_key="mcp-write-branch", ctx=FDE_USER)
-    app_id, headers = _builder_mcp_application(foundry, "ontology_editing")
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "ontology_editing")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     call = _mcp_patch_call(str(branch["id"]), "write-denied")
 
-    denied = client.post(f"/mcp/builder/{app_id}", headers=headers, json=call)
-    approved = client.post(
-        f"/mcp/builder/{app_id}",
-        headers={**headers, "X-FDE-Confirm-Tool": "ontology.branch.apply_patch"},
-        json={**call, "id": "write-approved"},
-    )
+    session_headers = _builder_session_headers(client, app_id, headers)
+    denied = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=call)
+    challenge = denied.json()["result"]["structuredContent"]
+    receipt = _approve_mcp_challenge(client, app_id, str(challenge["challengeId"]), headers)
+    approved_call = _mcp_patch_call(str(branch["id"]), "write-denied")
+    approved_call["params"]["arguments"]["confirmationReceipt"] = receipt
+    approved = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=approved_call)
     rejected_origin = client.post(
         f"/mcp/builder/{app_id}",
         headers={**headers, "Origin": "https://attacker.invalid"},
@@ -612,7 +1552,7 @@ def test_builder_mcp_requires_out_of_band_confirmation_and_rejects_untrusted_ori
     )
 
     assert denied.status_code == 200
-    assert denied.json()["error"]["data"]["type"] == "PERMISSION_DENIED"
+    assert challenge["status"] == "approval_required"
     assert approved.status_code == 200
     assert approved.json()["result"]["structuredContent"]["changeSummary"] == "Add Restaurant"
     assert rejected_origin.status_code == 400
@@ -633,7 +1573,7 @@ def test_official_palantir_ontology_tools_are_branch_only_and_confirmation_gated
         ctx=FDE_USER,
     )
     branch_id = str(branch["id"])
-    app_id, headers = _builder_mcp_application(foundry, "ontology_editing")
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "ontology_editing")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     definition = {
@@ -654,7 +1594,7 @@ def test_official_palantir_ontology_tools_are_branch_only_and_confirmation_gated
     created = _mcp_native_call(
         client,
         app_id,
-        {**headers, "X-FDE-Confirm-Tool": "create_or_update_foundry_object_type"},
+        headers,
         "approved-create",
         "ontology_editing",
         f"ontology-branch:{branch_id}",
@@ -692,7 +1632,7 @@ def test_official_palantir_ontology_tools_are_branch_only_and_confirmation_gated
         {},
     )
 
-    assert denied["error"]["data"]["type"] == "PERMISSION_DENIED"
+    assert denied["result"]["structuredContent"]["status"] == "approval_required"
     assert created["changeSummary"] == "Add Restaurant"
     assert viewed["definition"]["apiName"] == "Restaurant"
     assert searched["items"][0]["apiName"] == "Restaurant"
@@ -702,7 +1642,7 @@ def test_official_palantir_ontology_tools_are_branch_only_and_confirmation_gated
     deleted = _mcp_native_call(
         client,
         app_id,
-        {**headers, "X-FDE-Confirm-Tool": "delete_foundry_object_type"},
+        headers,
         "delete-object",
         "ontology_editing",
         f"ontology-branch:{branch_id}",
@@ -714,13 +1654,13 @@ def test_official_palantir_ontology_tools_are_branch_only_and_confirmation_gated
 
 
 def test_official_palantir_data_connection_tools_use_native_governed_sources(foundry: Any, monkeypatch: Any) -> None:
-    app_id, headers = _builder_mcp_application(foundry, "data_connection")
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "data_connection")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     rest_source = _mcp_native_call(
         client,
         app_id,
-        {**headers, "X-FDE-Confirm-Tool": "create_foundry_rest_api_data_source"},
+        headers,
         "create-rest-source",
         "data_connection",
         "tenant:tenant-demo",
@@ -740,7 +1680,7 @@ def test_official_palantir_data_connection_tools_use_native_governed_sources(fou
     policy = _mcp_native_call(
         client,
         app_id,
-        {**headers, "X-FDE-Confirm-Tool": "get_or_create_network_egress_policy"},
+        headers,
         "create-egress-policy",
         "data_connection",
         "tenant:tenant-demo",
@@ -756,7 +1696,7 @@ def test_official_palantir_data_connection_tools_use_native_governed_sources(fou
     webhook = _mcp_native_call(
         client,
         app_id,
-        {**headers, "X-FDE-Confirm-Tool": "create_foundry_rest_api_data_source_webhook"},
+        headers,
         "create-webhook",
         "data_connection",
         "tenant:tenant-demo",
@@ -801,23 +1741,109 @@ def _mcp_native_call(
     tool_name: str,
     arguments: dict[str, object],
 ) -> dict[str, Any]:
-    response = client.post(
+    session_headers = _builder_session_headers(client, app_id, headers)
+    payload = _mcp_tool_call_payload(rpc_id, mode, workspace_ref, tool_name, arguments)
+    response = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload)
+    response_payload = response.json()
+    structured = response_payload.get("result", {}).get("structuredContent", {})
+    if structured.get("status") == "approval_required":
+        receipt = _approve_mcp_challenge(client, app_id, str(structured["challengeId"]), headers)
+        payload["params"]["arguments"]["confirmationReceipt"] = receipt
+        response = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=payload)
+        response_payload = response.json()
+    assert response.status_code == 200
+    assert "error" not in response_payload, response_payload
+    return dict(response_payload["result"]["structuredContent"])
+
+
+def _concurrent_mcp_posts(
+    client: TestClient,
+    app_id: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> list[Any]:
+    def post_once(_: int) -> Any:
+        return client.post(f"/mcp/builder/{app_id}", headers=headers, json=payload)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        return list(executor.map(post_once, range(2)))
+
+
+def _assert_concurrent_result_or_conflict(responses: list[Any]) -> str:
+    assert all(response.status_code == 200 for response in responses)
+    bodies = [response.json() for response in responses]
+    results = [body["result"] for body in bodies if "result" in body]
+    assert results
+    for body in bodies:
+        if "error" in body:
+            assert body["error"]["data"]["type"] == "CONFLICT"
+    return str(results[0]["aiRunId"])
+
+
+def _builder_session_headers(client: TestClient, app_id: str, headers: dict[str, str]) -> dict[str, str]:
+    clean_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() != "x-fde-confirm-tool" and not key.lower().startswith("x-test-")
+    }
+    initialized = client.post(
         f"/mcp/builder/{app_id}",
-        headers=headers,
+        headers=clean_headers,
         json={
             "jsonrpc": "2.0",
-            "id": rpc_id,
-            "method": "tools/call",
-            "params": {
-                "name": tool_name,
-                "arguments": {"mode": mode, "workspaceRef": workspace_ref, "arguments": arguments},
-            },
+            "id": "initialize-helper",
+            "method": "initialize",
+            "params": _mcp_initialize_params(),
         },
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert "error" not in payload, payload
-    return dict(payload["result"]["structuredContent"])
+    assert initialized.status_code == 200
+    return {**clean_headers, "Mcp-Session-Id": initialized.headers["Mcp-Session-Id"]}
+
+
+def _mcp_initialize_params(protocol_version: str = "2025-06-18") -> dict[str, object]:
+    return {
+        "protocolVersion": protocol_version,
+        "capabilities": {},
+        "clientInfo": {"name": "foundry-lite-builder-test", "version": "1.0.0"},
+    }
+
+
+def _mcp_tool_call_payload(
+    rpc_id: str,
+    mode: str,
+    workspace_ref: str,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": {"mode": mode, "workspaceRef": workspace_ref, "arguments": arguments},
+        },
+    }
+
+
+def _approve_mcp_challenge(
+    client: TestClient,
+    app_id: str,
+    challenge_id: str,
+    headers: dict[str, str],
+) -> str:
+    response = client.post(
+        f"/api/aip/fde/mcp/{app_id}/confirmations/{challenge_id}/approve",
+        headers=_control_headers(headers),
+    )
+    assert response.status_code == 200, response.text
+    return str(response.json()["confirmationReceipt"])
+
+
+def _control_headers(headers: dict[str, str]) -> dict[str, str]:
+    authorization = headers.get("X-Test-Control-Authorization")
+    assert authorization is not None
+    return {"Authorization": authorization, "X-Request-ID": "builder-human-control"}
 
 
 def _raw_mcp_native_call(
@@ -829,9 +1855,10 @@ def _raw_mcp_native_call(
     tool_name: str,
     arguments: dict[str, object],
 ) -> dict[str, Any]:
+    session_headers = _builder_session_headers(client, app_id, headers)
     response = client.post(
         f"/mcp/builder/{app_id}",
-        headers=headers,
+        headers=session_headers,
         json={
             "jsonrpc": "2.0",
             "id": rpc_id,
@@ -875,6 +1902,106 @@ linkTypes: []
     foundry.objects.reindex("Order", ctx=FDE_USER)
 
 
+def _mcp_mutation_base_ontology() -> str:
+    return """
+objectTypes:
+  - apiName: Order
+    primaryKey: orderId
+    backing: {dataset: clean.mcp_mutation_orders, mode: snapshot, primaryKeyColumns: [order_id]}
+    properties:
+      - {apiName: orderId, column: order_id, type: string, nullable: false}
+      - {apiName: customerId, column: customer_id, type: string}
+      - {apiName: status, column: status, type: string, editable: true}
+  - apiName: Customer
+    primaryKey: customerId
+    backing: {dataset: clean.mcp_mutation_customers, mode: snapshot, primaryKeyColumns: [customer_id]}
+    properties:
+      - {apiName: customerId, column: customer_id, type: string, nullable: false}
+      - {apiName: name, column: name, type: string}
+linkTypes: []
+actionTypes: []
+"""
+
+
+def _mcp_link_definition() -> dict[str, object]:
+    return {
+        "apiName": "OrderCustomer",
+        "from": "Order",
+        "to": "Customer",
+        "cardinality": "many_to_one",
+        "backing": {
+            "dataset": "clean.mcp_mutation_orders",
+            "fromKey": "order_id",
+            "toKey": "customer_id",
+        },
+    }
+
+
+def _mcp_action_definition() -> dict[str, object]:
+    return {
+        "apiName": "ApproveOrder",
+        "target": "Order",
+        "parameters": [{"apiName": "reason", "type": "string", "required": True}],
+        "permissions": {"allowedRoles": ["data_engineer"]},
+        "mutations": [{"type": "setProperty", "property": "status", "value": "APPROVED"}],
+    }
+
+
+def _mcp_marker_object_definition() -> dict[str, object]:
+    return {
+        "apiName": "McpMutationMarker",
+        "primaryKey": "id",
+        "backing": {
+            "dataset": "clean.mcp_mutation_orders",
+            "mode": "snapshot",
+            "primaryKeyColumns": ["order_id"],
+        },
+        "properties": [{"apiName": "id", "column": "order_id", "type": "string", "nullable": False}],
+    }
+
+
+def _mcp_pipeline_graph() -> dict[str, object]:
+    columns = [
+        {"name": "order_id", "type": "string", "nullable": False},
+        {"name": "amount", "type": "int", "nullable": True},
+    ]
+    return {
+        "nodes": [
+            {
+                "id": "raw_orders",
+                "type": "dataset",
+                "config": {"datasetRef": "raw.mcp_pipeline_orders", "schema": columns},
+            },
+            {
+                "id": "clean_sql",
+                "type": "sql",
+                "config": {
+                    "sql": "select order_id, amount from {{ input('raw.mcp_pipeline_orders') }}",
+                    "outputDatasetRef": "work.mcp_pipeline_orders",
+                    "schema": columns,
+                },
+            },
+            {
+                "id": "out",
+                "type": "output_dataset",
+                "config": {"outputDatasetRef": "clean.mcp_pipeline_orders"},
+            },
+        ],
+        "edges": [
+            {"source": "raw_orders", "target": "clean_sql"},
+            {"source": "clean_sql", "target": "out"},
+        ],
+        "layout": {
+            "raw_orders": {"x": 0, "y": 0},
+            "clean_sql": {"x": 260, "y": 0},
+            "out": {"x": 520, "y": 0},
+        },
+        "outputContract": {"columns": columns},
+        "tests": [{"name": "schema contract", "expected": {"columns": columns}}],
+        "schedule": {"kind": "manual"},
+    }
+
+
 def _tool(name: str, arguments: dict[str, object]) -> ModelResponse:
     return ModelResponse(
         provider="fake",
@@ -916,8 +2043,100 @@ def _api_headers() -> dict[str, str]:
     }
 
 
+def _builder_user_oauth_headers(
+    foundry: Any,
+    monkeypatch: Any,
+    app_id: str,
+    scopes: tuple[str, ...],
+    suffix: str,
+) -> dict[str, str]:
+    client_id = f"builder-user-{suffix}"
+    redirect_uri = f"https://chat.example.test/oauth/{suffix}"
+    foundry.developer_console.create_osdk_application_client(
+        app_id,
+        client_id=client_id,
+        redirect_uris=(redirect_uri,),
+        allowed_scopes=scopes,
+        idempotency_key=f"{client_id}-public-client",
+        ctx=FDE_USER,
+    )
+    resource = f"http://testserver/mcp/builder/{app_id}"
+    token = _builder_oauth_token(
+        foundry,
+        app_id=app_id,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scopes=scopes,
+        verifier=f"foundry-lite-builder-user-{suffix}-verifier",
+        resource=resource,
+        ctx=FDE_USER,
+    )
+    issuer = foundry._services.osdk_oauth_sessions.oauth_token_issuer
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(issuer=issuer.issuer, audience=issuer.audience, jwks=issuer.public_jwks())
+    )
+    monkeypatch.setattr(api_runtime, "get_auth_provider", lambda: provider)
+    return {
+        "Authorization": f"Bearer {token['accessToken']}",
+        "MCP-Protocol-Version": "2025-06-18",
+        "X-Request-ID": f"builder-{suffix}",
+        "X-Test-Control-Authorization": f"Bearer {_human_control_token(issuer)}",
+    }
+
+
+def _builder_oauth_token(
+    foundry: Any,
+    *,
+    app_id: str,
+    client_id: str,
+    redirect_uri: str,
+    scopes: tuple[str, ...],
+    verifier: str,
+    resource: str | None,
+    ctx: RequestContext,
+) -> dict[str, object]:
+    authorization = foundry.auth.osdk_oauth_authorize(
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        code_challenge=_s256(verifier),
+        scopes=scopes,
+        resource=resource,
+        resource_application_id=app_id,
+        ctx=ctx,
+    )
+    return foundry.auth.osdk_oauth_token(
+        client_id=client_id,
+        code=str(authorization["code"]),
+        redirect_uri=redirect_uri,
+        code_verifier=verifier,
+        resource=resource,
+        resource_application_id=app_id,
+        ctx=ctx,
+    )
+
+
+def _human_control_token(issuer: Any) -> str:
+    issued_at = int(time.time())
+    return jwt.encode(
+        {
+            "iss": issuer.issuer,
+            "aud": issuer.audience,
+            "iat": issued_at,
+            "exp": issued_at + 300,
+            "tenant_id": FDE_USER.tenant_id,
+            "sub": "builder-human-approver",
+            "roles": list(FDE_USER.roles),
+            "jti": f"builder-human-{uuid4().hex}",
+        },
+        issuer.private_key,
+        algorithm="RS256",
+        headers={"kid": issuer.key_id},
+    )
+
+
 def _builder_mcp_application(
     foundry: Any,
+    monkeypatch: Any,
     mode: str,
     additional_resources: tuple[dict[str, object], ...] = (),
 ) -> tuple[str, dict[str, str]]:
@@ -936,12 +2155,13 @@ def _builder_mcp_application(
         ctx=FDE_USER,
     )
     app_id = str(application["application"]["id"])
-    return app_id, {
-        **_api_headers(),
-        "X-Foundry-Lite-App-ID": app_id,
-        "X-Foundry-Lite-Client-ID": f"client-fde-mcp-{suffix}",
-        "X-Foundry-Lite-Scopes": " ".join([scope, *extra_scopes]),
-    }
+    return app_id, _builder_user_oauth_headers(
+        foundry,
+        monkeypatch,
+        app_id,
+        tuple([scope, *extra_scopes]),
+        suffix,
+    )
 
 
 def _mcp_patch_call(branch_id: str, rpc_id: str) -> dict[str, object]:

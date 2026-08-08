@@ -47,6 +47,7 @@ class PreparedExecution:
     expected_object_version: int
     parameters: JsonObject
     policy_version: str
+    originating_actor_user_id: str
     source: str | None = None
     application_id: str | None = None
     client_id: str | None = None

@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+from collections.abc import Mapping
 from typing import cast
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, unquote
 
 from fastapi import APIRouter, Query, Request
-from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
+from fastapi.responses import RedirectResponse
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, ValidationFailed
 from pydantic import ValidationError
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
+from foundry_lite_api.mcp_authorization import McpResourceTarget, mcp_resource_scopes, parse_mcp_resource
 from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import JsonObject, OsdkOAuthRefreshRequest, OsdkOAuthTokenRequest
 
@@ -25,7 +31,22 @@ def _scope_query(scope: str | None) -> tuple[str, ...]:
     return tuple(item.strip() for item in scope.replace(",", " ").split(" ") if item.strip())
 
 
-@router.get("/api/auth/osdk/oauth/authorize")
+@router.get("/.well-known/oauth-authorization-server")
+def osdk_oauth_authorization_server(request: Request) -> dict[str, object]:
+    base = str(request.base_url).rstrip("/")
+    return {
+        "issuer": runtime.foundry.auth.osdk_oauth_issuer(),
+        "authorization_endpoint": f"{base}/api/auth/osdk/oauth/authorize",
+        "token_endpoint": f"{base}/api/auth/osdk/oauth/token",
+        "response_types_supported": ["code"],
+        "response_modes_supported": ["query"],
+        "grant_types_supported": ["authorization_code", "client_credentials", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
+    }
+
+
+@router.get("/api/auth/osdk/oauth/authorize", response_model=None)
 def authorize_osdk_oauth(
     request: Request,
     client_id: str | None = Query(default=None, alias="clientId"),
@@ -38,22 +59,35 @@ def authorize_osdk_oauth(
     oauth_code_challenge_method: str | None = Query(default=None, alias="code_challenge_method"),
     scope: str | None = Query(default=None),
     state: str | None = Query(default=None),
-) -> JsonObject:
+    response_type: str | None = Query(default=None),
+    resource: str | None = Query(default=None),
+) -> JsonObject | RedirectResponse:
     try:
-        return cast(
+        resolved_client_id = _oauth_query(client_id, oauth_client_id, "client_id")
+        target = parse_mcp_resource(request, resource) if resource is not None else None
+        if response_type is not None and response_type != "code":
+            raise ValidationFailed("OSDK OAuth response_type must be code")
+        if response_type is not None and target is None:
+            raise ValidationFailed("OSDK OAuth standard authorization requires resource")
+        result = cast(
             JsonObject,
             runtime.foundry.auth.osdk_oauth_authorize(
-                client_id=_oauth_query(client_id, oauth_client_id, "client_id"),
+                client_id=resolved_client_id,
                 redirect_uri=_oauth_query(redirect_uri, oauth_redirect_uri, "redirect_uri"),
                 code_challenge=_oauth_query(code_challenge, oauth_code_challenge, "code_challenge"),
                 code_challenge_method=_optional_oauth_query(
                     code_challenge_method, oauth_code_challenge_method, "code_challenge_method", "S256"
                 ),
-                scopes=_scope_query(scope),
+                scopes=_resource_scopes(target, _scope_query(scope)),
                 state=state,
+                resource=target.resource_uri if target is not None else None,
+                resource_application_id=target.application_id if target is not None else None,
                 ctx=_ctx(request),
             ),
         )
+        if response_type is not None:
+            return RedirectResponse(str(result["redirectTo"]), status_code=302)
+        return result
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -62,32 +96,143 @@ def authorize_osdk_oauth(
 async def exchange_osdk_oauth_token(request: Request) -> JsonObject:
     try:
         payload = await _token_request(request)
-        if payload.grant_type == "client_credentials":
-            return _oauth_token_response(
-                cast(
-                    JsonObject,
-                    runtime.foundry.auth.osdk_oauth_client_credentials(
-                        client_id=payload.client_id,
-                        client_secret=_required(payload.client_secret, "clientSecret"),
-                        scopes=_scope_query(payload.scope),
-                        ctx=_ctx(request),
-                    ),
-                )
-            )
-        return _oauth_token_response(
-            cast(
-                JsonObject,
-                runtime.foundry.auth.osdk_oauth_token(
-                    client_id=payload.client_id,
-                    code=_required(payload.code, "code"),
-                    redirect_uri=_required(payload.redirect_uri, "redirectUri"),
-                    code_verifier=_required(payload.code_verifier, "codeVerifier"),
-                    ctx=_ctx(request),
-                ),
-            )
-        )
+        target = parse_mcp_resource(request, payload.resource) if payload.resource is not None else None
+        token_ctx = _oauth_token_context(request, payload, target)
+        return _oauth_token_response(_exchange_oauth_grant(payload, target, token_ctx))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+def _exchange_oauth_grant(
+    payload: OsdkOAuthTokenRequest,
+    target: McpResourceTarget | None,
+    token_ctx: RequestContext,
+) -> JsonObject:
+    if payload.grant_type == "client_credentials":
+        return _client_credentials_token(payload, target, token_ctx)
+    if payload.grant_type == "refresh_token":
+        return _refresh_grant_token(payload, target, token_ctx)
+    return _authorization_code_token(payload, target, token_ctx)
+
+
+def _client_credentials_token(
+    payload: OsdkOAuthTokenRequest, target: McpResourceTarget | None, token_ctx: RequestContext
+) -> JsonObject:
+    return cast(
+        JsonObject,
+        runtime.foundry.auth.osdk_oauth_client_credentials(
+            client_id=payload.client_id,
+            client_secret=_required(payload.client_secret, "clientSecret"),
+            scopes=_resource_scopes(target, _scope_query(payload.scope)),
+            resource=target.resource_uri if target is not None else None,
+            ctx=token_ctx,
+        ),
+    )
+
+
+def _refresh_grant_token(
+    payload: OsdkOAuthTokenRequest, target: McpResourceTarget | None, token_ctx: RequestContext
+) -> JsonObject:
+    if payload.client_secret is not None:
+        runtime.foundry.auth.verify_osdk_oauth_client_credentials(
+            client_id=payload.client_id,
+            client_secret=payload.client_secret,
+            ctx=token_ctx,
+        )
+    return cast(
+        JsonObject,
+        runtime.foundry.auth.osdk_oauth_refresh(
+            refresh_token=_required(payload.refresh_token, "refreshToken"),
+            client_id=payload.client_id,
+            resource=target.resource_uri if target is not None else None,
+            resource_application_id=target.application_id if target is not None else None,
+            should_reevaluate_roles=False,
+            ctx=token_ctx,
+        ),
+    )
+
+
+def _authorization_code_token(
+    payload: OsdkOAuthTokenRequest, target: McpResourceTarget | None, token_ctx: RequestContext
+) -> JsonObject:
+    return cast(
+        JsonObject,
+        runtime.foundry.auth.osdk_oauth_token(
+            client_id=payload.client_id,
+            code=_required(payload.code, "code"),
+            redirect_uri=_required(payload.redirect_uri, "redirectUri"),
+            code_verifier=_required(payload.code_verifier, "codeVerifier"),
+            resource=target.resource_uri if target is not None else None,
+            resource_application_id=target.application_id if target is not None else None,
+            ctx=token_ctx,
+        ),
+    )
+
+
+def _oauth_token_context(
+    request: Request,
+    payload: OsdkOAuthTokenRequest,
+    target: McpResourceTarget | None,
+) -> RequestContext:
+    """Bind a token backchannel request without requiring a resource-owner bearer."""
+
+    tenant_id = _oauth_token_tenant(request, payload, target)
+    request_id = getattr(request.state, "request_id", "oauth-client-credentials")
+    return RequestContext(
+        tenant_id=tenant_id,
+        actor_user_id=f"oauth-client:{payload.client_id}",
+        request_id=request_id,
+        roles=(),
+    )
+
+
+def _oauth_token_tenant(
+    request: Request,
+    payload: OsdkOAuthTokenRequest,
+    target: McpResourceTarget | None,
+) -> str:
+    payload_tenant = _tenant_hint(payload.tenant_id)
+    header_tenant = _tenant_hint(request.headers.get("X-Tenant-ID"))
+    if payload_tenant and header_tenant and payload_tenant != header_tenant:
+        raise ValidationFailed("OSDK OAuth client credentials tenant values conflict")
+    hinted_tenant = payload_tenant or header_tenant
+    if target is not None:
+        resolved_tenant = runtime.foundry.auth.osdk_oauth_resource_tenant(
+            target.application_id,
+            payload.client_id,
+        )
+        if hinted_tenant is not None and hinted_tenant != resolved_tenant:
+            raise ValidationFailed("OSDK OAuth client credentials are invalid")
+        return resolved_tenant
+    tenant_id = hinted_tenant
+    if tenant_id is None:
+        if payload.grant_type != "client_credentials":
+            return _ctx(request).tenant_id
+        raise ValidationFailed("OSDK OAuth client credentials require tenant_id or resource")
+    return tenant_id
+
+
+def _tenant_hint(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not value.strip():
+        raise ValidationFailed("OSDK OAuth client credentials tenant_id must be non-empty")
+    return value.strip()
+
+
+def _resource_scopes(
+    target: McpResourceTarget | None,
+    requested_scopes: tuple[str, ...],
+) -> tuple[str, ...]:
+    if target is None:
+        return requested_scopes
+    allowed = mcp_resource_scopes(target.application_id, target.plane)
+    if not allowed:
+        raise PermissionDenied("OSDK OAuth application has no scopes for the requested MCP resource")
+    selected = requested_scopes or allowed
+    if not set(selected).issubset(allowed):
+        raise PermissionDenied("OSDK OAuth requested scope is not granted for the MCP resource")
+    return selected
 
 
 async def _token_request(request: Request) -> OsdkOAuthTokenRequest:
@@ -102,7 +247,10 @@ async def _token_request(request: Request) -> OsdkOAuthTokenRequest:
             raw = _single_form_values(parse_qs(body.decode("utf-8"), keep_blank_values=True))
         else:
             raise ValidationFailed("OSDK OAuth token request content type is not supported")
-        return OsdkOAuthTokenRequest.model_validate(raw)
+        if not isinstance(raw, Mapping):
+            raise ValidationFailed("OSDK OAuth token request must be an object")
+        values: dict[str, object] = {str(key): value for key, value in raw.items()}
+        return OsdkOAuthTokenRequest.model_validate(_with_basic_client_auth(values, request))
     except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
         raise ValidationFailed("OSDK OAuth token request is invalid") from exc
 
@@ -111,6 +259,27 @@ def _single_form_values(values: dict[str, list[str]]) -> dict[str, str]:
     if any(len(items) != 1 for items in values.values()):
         raise ValidationFailed("OSDK OAuth token request contains duplicate parameters")
     return {key: items[0] for key, items in values.items()}
+
+
+def _with_basic_client_auth(values: dict[str, object], request: Request) -> dict[str, object]:
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, encoded = authorization.partition(" ")
+    if scheme.lower() != "basic":
+        return values
+    try:
+        decoded = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+        encoded_client_id, encoded_secret = decoded.split(":", 1)
+        client_id = unquote(encoded_client_id)
+        client_secret = unquote(encoded_secret)
+    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        raise ValidationFailed("OSDK OAuth client authentication is invalid") from exc
+    body_client_id = values.get("client_id", values.get("clientId"))
+    body_secret = values.get("client_secret", values.get("clientSecret"))
+    if not client_id or not client_secret or (body_client_id is not None and body_client_id != client_id):
+        raise ValidationFailed("OSDK OAuth client authentication is invalid")
+    if body_secret is not None:
+        raise ValidationFailed("OSDK OAuth client authentication method is ambiguous")
+    return {**values, "client_id": client_id, "client_secret": client_secret}
 
 
 def _oauth_token_response(payload: JsonObject) -> JsonObject:

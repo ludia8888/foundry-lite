@@ -5,7 +5,8 @@ const DEMO_HEADERS = {
   "X-User-ID": "web-demo-operator",
   "X-Roles": "ops_manager,data_engineer,finance,aip_prompt_artifact_reader",
 };
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL =
+  process.env.FOUNDRY_LITE_E2E_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 type ResourceProject = {
   id: string;
@@ -218,7 +219,9 @@ test("Security screen manages project grants, proves denied mutation state, and 
     .not.toBeNull();
 
   await expect(page.locator("body")).toContainText("감사 이벤트");
-  expect(mutationEventType).not.toBeNull();
-  await expect(page.locator("body")).toContainText(mutationEventType as string);
+  if (mutationEventType === null) {
+    throw new Error("expected the mutation audit event type to be persisted");
+  }
+  await expect(page.locator("body")).toContainText(mutationEventType);
   await expect(page.locator("body")).toContainText("request id");
 });

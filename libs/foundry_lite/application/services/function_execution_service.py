@@ -33,6 +33,11 @@ from foundry_lite.application.services.ontology_function_validation import (
     validate_function_inputs,
 )
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
+from foundry_lite.application.services.osdk_service_principal_authorization import (
+    ServicePrincipalAccessSessionBoundary,
+    require_service_principal_scope,
+    service_principal_reader_context,
+)
 from foundry_lite.application.services.python_function_runtime import PythonFunctionRuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
@@ -58,12 +63,14 @@ class FunctionExecutionService(CoreService):
     required_collaborators = (
         "builder_runtime_service",
         "ontology_lookup_service",
+        "osdk_access_session_service",
         "osdk_application_service",
         "python_function_runtime_service",
         "runtime_service",
     )
     builder_runtime_service: BuilderRuntimeService
     ontology_lookup_service: OntologyLookupService
+    osdk_access_session_service: ServicePrincipalAccessSessionBoundary
     python_function_runtime_service: PythonFunctionRuntimeService
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: SupportsAudit
@@ -92,6 +99,27 @@ class FunctionExecutionService(CoreService):
             operation="execute",
         )
         return row
+
+    def describe_external_mcp_function(self, function_api_name: str, *, ctx: RequestContext) -> FunctionTypeRow:
+        """Describe one exact app-granted Function without granting a human operator role."""
+
+        self._require_external_mcp_scope(ctx, function_api_name)
+        with self.engine.begin() as conn:
+            return self.ontology_lookup_service._active_function_type(conn, ctx, function_api_name)
+
+    def execute_external_mcp_function(
+        self,
+        function_api_name: str,
+        *,
+        inputs: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> FunctionExecutionResult:
+        """Execute a compute-only Function through the narrow machine boundary."""
+
+        self._require_external_mcp_scope(ctx, function_api_name)
+        with self.engine.begin() as conn:
+            row = self.ontology_lookup_service._active_function_type(conn, ctx, function_api_name)
+        return self._run_row(service_principal_reader_context(ctx), row, inputs)
 
     def execute_pinned_function(
         self,
@@ -141,11 +169,30 @@ class FunctionExecutionService(CoreService):
             resource_api_name=row["api_name"],
             operation="execute",
         )
+        return self._run_row(ctx, row, inputs, execution_id)
+
+    def _run_row(
+        self,
+        ctx: RequestContext,
+        row: FunctionTypeRow,
+        inputs: Mapping[str, object],
+        execution_id: str | None = None,
+    ) -> FunctionExecutionResult:
         validate_function_inputs(row["definition"], inputs)
         if row["definition"].get("runtime") == FUNCTION_RUNTIME_PYTHON:
             return self._execute_python(ctx, row, inputs, execution_id)
         request = _builder_request(ctx, row, inputs, logic_run_id=execution_id)
         return _execution_result(row, request, self.builder_runtime_service.run(ctx, request))
+
+    def _require_external_mcp_scope(self, ctx: RequestContext, function_api_name: str) -> None:
+        require_service_principal_scope(
+            ctx,
+            self.osdk_access_session_service,
+            self.osdk_application_service,
+            resource_type="function",
+            resource_api_name=function_api_name,
+            operation="execute",
+        )
 
     def _execute_python(
         self,

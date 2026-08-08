@@ -46,6 +46,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "oauth_token_issuer",
         "secret_provider",
         "secret_vault",
+        "mcp_rate_limiter",
     ),
     "action": (
         "action_repository",

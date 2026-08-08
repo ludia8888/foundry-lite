@@ -378,13 +378,16 @@ class OsdkArtifactDownloadTokenRequest(BaseModel):
 class OsdkOAuthTokenRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    grant_type: Literal["authorization_code", "client_credentials"] = Field(
+    grant_type: Literal["authorization_code", "client_credentials", "refresh_token"] = Field(
         default="authorization_code", alias="grantType"
     )
     client_id: str = Field(alias="clientId")
     client_secret: str | None = Field(default=None, alias="clientSecret")
+    tenant_id: str | None = Field(default=None, alias="tenantId")
+    resource: str | None = None
     scope: str | None = None
     code: str | None = None
+    refresh_token: str | None = Field(default=None, alias="refreshToken")
     redirect_uri: str | None = Field(default=None, alias="redirectUri")
     code_verifier: str | None = Field(default=None, alias="codeVerifier")
 

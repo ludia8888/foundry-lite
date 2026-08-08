@@ -499,6 +499,10 @@ def test_pipeline_validation_and_run_helpers_cover_failure_shapes() -> None:
 
     assert result["status"] == "failed"
     assert result["testCount"] == 1
+    assert result["declaredTestCount"] == 0
+    assert result["proofKind"] == "static_graph_output_contract"
+    assert result["isDataExecution"] is False
+    assert result["evaluatedChecks"] == ["graph_validation", "output_dataset_and_contract"]
     assert _output_contract_test_failures({"nodes": [], "outputContract": {"columns": []}}) == [
         {"test": "output_dataset", "message": "output dataset reference is missing"}
     ]

@@ -150,7 +150,7 @@ def test_prompt_artifact_migration_applies_postgres_rls_to_tenant_table() -> Non
 def _assert_round_trip(engine: Engine) -> None:
     repository = SqlAlchemyAiRunRepository(engine)
     with _txn(engine) as transaction:
-        duplicate_message, updated_run = _seed_ledger(repository, transaction)
+        duplicate_message, duplicate_run, updated_run = _seed_ledger(repository, transaction)
         session = repository.session_by_id(transaction=transaction, tenant_id=_TENANT, session_id="ai-session-1")
         message = repository.message_by_client_id(
             transaction=transaction,
@@ -166,6 +166,8 @@ def _assert_round_trip(engine: Engine) -> None:
 
     assert duplicate_message is not None
     assert duplicate_message["id"] == "ai-message-1"
+    assert duplicate_run is not None
+    assert duplicate_run["id"] == "ai-run-1"
     assert updated_run is not None
     assert updated_run["status"] == "succeeded"
     assert session is not None and session["last_activity_at"] == "2026-06-25T00:00:04Z"
@@ -176,10 +178,11 @@ def _assert_round_trip(engine: Engine) -> None:
     assert other_tenant is None
 
 
-def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tuple[Any, Any]:
+def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tuple[Any, Any, Any]:
     repository.create_session(transaction=transaction, record=_session_record())
     repository.create_session(transaction=transaction, record=_reused_session_record())
-    repository.create_execution_run(transaction=transaction, record=_run_record())
+    assert repository.insert_execution_run_or_get_existing(transaction=transaction, record=_run_record()) is None
+    duplicate_run = repository.insert_execution_run_or_get_existing(transaction=transaction, record=_run_record())
     repository.create_session_state_version(transaction=transaction, record=_state_version_record())
     duplicate = _insert_idempotent_message(repository, transaction)
     assert repository.append_execution_event(transaction=transaction, record=_event_record("event-1", 1, "run_intent"))
@@ -222,7 +225,7 @@ def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tup
         error_json=None,
         completed_at="2026-06-25T00:00:05Z",
     )
-    return duplicate, updated
+    return duplicate, duplicate_run, updated
 
 
 def _assert_ledger_rows(ledger: Any) -> None:

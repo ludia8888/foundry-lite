@@ -35,6 +35,8 @@ from foundry_lite.domain.context import (
     DEFAULT_TENANT_ID,
     DEMO_ADMIN_ROLES,
 )
+from foundry_lite.domain.errors import PermissionDenied
+from foundry_lite.infrastructure.auth.oidc import JwtOidcAuthProvider
 
 __all__ = [
     "HEADER_APP_ID_KEY",
@@ -99,6 +101,7 @@ class HeaderTrustAuthProvider:
     default_actor_user_id: str = DEFAULT_ACTOR_USER_ID
     default_roles: tuple[str, ...] = DEFAULT_ROLES
     profile_name: str = "header-trust-auth"
+    mcp_bearer_verifier: JwtOidcAuthProvider | None = field(default=None, repr=False, compare=False)
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -127,6 +130,16 @@ class HeaderTrustAuthProvider:
             token_scopes=_split_scopes(headers.get(HEADER_SCOPES_KEY)),
             user_attributes=_user_attributes(headers.get(HEADER_USER_ATTRIBUTES_KEY)),
         )
+
+    def authenticate_for_audience(self, credentials: Credentials, audience: str) -> Principal:
+        """Verify local OAuth bearer tokens for one exact MCP resource."""
+
+        if self.mcp_bearer_verifier is None:
+            raise PermissionDenied(
+                "local MCP OAuth verifier is not configured",
+                details={"adapterProfile": self.profile_name},
+            )
+        return self.mcp_bearer_verifier.authenticate_for_audience(credentials, audience)
 
     def anonymous(self) -> Principal:
         return Principal(

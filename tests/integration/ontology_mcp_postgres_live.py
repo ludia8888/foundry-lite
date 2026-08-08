@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 import subprocess
@@ -11,15 +12,18 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from threading import Event
 from typing import cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import urlopen
 from uuid import uuid4
 
 import httpx2
+import jwt
 import pytest
 import yaml
 from mcp import ClientSession
+from mcp.client.auth.extensions.client_credentials import ClientCredentialsOAuthProvider
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
@@ -60,22 +64,30 @@ def test_official_mcp_client_uses_postgres_application_scope_and_action_approval
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _engine, db_url = ontology_mcp_live_database
+    runtime_root = tmp_path / "runtime"
+    port = _free_port()
+    public_base_url = f"http://127.0.0.1:{port}"
     monkeypatch.setenv("FOUNDRY_LITE_DB_URL", db_url)
-    monkeypatch.setenv("FOUNDRY_LITE_STORAGE_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("FOUNDRY_LITE_STORAGE_ROOT", str(runtime_root))
+    monkeypatch.setenv("FOUNDRY_LITE_OAUTH_ISSUER", public_base_url)
     from foundry_lite.application.foundry import FoundryLite
     from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 
-    foundry = FoundryLite(dependencies=create_runtime_core_dependencies(db_url=db_url, storage_root=tmp_path / "seed"))
+    foundry = FoundryLite(dependencies=create_runtime_core_dependencies(db_url=db_url, storage_root=runtime_root))
     object_version = _prepare_catalog(foundry, tmp_path)
-    application_id, headers = _create_mcp_application(foundry)
-    port = _free_port()
-    process = _start_api(db_url, tmp_path, port)
+    application_id, client_id, client_secret, scopes, auth_environment = _create_mcp_application(
+        foundry, public_base_url
+    )
+    process = _start_api(db_url, runtime_root, port, auth_environment)
     try:
         _wait_api(port, process)
         evidence = asyncio.run(
             _exercise_official_client(
-                f"http://127.0.0.1:{port}/mcp/ontology/{application_id}",
-                headers,
+                public_base_url,
+                f"{public_base_url}/mcp/ontology/{application_id}",
+                client_id,
+                client_secret,
+                scopes,
                 object_version,
             )
         )
@@ -98,9 +110,16 @@ def test_official_mcp_client_uses_postgres_application_scope_and_action_approval
     assert evidence["objectId"] == "ORDER-1"
     assert evidence["approvalStatus"] == "approval_required"
     assert str(evidence["planHash"]).startswith("sha256:")
+    assert evidence["authMode"] == "official_client_credentials_discovery"
+    assert evidence["audience"] == f"{public_base_url}/mcp/ontology/{application_id}"
+    assert evidence["issuer"] == public_base_url
+    assert evidence["grantedScopes"] == sorted(scopes)
 
 
-def _create_mcp_application(foundry: object) -> tuple[str, dict[str, str]]:
+def _create_mcp_application(
+    foundry: object,
+    public_base_url: str,
+) -> tuple[str, str, str, tuple[str, ...], dict[str, str]]:
     from foundry_lite.domain.context import demo_admin_context
 
     ctx = demo_admin_context()
@@ -131,20 +150,91 @@ def _create_mcp_application(foundry: object) -> tuple[str, dict[str, str]]:
         idempotency_key="official-mcp-live-server",
         ctx=ctx,
     )
-    return application_id, {
-        "X-Tenant-ID": ctx.tenant_id,
-        "X-User-ID": ctx.actor_user_id,
-        "X-Roles": ",".join(ctx.roles),
-        "X-Foundry-Lite-App-ID": application_id,
-        "X-Foundry-Lite-Client-ID": "official-mcp-live-client",
-        "X-Foundry-Lite-Scopes": " ".join(scopes),
-        "X-Request-ID": "official-mcp-client-live",
+    client_id = "official-mcp-live-service"
+    machine_client = console.create_osdk_application_client(
+        application_id,
+        client_id=client_id,
+        redirect_uris=(),
+        allowed_scopes=scopes,
+        access_token_ttl_seconds=120,
+        idempotency_key="official-mcp-live-service-client",
+        ctx=ctx,
+    )
+    rotated = console.rotate_osdk_application_client_secret(
+        application_id,
+        str(machine_client["id"]),
+        reason="Official strict Bearer MCP live proof",
+        idempotency_key="official-mcp-live-service-secret",
+        ctx=ctx,
+    )
+    issuer = foundry._services.osdk_oauth_client_credentials.oauth_token_issuer  # type: ignore[attr-defined]
+    auth_environment = {
+        "FOUNDRY_LITE_AUTH_PROFILE": "jwt",
+        "FOUNDRY_LITE_OAUTH_ISSUER": public_base_url,
+        "FOUNDRY_LITE_OIDC_ISSUER": public_base_url,
+        "FOUNDRY_LITE_OIDC_AUDIENCE": issuer.audience,
+        "FOUNDRY_LITE_OIDC_JWKS_JSON": json.dumps(issuer.public_jwks()),
     }
+    return application_id, client_id, str(rotated["clientSecret"]), scopes, auth_environment
 
 
-async def _exercise_official_client(url: str, headers: Mapping[str, str], object_version: int) -> dict[str, object]:
-    async with httpx2.AsyncClient(headers=dict(headers), timeout=15, trust_env=False) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read_stream, write_stream):
+class _MemoryTokenStorage:
+    def __init__(self) -> None:
+        self.tokens: OAuthToken | None = None
+        self.client_info: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self.tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self.tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self.client_info
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self.client_info = client_info
+
+
+async def _exercise_official_client(
+    api_url: str,
+    mcp_url: str,
+    client_id: str,
+    client_secret: str,
+    scopes: tuple[str, ...],
+    object_version: int,
+) -> dict[str, object]:
+    storage = _MemoryTokenStorage()
+    provider = ClientCredentialsOAuthProvider(
+        server_url=mcp_url,
+        storage=storage,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    request_trace: list[dict[str, object]] = []
+
+    async def record_request(request: httpx2.Request) -> None:
+        form_keys: list[str] = []
+        if request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+            form_keys = sorted(parse_qs(request.content.decode("utf-8"), keep_blank_values=True))
+        request_trace.append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "authScheme": request.headers.get("authorization", "").partition(" ")[0],
+                "formKeys": form_keys,
+            }
+        )
+
+    async with httpx2.AsyncClient(
+        base_url=api_url,
+        headers={"X-Request-ID": "official-mcp-client-live"},
+        auth=provider,
+        event_hooks={"request": [record_request]},
+        timeout=15,
+        trust_env=False,
+    ) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 initialized = await session.initialize()
                 listed = await session.list_tools()
@@ -158,6 +248,21 @@ async def _exercise_official_client(url: str, headers: Mapping[str, str], object
                         "params": {"reason": "Official external MCP client requested approval"},
                     },
                 )
+    assert storage.tokens is not None
+    claims = cast(dict[str, object], jwt.decode(storage.tokens.access_token, options={"verify_signature": False}))
+    token_requests = [item for item in request_trace if item["path"] == "/api/auth/osdk/oauth/token"]
+    assert token_requests == [
+        {
+            "method": "POST",
+            "path": "/api/auth/osdk/oauth/token",
+            "authScheme": "Basic",
+            "formKeys": ["grant_type", "resource", "scope"],
+        }
+    ]
+    assert not any("tenant_id" in cast(list[str], item["formKeys"]) for item in request_trace)
+    assert any(item["path"].startswith("/.well-known/oauth-protected-resource/") for item in request_trace)
+    assert any(item["path"] == "/.well-known/oauth-authorization-server" for item in request_trace)
+    assert any(item["path"] == urlsplit(mcp_url).path and not item["authScheme"] for item in request_trace)
     object_payload = cast(dict[str, object], object_result.structured_content)
     approval_payload = cast(dict[str, object], approval_result.structured_content)
     return {
@@ -166,6 +271,10 @@ async def _exercise_official_client(url: str, headers: Mapping[str, str], object
         "objectId": object_payload["objectId"],
         "approvalStatus": approval_payload["status"],
         "planHash": approval_payload["planHash"],
+        "authMode": "official_client_credentials_discovery",
+        "audience": claims["aud"],
+        "issuer": claims["iss"],
+        "grantedScopes": sorted(str(claims["scope"]).split()),
     }
 
 
@@ -237,7 +346,7 @@ def _ontology_definition() -> dict[str, object]:
                 "riskLevel": "high",
                 "agentExecutionPolicy": "approval_required",
                 "agentToolDescription": "Plan an order approval and request mandatory human review.",
-                "permissions": {"allowedRoles": ["admin"]},
+                "permissions": {"allowedRoles": ["admin", "ops_manager"]},
                 "parameters": [{"apiName": "reason", "type": "string", "required": True}],
                 "rules": [
                     {
@@ -256,11 +365,17 @@ def _ontology_definition() -> dict[str, object]:
     }
 
 
-def _start_api(db_url: str, tmp_path: Path, port: int) -> subprocess.Popen[bytes]:
+def _start_api(
+    db_url: str,
+    runtime_root: Path,
+    port: int,
+    auth_environment: Mapping[str, str],
+) -> subprocess.Popen[bytes]:
     env = {
         **os.environ,
+        **auth_environment,
         "FOUNDRY_LITE_DB_URL": db_url,
-        "FOUNDRY_LITE_HOME": str(tmp_path / "api"),
+        "FOUNDRY_LITE_HOME": str(runtime_root),
         "FOUNDRY_LITE_OTEL_DISABLED": "1",
         "PYTHONPATH": ".:libs:apps/api",
     }

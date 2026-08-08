@@ -36,6 +36,7 @@ IGNORED_DOC_PARTS = {
     "htmlcov",
     "mutants",
     "node_modules",
+    "test-results",
     "__pycache__",
 }
 REQUIRED_SOURCE_OF_TRUTH_DOCS = {

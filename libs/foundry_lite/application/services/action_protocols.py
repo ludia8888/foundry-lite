@@ -178,3 +178,28 @@ class ActionOsdkScopeBoundary(Protocol):
         resource_api_name: str,
         operation: OsdkResourceOperation,
     ) -> None: ...
+
+
+class ActionPlanningBoundary(Protocol):
+    def plan_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext | None = None,
+        is_dry_run: bool = False,
+    ) -> Mapping[str, object]: ...
+
+    def plan_external_mcp_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> Mapping[str, object]: ...

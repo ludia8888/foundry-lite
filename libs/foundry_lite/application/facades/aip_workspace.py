@@ -13,6 +13,7 @@ from foundry_lite.application.facades.aip_workspace_payloads import (
 from foundry_lite.application.facades.aip_workspace_payloads import (
     builder_runtime_request_from_payload as _builder_runtime_request_from_payload,
 )
+from foundry_lite.application.ports import OsdkMcpStreamLease
 from foundry_lite.application.services.aip.action_proposal import (
     ActionProposalRequest,
     ActionProposalResult,
@@ -307,6 +308,23 @@ class AipWorkspace:
             ctx or RequestContext(), application_id, session_id=session_id, discovery_mode=discovery_mode
         )
 
+    def activate_fde_mcp_lazy_discovery(
+        self,
+        application_id: str,
+        session_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> None:
+        self._fde_mcp.activate_lazy_discovery(ctx or RequestContext(), application_id, session_id)
+
+    def consume_fde_mcp_endpoint_rate_limit(
+        self,
+        application_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> None:
+        self._fde_mcp.consume_endpoint_rate_limit(ctx or RequestContext(), application_id)
+
     def run_fde_mcp_tool(
         self,
         request: FdeMcpToolCall,
@@ -314,6 +332,74 @@ class AipWorkspace:
         ctx: RequestContext | None = None,
     ) -> Mapping[str, object]:
         return self._fde_mcp.execute_tool(ctx or RequestContext(), request)
+
+    def open_fde_mcp_session(
+        self,
+        application_id: str,
+        session_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._fde_mcp.open_session(ctx or RequestContext(), application_id, session_id)
+
+    def fde_mcp_session_events(
+        self,
+        application_id: str,
+        session_id: str,
+        *,
+        after_sequence: int = 0,
+        ctx: RequestContext | None = None,
+    ) -> list[Mapping[str, object]]:
+        return [
+            dict(event)
+            for event in self._fde_mcp.session_events(
+                ctx or RequestContext(),
+                application_id,
+                session_id,
+                after_sequence=after_sequence,
+            )
+        ]
+
+    def claim_fde_mcp_session_stream(
+        self,
+        application_id: str,
+        session_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OsdkMcpStreamLease:
+        return self._fde_mcp.claim_session_stream(ctx or RequestContext(), application_id, session_id)
+
+    def release_fde_mcp_session_stream(
+        self,
+        application_id: str,
+        session_id: str,
+        lease_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> bool:
+        return self._fde_mcp.release_session_stream(ctx or RequestContext(), application_id, session_id, lease_id)
+
+    def close_fde_mcp_session(
+        self,
+        application_id: str,
+        session_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._fde_mcp.close_session(ctx or RequestContext(), application_id, session_id)
+
+    def approve_fde_mcp_confirmation(
+        self,
+        application_id: str,
+        challenge_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._fde_mcp.approve_confirmation(
+            ctx or RequestContext(),
+            application_id,
+            challenge_id,
+        )
 
     def plan_pilot_application(
         self, arguments: Mapping[str, object], *, ctx: RequestContext | None = None

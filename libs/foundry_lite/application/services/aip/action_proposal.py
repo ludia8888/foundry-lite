@@ -1,30 +1,31 @@
-"""AIP Action Proposal Service (P0g, §8.10/§12.2).
-
-The model may propose an ontology action, but it may not execute it. This
-service turns a model proposal into a durable human-review row only after the
-server re-checks the AI run ledger, agent action allowlist, ontology action
-definition, caller policy, and current target object version.
-"""
+"""Create durable, evidence-bound AIP Action proposals for human review."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 
-from foundry_lite.application.action_types import ActionExecutionPlanResponse
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.ports.ai_run_repository import AiLedgerRow
 from foundry_lite.application.services.action_plan_payloads import action_plan_object_versions
 from foundry_lite.application.services.action_planning_service import ActionPlanningService
 from foundry_lite.application.services.action_protocols import ActionOntologyLookup
+from foundry_lite.application.services.aip.action_proposal_contracts import (
+    ActionProposalError,
+    ActionProposalRequest,
+    ActionProposalResult,
+)
 from foundry_lite.application.services.aip.action_proposal_external import (
+    ActionExecutionPlanResponse,
+    JsonRpcRequestId,
     external_mcp_proposal,
     external_mcp_replay,
+    external_mcp_request,
     external_mcp_result,
     external_mcp_status,
+    internal_mcp_request_id,
+    require_external_mcp_replay_owner,
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import InsightReviewProposalFields
@@ -36,48 +37,6 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDen
 
 JsonObject = Mapping[str, object]
 _PROPOSAL_TYPE = "ontology_action"
-
-
-@dataclass(frozen=True)
-class ActionProposalRequest:
-    """One model-proposed ontology action awaiting human review."""
-
-    originating_ai_run_id: str
-    action_type: str
-    target_object_type: str
-    target_object_id: str
-    expected_object_version: int
-    parameters: JsonObject
-    evidence_context_ids: tuple[str, ...]
-    agent_allowed_actions: tuple[str, ...]
-    policy_version: str
-    expires_at: str
-    claim_text: str
-    originating_tool_call_id: str | None = None
-    priority: str = "normal"
-    assignee_user_id: str | None = None
-
-
-@dataclass(frozen=True)
-class ActionProposalResult:
-    """Created review plus canonical proposal fingerprint."""
-
-    proposal_id: str
-    proposal_fingerprint: str
-    review_id: str
-    review_payload: Mapping[str, object]
-    action_proposal: Mapping[str, object]
-
-
-@dataclass
-class ActionProposalError(Exception):
-    """Typed fail-closed action proposal rejection."""
-
-    reason: str
-    detail: str
-
-    def __post_init__(self) -> None:
-        Exception.__init__(self, self.detail)
 
 
 class ActionProposalService(CoreService):
@@ -140,7 +99,7 @@ class ActionProposalService(CoreService):
         *,
         application_id: str,
         session_id: str,
-        json_rpc_id: str,
+        json_rpc_id: JsonRpcRequestId,
         action_type: str,
         target_object_type: str,
         target_object_id: str,
@@ -150,11 +109,13 @@ class ActionProposalService(CoreService):
         idempotency_key: str,
     ) -> dict[str, object]:
         target = (target_object_type, target_object_id, expected_object_version)
-        request = _external_mcp_request(application_id, session_id, json_rpc_id, action_type, *target, parameters)
-        self._require_policy(ctx, request)
+        request = external_mcp_request(application_id, session_id, json_rpc_id, action_type, *target, parameters)
+        self._require_external_mcp_principal(ctx, application_id, request)
         evidence_refs = _external_mcp_evidence(ctx, request, application_id, session_id, json_rpc_id)
         fingerprint = _external_mcp_fingerprint(request, execution_plan, evidence_refs, application_id)
-        existing = self.insight_review_service.replay_created_review(idempotency_key, ctx=ctx)
+        existing = self.insight_review_service.replay_external_mcp_review(
+            idempotency_key, action_name=action_type, ctx=ctx
+        )
         if existing is not None:
             return external_mcp_replay(existing, execution_plan, fingerprint)
         proposal = external_mcp_proposal(
@@ -168,8 +129,23 @@ class ActionProposalService(CoreService):
         )
         return external_mcp_result(proposal, review, execution_plan, fingerprint, request.expires_at)
 
+    def has_external_mcp_replay(
+        self, ctx: RequestContext, *, application_id: str, action_type: str, idempotency_key: str
+    ) -> bool:
+        if ctx.application_id != application_id:
+            raise ActionProposalError("policy_denied", f"permission denied for action {action_type}")
+        existing = self.insight_review_service.replay_external_mcp_review(
+            idempotency_key, action_name=action_type, ctx=ctx
+        )
+        if existing is None:
+            return False
+        require_external_mcp_replay_owner(existing, application_id, action_type, ctx)
+        return True
+
     def external_mcp_status(self, ctx: RequestContext, *, application_id: str, review_id: str) -> dict[str, object]:
-        review = self.insight_review_service.review_detail(review_id, ctx=ctx)
+        review = self.insight_review_service.external_mcp_review_detail(
+            review_id, application_id=application_id, ctx=ctx
+        )
         return external_mcp_status(review, application_id, ctx.actor_user_id)
 
     def _execution_plan(
@@ -200,7 +176,9 @@ class ActionProposalService(CoreService):
         proposal: Mapping[str, object],
         idempotency_key: str | None = None,
     ) -> Mapping[str, object]:
-        review = self.insight_review_service.create_review(
+        if proposal.get("source") == "ontology_mcp":
+            return self._create_external_mcp_review(ctx, request, evidence_refs, fingerprint, proposal, idempotency_key)
+        return self.insight_review_service.create_review(
             claim_id=str(proposal["proposalId"]),
             claim_text=request.claim_text,
             evidence_object_ids=_evidence_object_ids(evidence_refs),
@@ -210,23 +188,52 @@ class ActionProposalService(CoreService):
             priority=request.priority,
             assignee_user_id=request.assignee_user_id,
             action_proposal=proposal,
-            proposal_fields=InsightReviewProposalFields(
-                proposal_type=_PROPOSAL_TYPE,
-                proposal_fingerprint=fingerprint,
-                originating_ai_run_id=request.originating_ai_run_id,
-                originating_tool_call_id=request.originating_tool_call_id,
-                expires_at=request.expires_at,
-                execution_status="pending_review",
-                approved_action_run_id=None,
-                approval_policy_version=request.policy_version,
-            ),
+            proposal_fields=_review_proposal_fields(request, fingerprint),
         )
-        return review
+
+    def _create_external_mcp_review(
+        self,
+        ctx: RequestContext,
+        request: ActionProposalRequest,
+        evidence_refs: Sequence[JsonObject],
+        fingerprint: str,
+        proposal: Mapping[str, object],
+        idempotency_key: str | None,
+    ) -> Mapping[str, object]:
+        return self.insight_review_service.create_external_mcp_review(
+            action_name=request.action_type,
+            claim_id=str(proposal["proposalId"]),
+            claim_text=request.claim_text,
+            evidence_object_ids=_evidence_object_ids(evidence_refs),
+            evidence_refs=evidence_refs,
+            idempotency_key=idempotency_key or fingerprint,
+            ctx=ctx,
+            priority=request.priority,
+            assignee_user_id=request.assignee_user_id,
+            action_proposal=proposal,
+            proposal_fields=_review_proposal_fields(request, fingerprint),
+        )
 
     def _require_policy(self, ctx: RequestContext, request: ActionProposalRequest) -> None:
         try:
             self.policy.require(ctx, "insight:create")
             self.policy.require(ctx, f"action:execute:{request.action_type}")
+        except PermissionDenied as exc:
+            raise ActionProposalError("policy_denied", f"permission denied for action {request.action_type}") from exc
+
+    def _require_external_mcp_principal(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        request: ActionProposalRequest,
+    ) -> None:
+        if ctx.application_id != application_id:
+            raise ActionProposalError(
+                "policy_denied",
+                f"permission denied for action {request.action_type}",
+            )
+        try:
+            self.insight_review_service.require_external_mcp_action(ctx, request.action_type)
         except PermissionDenied as exc:
             raise ActionProposalError("policy_denied", f"permission denied for action {request.action_type}") from exc
 
@@ -354,7 +361,7 @@ def _action_proposal_payload(
     execution_plan: ActionExecutionPlanResponse,
 ) -> dict[str, object]:
     proposal_id = f"aip-proposal-{fingerprint.removeprefix('sha256:')[:24]}"
-    return {
+    payload: dict[str, object] = {
         "proposalId": proposal_id,
         "proposalType": _PROPOSAL_TYPE,
         "actionType": request.action_type,
@@ -374,33 +381,21 @@ def _action_proposal_payload(
         "policyVersion": request.policy_version,
         "expiresAt": request.expires_at,
     }
+    if request.originating_json_rpc_id is not None:
+        payload["jsonRpcId"] = request.originating_json_rpc_id
+    return payload
 
 
-def _external_mcp_request(
-    application_id: str,
-    session_id: str,
-    json_rpc_id: str,
-    action_type: str,
-    target_object_type: str,
-    target_object_id: str,
-    expected_object_version: int,
-    parameters: Mapping[str, object],
-) -> ActionProposalRequest:
-    call_id = f"{application_id}:{session_id}:{json_rpc_id}"
-    expires_at = (datetime.now(UTC) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
-    return ActionProposalRequest(
-        originating_ai_run_id=f"ontology-mcp:{application_id}:{session_id}",
-        originating_tool_call_id=call_id,
-        action_type=action_type,
-        target_object_type=target_object_type,
-        target_object_id=target_object_id,
-        expected_object_version=expected_object_version,
-        parameters=parameters,
-        evidence_context_ids=(call_id,),
-        agent_allowed_actions=(action_type,),
-        policy_version="ontology-mcp-v1",
-        expires_at=expires_at,
-        claim_text=f"Ontology MCP requests governed execution of {action_type}.",
+def _review_proposal_fields(request: ActionProposalRequest, fingerprint: str) -> InsightReviewProposalFields:
+    return InsightReviewProposalFields(
+        proposal_type=_PROPOSAL_TYPE,
+        proposal_fingerprint=fingerprint,
+        originating_ai_run_id=request.originating_ai_run_id,
+        originating_tool_call_id=request.originating_tool_call_id,
+        expires_at=request.expires_at,
+        execution_status="pending_review",
+        approved_action_run_id=None,
+        approval_policy_version=request.policy_version,
     )
 
 
@@ -409,9 +404,9 @@ def _external_mcp_evidence(
     request: ActionProposalRequest,
     application_id: str,
     session_id: str,
-    json_rpc_id: str,
+    json_rpc_id: JsonRpcRequestId,
 ) -> list[dict[str, object]]:
-    source_id = f"{application_id}:{session_id}:{json_rpc_id}"
+    source_id = f"{application_id}:{session_id}:{internal_mcp_request_id(json_rpc_id)}"
     content_hash = _hash_json(
         {
             "actionType": request.action_type,
@@ -430,6 +425,7 @@ def _external_mcp_evidence(
             "sourceVersion": "2025-06-18",
             "contentHash": content_hash,
             "securityPartition": ctx.tenant_id,
+            "jsonRpcId": json_rpc_id,
         }
     ]
 

@@ -127,6 +127,8 @@ def test_action_proposal_rechecks_policy_allowlist_and_object_version(
         _propose(foundry, order, reason="Inventory confirmed", expected_object_version=999)
 
     assert policy_error.value.reason == "policy_denied"
+    assert policy_error.value.code == "ACTION_PROPOSAL_ERROR"
+    assert policy_error.value.details == {"reason": "policy_denied"}
     assert allowlist_error.value.reason == "action_not_in_agent_manifest"
     assert version_error.value.reason == "object_version_conflict"
     assert _table_count(foundry.engine, db.insight_reviews) == 0

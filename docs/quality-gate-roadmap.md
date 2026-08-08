@@ -712,7 +712,8 @@ principal/token/application/resource 권한 교집합을 유지하는지, low-ri
 run으로 보내는지, 그 밖의 Action은 immutable plan/version/evidence를 가진 AIP review 한 건으로 보내는지
 검증한다. 같은 JSON-RPC 호출은 동일 run/review를 replay하고, 같은 좌표의 다른 payload는 충돌한다.
 Developer Console enablement와 visual MCP Hub, 앱별 Origin allowlist, version-pinned query-function schema,
-HTTP 권한 경계를 재사용하는 stdio proxy, DB session/event sequence, `Last-Event-ID` resume와 DELETE 후
+HTTP 권한 경계를 재사용하는 stdio proxy, DB session/event sequence, finite SSE notification forwarding,
+`Last-Event-ID` resume, clean EOF의 DELETE와 DELETE 후
 session 재사용 차단도 검증한다. 표준 form OAuth, read-only approval status, 사람 승인 후 원래
 application/client/scope 재검증, 철회된 scope의 실행 차단, 승인 Action run 조회도 같은 gate가 검증한다.
 서비스 클라이언트의 one-time secret 발급, local encrypted vault version 좌표만 DB에 저장하는 회전,
@@ -724,6 +725,14 @@ race를 차단한다. 이 backend gate와 `quality:action-types-palantir-ui`의 
 Uvicorn 프로세스의 Streamable HTTP endpoint에 접속하여 실제 PostgreSQL 객체 조회와
 고위험 Action의 `approval_required` 분기까지 검증한다. 다만 hosted ChatGPT SaaS tenant와
 production cloud secret manager/KMS는 아직 별도 운영 증거다.
+`quality:mcp-rate-limits`는 Builder/Ontology의 POST/GET/DELETE endpoint와 tool 호출이
+tenant/plane/application/client/actor 기준 fixed-window quota를 공유하는지, tool/session 이름 변경으로
+bucket을 우회할 수 없는지, admitted durable replay가 tool quota를 다시 소비하지 않는지, 숫자와 문자열
+JSON-RPC ID가 충돌하지 않는지, 종료 세션 notification과 반복 DELETE가 `404`인지 검증한다. 거부 결과는
+HTTP 또는 MCP `isError` 경계에 맞는 정확한 `Retry-After`를 반환하고 같은 transaction에 audit/outbox를
+남겨야 한다. `quality:mcp-rate-limits-live`는 실제 PostgreSQL의 80개 동시 호출에서 한 fixed-window count만
+남는지와 tenant RLS를 release lane에서 검증한다. endpoint admission은 의도적으로 payload/session 상태
+확인보다 앞서므로 quota가 소진된 요청은 종료 세션이어도 `404`보다 `429`를 먼저 받을 수 있다.
 `quality:action-notification-policies`는 no-code UI와 API/TypeScript/Python SDK가 사용하는 durable tenant policy registry의
 create/update/disable, durable idempotency replay, config-fingerprint CAS, audit/outbox, disabled-policy fail-closed runtime 해석을 검증한다.
 `quality:action-notification-policies-live`는 PostgreSQL concurrent create 단일 승자와 policy/idempotency table의 tenant RLS를 release lane에서 검증한다.
@@ -2391,7 +2400,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 318개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 319개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key
@@ -2432,7 +2441,9 @@ browser execution은 후속 slice다.
 | 게이트                                    | 명령                               | Root cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Frontend backend API/SDK surface contract | `quality:frontend-backend-surface` | FastAPI route가 frontend/non-frontend로 분류되지 않거나, frontend-consumable route에 named SDK method/proofClass/request-contract proof test가 없거나, FastAPI `Idempotency-Key` route와 matrix `requiresIdempotencyKey` marker가 어긋나거나, 문서의 frontend route surface/helper count claim이 실제 matrix/generated SDK count와 어긋나거나, `SDK_CLIENT_SURFACE.helpers` helper가 matrix row/export/operator-evidence/helper-contract proof 없이 생기거나, `docs/frontend-backend-surface-contract.md`의 screen-level SDK recipe 계약 또는 `@foundry-lite/sdk/screen-recipes` typechecked recipe source/package export가 빠지거나, Web Operations/recipe source가 raw `/api/...` 호출로 SDK 계약을 우회하는 문제 차단 |
-| AI FDE governed platform contract | `quality:ai-fde` | 9개 mode와 native tool adapter가 invoking-user permission을 우회하거나, lazy search가 server-owned catalog 밖 tool을 활성화하거나, 사용자 확인 없이 mutation을 실행하거나, Ontology/Pipeline branch를 벗어나 쓰거나, Builder MCP의 OAuth app scope·Origin·재전송·structured content 계약이 깨지거나, Pilot의 seed/branch/OSDK/React/CI bundle idempotency 및 API/SDK/UI/runtime evidence가 drift하는 문제 차단 |
+| AI FDE governed platform contract | `quality:ai-fde` | 9개 mode의 catalog union 68개가 실제 Builder MCP JSON-RPC `tools/call`에서 빠지거나 native tool adapter가 invoking-user permission을 우회하고 durable 성공 증거를 남기지 못하거나, 49개 read가 불필요한 승인을 요구하거나 19개 mutation이 challenge → 별도 human bearer 승인 → 짧은 수명의 1회용 receipt를 거치지 않거나, lazy search가 server-owned catalog 밖 tool을 활성화하거나, Ontology/Pipeline branch를 벗어나 쓰거나, exact Builder audience·OAuth app scope·Origin·재전송·structured content 계약이 깨지거나, Pipeline static test proof를 실제 data execution으로 잘못 보고하거나, Pilot의 seed/branch/OSDK/React/CI bundle idempotency 및 API/SDK/UI/runtime evidence가 drift하는 문제 차단 |
+| Builder MCP official-client live contract | `quality:builder-mcp-live` | 공식 Python `ClientSession`이 별도 strict-OIDC Uvicorn과 PostgreSQL에 연결되지 않거나, application bearer와 별도 human bearer의 경계가 무너지거나, 한 session의 연속 branch mutation이 challenge → control-plane 승인 → outer `confirmationReceipt` 재호출을 거치지 않거나, receipt가 재사용되거나, proposal-only 경계를 넘어 active Ontology/deployment를 바꾸거나, Pipeline static test proof가 row execution으로 과장되는 문제 차단 |
+| MCP durable admission contract | `quality:mcp-rate-limits`; `quality:mcp-rate-limits-live` | 두 MCP plane의 POST/GET/DELETE 또는 tool quota가 누락되거나 tool/session 이름 회전으로 우회되거나, exact replay가 quota를 다시 소비하거나, fixed-window 동시 갱신·tenant RLS·audit/outbox·`Retry-After` 계약이 깨지는 문제 차단 |
 | Browser SDK request/helper contract       | `quality:sdk-request-contract`     | named SDK method가 실제 browser SDK에서 잘못된 HTTP method/path/query/header/body/idempotency key/error metadata를 보내거나, SDK helper가 retry/backoff/cursor/duplicate-action/error classification/request context 계약에서 drift 나는 문제 차단                                                                                                                                                                                                                                                                                 |
 | SDK TypeScript typecheck                  | `quality:sdk-typecheck`            | SDK package entrypoint, generated types, optional React helpers, and screen recipes가 TypeScript strict mode에서 깨져 프론트엔드가 SDK를 import하자마자 실패하는 문제 차단                                                                                                                                                                                                                                                                                                                                                         |
 | Foundry SPA TypeScript typecheck          | `quality:foundry-typecheck`        | SDK wire response의 nullable/optional 상태를 화면이 검증 없이 강한 타입으로 가정하거나, 실제 `apps/foundry` 화면 조합이 strict TypeScript mode에서 깨지는 문제 차단                                                                                                                                                                                                                                                                                                                                                                 |

@@ -22,6 +22,17 @@ def test_documentation_map_requires_every_markdown_doc_role(tmp_path: Path) -> N
     assert any(finding.reference == "docs/extra-runbook.md" for finding in findings)
 
 
+def test_documentation_map_ignores_playwright_error_context(tmp_path: Path) -> None:
+    _write_documentation_tree(tmp_path)
+    error_context = tmp_path / "test-results" / "failed-browser-case" / "error-context.md"
+    error_context.parent.mkdir(parents=True)
+    error_context.write_text("# Generated browser failure context\n", encoding="utf-8")
+
+    findings = _collect(tmp_path)
+
+    assert not any(finding.reference.endswith("error-context.md") for finding in findings)
+
+
 def test_documentation_map_rejects_stale_document_role(tmp_path: Path) -> None:
     _write_documentation_tree(tmp_path, extra_role="docs/missing-runbook.md")
 

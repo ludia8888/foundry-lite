@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from foundry_lite.application.ports.action_notification_recipient_directory import (
-    ActionNotificationRecipientDirectory,
-)
 from foundry_lite.application.services.action_distributed_contracts import (
     ActionAsyncRunRow,
     ActionDefinitionV3,
@@ -30,6 +27,7 @@ from foundry_lite.application.services.action_distributed_contracts import (
 from foundry_lite.application.services.action_distributed_effects import (
     ActionBeforeEffectOutcomeUnknown,
     ActionEffectDeliveryService,
+    ActionNotificationRecipientDirectory,
     ConnectorRegistryRepository,
 )
 from foundry_lite.application.services.action_distributed_revalidation import ActionRunRevalidator
@@ -74,6 +72,9 @@ from foundry_lite.application.services.action_webhook_plan_resolution import (
     resolve_webhook_edit_plan,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.osdk_service_principal_authorization import (
+    ServicePrincipalAccessSessionBoundary,
+)
 from foundry_lite.application.state_transitions import (
     ACTION_RUN_ASYNC_CANCELLED,
     ACTION_RUN_ASYNC_CONFLICT,
@@ -107,6 +108,7 @@ class ActionDistributedRunService(CoreService):
         "action_effect_delivery_service",
         "action_media_runtime_service",
         "ontology_lookup_service",
+        "osdk_access_session_service",
         "osdk_application_service",
         "runtime_service",
     )
@@ -119,6 +121,7 @@ class ActionDistributedRunService(CoreService):
     object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_lookup_service: OntologyLookupService
+    osdk_access_session_service: ServicePrincipalAccessSessionBoundary
     osdk_application_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
     action_effect_delivery_service: ActionEffectDeliveryService
@@ -281,6 +284,7 @@ class ActionDistributedRunService(CoreService):
             self.connector_registry_repository,
             self.object_read_repository,
             self.action_notification_recipient_directory,
+            self.osdk_access_session_service,
         )
 
     def _record_failure(

@@ -31,7 +31,7 @@ def _rpc(rpc_id: int, method: str) -> dict[str, object]:
     return {"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": {}}
 
 
-def test_builder_stdio_proxy_targets_builder_plane_and_forwards_named_confirmation() -> None:
+def test_builder_stdio_proxy_targets_builder_plane_without_reusable_confirmation_header() -> None:
     requests: list[Request] = []
 
     def opener(request: Request, *, timeout: float) -> _Response:
@@ -44,11 +44,15 @@ def test_builder_stdio_proxy_targets_builder_plane_and_forwards_named_confirmati
         "app/build tools",
         "secret-access-token",
         plane="builder",
-        confirmed_tool_id="ontology.branch.apply_patch",
     )
+    payload = _rpc(1, "tools/call")
+    payload["params"] = {
+        "name": "ontology.branch.apply_patch",
+        "arguments": {"confirmationReceipt": "one-time-receipt"},
+    }
     response, session_id = forward_message(
         config,
-        _rpc(1, "tools/call"),
+        payload,
         session_id=None,
         opener=cast(Any, opener),
     )
@@ -56,7 +60,9 @@ def test_builder_stdio_proxy_targets_builder_plane_and_forwards_named_confirmati
     assert response is not None and response["id"] == 1
     assert session_id == "builder-1"
     assert requests[0].full_url.endswith("/mcp/builder/app%2Fbuild%20tools")
-    assert requests[0].headers["X-fde-confirm-tool"] == "ontology.branch.apply_patch"
+    assert set(requests[0].headers) == {"Accept", "Authorization", "Content-type", "Mcp-protocol-version"}
+    forwarded = json.loads(cast(bytes, requests[0].data).decode())
+    assert forwarded["params"]["arguments"]["confirmationReceipt"] == "one-time-receipt"
     assert "secret-access-token" not in repr(config)
 
 
@@ -71,10 +77,8 @@ def test_builder_stdio_entrypoint_selects_builder_plane_without_exposing_token()
         args,
         {
             "FOUNDRY_LITE_MCP_ACCESS_TOKEN": "token-from-env",
-            "FOUNDRY_LITE_MCP_CONFIRM_TOOL": "ontology.branch.propose",
         },
     )
 
     assert config.plane == "builder"
-    assert config.confirmed_tool_id == "ontology.branch.propose"
     assert callable(main)

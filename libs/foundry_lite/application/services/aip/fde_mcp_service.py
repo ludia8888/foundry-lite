@@ -2,25 +2,68 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import replace
 
 from foundry_lite.application.ports import (
-    AiExecutionRunRecord,
     AiRunRepository,
-    AiSessionRecord,
-    AiToolCallRecord,
     OsdkApplicationRepository,
+    OsdkMcpSessionEventRow,
+    OsdkMcpStreamLease,
     TransactionManager,
 )
-from foundry_lite.application.ports.transaction_context import AI_RUN_FAILED, AI_RUN_SUCCEEDED
-from foundry_lite.application.primitives import _now
-from foundry_lite.application.services.aip.agent_runtime_ledger import event_record, hash_json
 from foundry_lite.application.services.aip.fde_catalog import FDE_MODES, fde_tool_catalog
-from foundry_lite.application.services.aip.fde_mcp_discovery import (
-    activation_record as _activation_record,
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    FdeMcpRequestBinding,
+    FdeOntologyToolError,
+    FdePlatformToolError,
+    ToolSpec,
+    hash_json,
+    is_scope_allowed,
+    tool_error_result,
+    validate_outer_shape,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    call_binding as _binding,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    error_result_payload as _error_result_payload,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    guard_external_tool as _guard_external_tool,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    has_active_client as _has_active_client,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    mcp_run_id as _mcp_run_id,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    mcp_tool as _mcp_tool,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    mode_scope as _mode_scope,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    platform_request as _platform_request,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    replay_result_payload as _replay_result_payload,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    result_payload as _result_payload,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    tool_domain_error as _tool_domain_error,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    tool_input_schema as _tool_input_schema,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    tool_spec as _tool_spec,
+)
+from foundry_lite.application.services.aip.fde_mcp_contract import (
+    validated_outer_input as _validated_outer_input,
 )
 from foundry_lite.application.services.aip.fde_mcp_discovery import (
     allowed_modes as _allowed_modes,
@@ -43,57 +86,33 @@ from foundry_lite.application.services.aip.fde_mcp_discovery import (
 from foundry_lite.application.services.aip.fde_mcp_discovery import (
     search_limit as _search_limit,
 )
-from foundry_lite.application.services.aip.fde_ontology_tools import FdeOntologyToolError
-from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, FdePlatformToolRequest
-from foundry_lite.application.services.aip.tool_broker import ToolBrokerResult, ToolSpec
+from foundry_lite.application.services.aip.fde_mcp_run_ledger import FdeMcpRunLedger
+from foundry_lite.application.services.aip.fde_mcp_security import FdeMcpSecurityLedger
+from foundry_lite.application.services.aip.fde_mcp_sessions import LAZY_DISCOVERY_MARKER, FdeMcpSessionLedger
+from foundry_lite.application.services.aip.fde_mcp_sessions import activation_record as _activation_record
+from foundry_lite.application.services.aip.fde_mcp_types import (
+    FdeMcpAccessSessionValidator,
+    FdeMcpApplicationReader,
+    FdeMcpContextValidator,
+    FdeMcpPlatformExecutor,
+    FdeMcpToolCall,
+)
+from foundry_lite.application.services.mcp_rate_limit_service import McpRateLimitService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
-from foundry_lite.domain.platform.scopes import is_scope_allowed, resource_scope
+from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, RateLimited, ValidationFailed
 from foundry_lite.security.policy import PolicyService
 
 JsonObject = Mapping[str, object]
-
-
-@dataclass(frozen=True)
-class FdeMcpToolCall:
-    """Normalized one-tool JSON-RPC request at the Builder MCP boundary."""
-
-    application_id: str
-    session_id: str
-    json_rpc_id: str
-    mode: str
-    workspace_ref: str
-    tool_id: str
-    arguments: JsonObject
-    confirmed_tool_id: str | None
-
-
-class FdeMcpContextValidator(Protocol):
-    """Validate MCP workspace scope through the canonical FDE context layer."""
-
-    def validate_scope(self, ctx: RequestContext, mode: str, workspace_ref: str) -> None: ...
-
-
-class FdeMcpPlatformExecutor(Protocol):
-    """Execute a server-owned tool through the governed FDE dispatcher."""
-
-    def execute(self, ctx: RequestContext, request: FdePlatformToolRequest) -> ToolBrokerResult: ...
-
-
-class FdeMcpApplicationReader(Protocol):
-    """Read the OAuth application's active clients and resource restrictions."""
-
-    def get_application(self, app_id: str, *, ctx: RequestContext | None = None) -> JsonObject: ...
-
-
-class FdeMcpAccessSessionValidator(Protocol):
-    def require_active(self, ctx: RequestContext, application_id: str) -> None: ...
 
 
 class FdeMcpGateway:
     """External MCP integration boundary over governed application services."""
 
     access_session_validator: FdeMcpAccessSessionValidator
+    run_ledger: FdeMcpRunLedger
+    rate_limits: McpRateLimitService
+    security_ledger: FdeMcpSecurityLedger
+    session_ledger: FdeMcpSessionLedger
 
     def __init__(
         self,
@@ -106,6 +125,7 @@ class FdeMcpGateway:
         application_reader: FdeMcpApplicationReader,
         application_repository: OsdkApplicationRepository,
         access_session_validator: FdeMcpAccessSessionValidator,
+        rate_limits: McpRateLimitService,
     ) -> None:
         self.engine = engine
         self.policy = policy
@@ -115,6 +135,66 @@ class FdeMcpGateway:
         self.osdk_application_service = application_reader
         self.osdk_application_repository = application_repository
         self.access_session_validator = access_session_validator
+        self.rate_limits = rate_limits
+        self.session_ledger = FdeMcpSessionLedger(engine, application_repository)
+        self.security_ledger = FdeMcpSecurityLedger(engine, ai_run_repository, policy)
+        self.run_ledger = FdeMcpRunLedger(engine, ai_run_repository, self.security_ledger)
+
+    def consume_endpoint_rate_limit(self, ctx: RequestContext, application_id: str) -> None:
+        self.rate_limits.consume_endpoint(ctx, plane="builder", application_id=application_id)
+
+    def open_session(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+    ) -> Mapping[str, object]:
+        self._authorized_application_bundle(ctx, application_id)
+        return self.session_ledger.open(ctx, application_id, session_id)
+
+    def session_events(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+        *,
+        after_sequence: int = 0,
+    ) -> list[OsdkMcpSessionEventRow]:
+        self._authorized_application_bundle(ctx, application_id)
+        return self.session_ledger.events(
+            ctx,
+            application_id,
+            session_id,
+            after_sequence=after_sequence,
+        )
+
+    def claim_session_stream(self, ctx: RequestContext, application_id: str, session_id: str) -> OsdkMcpStreamLease:
+        self._authorized_application_bundle(ctx, application_id)
+        return self.session_ledger.claim_stream(ctx, application_id, session_id)
+
+    def release_session_stream(self, ctx: RequestContext, application_id: str, session_id: str, lease_id: str) -> bool:
+        return self.session_ledger.release_stream(ctx, application_id, session_id, lease_id)
+
+    def close_session(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+    ) -> Mapping[str, object]:
+        self._authorized_application_bundle(ctx, application_id)
+        return self.session_ledger.close(ctx, application_id, session_id)
+
+    def approve_confirmation(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        challenge_id: str,
+    ) -> Mapping[str, object]:
+        bundle = self.osdk_application_service.get_application(application_id, ctx=ctx)
+        application = bundle.get("application")
+        if not isinstance(application, Mapping) or application.get("status") != "active":
+            raise PermissionDenied("Builder MCP application is not active")
+        return self.security_ledger.approve(ctx, application_id, challenge_id)
 
     def list_tools(
         self,
@@ -125,6 +205,8 @@ class FdeMcpGateway:
         discovery_mode: str = "eager",
     ) -> dict[str, object]:
         bundle = self._authorized_application_bundle(ctx, application_id)
+        if session_id is not None:
+            self.session_ledger.require_active(ctx, application_id, session_id)
         allowed = self._allowed_tools(ctx, bundle)
         search = _mcp_search_tool(_allowed_modes(allowed))
         if discovery_mode == "eager":
@@ -142,6 +224,10 @@ class FdeMcpGateway:
         ]
         return {"tools": [search, *projected], "discoveryMode": "lazy", "activatedToolCount": len(projected)}
 
+    def activate_lazy_discovery(self, ctx: RequestContext, application_id: str, session_id: str) -> None:
+        self._authorized_application_bundle(ctx, application_id)
+        self.session_ledger.mark_lazy(ctx, application_id, session_id)
+
     def _allowed_tools(self, ctx: RequestContext, bundle: JsonObject) -> dict[str, tuple[ToolSpec, set[str]]]:
         allowed: dict[str, tuple[ToolSpec, set[str]]] = {}
         for mode in FDE_MODES:
@@ -152,33 +238,97 @@ class FdeMcpGateway:
         return dict(sorted(allowed.items()))
 
     def execute_tool(self, ctx: RequestContext, request: FdeMcpToolCall) -> dict[str, object]:
+        catalog = self._authorized_catalog(ctx, request)
+        is_search = request.tool_id in {"search_tools", "fde.tools.search"}
+        spec = _tool_spec(catalog, "fde.tools.search" if is_search else request.tool_id)
+        schema = (
+            _mcp_search_tool((request.mode,))["inputSchema"] if is_search else _tool_input_schema((request.mode,), spec)
+        )
+        if not isinstance(schema, Mapping):
+            raise ValidationFailed("Builder MCP tool input schema is invalid")
+        validate_outer_shape(request, schema)
+        run_id = _mcp_run_id(ctx, request)
+        replay = self.security_ledger.replay(ctx, run_id, _binding(ctx, request, spec))
+        if replay is not None:
+            return _replay_result_payload(run_id, replay)
+        try:
+            self.rate_limits.consume_tool(ctx, plane="builder", application_id=request.application_id)
+        except RateLimited as exc:
+            return tool_error_result(exc, request_id=ctx.request_id)
+        self.fde_context_service.validate_scope(ctx, request.mode, request.workspace_ref)
+        if is_search:
+            return self._execute_tool_search(ctx, self._validated_search_request(request), catalog)
+        request = self._validated_request(request, schema)
+        _guard_external_tool(spec)
+        self._require_lazy_activation(ctx, request, spec)
+        return self._execute_catalog_tool(ctx, request, catalog, spec)
+
+    def _authorized_catalog(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+    ) -> tuple[ToolSpec, ...]:
         bundle = self._authorized_application_bundle(ctx, request.application_id)
+        self.session_ledger.require_active(ctx, request.application_id, request.session_id)
         if not self._mode_allowed(ctx, bundle, request.mode):
             raise PermissionDenied("Builder MCP mode is outside application restrictions")
-        self.fde_context_service.validate_scope(ctx, request.mode, request.workspace_ref)
-        catalog = fde_tool_catalog(request.mode, ())
-        if request.tool_id in {"search_tools", "fde.tools.search"}:
-            return self._execute_tool_search(ctx, request, catalog)
-        spec = _tool_spec(catalog, request.tool_id)
-        _guard_external_tool(spec)
+        return fde_tool_catalog(request.mode, ())
+
+    def _validated_search_request(self, request: FdeMcpToolCall) -> FdeMcpToolCall:
+        search_schema = _mcp_search_tool((request.mode,))["inputSchema"]
+        if not isinstance(search_schema, Mapping):
+            raise ValidationFailed("Builder MCP search_tools input schema is invalid")
+        return self._validated_request(request, search_schema)
+
+    def _execute_catalog_tool(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+        catalog: tuple[ToolSpec, ...],
+        spec: ToolSpec,
+    ) -> dict[str, object]:
         run_id = _mcp_run_id(ctx, request)
-        replay = self._replay(ctx, run_id)
-        if replay is not None:
-            return replay
-        self._seed_run(ctx, request, run_id, catalog)
+        binding = _binding(ctx, request, spec)
+        early_result = self._replay_or_confirm(ctx, request, spec, run_id, binding)
+        if early_result is not None:
+            return early_result
+        claimed = self._claim_run(ctx, request, binding, run_id, catalog)
+        if claimed is not None:
+            return claimed
+        return self._invoke_tool(ctx, request, catalog, spec, run_id)
+
+    def _invoke_tool(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+        catalog: tuple[ToolSpec, ...],
+        spec: ToolSpec,
+        run_id: str,
+    ) -> dict[str, object]:
         try:
             result = self.fde_platform_tool_service.execute(
                 ctx,
-                _platform_request(request, run_id, spec, catalog),
+                _platform_request(request, run_id, spec, catalog, is_confirmed=spec.effect != "READ"),
             )
         except (FdePlatformToolError, FdeOntologyToolError) as exc:
             domain_error = _tool_domain_error(exc)
-            self._fail_run(ctx, run_id, domain_error)
-            raise domain_error from exc
+            self.security_ledger.fail_execution(ctx, run_id, domain_error)
+            return _error_result_payload(
+                run_id,
+                f"{run_id}-tool-1",
+                domain_error,
+                request_id=ctx.request_id,
+            )
+        except FoundryLiteError as exc:
+            self.security_ledger.fail_execution(ctx, run_id, exc)
+            return _error_result_payload(run_id, f"{run_id}-tool-1", exc, request_id=ctx.request_id)
         except Exception as exc:
-            self._fail_run(ctx, run_id, exc)
+            self.security_ledger.fail_execution(ctx, run_id, exc)
             raise
-        self._complete_run(ctx, run_id, result.ledger_record)
+        self.run_ledger.complete(ctx, run_id, result.ledger_record)
+        self.session_ledger.record_tool_completed(
+            ctx, request.application_id, request.session_id, request.tool_id, run_id
+        )
         return _result_payload(run_id, result.tool_call_id, result.output_json, is_replayed=False)
 
     def _execute_tool_search(
@@ -193,13 +343,19 @@ class FdeMcpGateway:
         )
         matches = _rank_tools(query, candidates, limit)
         run_id = _mcp_run_id(ctx, request)
-        replay = self._replay(ctx, run_id)
+        binding = _binding(ctx, request, _tool_spec(catalog, "fde.tools.search"))
+        replay = self.security_ledger.replay(ctx, run_id, binding)
         if replay is not None:
-            return replay
-        self._seed_run(ctx, request, run_id, catalog)
+            return _replay_result_payload(run_id, replay)
+        claimed = self._claim_run(ctx, request, binding, run_id, catalog)
+        if claimed is not None:
+            return claimed
         output = self._activate_tools(ctx, request, query, matches)
         record = _search_ledger(ctx, request, run_id, output)
-        self._complete_run(ctx, run_id, record)
+        self.run_ledger.complete(ctx, run_id, record)
+        self.session_ledger.record_tool_completed(
+            ctx, request.application_id, request.session_id, request.tool_id, run_id
+        )
         return _result_payload(run_id, record.id, output, is_replayed=False)
 
     def _activate_tools(
@@ -211,15 +367,31 @@ class FdeMcpGateway:
     ) -> dict[str, object]:
         query_hash = hash_json({"mode": request.mode, "query": query.casefold()})
         activated: list[dict[str, object]] = []
+        has_new_activation = False
         with self.engine.begin() as conn:
             for tool, score in matches:
                 is_new = self.osdk_application_repository.activate_mcp_tool(
                     transaction=conn,
-                    record=_activation_record(ctx, request, tool.tool_id, query_hash),
+                    record=_activation_record(
+                        ctx,
+                        request.application_id,
+                        request.session_id,
+                        tool.tool_id,
+                        query_hash,
+                    ),
                 )
+                has_new_activation = has_new_activation or is_new
                 activated.append(
                     {"toolId": tool.tool_id, "description": tool.description, "score": score, "isNew": is_new}
                 )
+        if has_new_activation:
+            self.session_ledger.append_event(
+                ctx,
+                request.application_id,
+                request.session_id,
+                "notifications/tools/list_changed",
+                {"queryHash": query_hash},
+            )
         return {
             "queryHash": query_hash,
             "activatedTools": activated,
@@ -227,16 +399,7 @@ class FdeMcpGateway:
         }
 
     def _activated_tool_ids(self, ctx: RequestContext, application_id: str, session_id: str) -> set[str]:
-        with self.engine.begin() as conn:
-            rows = self.osdk_application_repository.mcp_tool_activations(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                app_id=application_id,
-                session_id=session_id,
-                client_id=ctx.client_id or "",
-                actor_user_id=ctx.actor_user_id,
-            )
-        return {str(row["tool_id"]) for row in rows}
+        return self.session_ledger.activated_tool_ids(ctx, application_id, session_id)
 
     def _authorized_application_bundle(self, ctx: RequestContext, application_id: str) -> JsonObject:
         self.access_session_validator.require_active(ctx, application_id)
@@ -263,221 +426,74 @@ class FdeMcpGateway:
         )
         return is_scope_allowed(required, ctx.token_scopes, granted)
 
-    def _replay(self, ctx: RequestContext, run_id: str) -> dict[str, object] | None:
-        with self.engine.begin() as conn:
-            ledger = self.ai_run_repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
-        if ledger is None:
-            return None
-        calls = ledger["toolCalls"]
-        output = calls[0].get("result_json") if calls else None
-        if not isinstance(output, Mapping):
-            raise ValidationFailed("Builder MCP idempotent run exists without terminal tool evidence")
-        return _result_payload(run_id, str(calls[0]["id"]), output, is_replayed=True)
+    def _validated_request(
+        self,
+        request: FdeMcpToolCall,
+        schema: Mapping[str, object],
+    ) -> FdeMcpToolCall:
+        arguments, receipt = _validated_outer_input(request, schema)
+        return replace(request, arguments=arguments, confirmation_receipt=receipt)
 
-    def _seed_run(
+    def _replay_or_confirm(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+        spec: ToolSpec,
+        run_id: str,
+        binding: FdeMcpRequestBinding,
+    ) -> dict[str, object] | None:
+        replay = self.security_ledger.replay(ctx, run_id, binding)
+        if replay is not None:
+            return _replay_result_payload(run_id, replay)
+        if spec.effect == "READ":
+            return None
+        if request.confirmation_receipt is None:
+            return self._confirmation_challenge(ctx, request, run_id, binding)
+        return None
+
+    def _confirmation_challenge(
         self,
         ctx: RequestContext,
         request: FdeMcpToolCall,
         run_id: str,
-        catalog: tuple[ToolSpec, ...],
+        binding: FdeMcpRequestBinding,
+    ) -> dict[str, object]:
+        challenge = self.security_ledger.issue_challenge(ctx, run_id, binding)
+        structured = challenge.get("structuredContent")
+        if challenge.get("isReplayed") is not True:
+            self.session_ledger.append_event(
+                ctx,
+                request.application_id,
+                request.session_id,
+                "notifications/foundry-lite/approval_required",
+                dict(structured) if isinstance(structured, Mapping) else {},
+            )
+        return challenge
+
+    def _require_lazy_activation(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+        spec: ToolSpec,
     ) -> None:
-        now = _now()
-        with self.engine.begin() as conn:
-            self.ai_run_repository.create_session(
-                transaction=conn,
-                record=AiSessionRecord(
-                    id=request.session_id,
-                    tenant_id=ctx.tenant_id,
-                    agent_version_id=f"builder-mcp:{request.application_id}:v1",
-                    actor_user_id=ctx.actor_user_id,
-                    status="active",
-                    created_at=now,
-                    last_activity_at=now,
-                ),
-            )
-            self.ai_run_repository.create_execution_run(
-                transaction=conn,
-                record=_run_record(ctx, request, run_id, catalog, now),
-            )
-            self.ai_run_repository.append_execution_event(
-                transaction=conn,
-                record=event_record(ctx, run_id, 1, "mcp_tool_running", {"toolId": request.tool_id}, now),
+        activated = self._activated_tool_ids(ctx, request.application_id, request.session_id)
+        if LAZY_DISCOVERY_MARKER in activated and spec.tool_id not in activated:
+            raise PermissionDenied(
+                "Builder MCP tool must be activated by search_tools in a lazy-discovery session",
+                details={"reason": "tool_not_activated", "toolId": spec.tool_id},
             )
 
-    def _complete_run(self, ctx: RequestContext, run_id: str, tool_record: AiToolCallRecord) -> None:
-        now = _now()
-        with self.engine.begin() as conn:
-            self.ai_run_repository.record_tool_call(transaction=conn, record=tool_record)
-            self.ai_run_repository.append_execution_event(
-                transaction=conn,
-                record=event_record(ctx, run_id, 2, "succeeded", {"source": "builder_mcp"}, now),
-            )
-            self.ai_run_repository.update_execution_run_status(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                ai_run_id=run_id,
-                transition=AI_RUN_SUCCEEDED,
-                usage_json={"modelCallCount": 0, "toolCallCount": 1, "source": "builder_mcp"},
-                error_json=None,
-                completed_at=now,
-            )
-
-    def _fail_run(self, ctx: RequestContext, run_id: str, exc: Exception) -> None:
-        now = _now()
-        error = {"type": type(exc).__name__, "detail": str(exc)[:512]}
-        with self.engine.begin() as conn:
-            self.ai_run_repository.append_execution_event(
-                transaction=conn,
-                record=event_record(ctx, run_id, 2, "failed", error, now),
-            )
-            self.ai_run_repository.update_execution_run_status(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                ai_run_id=run_id,
-                transition=AI_RUN_FAILED,
-                usage_json={"modelCallCount": 0, "toolCallCount": 0, "source": "builder_mcp"},
-                error_json=error,
-                completed_at=now,
-            )
-
-
-def _run_record(
-    ctx: RequestContext,
-    request: FdeMcpToolCall,
-    run_id: str,
-    catalog: tuple[ToolSpec, ...],
-    now: str,
-) -> AiExecutionRunRecord:
-    """Build the immutable durable MCP execution-run evidence."""
-    request_hash = hash_json({"mode": request.mode, "scope": request.workspace_ref, "arguments": request.arguments})
-    return AiExecutionRunRecord(
-        id=run_id,
-        tenant_id=ctx.tenant_id,
-        session_id=request.session_id,
-        agent_version_id=f"builder-mcp:{request.application_id}:v1",
-        actor_user_id=ctx.actor_user_id,
-        request_id=ctx.request_id,
-        trace_id=ctx.request_id,
-        status="running",
-        ontology_version_id="active-ontology",
-        model_alias_version="none",
-        resolved_model_id="none",
-        resolved_model_revision="none",
-        prompt_version_id="builder-mcp-direct-v1",
-        compiled_prompt_hash=request_hash,
-        tool_manifest_hash=hash_json([tool.tool_id for tool in catalog]),
-        context_manifest_hash=hash_json([request.workspace_ref]),
-        state_snapshot_hash=request_hash,
-        policy_snapshot_hash=hash_json({"policy": "builder-mcp-v1"}),
-        budget_json={"maxToolCalls": 1, "maxModelCalls": 0},
-        usage_json=None,
-        error_json=None,
-        started_at=now,
-        completed_at=None,
-    )
-
-
-def _platform_request(
-    request: FdeMcpToolCall,
-    run_id: str,
-    spec: ToolSpec,
-    catalog: tuple[ToolSpec, ...],
-) -> FdePlatformToolRequest:
-    """Translate a confirmed MCP call into the internal governed tool contract."""
-    approved = (spec.tool_id,) if request.confirmed_tool_id == spec.tool_id else ()
-    return FdePlatformToolRequest(
-        tool_call_id=f"{run_id}-tool-1",
-        ai_run_id=run_id,
-        sequence=1,
-        mode=request.mode,
-        scope_ref=request.workspace_ref,
-        spec=spec,
-        catalog=catalog,
-        arguments=request.arguments,
-        approved_tool_ids=approved,
-        max_output_bytes=65536,
-        occurred_at=_now(),
-    )
-
-
-def _mcp_tool(modes: tuple[str, ...], tool: ToolSpec) -> dict[str, object]:
-    """Project one deterministic MCP tool schema."""
-    return {
-        "name": tool.tool_id,
-        "title": tool.tool_id,
-        "description": tool.description,
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "mode": {"type": "string", "enum": list(modes)},
-                "workspaceRef": {"type": "string"},
-                "arguments": dict(tool.input_schema),
-            },
-            "required": ["mode", "workspaceRef", "arguments"],
-            "additionalProperties": False,
-        },
-        "annotations": {
-            "readOnlyHint": tool.effect == "READ",
-            "destructiveHint": tool.effect == "WRITE",
-            "idempotentHint": True,
-            "openWorldHint": False,
-        },
-    }
-
-
-def _mode_scope(mode: str) -> str:
-    """Return the resource restriction required to execute one FDE mode."""
-    return resource_scope("connector", f"fde_{mode}", "execute")
-
-
-def _has_active_client(value: object, client_id: str) -> bool:
-    """Check that the calling OAuth client is active for the application."""
-    return isinstance(value, list) and any(
-        isinstance(item, Mapping) and item.get("client_id") == client_id and item.get("status") == "active"
-        for item in value
-    )
-
-
-def _tool_spec(catalog: tuple[ToolSpec, ...], tool_id: str) -> ToolSpec:
-    """Resolve a requested tool from the selected mode's server catalog."""
-    for tool in catalog:
-        if tool.tool_id == tool_id:
-            return tool
-    raise ValidationFailed("Builder MCP tool is not available in the selected mode")
-
-
-def _guard_external_tool(spec: ToolSpec) -> None:
-    """Keep approval, merge, deployment, and activation outside MCP."""
-    if spec.tool_id.endswith((".execute_proposal", ".approve", ".merge", ".deploy", ".activate")):
-        raise PermissionDenied("Builder MCP never exposes approval, merge, deploy, or activation tools")
-
-
-def _tool_domain_error(exc: FdePlatformToolError | FdeOntologyToolError) -> PermissionDenied | ValidationFailed:
-    """Map internal FDE tool failures to stable API-domain errors."""
-    if exc.reason in {"approval_required", "tool_approval_required"}:
-        return PermissionDenied(exc.detail, details={"reason": exc.reason})
-    return ValidationFailed(exc.detail, details={"reason": exc.reason})
-
-
-def _mcp_run_id(ctx: RequestContext, request: FdeMcpToolCall) -> str:
-    """Derive a replay-safe run id from tenant, app, session, and JSON-RPC id."""
-    raw = ":".join((ctx.tenant_id, request.application_id, request.session_id, request.json_rpc_id, request.tool_id))
-    return f"aip-mcp-{hashlib.sha256(raw.encode()).hexdigest()[:32]}"
-
-
-def _result_payload(
-    run_id: str,
-    tool_call_id: str,
-    output: Mapping[str, object],
-    *,
-    is_replayed: bool,
-) -> dict[str, object]:
-    """Return native structured MCP content and durable run coordinates."""
-    return {
-        "aiRunId": run_id,
-        "toolCallId": tool_call_id,
-        "structuredContent": dict(output),
-        "content": [{"type": "text", "text": "Governed Builder MCP tool completed."}],
-        "isError": False,
-        "isReplayed": is_replayed,
-    }
+    def _claim_run(
+        self,
+        ctx: RequestContext,
+        request: FdeMcpToolCall,
+        binding: FdeMcpRequestBinding,
+        run_id: str,
+        catalog: tuple[ToolSpec, ...],
+    ) -> dict[str, object] | None:
+        if self.run_ledger.seed(ctx, request, binding, run_id, catalog):
+            return None
+        replay = self.security_ledger.replay(ctx, run_id, binding)
+        if replay is None:
+            raise ValidationFailed("Builder MCP run claim disappeared")
+        return _replay_result_payload(run_id, replay)

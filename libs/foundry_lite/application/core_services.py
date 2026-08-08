@@ -37,6 +37,7 @@ from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
 from foundry_lite.application.services.function_execution_service import FunctionExecutionService
 from foundry_lite.application.services.materialization_service import MaterializationService
+from foundry_lite.application.services.mcp_rate_limit_service import McpRateLimitService
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_search import OntologySearchService
@@ -166,6 +167,7 @@ class CoreServices:
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
+    mcp_rate_limits: McpRateLimitService
     media: MediaServices
     citation: CitationService
     logic_runtime: LogicRuntimeService
@@ -249,7 +251,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: SharedCoreSer
         fde_application_tools=shared["fde_application_tools"], fde_context=shared["fde_context"],
         fde_data_connection_tools=shared["fde_data_connection_tools"], fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],  # noqa: E501
         function_execution=build_service(FunctionExecutionService, dependencies), python_function_runtime=build_service(PythonFunctionRuntimeService, dependencies), virtual_table=build_service(VirtualTableService, dependencies),  # noqa: E501
-        iceberg_maintenance=shared["iceberg_maintenance"],
+        iceberg_maintenance=shared["iceberg_maintenance"], mcp_rate_limits=build_service(McpRateLimitService, dependencies),  # noqa: E501
         materialization=build_service(MaterializationService, dependencies),
         media=shared["media"], citation=build_service(CitationService, dependencies),
         logic_runtime=build_service(LogicRuntimeService, dependencies),
@@ -400,6 +402,7 @@ def _platform_collaborator_map(services: CoreServices) -> dict[str, CoreService]
         "insight_review_service": services.insight_review,
         "logic_runtime_service": services.logic_runtime,
         "model_gateway_service": services.model_gateway,
+        "osdk_access_session_service": services.osdk_access_sessions,
         "prompt_artifact_service": services.prompt_artifact,
         "outbox_publisher_service": services.outbox_publisher,
         "record_dlq_service": services.record_dlq,

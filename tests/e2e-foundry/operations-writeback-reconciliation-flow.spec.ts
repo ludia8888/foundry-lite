@@ -5,7 +5,8 @@ const DEMO_HEADERS = {
   "X-User-ID": "web-demo-operator",
   "X-Roles": "ops_manager,data_engineer,finance,aip_prompt_artifact_reader",
 };
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL =
+  process.env.FOUNDRY_LITE_E2E_API_BASE_URL ?? "http://127.0.0.1:8000";
 const WRITEBACK_ID = "writeback_web_reconcile_o1003";
 const TARGET_ORDER_ID = "O-1003";
 const APPROVAL_IDEMPOTENCY_KEY = "operations-web-approval-release-o1999";

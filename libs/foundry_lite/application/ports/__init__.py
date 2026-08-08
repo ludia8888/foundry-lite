@@ -170,6 +170,13 @@ from foundry_lite.application.ports.materialization_repository import (
     MaterializationTargetRef,
     MaterializationTriggerConfig,
 )
+from foundry_lite.application.ports.mcp_rate_limiter import (
+    McpPlane,
+    McpRateLimitDecision,
+    McpRateLimiter,
+    McpRateLimitRequest,
+    McpRateLimitScope,
+)
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
 from foundry_lite.application.ports.oauth_session_repository import (
     OAuthAccessTokenClaims,
@@ -287,11 +294,6 @@ from foundry_lite.application.ports.osdk_application_repository import (
     OsdkDeveloperConsoleIdempotencyRecord,
     OsdkDeveloperConsoleIdempotencyRow,
     OsdkLanguage,
-    OsdkMcpServerRecord,
-    OsdkMcpServerRow,
-    OsdkMcpSessionEventRow,
-    OsdkMcpSessionRecord,
-    OsdkMcpSessionRow,
     OsdkReleaseArtifactDownloadTokenRecord,
     OsdkReleaseArtifactDownloadTokenRow,
     OsdkReleaseArtifactRecord,
@@ -306,6 +308,14 @@ from foundry_lite.application.ports.osdk_application_repository import (
     OsdkSdkVersionBundle,
     OsdkSdkVersionRecord,
     OsdkSdkVersionRow,
+)
+from foundry_lite.application.ports.osdk_mcp_repository import (
+    OsdkMcpServerRecord,
+    OsdkMcpServerRow,
+    OsdkMcpSessionEventRow,
+    OsdkMcpSessionRecord,
+    OsdkMcpSessionRow,
+    OsdkMcpStreamLease,
 )
 from foundry_lite.application.ports.pipeline_dag_orchestrator import (
     PipelineDagDispatchRequest,

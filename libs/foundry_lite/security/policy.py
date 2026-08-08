@@ -97,6 +97,7 @@ class PolicyService:
         # promotion is a deploy-gate decision, restricted further to admins and
         # ops managers, mirroring action execution and operations retry.
         "aip:evals:run": {"admin", "data_engineer", "ops_manager"},
+        "aip:mcp:confirm": {"admin", "data_engineer", "ops_manager"},
         "aip:releases:promote": {"admin", "ops_manager"},
         # Binding a media version onto an object property writes into the object graph, so it is
         # gated above plain reads (viewers are excluded) to stop reference poisoning by callers

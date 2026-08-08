@@ -12,12 +12,20 @@ from foundry_lite.application.ports.insight_review_repository import (
     InsightReviewRow,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.insight_review_external_mcp import (
+    external_mcp_review_action_name,
+    require_external_mcp_action,
+)
 from foundry_lite.application.services.insight_review_payloads import (
     InsightReviewProposalFields,
     ensure_create_replay_matches,
     review_payload,
     review_record,
+)
+from foundry_lite.application.services.osdk_service_principal_authorization import (
+    ServicePrincipalAccessSessionBoundary,
 )
 from foundry_lite.application.services.runtime_restore_gates import require_write_traffic_open
 from foundry_lite.domain.context import RequestContext
@@ -32,7 +40,9 @@ class InsightReviewService(CoreService):
     """Application service for durable human review of AI/insight claims."""
 
     required_dependencies = ("engine", "policy", "insight_review_repository", "runtime_repository")
-    required_collaborators = ()
+    required_collaborators = ("osdk_access_session_service", "osdk_application_scope_service")
+    osdk_access_session_service: ServicePrincipalAccessSessionBoundary
+    osdk_application_scope_service: ActionOsdkScopeBoundary
 
     def create_review(
         self,
@@ -50,6 +60,64 @@ class InsightReviewService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_or_audit(ctx, "insight:create", "insight_review", claim_id)
+        return self._create_review_record(
+            ctx,
+            claim_id=claim_id,
+            claim_text=claim_text,
+            evidence_object_ids=evidence_object_ids,
+            evidence_refs=evidence_refs,
+            idempotency_key=idempotency_key,
+            priority=priority,
+            assignee_user_id=assignee_user_id,
+            action_proposal=action_proposal,
+            proposal_fields=proposal_fields,
+        )
+
+    def create_external_mcp_review(
+        self,
+        *,
+        action_name: str,
+        claim_id: str,
+        claim_text: str,
+        evidence_object_ids: Sequence[str],
+        evidence_refs: Sequence[Mapping[str, object]],
+        idempotency_key: str,
+        ctx: RequestContext,
+        priority: str = "normal",
+        assignee_user_id: str | None = None,
+        action_proposal: Mapping[str, object] | None = None,
+        proposal_fields: InsightReviewProposalFields | None = None,
+    ) -> dict[str, object]:
+        """Create a review through the narrow MCP Action boundary, without general insight:create."""
+
+        self.require_external_mcp_action(ctx, action_name)
+        return self._create_review_record(
+            ctx,
+            claim_id=claim_id,
+            claim_text=claim_text,
+            evidence_object_ids=evidence_object_ids,
+            evidence_refs=evidence_refs,
+            idempotency_key=idempotency_key,
+            priority=priority,
+            assignee_user_id=assignee_user_id,
+            action_proposal=action_proposal,
+            proposal_fields=proposal_fields,
+        )
+
+    def _create_review_record(
+        self,
+        ctx: RequestContext,
+        *,
+        claim_id: str,
+        claim_text: str,
+        evidence_object_ids: Sequence[str],
+        evidence_refs: Sequence[Mapping[str, object]],
+        idempotency_key: str,
+        priority: str,
+        assignee_user_id: str | None,
+        action_proposal: Mapping[str, object] | None,
+        proposal_fields: InsightReviewProposalFields | None,
+    ) -> dict[str, object]:
         self._require_write_open(ctx, operation="create_review", resource_id=claim_id)
         now = _now()
         record = review_record(
@@ -100,11 +168,29 @@ class InsightReviewService(CoreService):
         with self.engine.begin() as conn:
             return review_payload(self._require_row(conn, ctx, review_id))
 
+    def external_mcp_review_detail(
+        self, review_id: str, *, application_id: str, ctx: RequestContext
+    ) -> dict[str, object]:
+        with self.engine.begin() as conn:
+            review = review_payload(self._require_row(conn, ctx, review_id))
+        action_name = external_mcp_review_action_name(review, application_id, ctx)
+        self.require_external_mcp_action(ctx, action_name)
+        return review
+
     def replay_created_review(
         self, idempotency_key: str, *, ctx: RequestContext | None = None
     ) -> dict[str, object] | None:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "insight:create")
+        return self._review_by_create_key(ctx, idempotency_key)
+
+    def replay_external_mcp_review(
+        self, idempotency_key: str, *, action_name: str, ctx: RequestContext
+    ) -> dict[str, object] | None:
+        self.require_external_mcp_action(ctx, action_name)
+        return self._review_by_create_key(ctx, idempotency_key)
+
+    def _review_by_create_key(self, ctx: RequestContext, idempotency_key: str) -> dict[str, object] | None:
         with self.engine.begin() as conn:
             row = self.insight_review_repository.review_by_create_idempotency_key(
                 transaction=conn,
@@ -112,6 +198,14 @@ class InsightReviewService(CoreService):
                 idempotency_key=_required_idempotency_key(idempotency_key),
             )
         return review_payload(row) if row is not None else None
+
+    def require_external_mcp_action(self, ctx: RequestContext, action_name: str) -> None:
+        require_external_mcp_action(
+            ctx,
+            action_name,
+            self.osdk_access_session_service,
+            self.osdk_application_scope_service,
+        )
 
     def assign_review(
         self,

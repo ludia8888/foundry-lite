@@ -19,6 +19,8 @@ from foundry_lite.application.ports.oauth_session_repository import OAuthAccessT
 _DEFAULT_ISSUER = "https://foundry-lite.local/osdk-oauth"
 _DEFAULT_AUDIENCE = "foundry-lite-osdk"
 _DEFAULT_KEY_ID = "foundry-lite-local-osdk-oauth"
+OAUTH_ISSUER_ENV = "FOUNDRY_LITE_OAUTH_ISSUER"
+OAUTH_AUDIENCE_ENV = "FOUNDRY_LITE_OAUTH_AUDIENCE"
 
 
 @dataclass(frozen=True)
@@ -32,10 +34,20 @@ class LocalOAuthTokenIssuer:
     retired_public_jwks: tuple[RuntimeJsonObject, ...] = ()
 
     @classmethod
-    def from_key_path(cls, path: Path) -> LocalOAuthTokenIssuer:
+    def from_key_path(
+        cls,
+        path: Path,
+        *,
+        issuer: str | None = None,
+        audience: str | None = None,
+    ) -> LocalOAuthTokenIssuer:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            return cls(_load_private_key(path))
+            return cls(
+                _load_private_key(path),
+                issuer=issuer or _DEFAULT_ISSUER,
+                audience=audience or _DEFAULT_AUDIENCE,
+            )
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         path.write_bytes(
             key.private_bytes(
@@ -44,14 +56,14 @@ class LocalOAuthTokenIssuer:
                 encryption_algorithm=serialization.NoEncryption(),
             )
         )
-        return cls(key)
+        return cls(key, issuer=issuer or _DEFAULT_ISSUER, audience=audience or _DEFAULT_AUDIENCE)
 
     def issue_access_token(self, claims: OAuthAccessTokenClaims, *, ttl_seconds: int) -> OAuthIssuedAccessToken:
         now = int(time.time())
         expires_at = now + ttl_seconds
         payload = {
             "iss": self.issuer,
-            "aud": self.audience,
+            "aud": claims.get("resource") or self.audience,
             "iat": now,
             "exp": expires_at,
             "tenant_id": claims["tenant_id"],

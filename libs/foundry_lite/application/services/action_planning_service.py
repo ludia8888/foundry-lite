@@ -3,23 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import cast
 
 from foundry_lite.application.ports.action_branch_repository import ActionBranchRepository
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
-from foundry_lite.application.services.action_criteria_resolution import (
-    ResolvedLinkedCriteria,
-    resolve_linked_condition_context,
-    with_criteria_expectations,
-)
-from foundry_lite.application.services.action_effect_authorization import authorize_action_effects
-from foundry_lite.application.services.action_interface_resolution import (
-    interface_create_target_record,
-    require_interface_action_target,
-    require_interface_create_plan_target,
-    resolve_interface_action_definition,
-)
 from foundry_lite.application.services.action_media_runtime_service import ActionMediaRuntimeService
 from foundry_lite.application.services.action_planning_contracts import (
     ActionApplyCommand,
@@ -37,13 +23,16 @@ from foundry_lite.application.services.action_planning_contracts import (
     RequestContext,
     TransactionContext,
 )
+from foundry_lite.application.services.action_planning_output import (
+    PreparedActionPlan,
+    build_action_plan_response,
+    plan_action_command,
+)
+from foundry_lite.application.services.action_planning_request_support import resolve_plan_contract
 from foundry_lite.application.services.action_planning_resolution_support import (
     LivePlanResolutionContext,
-    action_command,
-    action_request_fingerprint,
     action_target_record_error,
     authorize_action_edit_plan,
-    authorized_action_contract,
     build_edit_plan,
     compile_action_definition,
     require_action_permission,
@@ -57,32 +46,28 @@ from foundry_lite.application.services.action_planning_resolution_support import
 )
 from foundry_lite.application.services.action_planning_response_support import (
     ActionRiskAssessment,
-    _now,
-    action_contract_fingerprint,
-    action_plan_diffs,
     action_plan_risk,
-    can_agent_execute_autonomously,
-    edit_plan_manifest,
     require_declared_risk_floor,
-    seal_action_execution_plan,
+)
+from foundry_lite.application.services.action_planning_rules import (
+    ResolvedLinkedCriteria,
+    authorize_action_effects,
+    authorize_external_mcp_action_plan,
+    function_edit_plan,
+    inspect_action_edit_plan,
+    interface_create_target_record,
+    require_interface_action_target,
+    require_interface_create_plan_target,
+    resolve_interface_action_definition,
+    resolve_linked_condition_context,
+    validate_action_effect_targets,
+    with_criteria_expectations,
 )
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.domain.action_runtime.action_effects import action_effect_payload
-
-
-@dataclass(frozen=True, slots=True)
-class _PreparedPlan:
-    action_type: ActionTypeRow
-    contract: ActionDefinitionV3
-    command: ActionApplyCommand
-    plan: EditPlan
-    target: ObjectRecordRow
-    risk: ActionRiskAssessment
+from foundry_lite.application.services.osdk_service_principal_authorization import ServicePrincipalAccessSessionBoundary
 
 
 class ActionPlanningService(CoreService):
-    """Read-only plan and dry-run use cases shared by UI, SDK, and future MCP."""
-
     required_dependencies = (
         "engine",
         "policy",
@@ -95,12 +80,14 @@ class ActionPlanningService(CoreService):
         "object_records_service",
         "action_media_runtime_service",
         "ontology_lookup_service",
+        "osdk_access_session_service",
         "osdk_application_scope_service",
         "runtime_service",
     )
     object_records_service: ActionObjectRecordLookup
     action_media_runtime_service: ActionMediaRuntimeService
     ontology_lookup_service: OntologyLookupService
+    osdk_access_session_service: ServicePrincipalAccessSessionBoundary
     osdk_application_scope_service: ActionOsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
     connector_registry_repository: ConnectorRegistryRepository
@@ -128,6 +115,42 @@ class ActionPlanningService(CoreService):
             ctx=ctx,
             is_dry_run=is_dry_run,
         )
+
+    def plan_external_mcp_action(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> ActionExecutionPlanResponse:
+        reader_ctx = self._authorize_external_mcp_request(ctx, action_api_name, object_type, object_id)
+        with self.engine.begin() as conn:
+            prepared = self._prepare_plan(
+                conn,
+                reader_ctx,
+                action_api_name,
+                object_type,
+                object_id,
+                expected_object_version,
+                params,
+                self.object_records_service,
+                None,
+                None,
+                is_external_mcp=True,
+            )
+            return build_action_plan_response(
+                conn,
+                reader_ctx,
+                self.policy,
+                prepared,
+                self.object_records_service,
+                branch_id=None,
+                is_dry_run=False,
+                authorization_ctx=ctx,
+            )
 
     def plan_action_with_object_lookup(
         self,
@@ -158,9 +181,10 @@ class ActionPlanningService(CoreService):
                 action_type_override,
                 branch_id,
             )
-            return self._plan_response(
+            return build_action_plan_response(
                 conn,
                 request_context,
+                self.policy,
                 prepared,
                 object_lookup,
                 branch_id=branch_id,
@@ -189,6 +213,25 @@ class ActionPlanningService(CoreService):
             ctx, resource_type="action", resource_api_name=action_api_name, operation="validate"
         )
 
+    def _authorize_external_mcp_request(
+        self,
+        ctx: RequestContext,
+        action_api_name: str,
+        object_type: str,
+        object_id: str,
+    ) -> RequestContext:
+        return authorize_external_mcp_action_plan(
+            self.engine,
+            self.policy,
+            self.runtime_service,
+            self.osdk_access_session_service,
+            self.osdk_application_scope_service,
+            ctx,
+            action_api_name,
+            object_type,
+            object_id,
+        )
+
     def _prepare_plan(
         self,
         conn: TransactionContext,
@@ -201,34 +244,77 @@ class ActionPlanningService(CoreService):
         object_lookup: ActionObjectRecordLookup,
         action_type_override: ActionTypeRow | None,
         branch_id: str | None,
-    ) -> _PreparedPlan:
-        action_type = action_type_override or self.ontology_lookup_service._active_action_type(
-            conn, ctx, action_api_name
+        *,
+        is_external_mcp: bool = False,
+    ) -> PreparedActionPlan:
+        action_type, contract = resolve_plan_contract(
+            self.ontology_lookup_service,
+            conn,
+            ctx,
+            action_api_name,
+            action_type_override,
+            is_external_mcp=is_external_mcp,
         )
-        if action_type["api_name"] != action_api_name:
-            raise NotFound("Action override does not match the requested Action")
-        contract = authorized_action_contract(action_type["definition"], ctx, "apply")
         require_interface_action_target(conn, ctx, self.ontology_lookup_service, contract, object_type)
+        command = plan_action_command(action_api_name, object_type, object_id, expected_object_version, params)
         target = self._target_record(
+            conn, ctx, action_type, contract, object_type, object_id, expected_object_version, object_lookup
+        )
+        return self._prepare_resolved_plan(
             conn,
             ctx,
             action_type,
             contract,
-            object_type,
-            object_id,
-            expected_object_version,
+            target,
+            command,
             object_lookup,
+            branch_id,
+            is_external_mcp=is_external_mcp,
         )
-        command = _plan_command(action_api_name, object_type, object_id, expected_object_version, params)
+
+    def _prepare_resolved_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        contract: ActionDefinitionV3,
+        target: ObjectRecordRow,
+        command: ActionApplyCommand,
+        object_lookup: ActionObjectRecordLookup,
+        branch_id: str | None,
+        *,
+        is_external_mcp: bool,
+    ) -> PreparedActionPlan:
+        effective, criteria = self._effective_command(conn, ctx, action_type, contract, target, command, branch_id)
+        plan, risk = self._authorized_plan(
+            conn,
+            ctx,
+            action_type,
+            contract,
+            effective,
+            object_lookup,
+            branch_id,
+            criteria,
+            is_external_mcp=is_external_mcp,
+        )
+        return PreparedActionPlan(action_type, contract, effective, plan, target, risk)
+
+    def _effective_command(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        contract: ActionDefinitionV3,
+        target: ObjectRecordRow,
+        command: ActionApplyCommand,
+        branch_id: str | None,
+    ) -> tuple[ActionApplyCommand, ResolvedLinkedCriteria]:
         criteria = self._criteria_context(conn, ctx, action_type, target, branch_id)
         if (error := self._request_error(ctx, action_type, target, command, criteria)) is not None:
             raise error
         effective = resolved_action_command(ctx, action_type, target, command)
         effective = self.action_media_runtime_service.resolve_command(conn, ctx, contract, effective)
-        plan, risk = self._authorized_plan(
-            conn, ctx, action_type, contract, effective, object_lookup, branch_id, criteria
-        )
-        return _PreparedPlan(action_type, contract, effective, plan, target, risk)
+        return effective, criteria
 
     def _authorized_plan(
         self,
@@ -240,23 +326,50 @@ class ActionPlanningService(CoreService):
         object_lookup: ActionObjectRecordLookup,
         branch_id: str | None,
         criteria: ResolvedLinkedCriteria,
+        *,
+        is_external_mcp: bool,
     ) -> tuple[EditPlan, ActionRiskAssessment]:
         if branch_id is None:
-            authorize_action_effects(
+            self._authorize_or_validate_effects(conn, ctx, contract, is_external_mcp=is_external_mcp)
+        plan = self._resolved_edit_plan(
+            conn, ctx, action_type, command, contract, object_lookup, is_external_mcp=is_external_mcp
+        )
+        plan = with_criteria_expectations(plan, criteria.expectations)
+        sensitive = (
+            inspect_action_edit_plan(conn, ctx, self.ontology_lookup_service, contract, plan)
+            if is_external_mcp
+            else authorize_action_edit_plan(conn, ctx, self.policy, self.ontology_lookup_service, contract, plan)
+        )
+        risk = action_plan_risk(contract, plan, sensitive)
+        require_declared_risk_floor(risk)
+        return plan, risk
+
+    def _authorize_or_validate_effects(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        contract: ActionDefinitionV3,
+        *,
+        is_external_mcp: bool,
+    ) -> None:
+        if is_external_mcp:
+            validate_action_effect_targets(
                 conn,
                 ctx,
-                self.policy,
-                self.osdk_application_scope_service,
                 self.connector_registry_repository,
                 self.action_notification_recipient_directory,
                 contract,
             )
-        plan = self._resolved_edit_plan(conn, ctx, action_type, command, contract, object_lookup)
-        plan = with_criteria_expectations(plan, criteria.expectations)
-        sensitive = authorize_action_edit_plan(conn, ctx, self.policy, self.ontology_lookup_service, contract, plan)
-        risk = action_plan_risk(contract, plan, sensitive)
-        require_declared_risk_floor(risk)
-        return plan, risk
+            return
+        authorize_action_effects(
+            conn,
+            ctx,
+            self.policy,
+            self.osdk_application_scope_service,
+            self.connector_registry_repository,
+            self.action_notification_recipient_directory,
+            contract,
+        )
 
     def _target_record(
         self,
@@ -336,16 +449,24 @@ class ActionPlanningService(CoreService):
         command: ActionApplyCommand,
         contract: ActionDefinitionV3,
         object_lookup: ActionObjectRecordLookup,
+        *,
+        is_external_mcp: bool,
     ) -> EditPlan:
         if contract.function is not None:
-            self.policy.require(ctx, "function:execute")
-            self.osdk_application_scope_service.require_resource_scope(
-                ctx,
-                resource_type="function",
-                resource_api_name=contract.function.api_name,
-                operation="execute",
+            return function_edit_plan(
+                ctx, contract, self.policy, self.osdk_application_scope_service, is_external_mcp=is_external_mcp
             )
-            return EditPlan()
+        return self._rule_edit_plan(conn, ctx, action_type, command, contract, object_lookup)
+
+    def _rule_edit_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        command: ActionApplyCommand,
+        contract: ActionDefinitionV3,
+        object_lookup: ActionObjectRecordLookup,
+    ) -> EditPlan:
         compiled = resolve_interface_action_definition(
             conn,
             ctx,
@@ -366,126 +487,3 @@ class ActionPlanningService(CoreService):
         validate_edit_plan(plan)
         require_interface_create_plan_target(contract, compiled, plan, command.object_type, command.object_id)
         return plan
-
-    def _plan_response(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        prepared: _PreparedPlan,
-        object_lookup: ActionObjectRecordLookup,
-        *,
-        branch_id: str | None,
-        is_dry_run: bool,
-    ) -> ActionExecutionPlanResponse:
-        contract = prepared.contract
-        payload: dict[str, object] = {
-            "actionApiName": contract.api_name,
-            "ontologyVersionId": prepared.action_type["ontology_version_id"],
-            "definitionFingerprint": action_contract_fingerprint(contract),
-            "functionVersion": contract.function.version if contract.function else None,
-            "target": _target_payload(prepared.command, prepared.target),
-            "parameters": dict(prepared.command.params),
-            "editManifest": edit_plan_manifest(prepared.plan),
-            "diffs": action_plan_diffs(conn, ctx, self.policy, object_lookup, prepared.plan),
-            "effectManifest": [] if branch_id else [action_effect_payload(effect) for effect in contract.effects],
-            "risk": _risk_payload(prepared.risk),
-            "authorization": _authorization_payload(ctx),
-            "approval": _approval_payload(contract, prepared.risk),
-            "executionMode": "branch_overlay" if branch_id else _execution_mode(contract, prepared.plan),
-            "isDryRun": is_dry_run,
-            "requestId": ctx.request_id,
-            "createdAt": _now(),
-        }
-        if branch_id is not None:
-            payload["branchId"] = branch_id
-            payload["suppressedEffects"] = [action_effect_payload(effect) for effect in contract.effects]
-        return cast(ActionExecutionPlanResponse, seal_action_execution_plan(payload))
-
-
-def _plan_command(
-    action_api_name: str,
-    object_type: str,
-    object_id: str,
-    expected_object_version: int,
-    params: Mapping[str, object],
-) -> ActionApplyCommand:
-    fingerprint = action_request_fingerprint(
-        action_api_name=action_api_name,
-        object_type=object_type,
-        object_id=object_id,
-        expected_object_version=expected_object_version,
-        params=params,
-    )
-    return action_command(
-        action_api_name,
-        object_type,
-        object_id,
-        expected_object_version,
-        params,
-        f"plan:{fingerprint}",
-        False,
-        False,
-        False,
-        False,
-    )
-
-
-def _target_payload(command: ActionApplyCommand, target: ObjectRecordRow) -> dict[str, object]:
-    return {
-        "objectType": command.object_type,
-        "objectId": command.object_id,
-        "expectedObjectVersion": command.expected_object_version,
-        "readObjectVersion": target["object_version"],
-    }
-
-
-def _risk_payload(risk: ActionRiskAssessment) -> dict[str, object]:
-    return {
-        "declaredLevel": risk.declared_level,
-        "effectiveLevel": risk.effective_level,
-        "reasons": list(risk.reasons),
-    }
-
-
-def _authorization_payload(ctx: RequestContext) -> dict[str, object]:
-    return {
-        "actorUserId": ctx.actor_user_id,
-        "applicationId": ctx.application_id,
-        "clientId": ctx.client_id,
-        "roles": sorted(ctx.roles),
-        "tokenScopes": sorted(ctx.token_scopes),
-        "userAttributeKeys": sorted(ctx.user_attributes),
-        "decision": "allow",
-    }
-
-
-def _approval_payload(contract: ActionDefinitionV3, risk: ActionRiskAssessment) -> dict[str, object]:
-    is_autonomous = can_agent_execute_autonomously(contract, risk)
-    return {
-        "requiredForAgent": not is_autonomous,
-        "agentExecutionPolicy": contract.agent_execution_policy,
-        "canAgentExecuteAutonomously": is_autonomous,
-        "reason": None if is_autonomous else _approval_reason(contract, risk),
-    }
-
-
-def _approval_reason(contract: ActionDefinitionV3, risk: ActionRiskAssessment) -> str:
-    if risk.effective_level != "low":
-        return f"{risk.effective_level}_risk_requires_human_approval"
-    return f"agent_policy_{contract.agent_execution_policy}"
-
-
-def _execution_mode(contract: ActionDefinitionV3, plan: EditPlan) -> str:
-    if contract.function is not None or contract.effects:
-        return "async"
-    edit_count = sum(
-        len(items)
-        for items in (
-            plan.objects_to_create,
-            plan.objects_to_modify,
-            plan.objects_to_delete,
-            plan.links_to_create,
-            plan.links_to_delete,
-        )
-    )
-    return "async" if edit_count > 25 else "sync"

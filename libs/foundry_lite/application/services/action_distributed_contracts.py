@@ -30,7 +30,9 @@ from foundry_lite.application.services.action_edit_plan_results import ActionEdi
 from foundry_lite.application.services.action_protocols import (
     ActionObjectIndexer,
     ActionObjectRecordLookup,
+    ActionOntologyLookup,
     ActionOsdkScopeBoundary,
+    ActionPlanningBoundary,
     ActionRuntimeBoundary,
 )
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
@@ -55,7 +57,9 @@ __all__ = [
     "ActionFunctionExecutor",
     "ActionObjectIndexer",
     "ActionObjectRecordLookup",
+    "ActionOntologyLookup",
     "ActionOsdkScopeBoundary",
+    "ActionPlanningBoundary",
     "ActionRepository",
     "ActionRunDispatchRequest",
     "ActionRunEventRecord",

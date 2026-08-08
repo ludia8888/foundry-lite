@@ -51,6 +51,24 @@ def authorize_action_effects(
             _require_governed_stream_target(effect.kind, effect.target_ref, ctx.tenant_id, notification_directory)
 
 
+def validate_action_effect_targets(
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    repository: ConnectorRegistryRepository,
+    notification_directory: ActionNotificationRecipientDirectory,
+    contract: ActionDefinitionV3,
+) -> None:
+    """Validate effect destinations for a read-only plan without authorizing execution."""
+
+    if not contract.effects or contract.source_version < 3:
+        return
+    for effect in contract.effects:
+        if effect.kind in {"webhook", "connector_command"}:
+            _registered_connector_target(transaction, ctx, repository, effect.target_ref)
+        else:
+            _require_governed_stream_target(effect.kind, effect.target_ref, ctx.tenant_id, notification_directory)
+
+
 def _require_connector_target(
     transaction: TransactionContext,
     ctx: RequestContext,
@@ -58,6 +76,16 @@ def _require_connector_target(
     repository: ConnectorRegistryRepository,
     target_ref: str,
 ) -> None:
+    connector_name = _registered_connector_target(transaction, ctx, repository, target_ref)
+    scope.require_resource_scope(ctx, resource_type="connector", resource_api_name=connector_name, operation="execute")
+
+
+def _registered_connector_target(
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    repository: ConnectorRegistryRepository,
+    target_ref: str,
+) -> str:
     connector_name, resource_name = _connector_parts(target_ref)
     connection = repository.connection_by_name(
         transaction=transaction, tenant_id=ctx.tenant_id, connector_name=connector_name
@@ -73,7 +101,7 @@ def _require_connector_target(
             "Action effect target must resolve to an active registered connector resource",
             details={"targetRef": target_ref},
         )
-    scope.require_resource_scope(ctx, resource_type="connector", resource_api_name=connector_name, operation="execute")
+    return connector_name
 
 
 def _connector_parts(target_ref: str) -> tuple[str, str]:

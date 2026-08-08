@@ -17,7 +17,7 @@ def _object_get_tool(name: str) -> dict[str, object]:
     return _tool(
         f"object.{name}.get",
         f"Get one permitted {name} object by ID.",
-        {"objectId": {"type": "string"}},
+        {"objectId": {"type": "string", "pattern": r"\S"}},
         ["objectId"],
         is_write=False,
     )
@@ -33,7 +33,7 @@ def _object_unified_search_tool(name: str) -> dict[str, object]:
             f"Use this when the answer may live in an attachment rather than in a property."
         ),
         {
-            "query": {"type": "string"},
+            "query": {"type": "string", "pattern": r"\S"},
             "filter": {"type": "object"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
         },
@@ -69,6 +69,7 @@ def action_tool(
     name: str,
     operation: str,
     description: str,
+    target_schema: Mapping[str, object],
     parameter_schema: Mapping[str, object],
     *,
     is_write: bool,
@@ -82,8 +83,8 @@ def action_tool(
         f"action.{name}.{operation}",
         f"{description} {suffix}",
         {
-            "objectType": {"type": "string"},
-            "objectId": {"type": "string"},
+            "objectType": dict(target_schema),
+            "objectId": {"type": "string", "pattern": r"\S"},
             "expectedObjectVersion": {"type": "integer", "minimum": 1},
             "params": parameter_schema,
         },
@@ -179,7 +180,7 @@ def run_status_tool() -> dict[str, object]:
     return _tool(
         "action_run.get",
         "Get durable status and evidence for an Action run visible to this application.",
-        {"runId": {"type": "string"}},
+        {"runId": {"type": "string", "pattern": r"\S"}},
         ["runId"],
         is_write=False,
     )
@@ -189,7 +190,7 @@ def approval_status_tool() -> dict[str, object]:
     return _tool(
         "action_approval.get",
         "Get read-only human approval and execution status for an Action proposal created by this MCP principal.",
-        {"reviewId": {"type": "string"}},
+        {"reviewId": {"type": "string", "pattern": r"\S"}},
         ["reviewId"],
         is_write=False,
     )

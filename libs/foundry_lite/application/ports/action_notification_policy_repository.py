@@ -10,6 +10,10 @@ from foundry_lite.application.ports.transaction_context import TransactionContex
 ActionNotificationPolicyStatus = Literal["active", "disabled"]
 
 
+class ActionNotificationPolicyIntegrityError(RuntimeError):
+    """Raised when an ignored insert has no matching policy business key."""
+
+
 class ActionNotificationPolicyRow(TypedDict):
     id: str
     tenant_id: str

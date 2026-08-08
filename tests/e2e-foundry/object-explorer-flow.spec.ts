@@ -9,7 +9,8 @@ const REVIEWER_HEADERS = {
   ...DEMO_HEADERS,
   "X-User-ID": "object-inline-reviewer",
 };
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL =
+  process.env.FOUNDRY_LITE_E2E_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 type GenericObject = {
   objectType: string;

@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from typing import TypedDict
 
 from foundry_lite.application.action_types import ActionCatalogItem, ActionExecutionPlanResponse
+from foundry_lite.application.services.mcp_json_rpc import JsonRpcRequestId, internal_mcp_request_id
+from foundry_lite.application.services.mcp_tool_results import serialized_text_content
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.domain.platform.scopes import is_scope_allowed
@@ -33,8 +35,14 @@ def can_autonomous_apply(item: ActionCatalogItem, plan: ActionExecutionPlanRespo
 
 
 def grant_visible(ctx: RequestContext, grant: Mapping[str, object]) -> bool:
+    return bool(effective_grant_scopes(ctx, grant))
+
+
+def effective_grant_scopes(ctx: RequestContext, grant: Mapping[str, object]) -> tuple[str, ...]:
+    """Return only scopes present in both the token and the durable application grant."""
+
     scopes = grant_scopes(grant)
-    return any(is_scope_allowed(scope, ctx.token_scopes, scopes) for scope in scopes)
+    return tuple(scope for scope in scopes if is_scope_allowed(scope, ctx.token_scopes, scopes))
 
 
 def grant_sort_key(grant: Mapping[str, object]) -> tuple[str, str]:
@@ -67,12 +75,13 @@ def parse_tool_name(name: str) -> tuple[str, str, str]:
 
 
 def mcp_idempotency_key(ctx: RequestContext, call: object) -> str:
+    request_identity = internal_mcp_request_id(request_id_attr(call, "json_rpc_id"))
     values = (
         ctx.tenant_id,
         ctx.actor_user_id,
         text_attr(call, "application_id"),
         text_attr(call, "session_id"),
-        text_attr(call, "json_rpc_id"),
+        request_identity,
         text_attr(call, "tool_name"),
     )
     return f"ontology-mcp-{hashlib.sha256(':'.join(values).encode()).hexdigest()}"
@@ -90,14 +99,14 @@ def action_request(arguments: JsonObject) -> ActionRequest:
 def mcp_result(result: Mapping[str, object]) -> dict[str, object]:
     return {
         "structuredContent": dict(result),
-        "content": [{"type": "text", "text": "Governed Ontology MCP tool completed."}],
+        "content": serialized_text_content(result),
         "isError": False,
     }
 
 
 def tool_event_payload(call: object, result: Mapping[str, object]) -> dict[str, object]:
     payload: dict[str, object] = {
-        "jsonRpcId": text_attr(call, "json_rpc_id"),
+        "jsonRpcId": request_id_attr(call, "json_rpc_id"),
         "toolName": text_attr(call, "tool_name"),
     }
     for source_key, target_key in (
@@ -152,3 +161,12 @@ def text_attr(value: object, name: str) -> str:
     if not isinstance(item, str) or not item:
         raise ValidationFailed("Ontology MCP call identity is invalid")
     return item
+
+
+def request_id_attr(value: object, name: str) -> JsonRpcRequestId:
+    item = getattr(value, name, None)
+    if type(item) is str:
+        return item
+    if type(item) is int:
+        return item
+    raise ValidationFailed("Ontology MCP request identity is invalid")

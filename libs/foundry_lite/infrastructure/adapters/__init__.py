@@ -45,6 +45,7 @@ from foundry_lite.infrastructure.adapters.local_external_media_reader import (
 )
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
+from foundry_lite.infrastructure.adapters.mcp_rate_limiter import SqlAlchemyMcpRateLimiter
 from foundry_lite.infrastructure.adapters.model_media_resolver import RepositoryModelMediaResolver
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_layout_processor import PdfLayoutProcessorAdapter
@@ -118,6 +119,7 @@ __all__ = [
     "LocalExternalMediaReader",
     "LocalMediaStorageAdapter",
     "LocalPreviewRendererAdapter",
+    "SqlAlchemyMcpRateLimiter",
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",

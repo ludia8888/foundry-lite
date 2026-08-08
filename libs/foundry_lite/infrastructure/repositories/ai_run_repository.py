@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -84,6 +86,30 @@ class SqlAlchemyAiRunRepository:
     def create_execution_run(self, *, transaction: Any, record: AiExecutionRunRecord) -> None:
         transaction.execute(
             insert(db.ai_execution_runs).values({"tenant_id": record.tenant_id, **_execution_run_values(record)})
+        )
+
+    def insert_execution_run_or_get_existing(
+        self, *, transaction: Any, record: AiExecutionRunRecord
+    ) -> AiLedgerRow | None:
+        values = {"tenant_id": record.tenant_id, **_execution_run_values(record)}
+        statement: Any
+        if transaction.dialect.name == "postgresql":
+            statement = (
+                postgres_insert(db.ai_execution_runs).values(**values).on_conflict_do_nothing(index_elements=("id",))
+            )
+        elif transaction.dialect.name == "sqlite":
+            statement = (
+                sqlite_insert(db.ai_execution_runs).values(**values).on_conflict_do_nothing(index_elements=("id",))
+            )
+        else:
+            statement = insert(db.ai_execution_runs).values(**values)
+        inserted = transaction.execute(statement.returning(db.ai_execution_runs.c.id)).scalar_one_or_none()
+        if inserted == record.id:
+            return None
+        return self.execution_run_by_id(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            ai_run_id=record.id,
         )
 
     def update_execution_run_status(

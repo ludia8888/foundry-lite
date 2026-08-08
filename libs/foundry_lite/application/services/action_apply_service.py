@@ -34,6 +34,7 @@ from foundry_lite.application.services.action_apply_planning_contracts import (
 from foundry_lite.application.services.action_apply_support import (
     _new_id,
     _now,
+    action_authority_snapshot,
     action_command,
     action_failure_transition,
     action_replay_response,
@@ -433,6 +434,7 @@ class ActionApplyService(CoreService):
                 result=None,
                 error=None,
                 external_writeback_uri=command.external_writeback_uri,
+                execution_plan=action_authority_snapshot(ctx),
                 created_at=_now(),
                 completed_at=None,
             ),
@@ -493,8 +495,5 @@ class ActionApplyService(CoreService):
 
     def _mutation_unit_of_work(self) -> ActionMutationUnitOfWork:
         return ActionMutationUnitOfWork(
-            action_repository=self.action_repository,
-            object_indexing_service=self.object_index_record_mutation_service,
-            runtime_service=self.runtime_service,
-            policy=self.policy,
+            self.action_repository, self.object_index_record_mutation_service, self.runtime_service, self.policy
         )

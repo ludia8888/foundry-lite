@@ -27,7 +27,10 @@ class OsdkAccessSessionService(CoreService):
                 session_id=session_id,
             )
         if row is None or not _is_active_session(row, ctx, application_id):
-            raise PermissionDenied("OSDK OAuth access session is inactive or no longer authorized")
+            raise PermissionDenied(
+                "OSDK OAuth access session is inactive or no longer authorized",
+                details={"resource": "oauth_access_session"},
+            )
 
 
 def _is_active_session(row: Mapping[str, object], ctx: RequestContext, application_id: str) -> bool:

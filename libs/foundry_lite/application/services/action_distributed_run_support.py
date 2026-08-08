@@ -87,6 +87,7 @@ def action_worker_context(row: ActionAsyncRunRow) -> RequestContext:
         application_id=_optional_text(principal.get("applicationId")),
         client_id=_optional_text(principal.get("clientId")),
         token_scopes=_strings(principal.get("tokenScopes")),
+        oauth_session_id=_optional_text(principal.get("oauthSessionId")),
         user_attributes=_mapping(principal.get("userAttributes"), "userAttributes"),
     )
 

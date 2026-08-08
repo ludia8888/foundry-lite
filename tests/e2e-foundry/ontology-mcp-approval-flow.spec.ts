@@ -5,8 +5,13 @@ const DEMO_HEADERS = {
   "X-User-ID": "web-demo-operator",
   "X-Roles": "ops_manager,data_engineer,finance,aip_prompt_artifact_reader",
 };
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL =
+  (process.env.FOUNDRY_LITE_E2E_API_BASE_URL ?? "http://127.0.0.1:8000").replace(
+    /\/+$/,
+    "",
+  );
 const TARGET_ORDER_ID = "O-3999";
+const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 type OrderObject = {
   objectId: string;
@@ -72,13 +77,59 @@ async function createMcpApplication(page: Page) {
     },
   );
   expect(configured.ok()).toBe(true);
+  const oauthClient = await page.request.post(
+    `${API_BASE_URL}/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients`,
+    {
+      headers: {
+        ...DEMO_HEADERS,
+        "Idempotency-Key": uniqueName("create-mcp-oauth-client"),
+      },
+      data: {
+        clientId,
+        redirectUris: [],
+        allowedScopes: scopes,
+        accessTokenTtlSeconds: 300,
+      },
+    },
+  );
+  expect(oauthClient.ok()).toBe(true);
+  const clientPayload = (await oauthClient.json()) as { id: string };
+  const rotated = await page.request.post(
+    `${API_BASE_URL}/api/developer-console/osdk-applications/${encodeURIComponent(appId)}/clients/${encodeURIComponent(clientPayload.id)}/secrets/rotate`,
+    {
+      headers: {
+        ...DEMO_HEADERS,
+        "Idempotency-Key": uniqueName("rotate-mcp-oauth-secret"),
+      },
+      data: { reason: "Ontology MCP browser E2E" },
+    },
+  );
+  expect(rotated.ok()).toBe(true);
+  const secretPayload = (await rotated.json()) as { clientSecret: string };
+  const resource = `${API_BASE_URL}/mcp/ontology/${encodeURIComponent(appId)}`;
+  const token = await page.request.post(`${API_BASE_URL}/api/auth/osdk/oauth/token`, {
+    headers: {
+      "X-Request-ID": uniqueName("mcp-client-credentials-token"),
+    },
+    form: {
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: secretPayload.clientSecret,
+      scope: scopes.join(" "),
+      resource,
+    },
+  });
+  expect(token.ok()).toBe(true);
+  const tokenPayload = (await token.json()) as {
+    accessToken: string;
+    token_type: string;
+  };
+  expect(tokenPayload.token_type).toBe("Bearer");
+  expect(tokenPayload.accessToken).toBeTruthy();
   return {
     appId,
     headers: {
-      ...DEMO_HEADERS,
-      "X-Foundry-Lite-App-ID": appId,
-      "X-Foundry-Lite-Client-ID": clientId,
-      "X-Foundry-Lite-Scopes": scopes.join(" "),
+      Authorization: `Bearer ${tokenPayload.accessToken}`,
       "X-Request-ID": uniqueName("mcp-browser-request"),
     },
   };
@@ -93,13 +144,45 @@ async function initializeMcp(
     `${API_BASE_URL}/mcp/ontology/${encodeURIComponent(appId)}`,
     {
       headers,
-      data: { jsonrpc: "2.0", id: "initialize", method: "initialize", params: {} },
+      data: {
+        jsonrpc: "2.0",
+        id: "initialize",
+        method: "initialize",
+        params: {
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: "foundry-lite-browser-e2e", version: "1.0.0" },
+        },
+      },
     },
   );
   expect(response.ok()).toBe(true);
+  const initialized = (await response.json()) as {
+    id: string;
+    result: { protocolVersion: string };
+  };
+  expect(initialized.id).toBe("initialize");
+  expect(initialized.result.protocolVersion).toBe(MCP_PROTOCOL_VERSION);
   const sessionId = response.headers()["mcp-session-id"];
   expect(sessionId).toBeTruthy();
-  return { ...headers, "Mcp-Session-Id": sessionId };
+  const sessionHeaders = {
+    ...headers,
+    "Mcp-Session-Id": sessionId,
+    "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+  };
+  const acknowledged = await page.request.post(
+    `${API_BASE_URL}/mcp/ontology/${encodeURIComponent(appId)}`,
+    {
+      headers: sessionHeaders,
+      data: {
+        jsonrpc: "2.0",
+        method: "notifications/initialized",
+        params: {},
+      },
+    },
+  );
+  expect(acknowledged.status()).toBe(202);
+  return sessionHeaders;
 }
 
 async function callMcp(
