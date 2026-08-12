@@ -61,6 +61,21 @@ def test_consumer_osdk_boundary_rejects_strict_profile_exception(tmp_path: Path)
     assert "STRICT_EXCEPTION_BUDGET_EXCEEDED" in result.stdout
 
 
+def test_consumer_osdk_boundary_rejects_foreign_or_prefix_lookalike_application_package(tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        'import { useAnything } from "@foundry-lite/test-osdk-evil/react";\n'
+        'import { Reservation } from "@foundry-lite/foreign-osdk";\n'
+        "export const value = [useAnything, Reservation];\n",
+    )
+
+    result = _run_gate(tmp_path)
+
+    assert result.returncode == 1
+    assert "FOREIGN_APPLICATION_OSDK_FORBIDDEN" in result.stdout
+    assert "APPLICATION_OSDK_IMPORT_REQUIRED" in result.stdout
+
+
 def _run_gate(workspace_root: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["node", str(GATE), "--workspace-root", str(workspace_root), "--no-write"],

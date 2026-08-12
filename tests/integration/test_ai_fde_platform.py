@@ -5,8 +5,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import shutil
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -1831,7 +1834,9 @@ def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk
     assert install["sdkVersions"][0]["language"] == "typescript"
 
 
-def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(foundry: Any, monkeypatch: Any) -> None:
+def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
+    foundry: Any, monkeypatch: Any, tmp_path: Any
+) -> None:
     foundry.ontology.apply_text("objectTypes: []\nactionTypes: []\nlinkTypes: []\n", ctx=FDE_USER)
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
@@ -1841,6 +1846,20 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(f
         json={"applicationName": "Dining Concierge", "domainDescription": "Foreign traveler booking operations"},
     )
     plan = planned.json()
+    assert plan["consumerOsdk"] == {
+        "applicationId": "dining_concierge",
+        "displayName": "Dining Concierge",
+        "profile": "consumer_osdk_strict",
+        "packageName": "@foundry-lite/dining-concierge-osdk",
+        "applicationSourceRoots": ["src"],
+        "sdkPackageRoot": "packages/application-osdk",
+        "exceptions": [],
+    }
+    plan["consumerOsdk"] = {
+        "profile": "generic",
+        "packageName": "@attacker/base-sdk-wrapper",
+        "exceptions": ["allow-base-sdk"],
+    }
 
     first_response = client.post(
         "/api/aip/pilot/applications",
@@ -1868,8 +1887,52 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(f
     assert first_response.status_code == 200
     assert replay_response.status_code == 200
     assert response.status_code == 200
-    assert response.json()["reactFiles"]["src/App.tsx"]
+    bundle = response.json()
+    files = bundle["reactFiles"]
+    assert bundle["consumerOsdk"]["profile"] == "consumer_osdk_strict"
+    assert bundle["consumerOsdk"]["exceptions"] == []
+    assert "@foundry-lite/dining-concierge-osdk/react" in files["src/App.tsx"]
+    assert "@foundry-lite/sdk" not in files["src/App.tsx"]
+    assert "useFoundryLiteOsdkClient" not in files["src/App.tsx"]
+    assert "usePilotApplicationScreen" in files["src/App.tsx"]
+    assert "OsdkObjectType<DiningConcierge>" in files["packages/application-osdk/src/generated.ts"]
+    assert "osdk(DiningConcierge).fetchPage" in files["packages/application-osdk/src/react.ts"]
+    assert "useFoundryLiteOsdkClient" in files["packages/application-osdk/src/react.ts"]
+    assert "typescript" in files["scripts/check-consumer-osdk.mjs"]
+    assert "pnpm consumer-osdk:check" in bundle["ciWorkflow"]
     assert response.json()["applicationPath"].startswith("/projects/")
+
+    for name, content in files.items():
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    checker = files["scripts/check-consumer-osdk.mjs"].replace(
+        'const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");',
+        f"const root = {json.dumps(str(tmp_path))};",
+    )
+    node = shutil.which("node")
+    assert node is not None
+    passed = subprocess.run(
+        [node, "--input-type=module", "-e", checker],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert passed.returncode == 0, passed.stderr
+
+    (tmp_path / "src/App.tsx").write_text(
+        'import { useFoundryLiteOsdkClient } from "@foundry-lite/sdk/react";\n', encoding="utf-8"
+    )
+    blocked = subprocess.run(
+        [node, "--input-type=module", "-e", checker],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert blocked.returncode == 1
+    assert "forbidden base SDK" in blocked.stderr
 
 
 def test_builder_mcp_requires_human_confirmation_receipt_and_rejects_untrusted_origin(

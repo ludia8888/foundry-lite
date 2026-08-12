@@ -728,9 +728,14 @@ def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id:
         workspace,
         "pilot.application.generate",
         {"plan": plan, "idempotencyKey": "mcp-full-surface-pilot"},
-        ("status", "resource", "ontologyBranch", "osdkApplication", "reactFiles"),
+        ("status", "resource", "ontologyBranch", "osdkApplication", "consumerOsdk", "reactFiles"),
     )
     assert generated["status"] == "generated_on_branch"
+    assert generated["consumerOsdk"]["profile"] == "consumer_osdk_strict"
+    assert generated["consumerOsdk"]["exceptions"] == []
+    assert "@foundry-lite/sdk" not in generated["reactFiles"]["src/App.tsx"]
+    assert "@foundry-lite/mcp-surface-pilot-osdk/react" in generated["reactFiles"]["src/App.tsx"]
+    assert "OsdkObjectType<McpSurfacePilot>" in generated["reactFiles"]["packages/application-osdk/src/generated.ts"]
     assert app_id
 
 
