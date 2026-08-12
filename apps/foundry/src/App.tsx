@@ -6,6 +6,7 @@ import { AppShell } from "@/components/shell/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { API_BASE_URL, DEMO_CONTEXT, DEMO_SESSION } from "@/lib/api";
+import CustomerReservationPage from "@/features/reservations/CustomerReservationPage";
 
 const HomePage = lazy(() => import("@/features/home/HomePage"));
 const ProjectsPage = lazy(() => import("@/features/projects/ProjectsPage"));
@@ -57,6 +58,7 @@ export function App() {
       <TooltipProvider delayDuration={300}>
         <BrowserRouter>
           <Routes>
+            <Route path="book/mcp-bistro-seoul" element={<CustomerReservationPage />} />
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
               <Route path="projects/:projectId/pilot/:slug" element={<PilotApplicationPage />} />
