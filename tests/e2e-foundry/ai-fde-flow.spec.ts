@@ -105,6 +105,7 @@ test("AI FDE makes branch scope and write approvals explicit before a governed r
 
 test("AI FDE Pilot creates one governed application bundle from an approved plan", async ({ page }) => {
   const plan = pilotPlan();
+  let planBody: Record<string, unknown> | null = null;
   let generationBody: Record<string, unknown> | null = null;
   let idempotencyKey = "";
   await page.route("**/api/aip/fde/catalog", async (route) => {
@@ -115,6 +116,7 @@ test("AI FDE Pilot creates one governed application bundle from an approved plan
     });
   });
   await page.route("**/api/aip/pilot/plan", async (route) => {
+    planBody = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(plan) });
   });
   await page.route("**/api/aip/pilot/applications", async (route) => {
@@ -128,13 +130,26 @@ test("AI FDE Pilot creates one governed application bundle from an approved plan
   });
 
   await page.goto("/aip");
-  await expect(page.getByText("실행 가능한 앱 생성")).toBeVisible();
-  await page.getByRole("button", { name: "생성 계획 만들기" }).click();
-  await expect(page.getByRole("button", { name: "Branch-first 앱 생성 승인" })).toBeVisible();
-  await page.getByRole("button", { name: "Branch-first 앱 생성 승인" }).click();
+  await expect(page.getByText("내 업무를 앱으로 설계하기")).toBeVisible();
+  await page.getByRole("button", { name: "업무 설계 검토하기" }).click();
+  await expect(page.getByText("앱 생성 가능")).toBeVisible();
+  await page.getByRole("button", { name: "검토한 설계로 테스트 앱 만들기" }).click();
 
-  await expect(page.getByText("Dining Concierge 생성 완료")).toBeVisible();
-  await expect(page.getByText("/projects/project_pilot_1/pilot/dining-concierge")).toBeVisible();
+  await expect(page.getByText("테스트 앱이 준비되었습니다")).toBeVisible();
+  await expect(page.getByRole("link", { name: "생성된 업무 앱 확인하기" })).toHaveAttribute(
+    "href",
+    "/projects/project_pilot_1/pilot/dining-concierge",
+  );
+  expect(planBody).toMatchObject({
+    applicationName: "Dining Concierge",
+    domainBrief: {
+      actors: ["고객", "매니저", "홀 직원"],
+      lifecycleStates: ["요청됨", "확인중", "확정됨", "방문완료", "취소됨"],
+    },
+  });
+  expect((planBody?.domainBrief as Record<string, unknown>).records).toHaveLength(2);
+  expect((planBody?.domainBrief as Record<string, unknown>).actions).toHaveLength(3);
+  expect((planBody?.domainBrief as Record<string, unknown>).policies).toHaveLength(2);
   expect(generationBody).toEqual({ plan });
   expect(idempotencyKey).toMatch(/^aip-pilot-generate-dining-concierge-/);
 });
@@ -192,10 +207,38 @@ test("generated Pilot application exposes durable resource, branch, files, and s
 });
 
 function pilotPlan() {
+  const domainBrief = {
+    actors: ["고객", "매니저", "홀 직원"],
+    records: [
+      { name: "예약", apiName: "Reservation", fields: [{ name: "고객명", type: "string", required: true }] },
+      { name: "테이블", apiName: "DiningTable", fields: [{ name: "좌석수", type: "integer", required: true }] },
+    ],
+    lifecycleStates: ["요청됨", "확인중", "확정됨", "방문완료", "취소됨"],
+    actions: [
+      { name: "예약 접수", apiName: "RequestReservation", fromStates: ["요청됨"], toState: "확인중", allowedActors: ["고객", "홀 직원"] },
+      { name: "예약 확정", apiName: "ConfirmReservation", fromStates: ["확인중"], toState: "확정됨", allowedActors: ["매니저", "홀 직원"] },
+      { name: "예약 취소", apiName: "CancelReservation", fromStates: ["확정됨"], toState: "취소됨", allowedActors: ["고객", "매니저"], requiresApproval: true },
+    ],
+    policies: [
+      { name: "운영 시간 중복", statement: "같은 테이블의 이용 시간이 겹치면 예약할 수 없습니다.", enforcement: "blocking" },
+      { name: "큰 모임", statement: "8명 이상 예약은 매니저가 한 번 확인합니다.", enforcement: "manual_review" },
+    ],
+    evidence: ["요청 시각", "규칙 판정 결과", "담당자"],
+    integrations: ["예약 DB", "결제 서비스", "문자 알림"],
+    successMeasures: ["중복 예약 0건", "예약 처리 2분 이내"],
+  };
   return {
     operationType: "pilot_application_plan",
     applicationName: "Dining Concierge",
     domainDescription: "외국인 여행자를 위한 예약 운영 앱",
+    domainBrief,
+    domainOsBlueprint: {
+      actors: domainBrief.actors,
+      records: domainBrief.records,
+      policies: domainBrief.policies,
+      workflow: { states: domainBrief.lifecycleStates, actions: domainBrief.actions },
+      readiness: { isReady: true, status: "ready_for_review", missingCount: 0, questions: [] },
+    },
     slug: "dining-concierge",
     projectDisplayName: "Dining Concierge",
     seed: { namespace: "pilot", name: "dining_concierge_seed" },
@@ -208,10 +251,12 @@ function pilotPlan() {
 }
 
 function pilotBundle() {
+  const plan = pilotPlan();
   return {
     applicationName: "Dining Concierge",
     applicationPath: "/projects/project_pilot_1/pilot/dining-concierge",
     status: "preview_ready",
+    domainOsBlueprint: plan.domainOsBlueprint,
     seed: { datasetRef: "pilot.dining_concierge_seed" },
     ontologyBranch: { id: "ontbranch_pilot_1" },
     reactFiles: { "src/App.tsx": "export default function App() {}", "src/osdk.ts": "export {}" },

@@ -1,5 +1,5 @@
 import type { AipFdeMode } from "@foundry-lite/sdk";
-import { GitBranch, Play, Rocket, Search, Send, ShieldCheck, UserRoundCheck } from "lucide-react";
+import { GitBranch, Play, Search, Send, ShieldCheck, UserRoundCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 
@@ -22,6 +22,7 @@ import { operationsRunHref } from "@/lib/operations-links";
 import { phaseTone } from "../aip-model";
 import type { AipWorkspace } from "../use-aip-workspace";
 import { EvidenceRow, MonoChip, SectionLabel } from "./Evidence";
+import { DomainOsStudioPanel } from "./DomainOsStudioPanel";
 
 const DEFAULT_PROMPT =
   "외국인 여행자를 위한 Restaurant, AvailabilitySlot, Hold, Booking 객체와 예약 Action을 설계하고 검증해줘.";
@@ -169,7 +170,7 @@ export function AiFdePanel({ workspace }: { workspace: AipWorkspace }) {
           </div>
         </div>
 
-        <PilotPanel workspace={workspace} />
+        <DomainOsStudioPanel workspace={workspace} />
 
         {fdeCatalog ? <ModeBoundary modes={fdeCatalog.modes} /> : null}
         {fdeCatalogError ? (
@@ -348,67 +349,6 @@ function StructuredOperation({ operation }: { operation: Record<string, unknown>
       <pre className="mt-2 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-muted-foreground">
         {JSON.stringify(operation, null, 2)}
       </pre>
-    </div>
-  );
-}
-
-function PilotPanel({ workspace }: { workspace: AipWorkspace }) {
-  const [applicationName, setApplicationName] = useState("Dining Concierge");
-  const [domainDescription, setDomainDescription] = useState(
-    "외국인 여행자가 식당을 검색하고 좌석을 hold한 뒤 예약·취소할 수 있는 운영 앱",
-  );
-  const { planPilot, generatePilot } = workspace;
-  return (
-    <div className="rounded border bg-card p-3">
-      <SectionLabel right={<StatusPill intent="info">Pilot</StatusPill>}>
-        실행 가능한 앱 생성
-      </SectionLabel>
-      <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-        한 번의 명시적 생성으로 Project, seed Dataset, Ontology branch, OSDK app, React 소스와 CI 계약을 함께 만듭니다.
-      </p>
-      <div className="mt-3 space-y-2">
-        <Input value={applicationName} onChange={(event) => setApplicationName(event.target.value)} />
-        <Textarea
-          value={domainDescription}
-          onChange={(event) => setDomainDescription(event.target.value)}
-          rows={3}
-          className="resize-none text-[11px]"
-        />
-        <Button
-          variant="outline"
-          className="w-full"
-          disabled={planPilot.isRunning || !applicationName.trim() || !domainDescription.trim()}
-          onClick={() =>
-            void planPilot.execute({
-              applicationName: applicationName.trim(),
-              domainDescription: domainDescription.trim(),
-            })
-          }
-        >
-          <Search /> 생성 계획 만들기
-        </Button>
-        {planPilot.result ? (
-          <Button
-            className="w-full"
-            disabled={generatePilot.isRunning}
-            onClick={() => {
-              if (planPilot.result) void generatePilot.execute(planPilot.result);
-            }}
-          >
-            <Rocket /> Branch-first 앱 생성 승인
-          </Button>
-        ) : null}
-        {generatePilot.result ? (
-          <div className="rounded border border-success/30 bg-success/5 p-2 text-[10px]">
-            <div className="font-medium">{generatePilot.result.applicationName} 생성 완료</div>
-            <div className="mt-1 font-mono text-muted-foreground">
-              {generatePilot.result.applicationPath}
-            </div>
-          </div>
-        ) : null}
-        {planPilot.error ? <ErrorState error={planPilot.error} /> : null}
-        {generatePilot.error ? <ErrorState error={generatePilot.error} /> : null}
-      </div>
     </div>
   );
 }

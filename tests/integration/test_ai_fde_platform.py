@@ -24,6 +24,7 @@ from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider, JwtOidcAuthConfig, JwtOidcAuthProvider
 from foundry_lite_api import runtime as api_runtime
+from foundry_lite_api.builder_mcp_ui import DOMAIN_OS_RESOURCE_URI
 from foundry_lite_api.main import app
 from foundry_lite_api.routers import builder_mcp as builder_mcp_router
 from sqlalchemy import func, select, update
@@ -887,6 +888,75 @@ def test_builder_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(foundry: An
     assert internal_notification.status_code == 500 and internal_notification.content == b""
 
 
+def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_name(
+    foundry: Any, monkeypatch: Any
+) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    path = f"/mcp/builder/{app_id}"
+    initialized = client.post(
+        path,
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": "domain-init", "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    session_headers = {**headers, "Mcp-Session-Id": initialized.headers["Mcp-Session-Id"]}
+    listed_tools = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "domain-tools", "method": "tools/list", "params": {}},
+    )
+    listed_resources = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "domain-resources", "method": "resources/list", "params": {}},
+    )
+    resource = client.post(
+        path,
+        headers=session_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "domain-resource",
+            "method": "resources/read",
+            "params": {"uri": DOMAIN_OS_RESOURCE_URI},
+        },
+    )
+    planned = client.post(
+        path,
+        headers=session_headers,
+        json=_mcp_tool_call_payload(
+            "domain-plan",
+            "osdk_react",
+            f"osdk-app:{app_id}",
+            "pilot.application.plan",
+            {
+                "applicationName": "시설관리 업무 OS",
+                "domainDescription": "입주민 요청을 접수하고 수리 완료 증거까지 관리합니다.",
+                "domainBrief": _property_maintenance_domain_brief(),
+            },
+        ),
+    )
+
+    assert initialized.status_code == listed_tools.status_code == listed_resources.status_code == 200
+    assert "Do not ask the user for API names" in initialized.json()["result"]["instructions"]
+    tools = {item["name"]: item for item in listed_tools.json()["result"]["tools"]}
+    assert tools["pilot.application.plan"]["_meta"]["ui"]["resourceUri"] == DOMAIN_OS_RESOURCE_URI
+    assert tools["pilot.application.generate"]["_meta"]["openai/outputTemplate"] == DOMAIN_OS_RESOURCE_URI
+    descriptors = listed_resources.json()["result"]["resources"]
+    assert len(descriptors) == 2
+    assert DOMAIN_OS_RESOURCE_URI in {item["uri"] for item in descriptors}
+    html = resource.json()["result"]["contents"][0]["text"]
+    assert "FoundryLiteMcpResources.DomainOsStudio" in html
+    assert "createFoundryLiteMcpAppsOsdk" in html
+    assert "이 설계로 테스트 앱 만들기" in html
+    content_hash = hashlib.sha256(html.encode("utf-8")).hexdigest()[:12]
+    assert DOMAIN_OS_RESOURCE_URI == f"ui://foundry-lite/domain-os-studio-v1-{content_hash}.html"
+    result = planned.json()["result"]["structuredContent"]
+    assert result["domainOsBlueprint"]["readiness"]["isReady"] is True
+    assert result["slug"].startswith("domain-os-")
+    assert result["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"osdk-app:{app_id}"}
+
+
 def test_builder_mcp_confirmation_receipt_is_human_idempotent_and_one_time(foundry: Any, monkeypatch: Any) -> None:
     app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
@@ -1587,7 +1657,11 @@ def test_builder_mcp_executes_uncovered_pipeline_source_osdk_and_pilot_mutations
         "osdk_react",
         f"osdk-app:{osdk_app}",
         "pilot.application.plan",
-        {"applicationName": "MCP Pilot", "domainDescription": "Direct mutation regression"},
+        {
+            "applicationName": "MCP Pilot",
+            "domainDescription": "시설 요청을 접수하고 분류하고 수리 완료까지 관리합니다.",
+            "domainBrief": _property_maintenance_domain_brief(),
+        },
     )
     pilot = _mcp_native_call(
         client,
@@ -1606,7 +1680,7 @@ def test_builder_mcp_executes_uncovered_pipeline_source_osdk_and_pilot_mutations
     assert source_test["connectionTestId"] == "mcp-probe-test"
     assert source_calls == [("mcp_probe_source", source_row["configFingerprint"], "uncovered-source-test")]
     assert osdk_update["application"]["id"] == osdk_app
-    assert pilot["status"] == "generated_on_branch"
+    assert pilot.get("status") == "generated_on_branch", pilot
 
 
 def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk_services(
@@ -1834,6 +1908,68 @@ def test_official_palantir_mcp_names_execute_native_compass_object_docs_and_osdk
     assert install["sdkVersions"][0]["language"] == "typescript"
 
 
+def _property_maintenance_domain_brief() -> dict[str, object]:
+    return {
+        "actors": ["입주민", "시설 담당자", "수리 업체"],
+        "records": [
+            {
+                "name": "수리 요청",
+                "apiName": "WorkOrder",
+                "fields": [
+                    {"name": "발생 위치", "apiName": "location", "type": "string", "required": True},
+                    {"name": "심각도", "apiName": "severity", "type": "string", "required": True},
+                ],
+            },
+            {
+                "name": "시설 자산",
+                "apiName": "PropertyAsset",
+                "fields": [{"name": "일련번호", "apiName": "serialNumber", "type": "string", "required": True}],
+            },
+        ],
+        "lifecycleStates": ["REPORTED", "TRIAGED", "SCHEDULED", "COMPLETED"],
+        "actions": [
+            {
+                "name": "요청 분류",
+                "apiName": "TriageWorkOrder",
+                "fromStates": ["REPORTED"],
+                "toState": "TRIAGED",
+                "requiredInformation": ["priority"],
+                "allowedActors": ["시설 담당자"],
+            },
+            {
+                "name": "수리 일정 확정",
+                "apiName": "ScheduleRepair",
+                "fromStates": ["TRIAGED"],
+                "toState": "SCHEDULED",
+                "requiredInformation": ["visitWindow"],
+                "allowedActors": ["시설 담당자", "수리 업체"],
+                "requiresApproval": True,
+            },
+            {
+                "name": "수리 완료",
+                "apiName": "CompleteRepair",
+                "fromStates": ["SCHEDULED"],
+                "toState": "COMPLETED",
+                "requiredInformation": ["completionNote"],
+                "allowedActors": ["수리 업체", "시설 담당자"],
+            },
+        ],
+        "policies": [
+            {
+                "name": "심각도 입력 필수",
+                "statement": "요청 분류 전에 심각도가 urgent 또는 normal로 기록되어야 합니다.",
+                "enforcement": "blocking",
+                "appliesToActions": ["TriageWorkOrder"],
+                "conditions": [{"propertyApiName": "severity", "operator": "in", "value": ["urgent", "normal"]}],
+                "evidence": "분류 시각과 담당자",
+            }
+        ],
+        "evidence": ["상태 변경 전후", "담당자", "완료 사진"],
+        "integrations": ["입주민 포털", "문자 알림"],
+        "successMeasures": ["긴급 요청 15분 이내 분류", "미완료 누락 0건"],
+    }
+
+
 def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     foundry: Any, monkeypatch: Any, tmp_path: Any
 ) -> None:
@@ -1843,42 +1979,55 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     planned = client.post(
         "/api/aip/pilot/plan",
         headers=_api_headers(),
-        json={"applicationName": "Dining Concierge", "domainDescription": "Foreign traveler booking operations"},
+        json={
+            "applicationName": "Property Care Desk",
+            "domainDescription": "입주민의 시설 문제를 접수하고 담당자가 분류한 뒤 수리 완료 증거까지 남깁니다.",
+            "domainBrief": _property_maintenance_domain_brief(),
+        },
     )
     plan = planned.json()
     assert plan["consumerOsdk"] == {
-        "applicationId": "dining_concierge",
-        "displayName": "Dining Concierge",
+        "applicationId": "property_care_desk",
+        "displayName": "Property Care Desk",
         "profile": "consumer_osdk_strict",
-        "packageName": "@foundry-lite/dining-concierge-osdk",
+        "packageName": "@foundry-lite/property-care-desk-osdk",
         "applicationSourceRoots": ["src"],
         "sdkPackageRoot": "packages/application-osdk",
         "exceptions": [],
     }
+    assert plan["domainOsBlueprint"]["readiness"]["isReady"] is True
+    assert [item["apiName"] for item in plan["domainOsBlueprint"]["records"]] == ["WorkOrder", "PropertyAsset"]
+    assert len(plan["ontologyResources"]) == 5
     plan["consumerOsdk"] = {
         "profile": "generic",
         "packageName": "@attacker/base-sdk-wrapper",
         "exceptions": ["allow-base-sdk"],
     }
+    plan["domainOsBlueprint"] = {"records": [{"apiName": "AttackerObject"}], "readiness": {"isReady": True}}
+    plan["ontologyResources"] = []
 
     first_response = client.post(
         "/api/aip/pilot/applications",
-        headers={**_api_headers(), "Idempotency-Key": "pilot-dining-1"},
+        headers={**_api_headers(), "Idempotency-Key": "pilot-property-1"},
         json={"plan": plan},
     )
     replay_response = client.post(
         "/api/aip/pilot/applications",
-        headers={**_api_headers(), "Idempotency-Key": "pilot-dining-1"},
+        headers={**_api_headers(), "Idempotency-Key": "pilot-property-1"},
         json={"plan": plan},
     )
     first = first_response.json()
     replay = replay_response.json()
 
+    assert first_response.status_code == 200, first_response.text
+    assert replay_response.status_code == 200, replay_response.text
     resource = first["resource"]
     assert first["status"] == "generated_on_branch"
-    assert len(first["ontologyBranch"]["diff"]["resources"]) == 1
-    assert first["osdkApplication"]["application"]["app_api_name"] == "dining_concierge"
-    assert len(foundry.datasets.list_versions(first["seed"]["datasetRef"], ctx=FDE_USER)) == 1
+    assert len(first["ontologyBranch"]["diff"]["resources"]) == 5
+    assert first["osdkApplication"]["application"]["app_api_name"] == "property_care_desk"
+    assert [item["recordApiName"] for item in first["seed"]["datasets"]] == ["WorkOrder", "PropertyAsset"]
+    for item in first["seed"]["datasets"]:
+        assert len(foundry.datasets.list_versions(item["datasetRef"], ctx=FDE_USER)) == 1
     assert replay["isReplayed"] is True
     assert replay["seed"]["versionId"] == first["seed"]["versionId"]
 
@@ -1891,15 +2040,26 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     files = bundle["reactFiles"]
     assert bundle["consumerOsdk"]["profile"] == "consumer_osdk_strict"
     assert bundle["consumerOsdk"]["exceptions"] == []
-    assert "@foundry-lite/dining-concierge-osdk/react" in files["src/App.tsx"]
+    assert "@foundry-lite/property-care-desk-osdk/react" in files["src/App.tsx"]
     assert "@foundry-lite/sdk" not in files["src/App.tsx"]
     assert "useFoundryLiteOsdkClient" not in files["src/App.tsx"]
     assert "usePilotApplicationScreen" in files["src/App.tsx"]
-    assert "OsdkObjectType<DiningConcierge>" in files["packages/application-osdk/src/generated.ts"]
-    assert "osdk(DiningConcierge).fetchPage" in files["packages/application-osdk/src/react.ts"]
-    assert "useFoundryLiteOsdkClient" in files["packages/application-osdk/src/react.ts"]
+    assert "OsdkObjectType<WorkOrder>" in files["packages/application-osdk/src/generated.ts"]
+    assert "OsdkObjectType<PropertyAsset>" in files["packages/application-osdk/src/generated.ts"]
+    assert "OsdkActionType<TriageWorkOrderRequest" in files["packages/application-osdk/src/generated.ts"]
+    assert "osdk(WorkOrder).fetchPage" in files["packages/application-osdk/src/react.ts"]
+    assert "osdk(TriageWorkOrder).startAction" in files["packages/application-osdk/src/react.ts"]
+    assert "createBrowserFoundryLiteOsdkClient" in files["packages/application-osdk/src/react.ts"]
+    assert "/api/objects/" in files["packages/application-osdk/src/runtime.ts"]
+    assert "/api/actions/" in files["packages/application-osdk/src/runtime.ts"]
+    assert all("@foundry-lite/sdk" not in content for name, content in files.items() if name.endswith((".ts", ".tsx")))
     assert "typescript" in files["scripts/check-consumer-osdk.mjs"]
     assert "pnpm consumer-osdk:check" in bundle["ciWorkflow"]
+    assert bundle["deploymentPlan"]["artifactKind"] == "vite_static_web_app"
+    assert bundle["deploymentPlan"]["status"] == "awaiting_ontology_review"
+    assert bundle["deploymentPlan"]["sourceFingerprint"].startswith("sha256:")
+    assert "actor_role_mapping_configured" in bundle["deploymentPlan"]["requiredBeforeHosting"]
+    assert {"index.html", "vite.config.ts", "src/styles.css"}.issubset(files)
     assert response.json()["applicationPath"].startswith("/projects/")
 
     for name, content in files.items():
@@ -1920,6 +2080,30 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
         text=True,
     )
     assert passed.returncode == 0, passed.stderr
+    typescript_paths = [str(tmp_path / name) for name in files if name.endswith((".ts", ".tsx"))]
+    syntax_script = (
+        'import { readFileSync } from "node:fs"; import ts from "typescript"; '
+        f"const paths = {json.dumps(typescript_paths)}; "
+        "const errors = paths.flatMap((path) => { "
+        "const result = ts.transpileModule(readFileSync(path, 'utf8'), { reportDiagnostics: true, "
+        "compilerOptions: { jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }); "
+        "return (result.diagnostics || []).filter((item) => item.category === ts.DiagnosticCategory.Error)"
+        ".map((item) => `${path}: ${ts.flattenDiagnosticMessageText(item.messageText, ' ')}`); }); "
+        "if (errors.length) { console.error(errors.join('\\n')); process.exit(1); }"
+    )
+    syntax_check = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            syntax_script,
+        ],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert syntax_check.returncode == 0, syntax_check.stderr
 
     (tmp_path / "src/App.tsx").write_text(
         'import { useFoundryLiteOsdkClient } from "@foundry-lite/sdk/react";\n', encoding="utf-8"

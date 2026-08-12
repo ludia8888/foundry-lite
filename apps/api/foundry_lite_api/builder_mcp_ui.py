@@ -10,7 +10,13 @@ from foundry_lite.domain.errors import NotFound, ValidationFailed
 BUILDER_CONFIRMATION_TOOL = "approve_builder_mutation"
 BUILDER_CONFIRMATION_RESOURCE_URI = "ui://foundry-lite/builder-confirmation-v1.html"
 BUILDER_CONFIRMATION_MIME_TYPE = "text/html;profile=mcp-app"
+DOMAIN_OS_RESOURCE_URI = "ui://foundry-lite/domain-os-studio-v1-354e3901f43f.html"
 _BUILDER_CONFIRMATION_PATH = Path(__file__).resolve().parents[3] / "apps" / "chatgpt-builder-widget" / "index.html"
+_DOMAIN_OS_ROOT = Path(__file__).resolve().parents[3] / "apps" / "chatgpt-domain-os-widget"
+_DOMAIN_OS_PATH = _DOMAIN_OS_ROOT / "index.html"
+_DOMAIN_OS_OSDK_PATH = _DOMAIN_OS_ROOT / "foundry-lite-mcp-osdk.js"
+_DOMAIN_OS_TOOLS = frozenset({"pilot.application.plan", "pilot.application.generate"})
+_OSDK_MARKER = "/*__FOUNDRY_LITE_MCP_OSDK__*/"
 
 
 def decorate_builder_tool_list(result: Mapping[str, object]) -> dict[str, object]:
@@ -32,24 +38,25 @@ def builder_resource_descriptor() -> dict[str, object]:
     }
 
 
+def builder_resource_descriptors() -> list[dict[str, object]]:
+    """Advertise both generic mutation review and the task-first Domain OS Studio."""
+
+    return [builder_resource_descriptor(), _domain_os_resource_descriptor()]
+
+
 def read_builder_resource(params: Mapping[str, object]) -> dict[str, object]:
     uri = _required_text(params, "uri")
+    if uri == DOMAIN_OS_RESOURCE_URI:
+        return _read_domain_os_resource(uri)
     if uri != BUILDER_CONFIRMATION_RESOURCE_URI:
         raise NotFound("Builder MCP UI resource was not found", details={"uri": uri})
-    if not _BUILDER_CONFIRMATION_PATH.is_file():
-        raise NotFound(
-            "Builder MCP UI asset is not installed",
-            details={
-                "uri": uri,
-                "expectedAsset": "apps/chatgpt-builder-widget/index.html",
-            },
-        )
+    text = _read_asset(_BUILDER_CONFIRMATION_PATH, uri, "apps/chatgpt-builder-widget/index.html")
     return {
         "contents": [
             {
                 "uri": uri,
                 "mimeType": BUILDER_CONFIRMATION_MIME_TYPE,
-                "text": _BUILDER_CONFIRMATION_PATH.read_text(encoding="utf-8"),
+                "text": text,
                 "_meta": _resource_meta(),
             }
         ]
@@ -79,10 +86,26 @@ def _decorate_tool(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise ValidationFailed("Builder MCP tool registry returned an invalid tool descriptor")
     descriptor = {str(key): item for key, item in value.items()}
+    if descriptor.get("name") in _DOMAIN_OS_TOOLS:
+        descriptor["_meta"] = _domain_os_tool_meta(descriptor.get("_meta"))
+        return descriptor
     annotations = descriptor.get("annotations")
     if isinstance(annotations, Mapping) and annotations.get("readOnlyHint") is False:
         descriptor["_meta"] = _mutation_tool_meta(descriptor.get("_meta"))
     return descriptor
+
+
+def _domain_os_tool_meta(value: object) -> dict[str, object]:
+    if value is not None and not isinstance(value, Mapping):
+        raise ValidationFailed("Domain OS tool descriptor _meta must be an object")
+    meta = {str(key): item for key, item in value.items()} if isinstance(value, Mapping) else {}
+    raw_ui = meta.get("ui", {})
+    if not isinstance(raw_ui, Mapping):
+        raise ValidationFailed("Domain OS tool descriptor _meta.ui must be an object")
+    meta["ui"] = {**raw_ui, "resourceUri": DOMAIN_OS_RESOURCE_URI}
+    meta["openai/outputTemplate"] = DOMAIN_OS_RESOURCE_URI
+    meta["openai/widgetAccessible"] = True
+    return meta
 
 
 def _mutation_tool_meta(value: object) -> dict[str, object]:
@@ -139,6 +162,50 @@ def _resource_meta() -> dict[str, object]:
     }
 
 
+def _domain_os_resource_descriptor() -> dict[str, object]:
+    return {
+        "uri": DOMAIN_OS_RESOURCE_URI,
+        "name": "foundry-lite-domain-os-studio",
+        "title": "업무 OS 설계 검토",
+        "description": "ChatGPT가 자연어 업무 설명에서 찾은 사람, 기록, 상태, 규칙, 버튼과 증거를 검토합니다.",
+        "mimeType": BUILDER_CONFIRMATION_MIME_TYPE,
+        "_meta": _domain_os_resource_meta(),
+    }
+
+
+def _domain_os_resource_meta() -> dict[str, object]:
+    return {
+        "ui": {"prefersBorder": True, "csp": {"connectDomains": [], "resourceDomains": []}},
+        "openai/widgetDescription": (
+            "A non-developer Domain OS review map rendered from a natural-language business description."
+        ),
+        "openai/widgetPrefersBorder": True,
+    }
+
+
+def _read_domain_os_resource(uri: str) -> dict[str, object]:
+    template = _read_asset(_DOMAIN_OS_PATH, uri, "apps/chatgpt-domain-os-widget/index.html")
+    runtime = _read_asset(_DOMAIN_OS_OSDK_PATH, uri, "apps/chatgpt-domain-os-widget/foundry-lite-mcp-osdk.js")
+    if template.count(_OSDK_MARKER) != 1:
+        raise ValidationFailed("Domain OS MCP App is missing its high-level OSDK injection point")
+    return {
+        "contents": [
+            {
+                "uri": uri,
+                "mimeType": BUILDER_CONFIRMATION_MIME_TYPE,
+                "text": template.replace(_OSDK_MARKER, runtime),
+                "_meta": _domain_os_resource_meta(),
+            }
+        ]
+    }
+
+
+def _read_asset(path: Path, uri: str, expected_asset: str) -> str:
+    if not path.is_file():
+        raise NotFound("Builder MCP UI asset is not installed", details={"uri": uri, "expectedAsset": expected_asset})
+    return path.read_text(encoding="utf-8")
+
+
 def _required_text(value: Mapping[str, object], key: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or not item.strip():
@@ -148,7 +215,9 @@ def _required_text(value: Mapping[str, object], key: str) -> str:
 
 __all__ = [
     "BUILDER_CONFIRMATION_TOOL",
+    "DOMAIN_OS_RESOURCE_URI",
     "builder_resource_descriptor",
+    "builder_resource_descriptors",
     "decorate_builder_tool_list",
     "read_builder_resource",
     "validate_resources_list_params",

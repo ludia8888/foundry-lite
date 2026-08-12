@@ -699,6 +699,34 @@ def _run_osdk_sdk_tools(runner: _FullSurfaceRunner, workspace: str) -> None:
     )
 
 
+def _mcp_surface_domain_brief() -> dict[str, object]:
+    return {
+        "actors": ["operator"],
+        "records": [
+            {
+                "name": "업무 건",
+                "apiName": "WorkItem",
+                "fields": [{"name": "담당 팀", "apiName": "team", "type": "string", "required": True}],
+            }
+        ],
+        "lifecycleStates": ["NEW", "DONE"],
+        "actions": [
+            {
+                "name": "업무 완료",
+                "apiName": "CompleteWorkItem",
+                "fromStates": ["NEW"],
+                "toState": "DONE",
+                "requiredInformation": ["completionNote"],
+                "allowedActors": ["operator"],
+            }
+        ],
+        "policies": [{"name": "완료 기록", "statement": "완료 메모를 남겨야 합니다.", "enforcement": "warning"}],
+        "evidence": ["상태 변경 전후", "담당자"],
+        "integrations": [],
+        "successMeasures": ["미완료 누락 0건"],
+    }
+
+
 def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id: str) -> None:
     runner.call(
         "osdk_react",
@@ -720,7 +748,11 @@ def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id:
         "osdk_react",
         workspace,
         "pilot.application.plan",
-        {"applicationName": "MCP Surface Pilot", "domainDescription": "Exhaustive Builder MCP proof"},
+        {
+            "applicationName": "MCP Surface Pilot",
+            "domainDescription": "업무 건을 접수하고 담당 팀이 완료 증거까지 남깁니다.",
+            "domainBrief": _mcp_surface_domain_brief(),
+        },
         ("operationType", "applicationName", "domainDescription", "slug"),
     )
     generated = runner.call(
@@ -728,14 +760,17 @@ def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id:
         workspace,
         "pilot.application.generate",
         {"plan": plan, "idempotencyKey": "mcp-full-surface-pilot"},
-        ("status", "resource", "ontologyBranch", "osdkApplication", "consumerOsdk", "reactFiles"),
+        ("status", "resource", "ontologyBranch", "osdkApplication", "consumerOsdk", "generatedFiles"),
     )
     assert generated["status"] == "generated_on_branch"
     assert generated["consumerOsdk"]["profile"] == "consumer_osdk_strict"
     assert generated["consumerOsdk"]["exceptions"] == []
-    assert "@foundry-lite/sdk" not in generated["reactFiles"]["src/App.tsx"]
-    assert "@foundry-lite/mcp-surface-pilot-osdk/react" in generated["reactFiles"]["src/App.tsx"]
-    assert "OsdkObjectType<McpSurfacePilot>" in generated["reactFiles"]["packages/application-osdk/src/generated.ts"]
+    assert generated["generatedFiles"]["isContentIncluded"] is False
+    assert generated["generatedFiles"]["delivery"] == "governed_resource"
+    bundle = runner.foundry.aip.get_pilot_application(generated["resource"]["rid"], ctx=FDE_USER)
+    assert "@foundry-lite/sdk" not in bundle["reactFiles"]["src/App.tsx"]
+    assert "@foundry-lite/mcp-surface-pilot-osdk/react" in bundle["reactFiles"]["src/App.tsx"]
+    assert "OsdkObjectType<WorkItem>" in bundle["reactFiles"]["packages/application-osdk/src/generated.ts"]
     assert app_id
 
 

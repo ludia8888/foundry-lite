@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Domain OS Studio MCP Apps QA Host</title>
+    <style>
+      :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #172033; background: #dfe7ef; }
+      body { margin: 0; padding: 24px; }
+      header { max-width: 920px; margin: 0 auto 14px; }
+      h1 { margin: 0; font-size: 18px; }
+      p { margin: 5px 0 0; color: #566477; font-size: 12px; }
+      iframe { display: block; width: min(920px, 100%); min-height: 760px; margin: auto; border: 0; background: transparent; }
+    </style>
+  </head>
+  <body>
+    <header><h1>MCP Apps QA Host</h1><p>ChatGPT가 전달하는 tool result와 app-only 호출을 재현합니다.</p></header>
+    <iframe id="widget" title="업무 OS 설계 검토"></iframe>
+    <script>
+      (() => {
+        const isIncomplete = new URLSearchParams(location.search).get("state") === "incomplete";
+        const blueprint = {
+          schemaVersion: "foundry-lite-domain-os-blueprint/v1",
+          summary: "입주민의 시설 문제를 접수하고 담당자가 분류한 뒤 수리 완료 증거까지 남깁니다.",
+          actors: ["입주민", "시설 담당자", "수리 업체"],
+          records: [
+            { apiName: "WorkOrder", displayName: "수리 요청", primaryKey: "workOrderId", fields: [
+              { apiName: "workOrderId", displayName: "수리 요청 ID" }, { apiName: "name", displayName: "이름" },
+              { apiName: "status", displayName: "현재 상태" }, { apiName: "location", displayName: "발생 위치" },
+              { apiName: "severity", displayName: "심각도" },
+            ] },
+            { apiName: "PropertyAsset", displayName: "시설 자산", primaryKey: "propertyAssetId", fields: [
+              { apiName: "propertyAssetId", displayName: "시설 자산 ID" }, { apiName: "name", displayName: "이름" },
+              { apiName: "status", displayName: "현재 상태" }, { apiName: "serialNumber", displayName: "일련번호" },
+            ] },
+          ],
+          workflow: {
+            states: ["접수됨", "분류됨", "방문예정", "완료됨"],
+            actions: [
+              { apiName: "TriageWorkOrder", displayName: "요청 분류", fromStates: ["접수됨"], toState: "분류됨", requiredInformation: ["우선순위"], allowedActors: ["시설 담당자"], requiresApproval: true },
+              { apiName: "CompleteRepair", displayName: "수리 완료", fromStates: ["방문예정"], toState: "완료됨", requiredInformation: ["완료 메모"], allowedActors: ["시설 담당자", "수리 업체"], requiresApproval: false },
+            ],
+          },
+          policies: [
+            { name: "심각도 필수", statement: "분류 전에 심각도가 기록되어야 합니다.", enforcement: "blocking", automationStatus: "executable_precondition" },
+            { name: "긴급 누수 우선 처리", statement: "긴급 누수의 우선순위는 담당자가 확인합니다.", enforcement: "manual_review", automationStatus: "human_confirmation" },
+            { name: "임대인 안내", statement: "완료 후 임대인에게 처리 내역을 알립니다.", enforcement: "warning", automationStatus: "documented_for_review" },
+          ],
+          evidence: ["상태 변경 전후", "담당자", "완료 사진"],
+          readiness: isIncomplete
+            ? { isReady: false, missingCount: 1, questions: [{ field: "evidence", question: "수리가 끝났다는 것을 무엇으로 확인할까요?" }] }
+            : { isReady: true, missingCount: 0, questions: [] },
+        };
+        const plan = {
+          operationType: "pilot_generation_plan", applicationName: "시설관리 업무 OS", domainOsBlueprint: blueprint,
+          consumerOsdk: { profile: "consumer_osdk_strict" },
+          mcpExecution: { mode: "osdk_react", workspaceRef: "osdk-app:qa-preview" },
+        };
+        const bundle = {
+          operationType: "pilot_application_bundle", applicationName: plan.applicationName,
+          applicationPath: "/projects/qa/pilot/property-care", status: "generated_on_branch",
+          domainOsBlueprint: blueprint, generatedFiles: { count: 2, names: ["src/App.tsx", "packages/application-osdk/src/generated.ts"] },
+        };
+        Promise.all([fetch("./index.html").then((response) => response.text()), fetch("./foundry-lite-mcp-osdk.js").then((response) => response.text())])
+          .then(([template, runtime]) => {
+            let generateCalls = 0;
+            const host = `<script>window.openai={toolInput:{mode:"osdk_react",workspaceRef:"osdk-app:qa-preview"},toolOutput:{structuredContent:${JSON.stringify(plan)}},async callTool(name){if(name==="pilot.application.generate"&&++window.generateCalls===1)return{structuredContent:{status:"approval_required",challengeId:"qa-challenge"},_meta:{widgetApprovalToken:"qa-token"}};if(name==="approve_builder_mutation")return{_meta:{confirmationReceipt:"qa-receipt"}};return{structuredContent:${JSON.stringify(bundle)}}},async sendFollowUpMessage(){return{}}};window.generateCalls=${generateCalls};<\/script>`;
+            document.getElementById("widget").srcdoc = template
+              .replace("<head>", `<head>${host}`)
+              .replace("/*__FOUNDRY_LITE_MCP_OSDK__*/", runtime);
+          });
+      })();
+    </script>
+  </body>
+</html>

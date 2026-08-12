@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Avenir Next", "Pretendard", ui-sans-serif, system-ui, sans-serif;
+        --navy: #12243a;
+        --ink: #172033;
+        --muted: #637083;
+        --paper: #f7f9fc;
+        --sheet: #ffffff;
+        --line: #d7e0ea;
+        --sky: #0879a6;
+        --sky-soft: #dff4fb;
+        --mint: #dff5e9;
+        --mint-ink: #14643c;
+        --amber: #fff1d6;
+        --amber-ink: #84510b;
+        --danger: #a63832;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: var(--ink); background: transparent; }
+      button { font: inherit; }
+      .shell {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--paper);
+        box-shadow: 0 18px 45px -38px #12243a;
+      }
+      .hero { padding: 22px; color: #f8fbff; background: var(--navy); }
+      .eyebrow { margin: 0 0 7px; color: #8bd9f3; font: 800 11px/1.2 ui-monospace, monospace; letter-spacing: .11em; }
+      h1 { margin: 0; font-size: clamp(22px, 5vw, 34px); line-height: 1.08; letter-spacing: -.025em; }
+      .hero p:last-child { max-width: 68ch; margin: 12px 0 0; color: #cbd9e8; font-size: 13px; line-height: 1.55; }
+      .body { display: grid; gap: 16px; padding: 18px; }
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(88px, 1fr));
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--sheet);
+      }
+      .flow-step { position: relative; min-height: 74px; padding: 12px 10px; border-right: 1px solid var(--line); }
+      .flow-step:last-child { border: 0; }
+      .flow-step::after { content: "→"; position: absolute; right: -8px; top: 28px; z-index: 2; color: var(--sky); background: var(--sheet); }
+      .flow-step:last-child::after { content: ""; }
+      .flow-label { color: var(--muted); font-size: 10px; font-weight: 750; }
+      .flow-value { display: block; margin-top: 5px; color: var(--navy); font-size: 17px; font-weight: 850; }
+      .grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card { border: 1px solid var(--line); border-radius: 14px; background: var(--sheet); padding: 15px; }
+      .card h2 { margin: 0 0 10px; color: var(--navy); font-size: 13px; }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip { border-radius: 999px; padding: 5px 8px; background: var(--sky-soft); color: #17556f; font-size: 11px; font-weight: 700; }
+      .list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+      .list li { padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.45; }
+      .list li:first-child { padding-top: 0; border: 0; }
+      .title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .muted { color: var(--muted); font-size: 11px; }
+      .badge { border-radius: 999px; padding: 4px 7px; background: var(--mint); color: var(--mint-ink); font-size: 10px; font-weight: 800; }
+      .badge.manual { background: var(--amber); color: var(--amber-ink); }
+      .badge.documented { color: var(--muted); background: var(--paper); border: 1px solid var(--line); }
+      .rail { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 4px 0 2px; }
+      .state { white-space: nowrap; border: 1px solid #b9d7e4; border-radius: 999px; padding: 6px 9px; color: #135d7a; background: #eefaff; font-size: 11px; font-weight: 750; }
+      .arrow { color: #7b8a9d; }
+      .notice { border-radius: 13px; padding: 13px; background: var(--amber); color: var(--amber-ink); font-size: 12px; line-height: 1.5; }
+      .notice.success { background: var(--mint); color: var(--mint-ink); }
+      .questions { margin: 8px 0 0; padding-left: 20px; }
+      .questions li { margin: 6px 0; }
+      .actions { display: flex; flex-wrap: wrap; gap: 9px; }
+      .button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 11px;
+        padding: 0 16px;
+        color: white;
+        background: var(--sky);
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .button.secondary { color: var(--navy); background: white; border: 1px solid var(--line); }
+      .button:disabled { cursor: not-allowed; opacity: .48; }
+      .button:focus-visible { outline: 3px solid #70d4f5; outline-offset: 2px; }
+      .status { min-height: 20px; margin: 0; color: var(--muted); font-size: 12px; }
+      .status[data-tone="error"] { color: var(--danger); }
+      .status[data-tone="success"] { color: var(--mint-ink); }
+      .receipt { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 18px; border-top: 1px solid var(--line); color: var(--muted); font: 10px/1.4 ui-monospace, monospace; }
+      .empty { padding: 30px 20px; text-align: center; }
+      @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } .flow { grid-template-columns: repeat(6, 96px); } }
+      @media (prefers-color-scheme: dark) {
+        :root { --ink:#e9f0f7; --muted:#a4b1c1; --paper:#101923; --sheet:#172331; --line:#334355; --navy:#09121d; --sky:#46b9df; --sky-soft:#173c4b; --mint:#163b29; --mint-ink:#86e4af; --amber:#3c2b13; --amber-ink:#f5c26f; }
+        .chip,.state { color:#9bdcf3; border-color:#2d6174; }
+        .button.secondary { color:var(--ink); background:var(--sheet); }
+      }
+      @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+    </style>
+  </head>
+  <body>
+    <main id="app" class="shell" aria-live="polite">
+      <div class="empty"><strong>업무 설계를 불러오는 중입니다.</strong><p class="muted">ChatGPT가 정리한 업무 지도를 확인합니다.</p></div>
+    </main>
+    <script>/*__FOUNDRY_LITE_MCP_OSDK__*/</script>
+    <script>
+      (() => {
+        "use strict";
+        const osdk = globalThis.createFoundryLiteMcpAppsOsdk();
+        const domainOs = osdk(globalThis.FoundryLiteMcpResources.DomainOsStudio);
+        const state = { plan: null, bundle: null, mode: "", workspaceRef: "", busy: false, message: "", tone: "info" };
+        const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+        const list = (value) => Array.isArray(value) ? value : [];
+        const text = (value) => String(value ?? "");
+        const escapeHtml = (value) => text(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+
+        function receive(value) {
+          if (!isObject(value)) return false;
+          if (value.localStatus) {
+            state.message = text(value.message);
+            state.tone = value.localStatus === "recovering" ? "info" : state.tone;
+            render();
+            return true;
+          }
+          const input = isObject(value.toolInput) ? value.toolInput : null;
+          if (input) {
+            state.mode = text(input.mode || state.mode);
+            state.workspaceRef = text(input.workspaceRef || state.workspaceRef);
+          }
+          const output = osdk.structured(value.toolOutput || value);
+          if (!isObject(output)) return false;
+          if (output.operationType === "pilot_generation_plan") {
+            state.plan = output;
+            const execution = isObject(output.mcpExecution) ? output.mcpExecution : {};
+            state.mode = text(execution.mode || state.mode);
+            state.workspaceRef = text(execution.workspaceRef || state.workspaceRef);
+          }
+          if (output.operationType === "pilot_application_bundle") state.bundle = output;
+          render();
+          return Boolean(state.plan || state.bundle);
+        }
+
+        function counts(blueprint) {
+          const workflow = isObject(blueprint.workflow) ? blueprint.workflow : {};
+          return [
+            ["사람", list(blueprint.actors).length],
+            ["업무 기록", list(blueprint.records).length],
+            ["상태", list(workflow.states).length],
+            ["규칙", list(blueprint.policies).length],
+            ["업무 버튼", list(workflow.actions).length],
+            ["증거", list(blueprint.evidence).length],
+          ];
+        }
+
+        function recordMarkup(record) {
+          const fields = list(record.fields).filter((field) => ![record.primaryKey, "name", "status"].includes(field.apiName));
+          return `<li><div class="title-row"><strong>${escapeHtml(record.displayName)}</strong><span class="badge">${fields.length}개 정보</span></div><div class="muted">${fields.map((field) => escapeHtml(field.displayName)).join(" · ") || "기본 정보"}</div></li>`;
+        }
+
+        function actionMarkup(action) {
+          const from = list(action.fromStates).join(", ") || "모든 상태";
+          const actors = list(action.allowedActors).join(", ") || "아직 정하지 않음";
+          const approval = action.requiresApproval ? '<span class="badge manual">사람 확인</span>' : '<span class="badge">바로 실행</span>';
+          return `<li><div class="title-row"><strong>${escapeHtml(action.displayName)}</strong>${approval}</div><div class="muted">${escapeHtml(from)} → ${escapeHtml(action.toState)}${list(action.requiredInformation).length ? ` · 입력: ${list(action.requiredInformation).map(escapeHtml).join(", ")}` : ""}</div><div class="muted">누를 수 있는 사람: ${escapeHtml(actors)}</div></li>`;
+        }
+
+        function policyMarkup(policy) {
+          const states = {
+            executable_precondition: { label: "조건 불충족 시 자동 차단", tone: "" },
+            human_confirmation: { label: "실행 전 사람이 확인", tone: "manual" },
+            documented_for_review: { label: "검토용 규칙 · 아직 자동화 안 됨", tone: "documented" },
+          };
+          const status = states[policy.automationStatus] || states.documented_for_review;
+          return `<li><div class="title-row"><strong>${escapeHtml(policy.name)}</strong><span class="badge ${status.tone}">${status.label}</span></div><div class="muted">${escapeHtml(policy.statement)}</div></li>`;
+        }
+
+        function blueprintMarkup(plan) {
+          const blueprint = isObject(plan.domainOsBlueprint) ? plan.domainOsBlueprint : {};
+          const workflow = isObject(blueprint.workflow) ? blueprint.workflow : {};
+          const readiness = isObject(blueprint.readiness) ? blueprint.readiness : {};
+          const questions = list(readiness.questions);
+          return `<section class="hero"><p class="eyebrow">FOUNDRY-LITE · DOMAIN OS DRAFT</p><h1>${escapeHtml(plan.applicationName)}</h1><p>${escapeHtml(blueprint.summary)}</p></section>
+            <section class="body">
+              <div class="flow" aria-label="업무 운영 지도">${counts(blueprint).map(([label, value]) => `<div class="flow-step"><span class="flow-label">${label}</span><strong class="flow-value">${value}</strong></div>`).join("")}</div>
+              <div class="card"><h2>업무가 움직이는 순서</h2><div class="rail">${list(workflow.states).map((item, index) => `${index ? '<span class="arrow">→</span>' : ""}<span class="state">${escapeHtml(item)}</span>`).join("")}</div></div>
+              <div class="grid">
+                <section class="card"><h2>계속 추적할 업무 기록</h2><ul class="list">${list(blueprint.records).map(recordMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>
+                <section class="card"><h2>사람이 실행할 업무 버튼</h2><ul class="list">${list(workflow.actions).map(actionMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>
+                <section class="card"><h2>반드시 지킬 규칙과 예외</h2><ul class="list">${list(blueprint.policies).map(policyMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>
+                <section class="card"><h2>나중에 확인할 증거</h2><div class="chips">${list(blueprint.evidence).map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div></section>
+              </div>
+              ${readiness.isReady ? '<div class="notice success"><strong>테스트 앱을 만들 준비가 됐습니다.</strong><br>지금은 안전하게 분리된 테스트 공간과 예시 데이터만 만들며, 실제 업무 연결과 배포는 별도 검토 단계입니다.</div>' : `<div class="notice"><strong>${questions.length}가지만 더 알려주세요.</strong><ol class="questions">${questions.map((item) => `<li>${escapeHtml(item.question)}</li>`).join("")}</ol></div>`}
+              <div class="actions">${readiness.isReady ? '<button id="generate" class="button" type="button">이 설계로 테스트 앱 만들기</button>' : '<button id="ask" class="button" type="button">대화에서 질문에 답하기</button>'}<button id="revise" class="button secondary" type="button">ChatGPT에 수정 내용 말하기</button></div>
+              <p id="status" class="status" data-tone="${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p>
+            </section><footer class="receipt"><span>업무 설계 버전 1</span><span>이 앱에 허용된 기능만 사용</span><span>${state.workspaceRef ? "테스트 공간 연결됨" : "테스트 공간 연결 확인 중"}</span></footer>`;
+        }
+
+        function bundleMarkup(bundle) {
+          const blueprint = isObject(bundle.domainOsBlueprint) ? bundle.domainOsBlueprint : {};
+          const workflow = isObject(blueprint.workflow) ? blueprint.workflow : {};
+          return `<section class="hero"><p class="eyebrow">TEST APPLICATION READY</p><h1>${escapeHtml(bundle.applicationName)} 준비 완료</h1><p>업무 기록 조회와 상태별 업무 버튼을 이 앱에 허용된 기능으로만 연결했습니다.</p></section><section class="body">
+            <div class="flow">${counts(blueprint).map(([label, value]) => `<div class="flow-step"><span class="flow-label">${label}</span><strong class="flow-value">${value}</strong></div>`).join("")}</div>
+            <div class="notice success"><strong>안전하게 분리된 테스트 앱을 만들었습니다.</strong><br>실제 업무 데이터에는 아직 연결하지 않았습니다. 담당자 검토·업무 설계 활성화·배포 확인 뒤에만 실제 업무에 사용합니다.</div>
+            <div class="grid"><section class="card"><h2>안전한 앱 연결</h2><ul class="list"><li>${list(blueprint.records).length}개 업무 기록 읽기</li><li>${list(workflow.actions).length}개 승인된 업무 버튼</li><li>화면은 이 앱에 허용된 기능만 사용</li></ul></section><section class="card"><h2>다음 단계</h2><ul class="list"><li>예시 데이터로 사용자 흐름 확인</li><li>실제 데이터 연결과 규칙 검증</li><li>담당자 검토 후 앱 배포</li></ul></section></div>
+            <div class="actions"><button id="next" class="button" type="button">ChatGPT와 실제 데이터 연결 계속하기</button></div><p id="status" class="status" data-tone="success">${escapeHtml(state.message || "중복 생성 없이 서버에 저장했습니다.")}</p>
+          </section><footer class="receipt"><span>테스트 공간 저장 완료</span><span>업무 화면 준비됨</span><span>생성 파일 ${escapeHtml(bundle.generatedFiles?.count ?? Object.keys(bundle.reactFiles || {}).length)}개</span></footer>`;
+        }
+
+        function render() {
+          const root = document.getElementById("app");
+          root.innerHTML = state.bundle ? bundleMarkup(state.bundle) : state.plan ? blueprintMarkup(state.plan) : '<div class="empty"><strong>업무 설계를 불러오는 중입니다.</strong><p class="muted">ChatGPT가 정리한 업무 지도를 확인합니다.</p></div>';
+          document.getElementById("generate")?.addEventListener("click", generate);
+          document.getElementById("ask")?.addEventListener("click", () => continueConversation("보완 질문에 답할게요. 한 번에 하나씩 쉬운 말로 질문해 주세요."));
+          document.getElementById("revise")?.addEventListener("click", () => continueConversation("방금 보여준 업무 설계에서 수정할 내용을 말하겠습니다. 제 설명을 반영해 설계를 다시 만들어 주세요."));
+          document.getElementById("next")?.addEventListener("click", () => continueConversation("생성된 테스트 앱을 실제 업무에 연결하려면 필요한 데이터, 권한, 배포 조건을 쉬운 말로 하나씩 안내해 주세요."));
+        }
+
+        async function continueConversation(prompt) {
+          state.message = "대화 입력창으로 안내를 보냅니다."; state.tone = "info"; render();
+          try {
+            const sent = await domainOs.askInConversation(prompt);
+            state.message = sent ? "ChatGPT 대화에서 계속 설명해 주세요." : "대화 입력창에 수정 내용을 직접 적어 주세요.";
+          } catch (error) { state.message = text(error?.message || error); state.tone = "error"; }
+          render();
+        }
+
+        async function generate() {
+          if (!state.plan || state.busy) return;
+          if (!state.mode || !state.workspaceRef) { state.message = "MCP 작업공간 연결을 확인하지 못해 앱을 만들지 않았습니다."; state.tone = "error"; render(); return; }
+          state.busy = true; state.message = "격리된 테스트 앱을 만들고 있습니다."; state.tone = "info"; render();
+          try {
+            const result = await domainOs.generateTestApplication({ mode: state.mode, workspaceRef: state.workspaceRef, plan: state.plan });
+            if (!receive(result)) throw new Error("생성 결과에 업무 앱 정보가 없습니다.");
+            state.message = "테스트 앱을 만들었습니다."; state.tone = "success";
+          } catch (error) { state.message = text(error?.message || error); state.tone = "error"; }
+          finally { state.busy = false; render(); }
+        }
+
+        osdk.subscribe(receive);
+        const initial = osdk.aliasSnapshot();
+        if (initial) receive(initial);
+        void osdk.initialize();
+        if (!state.plan && !state.bundle && typeof setInterval === "function") {
+          let attempts = 0;
+          const poll = setInterval(() => {
+            attempts += 1;
+            const snapshot = osdk.aliasSnapshot();
+            if ((snapshot && receive(snapshot)) || attempts >= 40) clearInterval(poll);
+          }, 250);
+        }
+        render();
+        globalThis.__foundryDomainOsWidgetTest = Object.freeze({ receive, generate, getState: () => ({ ...state }) });
+      })();
+    </script>
+  </body>
+</html>

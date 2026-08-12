@@ -17,7 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from foundry_lite_api import runtime
 from foundry_lite_api.builder_mcp_ui import (
     BUILDER_CONFIRMATION_TOOL,
-    builder_resource_descriptor,
+    builder_resource_descriptors,
     decorate_builder_tool_list,
     read_builder_resource,
     validate_resources_list_params,
@@ -233,7 +233,7 @@ def _dispatch_active_session(
         return _call_tool(application_id, session_id, request, payload, ctx)
     if method == "resources/list":
         validate_resources_list_params(payload.params)
-        return {"resources": [builder_resource_descriptor()]}
+        return {"resources": builder_resource_descriptors()}
     if method == "resources/read":
         return read_builder_resource(payload.params)
     raise method_not_found("Builder", method)
@@ -316,7 +316,12 @@ def _initialize_result(protocol_version: str) -> dict[str, object]:
         },
         "serverInfo": {"name": "foundry-lite-builder-mcp", "version": "1.0.0"},
         "instructions": (
-            "Use lazy discovery with search_tools or eager tools/list fallback and explicit workspaceRef values. "
+            "When a user describes any business domain in natural language, infer a bounded domainBrief and call "
+            "pilot.application.plan in osdk_react mode. Do not ask the user for API names or developer vocabulary. "
+            "If its readiness questions are non-empty, ask only those concrete business questions and plan again. "
+            "The embedded Domain OS Studio lets the user review the resulting people, records, states, rules, actions, "
+            "and evidence, then explicitly create a test application. Use lazy discovery with search_tools or eager "
+            "tools/list fallback and explicit workspaceRef values. "
             "Mutations return an approval challenge rendered by the embedded Builder confirmation app; "
             "the user can approve and retry the exact call inside ChatGPT. The authenticated human "
             "control-plane endpoint remains available for non-App clients. "
