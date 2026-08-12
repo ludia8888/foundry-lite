@@ -1,5 +1,8 @@
-import type { GenericObject } from "@foundry-lite/sdk";
-import { useFoundryLiteClient } from "@foundry-lite/sdk/react";
+import {
+  customerReservationDate,
+  useCustomerReservationScreen,
+} from "@foundry-lite/restaurant-reservation-osdk/react";
+import type { BookingPhase } from "@foundry-lite/restaurant-reservation-osdk/react";
 import {
   CalendarDays,
   Check,
@@ -13,49 +16,7 @@ import {
   UtensilsCrossed,
   Users,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-
 import "./customer-reservation.css";
-
-const RESTAURANT_OBJECT_ID = "seed-restaurant-1";
-const TABLE_OBJECT_ID = "seed-restaurant-1";
-type BookingPhase = "schedule" | "details" | "policy" | "success";
-
-type PolicyQuote = {
-  decision: string;
-  isBookable: boolean;
-  reasonCodes: string[];
-  depositAmountKrw: number;
-  cancellationDeadlineAt: string;
-  lateArrivalGraceMinutes: number;
-  quoteExpiresAt: string;
-  inventoryHoldStatus: string;
-  holdDurationMinutes: number;
-  serviceEndsAt: string;
-  turnTimeMinutes: number;
-  policyVersion: string;
-  policyMessage: string;
-};
-
-type BookingRequest = {
-  reservationId: string;
-  targetVersion: number;
-  params: Record<string, unknown>;
-};
-
-type CustomerDetails = {
-  guestName: string;
-  guestPhone: string;
-  guestEmail: string;
-  specialRequest: string;
-};
-
-const EMPTY_DETAILS: CustomerDetails = {
-  guestName: "",
-  guestPhone: "",
-  guestEmail: "",
-  specialRequest: "",
-};
 
 const REASON_LABELS: Record<string, string> = {
   RESTAURANT_CLOSED: "현재 예약을 받지 않습니다.",
@@ -72,69 +33,12 @@ const REASON_LABELS: Record<string, string> = {
   ACCESSIBLE_SEAT_UNAVAILABLE: "접근 가능한 좌석을 준비할 수 없습니다.",
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
 function asNumber(value: unknown, fallback: number): number {
   return typeof value === "number" ? value : fallback;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function dateInputValue(daysFromNow: number): string {
-  const date = new Date(Date.now() + daysFromNow * 86_400_000);
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
-
-function clockMinutes(value: string): number {
-  const [hours, minutes] = value.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function serviceSlots(properties: Record<string, unknown>): string[] {
-  const start = clockMinutes(asString(properties.serviceStartLocal, "17:30"));
-  const end = clockMinutes(asString(properties.lastSeatingLocal, "21:30"));
-  const interval = asNumber(properties.slotIntervalMinutes, 30);
-  const slots: string[] = [];
-  for (let cursor = start; cursor <= end; cursor += interval) {
-    const hours = String(Math.floor(cursor / 60)).padStart(2, "0");
-    const minutes = String(cursor % 60).padStart(2, "0");
-    slots.push(`${hours}:${minutes}`);
-  }
-  return slots;
-}
-
-function policyQuote(output: Record<string, unknown>): PolicyQuote {
-  const raw = isRecord(output.value) ? output.value : output;
-  return {
-    decision: asString(raw.decision, "UNAVAILABLE"),
-    isBookable: asBoolean(raw.isBookable),
-    reasonCodes: Array.isArray(raw.reasonCodes)
-      ? raw.reasonCodes.filter((item): item is string => typeof item === "string")
-      : [],
-    depositAmountKrw: asNumber(raw.depositAmountKrw, 0),
-    cancellationDeadlineAt: asString(raw.cancellationDeadlineAt),
-    lateArrivalGraceMinutes: asNumber(raw.lateArrivalGraceMinutes, 15),
-    quoteExpiresAt: asString(raw.quoteExpiresAt),
-    inventoryHoldStatus: asString(raw.inventoryHoldStatus, "AVAILABLE_NOT_HELD"),
-    holdDurationMinutes: asNumber(raw.holdDurationMinutes, 10),
-    serviceEndsAt: asString(raw.serviceEndsAt),
-    turnTimeMinutes: asNumber(raw.turnTimeMinutes, 120),
-    policyVersion: asString(raw.policyVersion, "unversioned"),
-    policyMessage: asString(raw.policyMessage),
-  };
 }
 
 function formatKrw(value: number): string {
@@ -151,15 +55,6 @@ function formatDateTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
-}
-
-function reservationId(date: string, time: string): string {
-  const suffix = crypto.randomUUID().slice(0, 8).toUpperCase();
-  return `RSV-WEB-${date.replaceAll("-", "")}-${time.replace(":", "")}-${suffix}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "예약 처리 중 알 수 없는 오류가 발생했습니다.";
 }
 
 function StepRail({ phase }: { phase: BookingPhase }) {
@@ -180,207 +75,13 @@ function StepRail({ phase }: { phase: BookingPhase }) {
 }
 
 export default function CustomerReservationPage() {
-  const client = useFoundryLiteClient();
-  const [restaurant, setRestaurant] = useState<GenericObject | null>(null);
-  const [table, setTable] = useState<GenericObject | null>(null);
-  const [phase, setPhase] = useState<BookingPhase>("schedule");
-  const [date, setDate] = useState(() => dateInputValue(3));
-  const [partySize, setPartySize] = useState(2);
-  const [preference, setPreference] = useState("WINDOW");
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
-  const [details, setDetails] = useState<CustomerDetails>(EMPTY_DETAILS);
-  const [quote, setQuote] = useState<PolicyQuote | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isQuoting, setIsQuoting] = useState(false);
-  const [isBooking, setIsBooking] = useState(false);
-  const [hasAcceptedPolicy, setHasAcceptedPolicy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pinnedBooking, setPinnedBooking] = useState<BookingRequest | null>(null);
-  const [confirmedReservation, setConfirmedReservation] = useState<GenericObject | null>(null);
-  const [isManaging, setIsManaging] = useState(false);
-
-  useEffect(() => {
-    let isCurrent = true;
-    void Promise.all([
-      client.objects.generic.get("Restaurant", RESTAURANT_OBJECT_ID),
-      client.objects.generic.get("DiningTable", TABLE_OBJECT_ID),
-    ])
-      .then(([restaurantObject, tableObject]) => {
-        if (!isCurrent) return;
-        setRestaurant(restaurantObject);
-        setTable(tableObject);
-      })
-      .catch((loadError: unknown) => {
-        if (isCurrent) setError(errorMessage(loadError));
-      })
-      .finally(() => {
-        if (isCurrent) setIsLoading(false);
-      });
-    return () => {
-      isCurrent = false;
-    };
-  }, [client]);
-
-  const restaurantProperties = restaurant?.properties ?? {};
-  const tableProperties = table?.properties ?? {};
-  const depositPartyThreshold = asNumber(restaurantProperties.largePartyThreshold, 4);
-  const slots = useMemo(() => serviceSlots(restaurantProperties), [restaurantProperties]);
-
-  const resetQuote = () => {
-    setSelectedTime(null);
-    setQuote(null);
-    setPinnedBooking(null);
-    setError(null);
-  };
-
-  const runQuote = async (
-    time: string,
-    objectIds = { restaurant: restaurant?.objectId, table: table?.objectId },
-  ) => {
-    if (!objectIds.restaurant || !objectIds.table) return null;
-    if (details.guestPhone.replace(/\D/g, "").length < 9) {
-      setError("좌석 확인을 위해 연락 가능한 휴대전화 번호를 입력해 주세요.");
-      return null;
-    }
-    setSelectedTime(time);
-    setQuote(null);
-    setError(null);
-    setIsQuoting(true);
-    try {
-      const result = await client.functions.generic.execute("QuoteAtomicReservationPolicy", {
-        inputs: {
-          restaurant: objectIds.restaurant,
-          table: objectIds.table,
-          desiredAt: `${date}T${time}:00+09:00`,
-          requestedAt: new Date().toISOString(),
-          partySize,
-          guestPhone: details.guestPhone,
-          seatingPreference: preference,
-        },
-      });
-      const nextQuote = policyQuote(result.output);
-      setQuote(nextQuote);
-      return nextQuote;
-    } catch (quoteError) {
-      setError(errorMessage(quoteError));
-      return null;
-    } finally {
-      setIsQuoting(false);
-    }
-  };
-
-  const buildBookingRequest = async (): Promise<BookingRequest> => {
-    if (!restaurant || !table || !selectedTime) throw new Error("방문 시간을 다시 선택해 주세요.");
-    const [freshRestaurant, freshTable] = await Promise.all([
-      client.objects.generic.get("Restaurant", RESTAURANT_OBJECT_ID),
-      client.objects.generic.get("DiningTable", TABLE_OBJECT_ID),
-    ]);
-    setRestaurant(freshRestaurant);
-    setTable(freshTable);
-    const freshQuote = await runQuote(selectedTime, {
-      restaurant: freshRestaurant.objectId,
-      table: freshTable.objectId,
-    });
-    if (!freshQuote?.isBookable) throw new Error("좌석 상태가 바뀌었습니다. 다른 시간을 선택해 주세요.");
-    const nextReservationId = reservationId(date, selectedTime);
-    return {
-      reservationId: nextReservationId,
-      targetVersion: freshRestaurant.objectVersion,
-      params: {
-        restaurant: restaurant.objectId,
-        table: freshTable.objectId,
-        reservationId: nextReservationId,
-        guestName: details.guestName.trim(),
-        guestPhone: details.guestPhone.trim(),
-        guestEmail: details.guestEmail.trim(),
-        partySize,
-        desiredAt: `${date}T${selectedTime}:00+09:00`,
-        requestedAt: new Date().toISOString(),
-        seatingPreference: preference,
-        specialRequest: details.specialRequest.trim(),
-        customerAcceptedPolicy: true,
-      },
-    };
-  };
-
-  const runReservationAction = async (
-    actionApiName: "PayReservationDeposit" | "CancelCustomerReservation",
-  ) => {
-    if (!confirmedReservation) return;
-    setError(null);
-    setIsManaging(true);
-    try {
-      const [freshReservation, freshTable] = await Promise.all([
-        client.objects.generic.get("Reservation", confirmedReservation.objectId),
-        client.objects.generic.get("DiningTable", TABLE_OBJECT_ID),
-      ]);
-      const operationId = `${actionApiName === "PayReservationDeposit" ? "PAY" : "CANCEL"}-${freshReservation.objectId}`;
-      const requestedAt = new Date().toISOString();
-      const shared = { reservation: freshReservation.objectId, table: freshTable.objectId, requestedAt };
-      const params = actionApiName === "PayReservationDeposit"
-        ? { ...shared, paymentAttemptId: operationId, paymentMethodRef: "pm_sandbox_visa_4242" }
-        : { ...shared, cancellationId: operationId, cancellationReason: "CUSTOMER_REQUEST" };
-      const run = await client.actions.runs.start(
-        actionApiName,
-        {
-          target: { objectType: "Reservation", objectId: freshReservation.objectId },
-          expectedObjectVersion: freshReservation.objectVersion,
-          params,
-        },
-        {
-          idempotencyKey: `customer:${actionApiName}:${freshReservation.objectId}`,
-          waitSeconds: 30,
-        },
-      );
-      if (run.status !== "succeeded") {
-        throw new Error(actionApiName === "PayReservationDeposit" ? "보증금 승인이 완료되지 않았습니다." : "취소 처리가 완료되지 않았습니다.");
-      }
-      setConfirmedReservation(
-        await client.objects.generic.get("Reservation", freshReservation.objectId),
-      );
-    } catch (manageError) {
-      setError(errorMessage(manageError));
-    } finally {
-      setIsManaging(false);
-    }
-  };
-
-  const submitBooking = async () => {
-    if (!hasAcceptedPolicy) {
-      setError("취소·보증금·지각 정책에 동의해 주세요.");
-      return;
-    }
-    setError(null);
-    setIsBooking(true);
-    try {
-      const request = pinnedBooking ?? (await buildBookingRequest());
-      if (!pinnedBooking) setPinnedBooking(request);
-      const run = await client.actions.runs.start(
-        "ReserveTableWithAtomicInventory",
-        {
-          target: { objectType: "Restaurant", objectId: RESTAURANT_OBJECT_ID },
-          expectedObjectVersion: request.targetVersion,
-          params: request.params,
-        },
-        { idempotencyKey: `customer-book:${request.reservationId}`, waitSeconds: 30 },
-      );
-      if (run.status !== "succeeded") {
-        throw new Error("예약이 확정되지 않았습니다. 같은 요청으로 다시 확인해 주세요.");
-      }
-      const created = await client.objects.generic.get("Reservation", request.reservationId);
-      setConfirmedReservation(created);
-      setPhase("success");
-    } catch (bookingError) {
-      setError(errorMessage(bookingError));
-    } finally {
-      setIsBooking(false);
-    }
-  };
-
-  const canContinueDetails =
-    details.guestName.trim().length >= 2 &&
-    details.guestEmail.includes("@") &&
-    details.guestPhone.replace(/\D/g, "").length >= 9;
+  const {
+    restaurantProperties, tableProperties, phase, setPhase, date, setDate, partySize,
+    setPartySize, preference, setPreference, selectedTime, details, setDetails, quote,
+    isLoading, isQuoting, isBooking, hasAcceptedPolicy, setHasAcceptedPolicy, error,
+    setError, confirmedReservation, isManaging, depositPartyThreshold, slots,
+    canContinueDetails, resetQuote, runQuote, submitBooking, runReservationAction,
+  } = useCustomerReservationScreen();
 
   if (isLoading) {
     return (
@@ -439,7 +140,7 @@ export default function CustomerReservationPage() {
         {phase === "schedule" ? (
           <div className="booking-phase" data-testid="schedule-step">
             <div className="field-grid">
-              <label><span><CalendarDays aria-hidden="true" /> 방문일</span><input data-testid="booking-date" type="date" min={dateInputValue(0)} value={date} onChange={(event) => { setDate(event.target.value); resetQuote(); }} /></label>
+              <label><span><CalendarDays aria-hidden="true" /> 방문일</span><input data-testid="booking-date" type="date" min={customerReservationDate(0)} value={date} onChange={(event) => { setDate(event.target.value); resetQuote(); }} /></label>
               <label><span>연락처</span><input data-testid="guest-phone-schedule" inputMode="tel" autoComplete="tel" placeholder="010-0000-0000" value={details.guestPhone} onChange={(event) => { setDetails((current) => ({ ...current, guestPhone: event.target.value })); resetQuote(); }} /></label>
             </div>
 

@@ -14,6 +14,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 _REPOSITORY = SourceRepositoryRef("github", 42, "example", "foundry-lite")
+_SOURCE_COMMIT = "a" * 40
 
 
 def test_ontology_manifest_binds_exact_content_without_copying_tenant_data() -> None:
@@ -97,6 +98,74 @@ def test_pipeline_manifest_is_deterministic_and_hashes_review_evidence() -> None
     assert "pipeline_branch_test" not in first.canonical_bytes.decode("utf-8")
 
 
+def test_manifest_binds_passing_consumer_osdk_receipt_to_source_commit() -> None:
+    proposal = _pipeline_proposal()
+
+    manifest = build_governed_release_source_manifest(
+        RequestContext(tenant_id="tenant-a"),
+        "pipeline",
+        proposal,
+        _REPOSITORY,
+        "main",
+        "codex/orders",
+        consumer_osdk_application_id="restaurant-reservation-customer",
+        consumer_osdk_compliance=_consumer_osdk_receipt(),
+        expected_source_commit=_SOURCE_COMMIT,
+    )
+
+    binding = json.loads(manifest.canonical_bytes)["consumerOsdkCompliance"]
+    assert binding["applicationId"] == "restaurant-reservation-customer"
+    assert binding["sourceCommit"] == _SOURCE_COMMIT
+    assert binding["sourceTreeHash"].startswith("sha256:")
+    assert binding["sdkArtifactHash"].startswith("sha256:")
+    assert binding["ontologyFingerprint"].startswith("sha256:")
+    assert binding["receiptFingerprint"].startswith("sha256:")
+    assert "sourceFiles" not in binding
+
+
+def test_manifest_blocks_strict_consumer_release_without_receipt() -> None:
+    with pytest.raises(ValidationFailed, match="consumerOsdkCompliance"):
+        build_governed_release_source_manifest(
+            RequestContext(tenant_id="tenant-a"),
+            "pipeline",
+            _pipeline_proposal(),
+            _REPOSITORY,
+            "main",
+            "codex/orders",
+            consumer_osdk_application_id="restaurant-reservation-customer",
+            expected_source_commit=_SOURCE_COMMIT,
+        )
+
+
+def test_manifest_blocks_stale_or_bypassed_consumer_osdk_receipt() -> None:
+    with pytest.raises(ConflictDetected, match="stale"):
+        build_governed_release_source_manifest(
+            RequestContext(tenant_id="tenant-a"),
+            "pipeline",
+            _pipeline_proposal(),
+            _REPOSITORY,
+            "main",
+            "codex/orders",
+            consumer_osdk_application_id="restaurant-reservation-customer",
+            consumer_osdk_compliance=_consumer_osdk_receipt(source_commit="b" * 40),
+            expected_source_commit=_SOURCE_COMMIT,
+        )
+    receipt = _consumer_osdk_receipt()
+    receipt["applications"][0]["exceptionCount"] = 1
+    with pytest.raises(ConflictDetected, match="bypasses"):
+        build_governed_release_source_manifest(
+            RequestContext(tenant_id="tenant-a"),
+            "pipeline",
+            _pipeline_proposal(),
+            _REPOSITORY,
+            "main",
+            "codex/orders",
+            consumer_osdk_application_id="restaurant-reservation-customer",
+            consumer_osdk_compliance=receipt,
+            expected_source_commit=_SOURCE_COMMIT,
+        )
+
+
 def test_manifest_rejects_proposal_content_drift() -> None:
     graph = {"schemaVersion": 2, "nodes": [], "edges": []}
     proposal = {
@@ -115,6 +184,43 @@ def test_manifest_rejects_proposal_content_drift() -> None:
             "main",
             "codex/orders",
         )
+
+
+def _pipeline_proposal() -> dict[str, object]:
+    graph = {"edges": [], "nodes": [], "schemaVersion": 2}
+    return {
+        "id": "pipeprop_123",
+        "graph": graph,
+        "graphFingerprint": pipeline_graph_fingerprint(graph),
+        "sourceBranch": {"branchName": "orders", "branchId": "pipebranch_123"},
+        "changeDiff": {"items": [], "summary": {"totalChangeCount": 0}},
+        "diffCompleteness": "complete",
+        "testReceipt": {"status": "passed", "proofKind": "pipeline_branch_test"},
+    }
+
+
+def _consumer_osdk_receipt(source_commit: str = _SOURCE_COMMIT) -> dict[str, object]:
+    fingerprint = f"sha256:{'1' * 64}"
+    return {
+        "schemaVersion": "foundry-lite-consumer-osdk-compliance/v1",
+        "sourceCommit": source_commit,
+        "inventoryHash": fingerprint,
+        "isCompliant": True,
+        "applications": [
+            {
+                "applicationId": "restaurant-reservation-customer",
+                "profile": "consumer_osdk_strict",
+                "ontologyFingerprint": fingerprint,
+                "sourceTreeHash": fingerprint,
+                "sdkPackageTreeHash": fingerprint,
+                "sdkArtifactHash": fingerprint,
+                "exceptionCount": 0,
+                "violationCount": 0,
+                "isCompliant": True,
+                "sourceFiles": [{"path": "private/source.ts", "hash": fingerprint}],
+            }
+        ],
+    }
 
 
 def test_manifest_rejects_unbound_source_head() -> None:

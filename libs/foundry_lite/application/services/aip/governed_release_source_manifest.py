@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from foundry_lite.application.ports.source_control_release import SourceRepositoryRef
+from foundry_lite.application.services.aip.consumer_osdk_compliance import consumer_osdk_compliance_binding
 from foundry_lite.application.services.ontology_proposal_payloads import yaml_fingerprint
 from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
 from foundry_lite.domain.context import RequestContext
@@ -55,6 +56,10 @@ def build_governed_release_source_manifest(
     repository: SourceRepositoryRef,
     base_ref: str,
     head_ref: str,
+    *,
+    consumer_osdk_application_id: str | None = None,
+    consumer_osdk_compliance: JsonObject | None = None,
+    expected_source_commit: str | None = None,
 ) -> GovernedReleaseSourceManifest:
     """Build the exact, redacted bytes that a source candidate must contain."""
 
@@ -65,7 +70,7 @@ def build_governed_release_source_manifest(
     branch_name = _required_text(branch, "branchName")
     _require_source_binding(head_ref, branch_name)
     content_fingerprint = _verified_content_fingerprint(release_kind, proposal)
-    payload = _manifest_payload(
+    payload = _bound_manifest_payload(
         release_kind,
         proposal,
         repository,
@@ -73,6 +78,9 @@ def build_governed_release_source_manifest(
         head_ref,
         branch_id,
         content_fingerprint,
+        consumer_osdk_application_id,
+        consumer_osdk_compliance,
+        expected_source_commit,
     )
     canonical_bytes = _canonical_json(payload) + b"\n"
     return GovernedReleaseSourceManifest(
@@ -124,6 +132,44 @@ def _manifest_payload(
         },
         "reviewEvidence": _review_evidence_fingerprints(release_kind, proposal),
     }
+
+
+def _bound_manifest_payload(
+    release_kind: str,
+    proposal: JsonObject,
+    repository: SourceRepositoryRef,
+    base_ref: str,
+    head_ref: str,
+    branch_id: str,
+    content_fingerprint: str,
+    application_id: str | None,
+    compliance: JsonObject | None,
+    expected_source_commit: str | None,
+) -> dict[str, object]:
+    payload = _manifest_payload(release_kind, proposal, repository, base_ref, head_ref, branch_id, content_fingerprint)
+    _bind_consumer_osdk(payload, application_id, compliance, expected_source_commit)
+    return payload
+
+
+def _bind_consumer_osdk(
+    payload: dict[str, object],
+    application_id: str | None,
+    compliance: JsonObject | None,
+    expected_source_commit: str | None,
+) -> None:
+    if application_id is None and compliance is None:
+        return
+    if not isinstance(application_id, str) or not application_id.strip():
+        raise ValidationFailed("consumerOsdkApplicationId is required with a compliance receipt")
+    if compliance is None:
+        raise ValidationFailed("consumerOsdkCompliance is required for a strict consumer application release")
+    if not isinstance(expected_source_commit, str) or not expected_source_commit:
+        raise ValidationFailed("expected source commit is required for consumer OSDK compliance")
+    payload["consumerOsdkCompliance"] = consumer_osdk_compliance_binding(
+        compliance,
+        application_id.strip(),
+        expected_source_commit,
+    )
 
 
 def _verified_content_fingerprint(release_kind: str, proposal: JsonObject) -> str:

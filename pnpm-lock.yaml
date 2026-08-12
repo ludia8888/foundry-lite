@@ -21,8 +21,15 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  apps/chatgpt-builder-widget: {}
+
+  apps/chatgpt-release-widget: {}
+
   apps/foundry:
     dependencies:
+      '@foundry-lite/restaurant-reservation-osdk':
+        specifier: workspace:*
+        version: link:../../packages/restaurant-reservation-osdk
       '@foundry-lite/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk-ts
@@ -93,6 +100,22 @@ importers:
       vite:
         specifier: ^7.0.0
         version: 7.3.6(@types/node@26.1.0)(jiti@2.7.0)(lightningcss@1.32.0)
+
+  packages/restaurant-reservation-osdk:
+    dependencies:
+      '@foundry-lite/sdk':
+        specifier: workspace:*
+        version: link:../sdk-ts
+      react:
+        specifier: '>=18'
+        version: 19.2.7
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.8
+        version: 19.2.17
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
   packages/sdk-ts:
     dependencies:

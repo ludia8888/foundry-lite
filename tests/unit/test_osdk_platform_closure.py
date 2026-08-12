@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import json
 import sys
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -120,7 +121,17 @@ def test_osdk_sdk_release_publishes_local_typescript_and_python_artifacts(foundr
     )
     raw = base64.b64decode(cast(str, artifact["contentBase64"]))
     assert f"sha256:{hashlib.sha256(raw).hexdigest()}" == ts_artifacts[0]["content_hash"]
-    assert json.loads(raw)["packageName"] == "@acme/orders-osdk"
+    ts_zip_path = tmp_path / "orders_osdk_typescript.zip"
+    ts_zip_path.write_bytes(raw)
+    with zipfile.ZipFile(ts_zip_path) as archive:
+        package = json.loads(archive.read("package.json"))
+        manifest = json.loads(archive.read("manifest.json"))
+        source = archive.read("src/index.ts").decode("utf-8")
+    assert package["name"] == "@acme/orders-osdk"
+    assert manifest["packageName"] == "@acme/orders-osdk"
+    assert "export const $Objects = {" in source
+    assert '"Order":' in source
+    assert "OsdkObjectType" in source
 
     py_release = foundry.developer_console.create_osdk_sdk_version(
         app_id,

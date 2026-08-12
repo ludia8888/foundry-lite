@@ -32,6 +32,10 @@ def source_publication_manifest(
     release_kind: str,
     proposal: JsonObject,
     config: GovernedReleaseDeliveryConfig,
+    *,
+    consumer_osdk_application_id: str | None = None,
+    consumer_osdk_compliance: JsonObject | None = None,
+    expected_source_commit: str | None = None,
 ) -> tuple[GovernedReleaseSourceManifest, SourceCandidateManifest]:
     """Build the exact public-safe artifact from server-read proposal state."""
 
@@ -44,6 +48,9 @@ def source_publication_manifest(
         repository,
         config.source_base_ref,
         head_ref,
+        consumer_osdk_application_id=consumer_osdk_application_id,
+        consumer_osdk_compliance=consumer_osdk_compliance,
+        expected_source_commit=expected_source_commit,
     )
     return governed, SourceCandidateManifest(
         governed.artifact_path,

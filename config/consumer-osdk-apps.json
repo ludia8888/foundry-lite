@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "foundry-lite-consumer-osdk-apps/v1",
+  "applications": [
+    {
+      "applicationId": "restaurant-reservation-customer",
+      "profile": "consumer_osdk_strict",
+      "sourceRoots": [
+        "apps/foundry/src/features/reservations"
+      ],
+      "sdkPackageName": "@foundry-lite/restaurant-reservation-osdk",
+      "sdkPackageRoot": "packages/restaurant-reservation-osdk",
+      "contractPath": "packages/restaurant-reservation-osdk/osdk.contract.json",
+      "generatedPath": "packages/restaurant-reservation-osdk/src/generated.ts",
+      "exceptions": []
+    }
+  ]
+}

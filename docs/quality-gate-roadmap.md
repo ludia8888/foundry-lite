@@ -2428,6 +2428,19 @@ The optional React entrypoint also exposes live ontology catalog workspace state
 start-and-poll job state, and admin console launch/task-plan actions that split browser-safe actions from
 worker/CLI/runbook/future rows while carrying execution surface, approval, checklist, and blocking
 reason fields for screen implementation.
+Consumer-facing domain applications can opt into the stronger `consumer_osdk_strict` profile through
+`config/consumer-osdk-apps.json`. The first app, `restaurant-reservation-customer`, consumes only
+`@foundry-lite/restaurant-reservation-osdk/react`; its package owns typed Restaurant, DiningTable,
+Reservation, ReservationPolicyQuote, reserve, payment, cancel, and policy-quote Function resources.
+The base OSDK now gives generated packages typed `executeFunction(...)` and asynchronous `startAction(...)`
+primitives, so an app package does not need to fall back to generic transport methods for those operations.
+`scripts/quality/check_consumer_osdk_boundary.mjs` uses the TypeScript compiler AST to reject base-SDK
+imports, low-level hooks, dot/bracket generic object/function/action escape hatches, and any exception entry.
+The same gate writes a compliance receipt with source commit plus source-tree, package-tree, artifact, and
+ontology fingerprints. When a Governed Release source publication declares the strict application, the
+receipt is mandatory and must match the exact provider base commit before publication. This deliberately
+enforces source/build/release provenance; it does not claim the HTTP server can identify the caller's
+library from a valid authorized request, nor that all existing administrative screens are strict apps.
 The same gate now protects `docs/frontend-backend-surface-contract.md` as a frontend SDK recipe contract and
 `packages/sdk-ts/src/screen-recipes.ts` as the typechecked source exported through
 `@foundry-lite/sdk/screen-recipes`: session, dataset explorer, object/action workspace, large ontology lookup, media,
@@ -2456,6 +2469,7 @@ browser execution은 후속 slice다.
 | SDK TypeScript typecheck                  | `quality:sdk-typecheck`            | SDK package entrypoint, generated types, optional React helpers, and screen recipes가 TypeScript strict mode에서 깨져 프론트엔드가 SDK를 import하자마자 실패하는 문제 차단                                                                                                                                                                                                                                                                                                                                                         |
 | Foundry SPA TypeScript typecheck          | `quality:foundry-typecheck`        | SDK wire response의 nullable/optional 상태를 화면이 검증 없이 강한 타입으로 가정하거나, 실제 `apps/foundry` 화면 조합이 strict TypeScript mode에서 깨지는 문제 차단                                                                                                                                                                                                                                                                                                                                                                 |
 | Frontend foundation SDK/SPA contract      | `quality:frontend-foundation`      | generated SDK와 browser SDK helper surface가 달라지거나, Web Operations가 SDK request/error/request-id 경계를 우회하거나, frontend error가 request id/retryability 없이 표시되거나, Foundry SPA가 SDK 계약을 잘못 소비해 타입 검사가 깨지는 문제 차단                                                                                                                                                                                                                                                                                 |
+| Consumer application OSDK strict contract | `quality:consumer-osdk`            | strict app이 base SDK 또는 generic object/function/action escape hatch로 내려가거나, alias/bracket notation으로 AST 검사를 우회하거나, contract와 generated app package가 drift하거나, exception budget이 0보다 커지거나, source/package/artifact/ontology fingerprint receipt가 없거나 Governed Release provider base commit과 어긋나는 문제 차단 |
 
 ### S63 — Insight Review Backend/API/SDK Contract
 
