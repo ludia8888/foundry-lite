@@ -76,10 +76,19 @@ class ExternalReleaseSourcePublicationWorkflow:
         proposal: dict[str, object] | Mapping[str, object],
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
-        governed, manifest = source_publication_manifest(ctx, release_kind, proposal, self._config)
         idempotency_key = _required_text(arguments, "idempotencyKey")
         replay = self._find_replay(ctx, idempotency_key)
-        request = self._request(proposal, release_kind, manifest, idempotency_key, replay)
+        base_sha = _required_text(replay.target_ref, "baseSha") if replay is not None else self._fresh_base_sha()
+        governed, manifest = source_publication_manifest(
+            ctx,
+            release_kind,
+            proposal,
+            self._config,
+            consumer_osdk_application_id=_optional_text(arguments, "consumerOsdkApplicationId"),
+            consumer_osdk_compliance=_optional_mapping(arguments, "consumerOsdkCompliance"),
+            expected_source_commit=base_sha,
+        )
+        request = self._request(proposal, release_kind, manifest, idempotency_key, base_sha)
         if replay is not None:
             require_publication_replay_binding(replay, ctx, request)
             row = replay
@@ -141,9 +150,8 @@ class ExternalReleaseSourcePublicationWorkflow:
         release_kind: str,
         manifest: SourceCandidateManifest,
         idempotency_key: str,
-        replay: ReleaseDeliveryRecord | None,
+        base_sha: str,
     ) -> SourceCandidatePublicationRequest:
-        base_sha = _required_text(replay.target_ref, "baseSha") if replay is not None else self._fresh_base_sha()
         return source_publication_request_for_proposal(
             release_kind,
             proposal,
@@ -336,6 +344,24 @@ def _repository(config: GovernedReleaseDeliveryConfig) -> SourceRepositoryRef:
     if repository is None:
         raise ConflictDetected("source-control repository is not configured")
     return repository
+
+
+def _optional_text(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConflictDetected(f"{key} must be a non-empty string")
+    return value.strip()
+
+
+def _optional_mapping(payload: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ConflictDetected(f"{key} must be an object")
+    return value
 
 
 def _require_publication_snapshot(

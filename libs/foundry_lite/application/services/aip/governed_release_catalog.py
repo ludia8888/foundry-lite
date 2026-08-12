@@ -94,7 +94,13 @@ def _publish_schema() -> dict[str, object]:
     """Describe an explicit publication of one exact governed source candidate."""
 
     return _schema(
-        {"releaseKind": _RELEASE_KIND, "proposalId": _TEXT, "idempotencyKey": _TEXT},
+        {
+            "releaseKind": _RELEASE_KIND,
+            "proposalId": _TEXT,
+            "idempotencyKey": _TEXT,
+            "consumerOsdkApplicationId": _TEXT,
+            "consumerOsdkCompliance": {"type": "object", "additionalProperties": True},
+        },
         ["releaseKind", "proposalId", "idempotencyKey"],
     )
 
