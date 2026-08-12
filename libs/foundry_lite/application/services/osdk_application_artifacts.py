@@ -135,24 +135,95 @@ def _release_manifest(
 
 def _artifact_bytes(manifest: RuntimeJsonObject, language: OsdkLanguage) -> bytes:
     if language == "typescript":
-        return json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")
+        return _typescript_package_zip(manifest)
     return _python_package_zip(manifest)
 
 
+def _typescript_package_zip(manifest: RuntimeJsonObject) -> bytes:
+    package_json = {
+        "name": manifest["packageName"],
+        "version": manifest["version"],
+        "private": True,
+        "type": "module",
+        "exports": {".": "./src/index.ts"},
+        "dependencies": {"@foundry-lite/sdk": "^0.1.0"},
+    }
+    entries = {
+        "package.json": json.dumps(package_json, sort_keys=True, indent=2) + "\n",
+        "manifest.json": json.dumps(manifest, sort_keys=True, indent=2) + "\n",
+        "src/index.ts": _typescript_package_source(manifest),
+    }
+    return _package_zip(entries)
+
+
+def _typescript_package_source(manifest: RuntimeJsonObject) -> str:
+    snapshot = cast(Mapping[str, object], manifest["resourceScopeSnapshot"])
+    resources = cast(Sequence[Mapping[str, object]], snapshot.get("resources", []))
+    grouped = {
+        kind: [str(item["resourceApiName"]) for item in resources if item.get("resourceType") == kind]
+        for kind in ("object", "action", "function")
+    }
+    lines = [
+        "// Generated application-scoped OSDK package. Do not edit by hand.",
+        'import type { OsdkActionType, OsdkFunctionType, OsdkObjectType } from "@foundry-lite/sdk";',
+        "",
+        f"export const SDK_PACKAGE_MANIFEST = {json.dumps(manifest, sort_keys=True)} as const;",
+        _typescript_registry("$Objects", grouped["object"], "object", "OsdkObjectType"),
+        _typescript_registry("$Actions", grouped["action"], "action", "OsdkActionType"),
+        _typescript_registry("$Functions", grouped["function"], "function", "OsdkFunctionType"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _typescript_registry(name: str, api_names: Sequence[str], kind: str, type_name: str) -> str:
+    entries = []
+    for api_name in api_names:
+        metadata = _typescript_resource_metadata(api_name, kind)
+        entries.append(f"  {json.dumps(api_name)}: {metadata} as {type_name},")
+    return "\n".join([f"export const {name} = {{", *entries, "} as const;"])
+
+
+def _typescript_resource_metadata(api_name: str, kind: str) -> str:
+    value: dict[str, object]
+    if kind == "object":
+        value = {
+            "kind": kind,
+            "apiName": api_name,
+            "primaryKey": "objectId",
+            "titleProperty": None,
+            "properties": [],
+            "propertyDatasources": {},
+        }
+    elif kind == "action":
+        value = {"kind": kind, "apiName": api_name, "targetObjectType": "", "targetKind": "object"}
+    else:
+        value = {"kind": kind, "apiName": api_name, "inputs": [], "output": "unknown"}
+    return json.dumps(value, sort_keys=True)
+
+
 def _python_package_zip(manifest: RuntimeJsonObject) -> bytes:
+    package_dir = _python_package_dir(str(manifest["packageName"]))
+    module = f"SDK_PACKAGE_MANIFEST = {json.dumps(manifest, sort_keys=True)}\n"
+    return _package_zip({f"{package_dir}/__init__.py": module})
+
+
+def _package_zip(entries: Mapping[str, str]) -> bytes:
     import io
 
     buffer = io.BytesIO()
-    package_dir = _python_package_dir(str(manifest["packageName"]))
-    module = f"SDK_PACKAGE_MANIFEST = {json.dumps(manifest, sort_keys=True)}\n"
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{package_dir}/__init__.py", module)
+        for name, content in sorted(entries.items()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, content.encode("utf-8"))
     return buffer.getvalue()
 
 
 def _artifact_path(artifact_dir: Path, manifest: RuntimeJsonObject, language: OsdkLanguage) -> Path:
     if language == "typescript":
-        return artifact_dir / f"{_artifact_file_stem(str(manifest['packageName']))}-{manifest['version']}.json"
+        return artifact_dir / f"{_artifact_file_stem(str(manifest['packageName']))}-{manifest['version']}.zip"
     return artifact_dir / f"{_python_package_dir(str(manifest['packageName']))}-{manifest['version']}.zip"
 
 

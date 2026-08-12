@@ -98,6 +98,7 @@ assert.deepEqual(sdk.$Ontology.actionApiNames, ["ApproveOrder"]);
 assert.deepEqual(sdk.$Ontology.linkApiNames, ["OrderCustomer"]);
 assert.equal(osdk.objects.Order, sdk.Order);
 assert.equal(osdk.actions.ApproveOrder, sdk.ApproveOrder);
+assert.equal(osdk.functions.orderRiskSummary, sdk.orderRiskSummary);
 assert.equal(sdk.getObjectType("Order"), sdk.Order);
 assert.equal(sdk.getActionType("ApproveOrder"), sdk.ApproveOrder);
 const sdkManifest = sdk.sdkPackageManifest();
@@ -1798,6 +1799,26 @@ await expectSdkCall(
   },
 );
 coveredSurfaceIds.delete("functions.orderRiskSummary.execute.generated");
+responseQueue.push(okResponse({
+  functionApiName: "orderRiskSummary",
+  logicRunId: "fnrun/osdk",
+  aiRunId: null,
+  status: "succeeded",
+  output: { value: "LOW_RISK" },
+  resultHash: "sha256:osdk-function",
+}));
+{
+  const beforeCalls = calls.length;
+  const result = await osdk(sdk.orderRiskSummary).executeFunction({ objectId: "O-1001" });
+  assert.equal(result.output, "LOW_RISK");
+  assertRequest(calls[beforeCalls], {
+    surfaceId: "osdk.function.orderRiskSummary.executeFunction",
+    path: "/api/functions/orderRiskSummary/execute",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { inputs: { objectId: "O-1001" } },
+  });
+}
 await expectSdkCall("objects.generic.get", () => osdk(sdk.Order).fetchOne("order/osdk", { explain: true }), {
   path: "/api/objects/Order/order%2Fosdk?explain=true",
 });
@@ -5386,6 +5407,28 @@ await expectSdkCall(
       target: { objectType: "Order", objectId: "order/1" },
       expectedObjectVersion: 7,
       params: { reason: "approved" },
+    },
+  },
+);
+await expectSdkCall(
+  "actions.runs.start",
+  () =>
+    osdk(sdk.ApproveOrder).startAction(
+      {
+        objectId: "order/osdk-async",
+        expectedObjectVersion: 9,
+        params: { reason: "osdk-async-approved" },
+      },
+      { idempotencyKey: "osdk-async-key", waitSeconds: 30 },
+    ),
+  {
+    path: "/api/actions/ApproveOrder/runs?waitSeconds=30",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-async-key" },
+    body: {
+      target: { objectType: "Order", objectId: "order/osdk-async" },
+      expectedObjectVersion: 9,
+      params: { reason: "osdk-async-approved" },
     },
   },
 );
