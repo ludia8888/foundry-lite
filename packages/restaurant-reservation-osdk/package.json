@@ -1,0 +1,23 @@
+{
+  "name": "@foundry-lite/restaurant-reservation-osdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": "./src/generated.ts",
+    "./react": "./src/react.ts"
+  },
+  "dependencies": {
+    "@foundry-lite/sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "typescript": "^6.0.3"
+  }
+}
