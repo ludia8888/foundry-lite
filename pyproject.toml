@@ -53,6 +53,9 @@ postgres = [
 ]
 
 [dependency-groups]
+deployment = [
+  "alembic>=1.13",
+]
 dev = [
   "alembic>=1.13",
   "bandit>=1.7",

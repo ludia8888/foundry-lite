@@ -1,0 +1,169 @@
+# PROTECTED STAGING BOOTSTRAP ONLY.
+# Syncing this Blueprint creates billable Render resources. Do not apply it
+# without explicit cost approval and all external managed dependencies below.
+services:
+  - type: web
+    name: foundry-lite-governed-release-staging
+    runtime: docker
+    repo: https://github.com/ludia8888/foundry-lite
+    branch: main
+    dockerfilePath: ./deploy/render/Dockerfile.api
+    dockerCommand: /app/deploy/render/start_api.sh
+    preDeployCommand: /app/deploy/render/predeploy_migrate.sh
+    autoDeployTrigger: "off"
+    healthCheckPath: /readyz
+    maxShutdownDelaySeconds: 60
+    plan: standard
+    region: singapore
+    numInstances: 1
+    disk:
+      name: foundry-lite-staging-state
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: FOUNDRY_LITE_RUNTIME_PROFILE
+        value: staging
+      - key: FOUNDRY_LITE_AUTH_PROFILE
+        value: oidc
+      - key: FOUNDRY_LITE_HOME
+        value: /var/data/foundry-lite
+      - key: FOUNDRY_LITE_DURABLE_STATE_MOUNT
+        value: /var/data
+      - key: FOUNDRY_LITE_DB_URL
+        fromDatabase:
+          name: foundry-lite-governed-release-staging-db
+          property: connectionString
+      - key: FOUNDRY_LITE_ADAPTER_PROFILE
+        value: s3-storage
+      - key: FOUNDRY_LITE_MEDIA_STORAGE_PROFILE
+        value: s3-media
+      - key: FOUNDRY_LITE_EXTERNAL_MEDIA_PROFILE
+        value: s3-external
+      - key: FOUNDRY_LITE_CONTENT_INDEX_PROFILE
+        value: elasticsearch
+      - key: FOUNDRY_LITE_COMPUTE_PROFILE
+        value: spark
+      - key: FOUNDRY_LITE_CONNECTOR_PROFILE
+        value: rest
+      - key: FOUNDRY_LITE_SEARCH_PROFILE
+        value: elasticsearch
+      - key: FOUNDRY_LITE_STREAM_PROFILE
+        value: kafka
+      - key: FOUNDRY_LITE_WORKFLOW_PROFILE
+        value: temporal
+      - key: FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE
+        value: anthropic
+      - key: FOUNDRY_LITE_ACTION_FILE_SCANNER_PROFILE
+        value: clamav
+      - key: FOUNDRY_LITE_TRAINED_MODEL_PROFILE
+        value: container
+      - key: FOUNDRY_LITE_S3_CREATE_BUCKET
+        value: "0"
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_OWNER
+        value: ludia8888
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY
+        value: foundry-lite
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_BASE_REF
+        value: main
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_HEAD_PREFIX
+        value: codex/
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_MERGE_METHOD
+        value: squash
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_BYPASS_POLICY_VERIFIED
+        value: "false"
+      - key: FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID
+        fromService:
+          type: web
+          name: foundry-lite-governed-release-staging
+          envVarKey: RENDER_SERVICE_ID
+      - key: FOUNDRY_LITE_RENDER_RELEASE_ENVIRONMENT
+        value: staging
+      - key: FOUNDRY_LITE_MCP_PUBLIC_BASE_URL
+        fromService:
+          type: web
+          name: foundry-lite-governed-release-staging
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY
+        generateValue: true
+      - key: FOUNDRY_LITE_OPERATIONS_CURSOR_SIGNING_KEY
+        generateValue: true
+      - key: FOUNDRY_LITE_OIDC_ISSUER
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_AUDIENCE
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_DISCOVERY_JSON
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_JWKS_JSON
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_ALLOWED_CLIENT_IDS_JSON
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_HUMAN_GRANT_CLAIM
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_HUMAN_GRANT_VALUE
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_GRANT_TYPE_CLAIM
+        sync: false
+      - key: FOUNDRY_LITE_OIDC_GRANT_TYPE_VALUE
+        sync: false
+      - key: FOUNDRY_LITE_MCP_AUTHORIZATION_SERVER
+        sync: false
+      - key: FOUNDRY_LITE_GOVERNED_RELEASE_APPLICATION_ID
+        sync: false
+      - key: FOUNDRY_LITE_GOVERNED_RELEASE_GOLDEN_MANIFEST_PATH
+        value: /var/data/foundry-lite/operator-evidence/governed_release_golden_manifest.json
+      - key: FOUNDRY_LITE_GOVERNED_RELEASE_LIVE_PREFLIGHT_PATH
+        value: /var/data/foundry-lite/operator-evidence/governed_release_live_preflight.json
+      - key: FOUNDRY_LITE_GOVERNED_RELEASE_GOLDEN_EVIDENCE_PATH
+        value: /var/data/foundry-lite/operator-evidence/governed_release_golden_evidence.json
+      - key: FOUNDRY_LITE_GOVERNED_RELEASE_GOLDEN_VERIFICATION_PATH
+        value: /var/data/foundry-lite/operator-evidence/governed_release_golden_verification.json
+      - key: FOUNDRY_LITE_S3_BUCKET
+        sync: false
+      - key: FOUNDRY_LITE_S3_ENDPOINT_URL
+        sync: false
+      - key: FOUNDRY_LITE_S3_ACCESS_KEY_ID
+        sync: false
+      - key: FOUNDRY_LITE_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: FOUNDRY_LITE_ELASTICSEARCH_URL
+        sync: false
+      - key: FOUNDRY_LITE_KAFKA_BOOTSTRAP_SERVERS
+        sync: false
+      - key: FOUNDRY_LITE_TEMPORAL_ADDRESS
+        sync: false
+      - key: FOUNDRY_LITE_TEMPORAL_NAMESPACE
+        sync: false
+      - key: FOUNDRY_LITE_CLAMAV_HOST
+        sync: false
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY_ID
+        sync: false
+      - key: FOUNDRY_LITE_GITHUB_RELEASE_TOKEN_SECRET_REF
+        value: github_release_token
+      - key: FOUNDRY_LITE_SECRET_GITHUB_RELEASE_TOKEN
+        sync: false
+      - key: FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF
+        value: render_release_token
+      - key: FOUNDRY_LITE_SECRET_RENDER_RELEASE_TOKEN
+        sync: false
+      - key: FOUNDRY_LITE_ANTHROPIC_SECRET_REF
+        value: anthropic_api_key
+      - key: FOUNDRY_LITE_SECRET_ANTHROPIC_API_KEY
+        sync: false
+      - key: FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY
+        sync: false
+      - key: FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER
+        sync: false
+      - key: FOUNDRY_LITE_CODE_EXECUTION_IMAGE
+        sync: false
+      - key: FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE
+        sync: false
+      - key: FOUNDRY_LITE_TRAINED_MODEL_IMAGE
+        sync: false
+
+databases:
+  - name: foundry-lite-governed-release-staging-db
+    plan: basic-1gb
+    region: singapore
+    databaseName: foundry_lite_staging
+    user: foundry_lite_staging
+    ipAllowList: []

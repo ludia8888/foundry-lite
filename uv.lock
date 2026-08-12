@@ -798,6 +798,9 @@ temporal = [
 ]
 
 [package.dev-dependencies]
+deployment = [
+    { name = "alembic" },
+]
 dev = [
     { name = "alembic" },
     { name = "bandit" },
@@ -868,6 +871,7 @@ requires-dist = [
 provides-extras = ["kafka", "elasticsearch", "s3", "iceberg", "temporal", "spark", "postgres"]
 
 [package.metadata.requires-dev]
+deployment = [{ name = "alembic", specifier = ">=1.13" }]
 dev = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "bandit", specifier = ">=1.7" },

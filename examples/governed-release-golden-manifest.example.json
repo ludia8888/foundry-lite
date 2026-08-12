@@ -1,0 +1,62 @@
+{
+  "applicationId": "replace-with-release-application-id",
+  "authorizationServer": "https://identity.example.invalid/tenant",
+  "deployment": {
+    "environment": "production",
+    "provider": "render",
+    "serviceId": "srv-replace-with-live-service"
+  },
+  "hostedClientId": "replace-with-hosted-chatgpt-oauth-client-id",
+  "publicBaseUrl": "https://foundry.example.invalid",
+  "requiredScenarios": [
+    "ontology",
+    "pipeline"
+  ],
+  "requiredScope": "osdk:connector:governed_release:execute",
+  "resource": "https://foundry.example.invalid/mcp/release/replace-with-release-application-id",
+  "runId": "replace-with-one-golden-run-id",
+  "schemaVersion": "governed-release-golden-manifest/v2",
+  "sourceControl": {
+    "baseRef": "main",
+    "owner": "replace-with-github-owner",
+    "provider": "github",
+    "publications": [
+      {
+        "baseRef": "main",
+        "baseSha": "0000000000000000000000000000000000000000",
+        "headRef": "codex/replace-with-ontology-proposal-id",
+        "headSha": "1111111111111111111111111111111111111111",
+        "kind": "ontology",
+        "manifestFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "manifestPath": ".foundry-lite/releases/ontology/replace-with-ontology-proposal-id.json",
+        "operation": "source_publish",
+        "owner": "replace-with-github-owner",
+        "proposalId": "replace-with-ontology-proposal-id",
+        "provider": "github",
+        "pullNumber": 1,
+        "repository": "replace-with-github-repository",
+        "repositoryId": 1,
+        "treeSha": "2222222222222222222222222222222222222222"
+      },
+      {
+        "baseRef": "main",
+        "baseSha": "3333333333333333333333333333333333333333",
+        "headRef": "codex/replace-with-pipeline-proposal-id",
+        "headSha": "4444444444444444444444444444444444444444",
+        "kind": "pipeline",
+        "manifestFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "manifestPath": ".foundry-lite/releases/pipeline/replace-with-pipeline-proposal-id.json",
+        "operation": "source_publish",
+        "owner": "replace-with-github-owner",
+        "proposalId": "replace-with-pipeline-proposal-id",
+        "provider": "github",
+        "pullNumber": 2,
+        "repository": "replace-with-github-repository",
+        "repositoryId": 1,
+        "treeSha": "5555555555555555555555555555555555555555"
+      }
+    ],
+    "repository": "replace-with-github-repository",
+    "repositoryId": 1
+  }
+}

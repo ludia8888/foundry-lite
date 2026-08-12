@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1.7
+
+# Protected staging bootstrap image. This packages the API and every declared
+# production adapter dependency, but external S3/Elasticsearch/Kafka/Temporal/
+# ClamAV/OIDC services must still be supplied by the operator.
+FROM python:3.12-slim-bookworm AS runtime
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /usr/local/bin/
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/libs:/app/apps/api:/app/apps/cli:/app/apps/worker \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/foundry-lite-venv
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        libgomp1 \
+        openjdk-17-jre-headless \
+        poppler-utils \
+        tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync \
+    --frozen \
+    --all-extras \
+    --group deployment \
+    --no-group dev \
+    --no-install-project
+
+COPY alembic.ini ./
+COPY apps/api ./apps/api
+COPY apps/cli ./apps/cli
+COPY apps/worker ./apps/worker
+COPY libs ./libs
+COPY migrations ./migrations
+COPY scripts/operations ./scripts/operations
+COPY deploy/render ./deploy/render
+
+RUN groupadd --gid 10001 foundry-lite \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin foundry-lite \
+    && mkdir -p /var/data /app/artifacts/operations \
+    && chown -R 10001:10001 /var/data /app/artifacts \
+    && chmod 0555 \
+        /app/deploy/render/normalize_render_environment.sh \
+        /app/deploy/render/start_api.sh \
+        /app/deploy/render/predeploy_migrate.sh
+
+USER 10001:10001
+
+EXPOSE 10000
+
+CMD ["/app/deploy/render/start_api.sh"]
