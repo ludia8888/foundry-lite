@@ -13,6 +13,8 @@ from foundry_lite.application.dependencies import RuntimeProfile
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.oauth_session_repository import OAuthTokenIssuer
 from foundry_lite.infrastructure.auth import (
+    OAUTH_AUDIENCE_ENV,
+    OAUTH_ISSUER_ENV,
     AuthProvider,
     HeaderTrustAuthProvider,
     JwtOidcAuthConfig,
@@ -21,6 +23,13 @@ from foundry_lite.infrastructure.auth import (
 )
 from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 from foundry_lite.observability.tracing import configure_observability
+from sqlalchemy.engine import Engine
+
+from foundry_lite_api.mcp_authorization_config import (
+    McpAuthorizationConfig,
+    governed_release_mcp_authority,
+    mcp_authorization_config_from_env,
+)
 
 _TargetT = TypeVar("_TargetT")
 
@@ -57,6 +66,15 @@ class ApiRuntime:
 
     foundry: FoundryLite
     auth_provider: AuthProvider
+    mcp_authorization: McpAuthorizationConfig
+
+
+@dataclass(frozen=True)
+class ApiReadiness:
+    """Non-secret evidence that startup composition and metadata DB are usable."""
+
+    runtime_profile: str
+    database_backend: str
 
 
 class _RuntimeProxy[TargetT]:
@@ -73,7 +91,11 @@ _api_runtime: ApiRuntime | None = None
 _api_runtime_lock = threading.Lock()
 _observability_configured = False
 
-ALLOWED_BROWSER_ORIGINS = ("http://127.0.0.1:4173", "http://localhost:4173")
+ALLOWED_BROWSER_ORIGINS = (
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+    "https://chatgpt.com",
+)
 
 WEBSOCKET_SUBSCRIPTION_CONNECT_LIMIT = int(os.getenv("FOUNDRY_LITE_WS_SUBSCRIPTION_CONNECT_LIMIT", "100"))
 WEBSOCKET_SUBSCRIPTION_CONNECT_WINDOW_SECONDS = float(
@@ -90,18 +112,26 @@ def initialize_api_runtime(environ: Mapping[str, str] | None = None) -> ApiRunti
     with _api_runtime_lock:
         if _api_runtime is None:
             _configure_observability_once()
+            auth_provider = auth_provider_from_env(source)
+            mcp_authorization = mcp_authorization_config_from_env(source, auth_provider)
             dependencies = create_runtime_core_dependencies(
                 profile=RuntimeProfile.from_value(source.get("FOUNDRY_LITE_RUNTIME_PROFILE")),
                 db_url=source.get("FOUNDRY_LITE_DB_URL"),
                 storage_root=source.get("FOUNDRY_LITE_HOME", ".foundry-lite"),
                 adapter_profile=source.get("FOUNDRY_LITE_ADAPTER_PROFILE", "local"),
+                governed_release_mcp_authority=governed_release_mcp_authority(
+                    mcp_authorization,
+                    auth_provider,
+                ),
+                oauth_issuer=source.get(OAUTH_ISSUER_ENV),
+                oauth_audience=source.get(OAUTH_AUDIENCE_ENV),
             )
-            auth_provider = auth_provider_from_env(source)
             if isinstance(auth_provider, HeaderTrustAuthProvider):
                 auth_provider = _runtime_auth_provider(auth_provider, dependencies.oauth_token_issuer)
             _api_runtime = ApiRuntime(
                 foundry=FoundryLite(dependencies=dependencies),
                 auth_provider=auth_provider,
+                mcp_authorization=mcp_authorization,
             )
         return _api_runtime
 
@@ -116,6 +146,8 @@ def _runtime_auth_provider(auth_provider: AuthProvider, oauth_token_issuer: OAut
             issuer=oauth_token_issuer.issuer,
             audience=oauth_token_issuer.audience,
             jwks=oauth_token_issuer.public_jwks(),
+            grant_type_claim="gty",
+            grant_type_value="authorization_code",
         )
     )
     return replace(auth_provider, mcp_bearer_verifier=verifier)
@@ -135,8 +167,26 @@ def get_auth_provider() -> AuthProvider:
     return get_api_runtime().auth_provider
 
 
+def get_mcp_authorization_config() -> McpAuthorizationConfig:
+    return get_api_runtime().mcp_authorization
+
+
 def is_api_runtime_initialized() -> bool:
     return _api_runtime is not None
+
+
+def probe_api_readiness() -> ApiReadiness:
+    """Open a real metadata connection after resolving the startup composition."""
+
+    api_runtime = get_api_runtime()
+    engine = cast(Engine, api_runtime.foundry.engine)
+    with engine.connect() as connection:
+        if connection.exec_driver_sql("SELECT 1").scalar_one() != 1:
+            raise RuntimeError("metadata database readiness query returned an unexpected result")
+    return ApiReadiness(
+        runtime_profile=api_runtime.foundry.runtime_profile.name,
+        database_backend=engine.dialect.name,
+    )
 
 
 def reset_api_runtime_for_tests() -> None:
