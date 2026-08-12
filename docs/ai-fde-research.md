@@ -65,7 +65,7 @@ flowchart LR
 - Ontology와 Pipeline 변경은 선택한 branch에만 쓰며 proposal까지 만들 수 있습니다. AI에게 승인·merge·deploy·activation tool은 제공하지 않습니다.
 - 모델·도구·입력·구조화 결과·사용량·상태 이벤트는 `ai_sessions`, `ai_execution_runs`, `ai_tool_calls` 원장에 남습니다.
 - `/mcp/builder/{application_id}`는 Streamable HTTP, OAuth Authorization Code + PKCE, app/client/resource-scope 제한, Origin 검증, native structured content, JSON-RPC 재전송 idempotency, out-of-band mutation 확인을 제공합니다. `discoveryMode=lazy`에서는 새 session이 `search_tools`만 받고, local ranking으로 찾은 허용 도구만 그 session에 영속 활성화하며 `notifications/tools/list_changed`를 받습니다. eager mode는 호환 경로로 유지됩니다.
-- Pilot API와 AIP UI는 Project, replay-safe seed Dataset, Ontology branch, OSDK application, 실제 OSDK query를 사용하는 React source, CI workflow, durable resource, stable preview path를 한 번의 명시적 생성으로 만듭니다.
+- Pilot API와 AIP UI는 Project, replay-safe seed Dataset, Ontology branch, OSDK application, 실제 OSDK query를 사용하는 React source, CI workflow, durable resource, stable preview path를 한 번의 명시적 생성으로 만듭니다. 고객 화면은 base SDK나 inline generic object descriptor를 직접 받지 않고 `consumer_osdk_strict` 앱 package/domain hook만 import합니다. 모델이 반환된 plan의 package/profile/exception을 변조해도 서버가 strict 좌표를 다시 계산하며, bundle의 TypeScript AST checker와 `consumer-osdk:check` CI step이 우회를 차단합니다.
 - generated TypeScript/browser SDK와 AIP/Pilot 화면은 같은 named API 계약을 사용합니다.
 
 ## 완성 경계

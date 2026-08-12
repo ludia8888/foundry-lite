@@ -210,7 +210,7 @@
         "apps/foundry/src/features/aip/PilotApplicationPage.tsx",
         "test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle"
       ],
-      "boundary": "Generation creates replay-safe seed data, an isolated Ontology branch, restricted OSDK app, OSDK-backed React source, CI contract, durable resource, and a stable preview path; production use still requires human Ontology activation."
+      "boundary": "Generation creates replay-safe seed data, an isolated Ontology branch, restricted OSDK app, application-specific consumer_osdk_strict package and domain hook, TypeScript-AST boundary checker, CI contract, durable resource, and a stable preview path. The customer App source cannot import the base SDK or construct inline generic resources, and server normalization overwrites model-supplied package, profile, and exception bypasses. Production use still requires human Ontology activation."
     }
   ]
 }

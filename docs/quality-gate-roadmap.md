@@ -2441,6 +2441,12 @@ ontology fingerprints. When a Governed Release source publication declares the s
 receipt is mandatory and must match the exact provider base commit before publication. This deliberately
 enforces source/build/release provenance; it does not claim the HTTP server can identify the caller's
 library from a valid authorized request, nor that all existing administrative screens are strict apps.
+AI FDE `pilot.application.generate` uses the same boundary by construction: the server emits a dedicated
+application package, typed resource, React domain hook, customer App import, TypeScript AST checker, and
+`consumer-osdk:check` CI step. `_normalized_plan(...)` recomputes package/profile/zero-exception coordinates,
+so returning a modified plan through MCP cannot downgrade the generated bundle to the base SDK. The target
+repository must still register the generated bundle in its strict inventory to obtain source-bound Governed
+Release receipt enforcement.
 The same gate now protects `docs/frontend-backend-surface-contract.md` as a frontend SDK recipe contract and
 `packages/sdk-ts/src/screen-recipes.ts` as the typechecked source exported through
 `@foundry-lite/sdk/screen-recipes`: session, dataset explorer, object/action workspace, large ontology lookup, media,
