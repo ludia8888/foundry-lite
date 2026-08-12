@@ -93,6 +93,14 @@ function importModuleName(node) {
   return null;
 }
 
+function isModuleOrSubpath(moduleName, packageName) {
+  return moduleName === packageName || moduleName.startsWith(`${packageName}/`);
+}
+
+function isApplicationOsdkModule(moduleName) {
+  return moduleName.startsWith("@foundry-lite/") && moduleName.split("/")[1]?.endsWith("-osdk");
+}
+
 function propertyChain(node) {
   const parts = [];
   let current = node;
@@ -130,8 +138,16 @@ function scanFile(path, workspaceRoot, appPackageName, isConsumerSource) {
   let hasApplicationImport = false;
   function visit(node) {
     const moduleName = importModuleName(node);
-    if (moduleName?.startsWith(appPackageName)) hasApplicationImport = true;
-    if (moduleName?.startsWith("@foundry-lite/sdk")) {
+    if (moduleName && isModuleOrSubpath(moduleName, appPackageName)) hasApplicationImport = true;
+    if (moduleName && isConsumerSource && isApplicationOsdkModule(moduleName)
+        && !isModuleOrSubpath(moduleName, appPackageName)) {
+      violations.push(violation(
+        source, node, "FOREIGN_APPLICATION_OSDK_FORBIDDEN",
+        `strict consumer source cannot import another application OSDK: ${moduleName}`,
+        workspaceRoot,
+      ));
+    }
+    if (moduleName && isModuleOrSubpath(moduleName, "@foundry-lite/sdk")) {
       if (isConsumerSource) {
         violations.push(violation(
           source, node, "BASE_SDK_IMPORT_FORBIDDEN",

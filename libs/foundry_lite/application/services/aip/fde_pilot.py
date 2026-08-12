@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import (
+    ci_workflow,
+    consumer_osdk_plan,
+    react_files,
+)
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, required_text
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
@@ -57,6 +61,7 @@ class FdePilotService(CoreService):
                     "scopes": [f"osdk:object:{object_name}:read"],
                 }
             ],
+            "consumerOsdk": consumer_osdk_plan(app_name, slug),
             "react": {"routes": ["/"], "objectTypes": [object_name], "framework": "react"},
             "ci": {"commands": ["pnpm typecheck", "pnpm test", "pnpm build"]},
             "requiredApprovals": ["pilot.application.generate"],
@@ -206,6 +211,7 @@ def _normalized_plan(plan: JsonObject) -> dict[str, object]:
     _mapping(normalized.get("seed"), "seed")
     _mapping_items(normalized.get("ontologyResources"))
     _mapping_items(normalized.get("applicationResources"))
+    normalized["consumerOsdk"] = consumer_osdk_plan(app_name, str(normalized["slug"]))
     return normalized
 
 
@@ -226,62 +232,13 @@ def _bundle(
         "seed": dict(seed),
         "ontologyBranch": dict(branch),
         "osdkApplication": dict(application),
-        "reactFiles": _react_files(plan),
-        "ciWorkflow": _ci_workflow(),
+        "consumerOsdk": dict(_mapping(plan.get("consumerOsdk"), "consumerOsdk")),
+        "reactFiles": react_files(plan),
+        "ciWorkflow": ci_workflow(),
         "applicationPath": f"/projects/{project['id']}/pilot/{slug}",
         "status": "generated_on_branch",
         "nextStep": "Review and activate the Ontology proposal before using production data.",
     }
-
-
-def _react_files(plan: JsonObject) -> dict[str, str]:
-    descriptor = _osdk_object_descriptor(plan)
-    title = json.dumps(str(plan["applicationName"]), ensure_ascii=True)
-    return {
-        "package.json": (
-            '{"dependencies":{"@foundry-lite/sdk":"workspace:*","react":"^19.0.0"},'
-            '"scripts":{"build":"vite build","test":"vitest run","typecheck":"tsc --noEmit"}}'
-        ),
-        "src/App.tsx": (
-            "import { useEffect, useState } from 'react';\n"
-            "import { useFoundryLiteOsdkClient } from '@foundry-lite/sdk/react';\n"
-            f"const ObjectType = {descriptor} as const;\n"
-            f"const title = {title};\n"
-            "export default function App() { const osdk = useFoundryLiteOsdkClient(); "
-            "const [items, setItems] = useState<unknown[]>([]); "
-            "useEffect(() => { void osdk(ObjectType).fetchPage({ pageSize: 50 })"
-            ".then((page) => setItems(page.data)); }, [osdk]); "
-            "return <main><h1>{title}</h1><pre>{JSON.stringify(items, null, 2)}</pre></main>; }\n"
-        ),
-        "src/main.tsx": "import App from './App';\nexport { App };\n",
-        "src/generated/ontology.ts": f"export const PilotObjectType = {descriptor} as const;\n",
-    }
-
-
-def _osdk_object_descriptor(plan: JsonObject) -> str:
-    resources = _mapping_items(plan.get("ontologyResources"))
-    entry = resources[0] if resources else {}
-    definition = _mapping(entry.get("definition"), "ontology resource definition")
-    properties = [required_text(item, "apiName") for item in _mapping_items(definition.get("properties"))]
-    descriptor: dict[str, object] = {
-        "kind": "object",
-        "apiName": required_text(definition, "apiName"),
-        "primaryKey": required_text(definition, "primaryKey"),
-        "titleProperty": "name" if "name" in properties else None,
-        "properties": properties,
-        "propertyDatasources": {},
-    }
-    return json.dumps(descriptor, sort_keys=True)
-
-
-def _ci_workflow() -> str:
-    return (
-        "steps:\n"
-        "  - run: pnpm install --frozen-lockfile\n"
-        "  - run: pnpm typecheck\n"
-        "  - run: pnpm test\n"
-        "  - run: pnpm build\n"
-    )
 
 
 def _seed_plan(slug: str) -> dict[str, object]:
