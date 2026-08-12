@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
+from foundry_lite.application.services.aip.fde_pilot_osdk_runtime import portable_runtime_source
+from foundry_lite.application.services.aip.fde_pilot_osdk_source import (
+    application_source,
+    consumer_contract,
+    generated_source,
+    ontology_reexport,
+    react_hook_source,
+)
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, required_text
 
 JsonObject = Mapping[str, object]
@@ -119,28 +127,30 @@ def consumer_osdk_plan(application_name: str, slug: str) -> dict[str, object]:
 def react_files(plan: JsonObject) -> dict[str, str]:
     """Render a consumer screen that can only import its application OSDK package."""
 
-    definition = _object_definition(plan)
-    object_name = required_text(definition, "apiName")
     package_name = _package_name(plan)
     return {
         "package.json": _application_package_json(package_name),
-        "consumer-osdk.contract.json": _consumer_contract(plan, definition),
-        "src/App.tsx": _application_source(plan, package_name),
-        "src/main.tsx": "import App from './App';\nexport { App };\n",
-        "src/generated/ontology.ts": (
-            f"export {{ {object_name} as PilotObjectType }} from {json.dumps(package_name)};\n"
-        ),
+        "index.html": _index_html(),
+        "tsconfig.json": _tsconfig_json(),
+        "vite.config.ts": _vite_config_source(),
+        "consumer-osdk.contract.json": consumer_contract(plan),
+        "src/App.tsx": application_source(plan, package_name),
+        "src/main.tsx": _main_source(package_name),
+        "src/styles.css": _styles_source(),
+        "src/generated/ontology.ts": ontology_reexport(plan, package_name),
         "scripts/check-consumer-osdk.mjs": _strict_checker_source(package_name),
+        "scripts/check-runtime-contract.mjs": _runtime_contract_source(),
         "packages/application-osdk/package.json": _osdk_package_json(package_name),
-        "packages/application-osdk/src/generated.ts": _generated_source(plan, definition),
-        "packages/application-osdk/src/react.ts": _react_hook_source(object_name),
+        "packages/application-osdk/src/generated.ts": generated_source(plan),
+        "packages/application-osdk/src/react.ts": react_hook_source(plan),
+        "packages/application-osdk/src/runtime.ts": portable_runtime_source(),
     }
 
 
 def ci_workflow() -> str:
     return (
         "steps:\n"
-        "  - run: pnpm install --frozen-lockfile\n"
+        "  - run: pnpm install --no-frozen-lockfile\n"
         "  - run: pnpm consumer-osdk:check\n"
         "  - run: pnpm typecheck\n"
         "  - run: pnpm test\n"
@@ -150,18 +160,97 @@ def ci_workflow() -> str:
 
 def _application_package_json(package_name: str) -> str:
     value = {
+        "name": package_name.removesuffix("-osdk") + "-app",
         "private": True,
-        "workspaces": ["packages/*"],
-        "dependencies": {package_name: "workspace:*", "react": "^19.0.0"},
-        "devDependencies": {"typescript": "^6.0.3"},
+        "packageManager": "pnpm@10.23.0",
+        "dependencies": {package_name: "file:packages/application-osdk", "react": "19.2.7", "react-dom": "19.2.7"},
+        "devDependencies": {
+            "@types/react": "19.2.17",
+            "@types/react-dom": "19.2.3",
+            "@vitejs/plugin-react": "4.7.0",
+            "typescript": "6.0.3",
+            "vite": "7.3.6",
+        },
         "scripts": {
             "build": "vite build",
             "consumer-osdk:check": "node scripts/check-consumer-osdk.mjs",
-            "test": "vitest run",
+            "test": "node scripts/check-runtime-contract.mjs",
             "typecheck": "tsc --noEmit",
         },
     }
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _index_html() -> str:
+    return (
+        '<!doctype html><html lang="ko"><head><meta charset="UTF-8" />'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0" />'
+        '<title>Domain OS</title></head><body><div id="root"></div>'
+        '<script type="module" src="/src/main.tsx"></script></body></html>\n'
+    )
+
+
+def _tsconfig_json() -> str:
+    value = {
+        "compilerOptions": {
+            "target": "ES2022",
+            "lib": ["ES2022", "DOM", "DOM.Iterable"],
+            "module": "ESNext",
+            "moduleResolution": "Bundler",
+            "jsx": "react-jsx",
+            "strict": True,
+            "noEmit": True,
+            "skipLibCheck": True,
+            "types": ["vite/client"],
+        },
+        "include": ["src", "packages/application-osdk/src", "vite.config.ts"],
+    }
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _vite_config_source() -> str:
+    return (
+        'import react from "@vitejs/plugin-react";\n'
+        'import { defineConfig } from "vite";\n'
+        "export default defineConfig({ plugins: [react()] });\n"
+    )
+
+
+def _main_source(package_name: str) -> str:
+    return (
+        'import { StrictMode } from "react";\n'
+        'import { createRoot } from "react-dom/client";\n'
+        f"import {{ PilotApplicationProvider }} from {json.dumps(f'{package_name}/react')};\n"
+        'import App from "./App";\n'
+        'import "./styles.css";\n'
+        'const root = document.getElementById("root");\n'
+        'if (!root) throw new Error("앱을 표시할 영역을 찾지 못했습니다.");\n'
+        "createRoot(root).render(<StrictMode><PilotApplicationProvider>"
+        "<App /></PilotApplicationProvider></StrictMode>);\n"
+    )
+
+
+def _styles_source() -> str:
+    return (
+        ":root{font-family:Inter,Pretendard,system-ui,sans-serif;color:#172033;background:#eef3f8;line-height:1.5}"
+        "*{box-sizing:border-box}body{margin:0}main{max-width:1120px;margin:auto;padding:32px 24px 64px}"
+        "header{border-radius:20px;background:#14243a;color:#f8fafc;padding:28px}header>p:first-child{color:#7dd3fc}"
+        "header h1{font-size:clamp(2rem,5vw,4rem);line-height:1;margin:10px 0 18px}"
+        "nav{display:flex;gap:8px;overflow:auto;padding:20px 0}nav span{white-space:nowrap;border-radius:999px;"
+        "background:#dbeafe;color:#1e3a5f;padding:7px 12px;font-size:.8rem;font-weight:700}"
+        "section,aside{margin-top:16px;border:1px solid #cbd5e1;border-radius:16px;background:white;padding:22px}"
+        "article{display:grid;gap:14px}form{border-top:1px solid #e2e8f0;padding-top:16px;display:grid;gap:10px}"
+        "dl{display:grid;gap:8px}dl div{display:grid;grid-template-columns:minmax(110px,1fr) 2fr;gap:12px}"
+        "dt{color:#64748b;font-size:.8rem}dd{margin:0;overflow-wrap:anywhere}"
+        ".permission{margin:0;color:#64748b;font-size:.78rem}"
+        "label{display:grid;gap:5px;font-size:.82rem;font-weight:650}input{border:1px solid #94a3b8;border-radius:8px;"
+        "padding:10px;font:inherit}button{justify-self:start;border:0;border-radius:9px;background:#0369a1;color:white;"
+        "padding:10px 15px;font:inherit;font-weight:750;cursor:pointer}button:focus-visible,input:focus-visible{"
+        "outline:3px solid #7dd3fc}[role=status]{position:sticky;bottom:16px;border-radius:10px;background:#0f172a;"
+        "color:white;padding:12px 16px}pre{overflow:auto;background:#f1f5f9;padding:14px;border-radius:10px}"
+        "@media(min-width:800px){main{display:grid;grid-template-columns:2fr 1fr;gap:18px}header,nav,[role=status]{"
+        "grid-column:1/-1}section,aside{margin-top:0}}"
+    )
 
 
 def _osdk_package_json(package_name: str) -> str:
@@ -171,117 +260,25 @@ def _osdk_package_json(package_name: str) -> str:
         "private": True,
         "type": "module",
         "exports": {".": "./src/generated.ts", "./react": "./src/react.ts"},
-        "dependencies": {"@foundry-lite/sdk": "workspace:*"},
         "peerDependencies": {"react": ">=18"},
     }
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def _consumer_contract(plan: JsonObject, definition: JsonObject) -> str:
-    boundary = _mapping(plan.get("consumerOsdk"), "consumerOsdk")
-    value = {
-        "schemaVersion": "foundry-lite-generated-consumer-osdk/v1",
-        **boundary,
-        "objects": [dict(definition)],
-        "actions": [],
-        "functions": [],
-        "requiredGate": "quality:consumer-osdk",
-    }
-    return json.dumps(value, sort_keys=True, indent=2) + "\n"
-
-
-def _application_source(plan: JsonObject, package_name: str) -> str:
-    title = json.dumps(str(plan["applicationName"]), ensure_ascii=True)
-    return (
-        f"import {{ usePilotApplicationScreen }} from {json.dumps(f'{package_name}/react')};\n"
-        f"const title = {title};\n"
-        "export default function App() { const screen = usePilotApplicationScreen(); "
-        "if (screen.isLoading) return <main><h1>{title}</h1><p>Loading…</p></main>; "
-        "if (screen.error) return <main><h1>{title}</h1><p>{screen.error.message}</p></main>; "
-        "return <main><h1>{title}</h1><pre>{JSON.stringify(screen.items, null, 2)}</pre></main>; }\n"
-    )
-
-
-def _generated_source(plan: JsonObject, definition: JsonObject) -> str:
-    object_name = required_text(definition, "apiName")
-    properties = _mapping_items(definition.get("properties"))
-    descriptor = _object_descriptor(definition, properties)
-    fields = "\n".join(_property_field(item) for item in properties)
-    manifest = {
-        "schemaVersion": "foundry-lite-consumer-osdk-manifest/v1",
-        "applicationId": _mapping(plan.get("consumerOsdk"), "consumerOsdk")["applicationId"],
-        "profile": "consumer_osdk_strict",
-        "objectApiNames": [object_name],
-        "actionApiNames": [],
-        "functionApiNames": [],
-    }
-    return (
-        "// Generated application OSDK. Do not edit by hand.\n"
-        'import type { FoundryLiteObject, OsdkObjectType } from "@foundry-lite/sdk";\n\n'
-        f"export type {object_name}Properties = {{\n{fields}\n}};\n"
-        f"export type {object_name} = FoundryLiteObject<{json.dumps(object_name)}, {object_name}Properties>;\n"
-        f"export const {object_name} = {descriptor} as const as OsdkObjectType<{object_name}>;\n"
-        f"export const $Objects = {{ {object_name} }} as const;\n"
-        f"export const CONSUMER_OSDK_MANIFEST = {json.dumps(manifest, sort_keys=True)} as const;\n"
-    )
-
-
-def _react_hook_source(object_name: str) -> str:
-    return (
-        'import { useEffect, useState } from "react";\n'
-        'import { useFoundryLiteOsdkClient } from "@foundry-lite/sdk/react";\n'
-        f'import {{ {object_name}, type {object_name} as {object_name}Object }} from "./generated";\n\n'
-        "export function usePilotApplicationScreen() {\n"
-        "  const osdk = useFoundryLiteOsdkClient();\n"
-        f"  const [items, setItems] = useState<readonly {object_name}Object[]>([]);\n"
-        "  const [error, setError] = useState<Error | null>(null);\n"
-        "  const [isLoading, setIsLoading] = useState(true);\n"
-        "  useEffect(() => { let isActive = true; setIsLoading(true); setError(null);\n"
-        f"    void osdk({object_name}).fetchPage({{ pageSize: 50 }}).then((page) => {{\n"
-        "      if (isActive) setItems(page.data);\n"
-        "    }).catch((reason: unknown) => {\n"
-        "      if (isActive) setError(reason instanceof Error ? reason : new Error(String(reason)));\n"
-        "    }).finally(() => { if (isActive) setIsLoading(false); });\n"
-        "    return () => { isActive = false; }; }, [osdk]);\n"
-        "  return { items, error, isLoading } as const;\n"
-        "}\n"
-    )
 
 
 def _strict_checker_source(package_name: str) -> str:
     return _STRICT_CHECKER_SOURCE.replace("__PACKAGE_NAME__", package_name).replace("{{", "{").replace("}}", "}")
 
 
-def _object_definition(plan: JsonObject) -> dict[str, object]:
-    resources = _mapping_items(plan.get("ontologyResources"))
-    if not resources:
-        raise FdePlatformToolError("schema_invalid", "Pilot requires one Ontology object resource")
-    return _mapping(resources[0].get("definition"), "ontology resource definition")
-
-
-def _object_descriptor(definition: JsonObject, properties: Sequence[JsonObject]) -> str:
-    property_names = [required_text(item, "apiName") for item in properties]
-    value: dict[str, object] = {
-        "kind": "object",
-        "apiName": required_text(definition, "apiName"),
-        "primaryKey": required_text(definition, "primaryKey"),
-        "titleProperty": "name" if "name" in property_names else None,
-        "properties": property_names,
-        "propertyDatasources": {},
-    }
-    return json.dumps(value, sort_keys=True)
-
-
-def _property_field(value: JsonObject) -> str:
-    name = required_text(value, "apiName")
-    scalar = _typescript_scalar(required_text(value, "type"))
-    optional = "" if value.get("nullable") is False else "?"
-    nullable = "" if value.get("nullable") is False else " | null"
-    return f"  readonly {name}{optional}: {scalar}{nullable};"
-
-
-def _typescript_scalar(value: str) -> str:
-    return {"boolean": "boolean", "double": "number", "integer": "number", "long": "number"}.get(value, "string")
+def _runtime_contract_source() -> str:
+    return (
+        'import { readFileSync } from "node:fs";\n'
+        'const runtime = readFileSync("packages/application-osdk/src/runtime.ts", "utf8");\n'
+        'const react = readFileSync("packages/application-osdk/src/react.ts", "utf8");\n'
+        'for (const value of ["/api/objects/", "/api/actions/", "Idempotency-Key", "credentials: \\"include\\""]) '
+        "if (!runtime.includes(value)) throw new Error(`portable OSDK runtime is missing ${value}`);\n"
+        'if (!react.includes("PilotApplicationProvider")) throw new Error("application provider is missing");\n'
+        'process.stdout.write("portable Domain OS runtime contract passed\\n");\n'
+    )
 
 
 def _package_name(plan: JsonObject) -> str:
@@ -292,14 +289,6 @@ def _mapping(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise FdePlatformToolError("schema_invalid", f"{field} must be an object")
     return {str(name): item for name, item in value.items()}
-
-
-def _mapping_items(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise FdePlatformToolError("schema_invalid", "expected a list of objects")
-    if not all(isinstance(item, Mapping) for item in value):
-        raise FdePlatformToolError("schema_invalid", "expected a list of objects")
-    return [{str(name): field for name, field in item.items()} for item in value if isinstance(item, Mapping)]
 
 
 __all__ = ["ci_workflow", "consumer_osdk_plan", "react_files"]

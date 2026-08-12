@@ -9,6 +9,7 @@ from foundry_lite.application.services.aip.fde_application_tool_projections impo
     FdeLineageReader,
     dataset_tool_result,
     lineage_graph,
+    pilot_generation_tool_result,
 )
 from foundry_lite.application.services.aip.fde_pilot import FdePilotService
 from foundry_lite.application.services.aip.fde_platform_docs import (
@@ -101,12 +102,17 @@ class FdeApplicationToolService(CoreService):
                 required_text(request.arguments, "query"), _bounded_limit(request.arguments.get("maxResults"))
             )
         if tool_id == "pilot.application.plan":
-            return self.fde_pilot_service.plan(request.arguments)
+            return {
+                **self.fde_pilot_service.plan(request.arguments),
+                "mcpExecution": {"mode": request.mode, "workspaceRef": request.scope_ref},
+            }
         if tool_id == "pilot.application.generate":
-            return self.fde_pilot_service.generate(
-                ctx,
-                _mapping(request.arguments.get("plan"), "plan"),
-                required_text(request.arguments, "idempotencyKey"),
+            return pilot_generation_tool_result(
+                self.fde_pilot_service.generate(
+                    ctx,
+                    _mapping(request.arguments.get("plan"), "plan"),
+                    required_text(request.arguments, "idempotencyKey"),
+                )
             )
         if tool_id in _PALANTIR_NATIVE_TOOL_IDS:
             return self._palantir_native(ctx, request)

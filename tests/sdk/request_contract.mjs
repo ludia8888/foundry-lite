@@ -1132,20 +1132,38 @@ await expectSdkCall(
     headers: {},
   },
 );
+const pilotDomainBrief = {
+  actors: ["operator"],
+  records: [{ name: "Work item", apiName: "WorkItem", fields: [{ name: "Team", apiName: "team" }] }],
+  lifecycleStates: ["NEW", "DONE"],
+  actions: [{ name: "Complete", apiName: "CompleteWorkItem", fromStates: ["NEW"], toState: "DONE", allowedActors: ["operator"] }],
+  policies: [{ name: "Completion evidence", statement: "Keep a completion record." }],
+  evidence: ["operator", "before and after status"],
+};
 await expectSdkCall(
   "aip.pilot.plan",
-  () => client.aip.pilot.plan({ applicationName: "Dining Concierge", domainDescription: "Booking operations" }),
+  () => client.aip.pilot.plan({
+    applicationName: "Dining Concierge",
+    domainDescription: "Booking operations",
+    domainBrief: pilotDomainBrief,
+  }),
   {
     path: "/api/aip/pilot/plan",
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: { applicationName: "Dining Concierge", domainDescription: "Booking operations" },
+    body: {
+      applicationName: "Dining Concierge",
+      domainDescription: "Booking operations",
+      domainBrief: pilotDomainBrief,
+    },
   },
 );
 const pilotPlan = {
   operationType: "pilot_generation_plan",
   applicationName: "Dining Concierge",
   domainDescription: "Booking operations",
+  domainBrief: pilotDomainBrief,
+  domainOsBlueprint: {},
   slug: "dining-concierge",
   projectDisplayName: "Dining Concierge Pilot",
   seed: {},

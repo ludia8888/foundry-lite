@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Protocol
 
-from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
+from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json, required_text
 from foundry_lite.domain.context import RequestContext
 
 
@@ -66,6 +66,46 @@ def dataset_tool_result(tool_id: str, inspection: Mapping[str, object]) -> dict[
         files = _mapping_items(manifest.get("files"))
         return {**identity, "files": files, "count": len(files), "isManifestBounded": True}
     return {**identity, **_manifest_statistics(manifest)}
+
+
+def pilot_generation_tool_result(bundle: Mapping[str, object]) -> dict[str, object]:
+    """Keep generated source durable while returning a bounded ChatGPT completion view."""
+
+    files = _mapping(bundle.get("reactFiles"), "reactFiles")
+    resource = _mapping(bundle.get("resource"), "resource")
+    branch = _mapping(bundle.get("ontologyBranch"), "ontologyBranch")
+    branch_diff = _mapping(branch.get("diff"), "ontologyBranch.diff")
+    rid = required_text(resource, "rid")
+    return {
+        "operationType": bundle.get("operationType"),
+        "status": bundle.get("status"),
+        "applicationName": bundle.get("applicationName"),
+        "domainOsBlueprint": bundle.get("domainOsBlueprint"),
+        "resource": _resource_summary(resource),
+        "ontologyBranch": {
+            "id": branch.get("id"),
+            "contentFingerprint": branch.get("contentFingerprint"),
+            "resourceCount": len(_mapping_items(branch_diff.get("resources"))),
+        },
+        "osdkApplication": bundle.get("osdkApplication"),
+        "consumerOsdk": bundle.get("consumerOsdk"),
+        "deploymentPlan": bundle.get("deploymentPlan"),
+        "applicationPath": bundle.get("applicationPath"),
+        "generatedFiles": {
+            "count": len(files),
+            "names": sorted(files),
+            "isContentIncluded": False,
+            "delivery": "governed_resource",
+            "retrievePath": f"/api/aip/pilot/applications/{rid}",
+        },
+        "resultHash": hash_json(bundle),
+        "nextStep": bundle.get("nextStep"),
+    }
+
+
+def _resource_summary(resource: Mapping[str, object]) -> dict[str, object]:
+    keys = ("rid", "resourceType", "displayName", "projectId", "sourceRef", "operationsPath")
+    return {key: resource.get(key) for key in keys if resource.get(key) is not None}
 
 
 def _public_lineage_edge(edge: Mapping[str, object]) -> dict[str, object]:

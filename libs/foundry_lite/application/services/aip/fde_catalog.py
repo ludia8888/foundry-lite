@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from foundry_lite.application.services.aip.fde_domain_os_tool_schema import DOMAIN_BRIEF_SCHEMA
 from foundry_lite.application.services.aip.fde_palantir_mcp_catalog import (
     PALANTIR_MCP_NATIVE_TOOLS,
     PALANTIR_MCP_TOOLS_BY_CAPABILITY,
@@ -380,10 +381,14 @@ _FDE_TOOLS = (
     ),
     _tool(
         "pilot.application.plan",
-        "Create a typed Pilot generation plan without mutation.",
+        "Turn a non-developer's detailed business description into a reviewable Domain OS blueprint without mutation.",
         "developer_console:read",
-        {"applicationName": {"type": "string"}, "domainDescription": {"type": "string"}},
-        ["applicationName", "domainDescription"],
+        {
+            "applicationName": {"type": "string", "minLength": 1, "maxLength": 255},
+            "domainDescription": {"type": "string", "minLength": 1, "maxLength": 10000},
+            "domainBrief": DOMAIN_BRIEF_SCHEMA,
+        },
+        ["applicationName", "domainDescription", "domainBrief"],
     ),
     _tool(
         "pilot.application.generate",

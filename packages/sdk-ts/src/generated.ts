@@ -813,11 +813,54 @@ export type AipFdeRunResult = AipAgentRunResult & {
   toolDiscovery: string;
   structuredOperations: Array<Record<string, unknown>>;
 };
-export type AipPilotPlanRequest = { applicationName: string; domainDescription: string };
+export type AipPilotFieldInput = {
+  name: string;
+  apiName?: string;
+  type?: "string" | "integer" | "float" | "boolean" | "date" | "timestamp";
+  required?: boolean;
+  description?: string;
+};
+export type AipPilotDomainBrief = {
+  actors: string[];
+  records: Array<{ name: string; apiName?: string; description?: string; fields?: AipPilotFieldInput[] }>;
+  lifecycleStates: string[];
+  actions: Array<{
+    name: string;
+    apiName?: string;
+    description?: string;
+    fromStates?: string[];
+    toState: string;
+    requiredInformation?: string[];
+    allowedActors?: string[];
+    requiresApproval?: boolean;
+  }>;
+  policies: Array<{
+    name: string;
+    statement: string;
+    enforcement?: "blocking" | "warning" | "manual_review";
+    evidence?: string;
+    appliesToActions?: string[];
+    conditions?: Array<{
+      propertyApiName: string;
+      operator: "eq" | "neq" | "in" | "notIn" | "lt" | "lte" | "gt" | "gte";
+      value: unknown;
+    }>;
+  }>;
+  evidence: string[];
+  integrations?: string[];
+  successMeasures?: string[];
+};
+export type AipPilotPlanRequest = {
+  applicationName: string;
+  domainDescription: string;
+  domainBrief: AipPilotDomainBrief;
+};
 export type AipPilotPlan = {
   operationType: string;
   applicationName: string;
   domainDescription: string;
+  domainBrief: AipPilotDomainBrief;
+  domainOsBlueprint: Record<string, unknown>;
   slug: string;
   projectDisplayName: string;
   seed: Record<string, unknown>;
@@ -831,6 +874,7 @@ export type AipPilotApplicationBundle = Record<string, unknown> & {
   applicationName: string;
   applicationPath: string;
   status: string;
+  domainOsBlueprint: Record<string, unknown>;
   reactFiles: Record<string, string>;
   resource?: Record<string, unknown>;
   isReplayed?: boolean;

@@ -1,0 +1,256 @@
+"""Cross-domain contract proof for non-developer Domain OS planning."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pytest
+from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
+    application_resources,
+    build_domain_os_blueprint,
+    ontology_resources,
+    require_ready_blueprint,
+    seed_plan,
+)
+from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
+
+
+def test_property_maintenance_brief_compiles_independent_objects_actions_and_seed_data() -> None:
+    blueprint = build_domain_os_blueprint(property_maintenance_arguments())
+
+    assert blueprint["readiness"] == {
+        "isReady": True,
+        "status": "ready_for_review",
+        "missingCount": 0,
+        "questions": [],
+    }
+    assert [record["apiName"] for record in blueprint["records"]] == ["WorkOrder", "PropertyAsset"]
+    assert [action["apiName"] for action in blueprint["workflow"]["actions"]] == [
+        "TriageWorkOrder",
+        "ScheduleRepair",
+        "CompleteRepair",
+    ]
+    assert blueprint["workflow"]["actions"][0]["parameters"] == [
+        {"apiName": "priority", "displayName": "priority", "type": "string"}
+    ]
+    assert blueprint["workflow"]["actions"][0]["requiresApproval"] is True
+    assert blueprint["workflow"]["actions"][0]["allowedActors"] == ["coordinator"]
+    assert blueprint["workflow"]["actions"][0]["allowedRoles"][0].startswith("domain_actor_")
+    assert [policy["automationStatus"] for policy in blueprint["policies"]] == [
+        "human_confirmation",
+        "executable_precondition",
+    ]
+    assert [screen["id"] for screen in blueprint["screens"]] == ["today", "record", "policy", "evidence"]
+
+    resources = ontology_resources(blueprint, "seed.property_maintenance")
+    assert len(resources) == 5
+    assert resources[0]["definition"]["backing"]["dataset"] == "seed.property_maintenance"
+    assert resources[1]["definition"]["backing"]["dataset"] == "seed.property_maintenance_property_asset"
+    assert resources[2]["definition"]["preconditions"][0]["safeExpression"] == "object.status in ['REPORTED']"
+    assert resources[2]["definition"]["permissions"] == {
+        "allowedRoles": blueprint["workflow"]["actions"][0]["allowedRoles"]
+    }
+    assert resources[2]["definition"]["preconditions"][1] == {
+        "op": "in",
+        "left": {"kind": "objectProperty", "property": "severity"},
+        "right": {"kind": "literal", "value": ["urgent", "normal"]},
+        "message": "분류 전에 심각도가 urgent 또는 normal로 기록되어야 합니다.",
+        "policyName": "심각도 필수",
+    }
+
+    scopes = application_resources(blueprint)
+    assert scopes == [
+        {
+            "resourceType": "object",
+            "resourceApiName": "WorkOrder",
+            "scopes": ["osdk:object:WorkOrder:read"],
+        },
+        {
+            "resourceType": "object",
+            "resourceApiName": "PropertyAsset",
+            "scopes": ["osdk:object:PropertyAsset:read"],
+        },
+        {
+            "resourceType": "action",
+            "resourceApiName": "TriageWorkOrder",
+            "scopes": ["osdk:action:TriageWorkOrder:execute"],
+        },
+        {
+            "resourceType": "action",
+            "resourceApiName": "ScheduleRepair",
+            "scopes": ["osdk:action:ScheduleRepair:execute"],
+        },
+        {
+            "resourceType": "action",
+            "resourceApiName": "CompleteRepair",
+            "scopes": ["osdk:action:CompleteRepair:execute"],
+        },
+    ]
+
+    seed = seed_plan("property_maintenance", blueprint)
+    assert [item["datasetRef"] for item in seed["datasets"]] == [
+        "seed.property_maintenance",
+        "seed.property_maintenance_property_asset",
+    ]
+    assert seed["datasets"][0]["primaryKey"] == ["work_order_id"]
+    assert seed["datasets"][1]["primaryKey"] == ["property_asset_id"]
+    assert set(seed["datasets"][0]["rows"][0]) == {"work_order_id", "name", "status", "location", "severity"}
+
+
+def test_incomplete_brief_returns_plain_language_questions_and_cannot_generate() -> None:
+    blueprint = build_domain_os_blueprint(
+        {
+            "applicationName": "시설 요청 OS",
+            "domainDescription": "시설에서 발생한 요청을 빠짐없이 접수하고 처리합니다.",
+            "domainBrief": {
+                "actors": [],
+                "records": [],
+                "lifecycleStates": [],
+                "actions": [],
+                "policies": [],
+                "evidence": [],
+                "integrations": [],
+                "successMeasures": [],
+            },
+        }
+    )
+
+    assert blueprint["readiness"]["isReady"] is False
+    assert blueprint["readiness"]["missingCount"] == 6
+    assert blueprint["readiness"]["questions"][0]["question"] == "이 업무를 수행하거나 영향을 받는 사람은 누구인가요?"
+    with pytest.raises(FdePlatformToolError, match="업무 설계에 빈칸") as error:
+        require_ready_blueprint(blueprint)
+    assert error.value.reason == "domain_blueprint_incomplete"
+
+
+def test_unknown_transition_and_duplicate_field_api_name_are_rejected() -> None:
+    unknown_state = property_maintenance_arguments()
+    unknown_state["domainBrief"]["actions"][0]["toState"] = "MISSING_STATE"
+    with pytest.raises(FdePlatformToolError, match="정의되지 않은 상태"):
+        build_domain_os_blueprint(unknown_state)
+
+    duplicate_field = deepcopy(property_maintenance_arguments())
+    duplicate_field["domainBrief"]["records"][0]["fields"].append(
+        {"name": "Duplicate", "apiName": "location", "type": "string", "required": False}
+    )
+    with pytest.raises(FdePlatformToolError, match="정보 이름은 서로 달라야"):
+        build_domain_os_blueprint(duplicate_field)
+
+    unknown_actor = property_maintenance_arguments()
+    unknown_actor["domainBrief"]["actions"][0]["allowedActors"] = ["outsider"]
+    with pytest.raises(FdePlatformToolError, match="참여자로 정리되지 않은 사람"):
+        build_domain_os_blueprint(unknown_actor)
+
+
+def test_action_actor_permission_is_required_before_generation() -> None:
+    arguments = property_maintenance_arguments()
+    arguments["domainBrief"]["actions"][0]["allowedActors"] = []
+
+    blueprint = build_domain_os_blueprint(arguments)
+
+    assert blueprint["readiness"]["isReady"] is False
+    assert blueprint["readiness"]["questions"] == [
+        {
+            "field": "actionPermissions",
+            "question": "각 업무 버튼을 누를 수 있는 사람을 참여자 중에서 정해주세요.",
+        }
+    ]
+    with pytest.raises(FdePlatformToolError, match="업무 설계에 빈칸"):
+        require_ready_blueprint(blueprint)
+
+
+@pytest.mark.parametrize(
+    ("operator", "value", "message"),
+    [
+        ("lt", 3, "크기 비교 규칙"),
+        ("eq", ["urgent"], "목록일 수 없습니다"),
+        ("in", [], "비어 있지 않은 목록"),
+        ("eq", 10, "업무 정보 형식과 맞지 않습니다"),
+    ],
+)
+def test_policy_condition_rejects_operator_and_value_type_mismatches(
+    operator: str,
+    value: object,
+    message: str,
+) -> None:
+    arguments = property_maintenance_arguments()
+    condition = arguments["domainBrief"]["policies"][1]["conditions"][0]
+    condition["operator"] = operator
+    condition["value"] = value
+
+    with pytest.raises(FdePlatformToolError, match=message):
+        build_domain_os_blueprint(arguments)
+
+
+def property_maintenance_arguments() -> dict[str, object]:
+    return {
+        "applicationName": "Property Care Desk",
+        "domainDescription": "입주민의 시설 문제를 접수하고 담당자가 우선순위를 정한 뒤 수리 완료 증거까지 남깁니다.",
+        "domainBrief": {
+            "actors": ["resident", "coordinator", "vendor"],
+            "records": [
+                {
+                    "name": "수리 요청",
+                    "apiName": "WorkOrder",
+                    "fields": [
+                        {"name": "location", "apiName": "location", "type": "string", "required": True},
+                        {"name": "severity", "apiName": "severity", "type": "string", "required": True},
+                    ],
+                },
+                {
+                    "name": "시설 자산",
+                    "apiName": "PropertyAsset",
+                    "fields": [
+                        {"name": "serial number", "apiName": "serialNumber", "type": "string", "required": True}
+                    ],
+                },
+            ],
+            "lifecycleStates": ["REPORTED", "TRIAGED", "SCHEDULED", "COMPLETED"],
+            "actions": [
+                {
+                    "name": "요청 분류",
+                    "apiName": "TriageWorkOrder",
+                    "fromStates": ["REPORTED"],
+                    "toState": "TRIAGED",
+                    "requiredInformation": ["priority"],
+                    "allowedActors": ["coordinator"],
+                },
+                {
+                    "name": "수리 일정 확정",
+                    "apiName": "ScheduleRepair",
+                    "fromStates": ["TRIAGED"],
+                    "toState": "SCHEDULED",
+                    "requiredInformation": ["visit window"],
+                    "allowedActors": ["coordinator", "vendor"],
+                    "requiresApproval": True,
+                },
+                {
+                    "name": "수리 완료",
+                    "apiName": "CompleteRepair",
+                    "fromStates": ["SCHEDULED"],
+                    "toState": "COMPLETED",
+                    "requiredInformation": ["completion note"],
+                    "allowedActors": ["vendor", "coordinator"],
+                },
+            ],
+            "policies": [
+                {
+                    "name": "긴급 누수 우선 처리",
+                    "statement": "긴급 누수는 일반 요청보다 먼저 배정해야 합니다.",
+                    "enforcement": "manual_review",
+                    "evidence": "분류 담당자와 판단 시각",
+                    "appliesToActions": ["TriageWorkOrder"],
+                },
+                {
+                    "name": "심각도 필수",
+                    "statement": "분류 전에 심각도가 urgent 또는 normal로 기록되어야 합니다.",
+                    "enforcement": "blocking",
+                    "appliesToActions": ["TriageWorkOrder"],
+                    "conditions": [{"propertyApiName": "severity", "operator": "in", "value": ["urgent", "normal"]}],
+                },
+            ],
+            "evidence": ["상태 변경 전후", "담당자", "완료 사진"],
+            "integrations": ["입주민 포털", "문자 알림"],
+            "successMeasures": ["긴급 요청 15분 이내 분류", "미완료 누락 0건"],
+        },
+    }
