@@ -107,6 +107,14 @@ flowchart LR
 
 Governed Release 위젯 URI의 마지막 12자리는 실제 embedded HTML의 SHA-256 prefix다. HTML을 바꾸고 URI를 올리지 않으면 `test_governed_release_widget_uri_is_content_addressed`가 실패하므로, ChatGPT가 동일 URI의 오래된 카드를 새 대화에서도 재사용하는 문제를 배포 전에 차단한다.
 
+### ChatGPT Domain OS Studio
+
+Builder MCP의 `pilot.application.plan`과 `pilot.application.generate`는 `ui://foundry-lite/domain-os-studio-v1-354e3901f43f.html`을 ChatGPT 내부 출력 화면으로 사용한다. URI의 마지막 12자리는 고수준 MCP OSDK adapter를 주입한 최종 HTML의 SHA-256 prefix이며, 내용이 바뀌고 URI를 갱신하지 않으면 integration gate가 실패한다. ChatGPT는 비개발자의 자연어 설명에서 사람, 업무 기록, 상태, 규칙, 업무 버튼, 증거를 bounded `domainBrief`로 정리한다. API 이름을 사용자에게 묻지 않으며, 설계가 비어 있으면 서버가 반환한 쉬운 업무 질문만 다시 묻는다. 화면은 MCP Apps `2026-01-26` JSON-RPC `postMessage`를 기본 bridge로 사용하고 `window.openai`는 호환 fallback으로만 사용한다. 화면 코드가 `tools/call`이나 `pilot.application.generate`를 직접 조립하지 못하게 하고, Foundry-lite가 제공하는 `DomainOsStudio` 고수준 MCP OSDK만 사용한다.
+
+현재 범위는 자연어 설계 → ChatGPT 내부 검토 → app-only 사람 확인 → 격리 Project/Dataset/Ontology branch/OSDK application 생성 → 휴대형 React 앱 소스 저장이다. 큰 소스 본문은 MCP 출력 한도에 싣지 않고 governed resource에 보관하며, ChatGPT에는 완료 화면에 필요한 요약, resource RID, 파일 목록과 배포 상태만 반환한다. 생성 앱의 고객 화면은 앱 전용 고수준 OSDK hook만 import한다. 앱 전용 패키지 안에는 Object 조회, Action 실행, idempotency key, 브라우저 세션 연결에 필요한 작은 런타임이 포함되어 있어 Foundry-lite 모노레포 밖에서도 설치, strict OSDK 검사, TypeScript 검사, 런타임 계약 검사, Vite production build가 가능하다. `pnpm --silent quality:domain-os-deploy-bundle`이 이 독립 빌드를 검증한다.
+
+식당, 부동산, 세무회계, 대출, 병원, 제조 여섯 업무 설명이 같은 컴파일러에서 서로 다른 Object, 상태 전이, Action, 자동 차단 조건, 사람 확인 규칙, 독립 seed Dataset, 최소 권한 scope로 생성되는지 `quality:ai-fde`가 검증한다. 각 업무 버튼에는 자연어 참여자 중 실제로 누를 수 있는 사람을 지정해야 하며, 비어 있거나 알려지지 않은 참여자를 쓰면 생성이 차단된다. 서버는 이 선택을 앱별 안정적인 role ID와 Action `allowedRoles`로 컴파일한다. 생성된 고객 화면은 여러 업무 건을 모두 보여주고 API 키 대신 사람이 읽는 정보 이름과 버튼별 실행 가능 참여자를 표시한다. 이는 업종별 법률·세무·의료 판단이 자동으로 옳다는 증거가 아니다. 명시적인 property/operator/value 조건만 Action precondition으로 자동화하고, 필드 형식과 맞지 않는 조건은 거절하며, 조건이 없는 자연어 규칙은 `검토용 규칙 · 아직 자동화 안 됨`으로 표시한다. 대출 승인, 신고 승인, 의료 확인 같은 책임 작업은 사람 확인으로 남긴다. 실제 운영 사용 전에는 실제 데이터, 앱 role ID와 IdP/조직 역할 연결, 인증 session bootstrap, Ontology proposal 활성화, host target과 업종 담당자의 정책 검토가 필요하다. 새 Domain OS Studio 자체의 hosted ChatGPT SaaS 실증과 실제 외부 host 배포는 아직 검증되지 않았으며, 현재 UI 증거는 표준 bridge contract, TestClient, Node widget, local Chromium QA다.
+
 Governed Release와 Ontology/Pipeline proposal은 **검토 담당 배정과 사람의 명시적 위젯 승인**을 계속 필수로 요구하지만, 작성자와 검토자가 서로 다른 사용자일 필요는 없다. 따라서 한 사용자가 자신의 제안을 검토 담당으로 수락하고 승인할 수 있다. 별도 리뷰어가 필요한 GitHub ruleset이나 조직 정책이 있으면 그 외부 규칙은 추가 조건으로 그대로 적용된다.
 
 현재 v9 위젯은 첫 정상 스냅샷에서 비밀 없는 read-only 복구 좌표만 MCP Apps 표준 `ui/update-model-context`로 영구 저장한다. Hosted 대화 재접속에서 과거 tool result/input이 즉시 재전달되지 않아도 bounded wait 뒤 `open_release_workspace`, `list_release_inbox`, 또는 exact `get_release_status` 중 하나만 호출해 서버 상태를 다시 읽으며, 좌표까지 없으면 mutation을 추측하지 않고 명시적 복구 안내로 끝낸다. 2026-08-12 실제 ChatGPT 새 탭 재접속은 23초 안에 `empty-inbox`를 복구했고 durable tool quota는 정확히 read-only 1회를 기록했다.
@@ -300,6 +308,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 pnpm --silent quality:consumer-osdk
 pnpm --silent quality:consumer-osdk-typecheck
+pnpm --silent quality:domain-os-deploy-bundle
 ```
 
 프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 319개 frontend route surface는 모두 `named-sdk-only` 정책이며, 17개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback, MCP transport, OAuth discovery처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
@@ -372,6 +381,7 @@ pnpm worker:pipeline-control
 | `quality:sdk-request-contract` | 브라우저 SDK가 method, path, query, header, body, idempotency key, typed error metadata를 실제 계약과 다르게 보내는 문제를 차단합니다. |
 | `quality:frontend-foundation` | generated SDK, browser SDK helper, Foundry SPA strict TypeScript 검사, Web Operations SDK-only 호출, request id, retryability, typed frontend error가 drift 나는 문제를 차단합니다. |
 | `quality:consumer-osdk` | strict consumer app이 base SDK나 generic object/function/action escape hatch로 내려가거나, 생성 패키지가 contract에서 drift하거나, 예외 budget이 0보다 커지거나, 릴리스 receipt의 source/package/artifact/ontology fingerprint가 누락·변조되는 문제를 차단합니다. |
+| `quality:domain-os-deploy-bundle` | 동적으로 생성된 Domain OS를 Foundry-lite 모노레포 밖의 빈 디렉터리에 풀어 offline dependency install, 앱 전용 OSDK boundary, TypeScript, portable runtime contract, Vite production build를 실행하고 `dist/index.html` 생성을 검증합니다. 실제 운영 인증·데이터·host 배포 증거는 별도입니다. |
 | `quality:proof-matrix` | infra tricky matrix의 proof class가 문서에만 있고 실제 pytest나 CI evidence와 연결되지 않는 문제를 차단합니다. |
 | `quality:source-of-truth` | serving source of truth가 코드, 테스트, 운영 증거, 문서 사이에서 갈라지는 문제를 차단합니다. |
 | `quality:operator-evidence` | 실패 원인이 로그 한 줄에만 남고 audit, run detail, transaction, error payload로 다시 추적되지 않는 문제를 차단합니다. |
