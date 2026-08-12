@@ -4209,6 +4209,11 @@
   ],
   "nonFrontendRoutes": [
     {
+      "route": "GET /readyz",
+      "accessClass": "platform-readiness",
+      "reason": "The deployment platform probes startup composition and metadata database connectivity; this unauthenticated response exposes no configuration or product data."
+    },
+    {
       "route": "GET /metrics",
       "accessClass": "observability-scrape",
       "reason": "Prometheus text exposition is consumed by monitoring, not the product frontend SDK."
@@ -4269,9 +4274,39 @@
       "reason": "Consumer Ontology MCP OAuth protected-resource metadata is discovered directly by external MCP clients."
     },
     {
+      "route": "POST /mcp/release/{application_id}",
+      "accessClass": "external-mcp-json-rpc",
+      "reason": "Governed Release MCP JSON-RPC is consumed by an OAuth-authorized ChatGPT MCP app and must not be wrapped as a normal product REST SDK call."
+    },
+    {
+      "route": "GET /mcp/release/{application_id}",
+      "accessClass": "external-mcp-stream",
+      "reason": "Governed Release MCP Streamable HTTP reconnect and server events follow the MCP transport contract rather than the product REST SDK."
+    },
+    {
+      "route": "GET /mcp/release/{application_id}/live-readiness",
+      "accessClass": "external-mcp-operational-readiness",
+      "reason": "OAuth-authorized operators use this Governed Release endpoint to verify the external delivery bindings before a release; it is an MCP operations surface rather than a browser product SDK control."
+    },
+    {
+      "route": "DELETE /mcp/release/{application_id}",
+      "accessClass": "external-mcp-session",
+      "reason": "Governed Release MCP session termination is an external protocol operation rather than a browser product control."
+    },
+    {
+      "route": "GET /.well-known/oauth-protected-resource/mcp/release/{application_id}",
+      "accessClass": "oauth-discovery",
+      "reason": "Governed Release MCP OAuth protected-resource metadata is discovered directly by external MCP clients."
+    },
+    {
       "route": "GET /.well-known/oauth-authorization-server",
       "accessClass": "oauth-discovery",
       "reason": "OAuth authorization-server metadata is a public discovery document for external clients, not a named product SDK surface."
+    },
+    {
+      "route": "POST /api/auth/osdk/oauth/register",
+      "accessClass": "oauth-dynamic-client-registration",
+      "reason": "RFC 7591 registration is called by a remote MCP host discovering this server, before any user session exists, so it cannot be a named product SDK surface. It is off unless an operator opts one non-protected application in, and it only ever mints a secretless PKCE client clamped to that application's plane scopes."
     }
   ]
 }
