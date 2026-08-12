@@ -31,7 +31,7 @@ def test_builder_mcp_executes_every_catalog_tool_through_real_json_rpc(
     monkeypatch: Any,
     tmp_path: Any,
 ) -> None:
-    """Ratchet the real Builder MCP surface to exactly the canonical 68 tools."""
+    """Ratchet the real Builder MCP surface to exactly the canonical 69 tools."""
     state = _prepare_surface_state(foundry, monkeypatch, tmp_path)
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     issuer = foundry._services.osdk_oauth_sessions.oauth_token_issuer
@@ -281,7 +281,7 @@ def _run_governance_tools(runner: _FullSurfaceRunner, foundry: Any) -> dict[str,
         {
             "displayName": "MCP Full Surface",
             "description": "Real JSON-RPC exhaustive proof",
-            "metadata": {"proof": "68-of-68"},
+            "metadata": {"proof": "69-of-69"},
             "idempotencyKey": "mcp-full-surface-project",
         },
         ("project",),
@@ -476,7 +476,7 @@ def _run_ontology_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         workspace,
         "ontology.branch.propose",
         {
-            "title": "Builder MCP 68-tool ontology proof",
+            "title": "Builder MCP 69-tool ontology proof",
             "description": "Exhaustive JSON-RPC branch proposal",
             "idempotencyKey": "mcp-full-surface-ontology-proposal",
         },
@@ -537,7 +537,7 @@ def _run_pipeline_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         workspace,
         "pipeline.branch.propose",
         {
-            "title": "Builder MCP 68-tool pipeline proof",
+            "title": "Builder MCP 69-tool pipeline proof",
             "description": "Exhaustive JSON-RPC pipeline proposal",
             "idempotencyKey": "mcp-full-surface-pipeline-proposal",
         },

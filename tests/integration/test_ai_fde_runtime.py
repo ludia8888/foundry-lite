@@ -218,7 +218,7 @@ def test_ai_fde_catalog_is_permission_scoped_and_lists_current_modes(foundry: An
     assert modes["platform_qa"] == "current"
     assert catalog["safetyBoundary"]["writes"] == "governed_scope_only"
     tool_ids = {str(tool["toolId"]) for tool in catalog["tools"]}
-    assert len(tool_ids) == 68
+    assert len(tool_ids) == 69
     assert {
         "list_resources_in_foundry_folder",
         "get_project_imports",

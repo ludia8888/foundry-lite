@@ -16,8 +16,8 @@
 
 ## 폭의 차이
 
-현재 Foundry-lite AI FDE catalog는 9개 mode와 68개 server-owned tool입니다. 이 중 43개는 Palantir의
-공개 72개 catalog와 이름이 정확히 일치하고, 나머지 25개는 Foundry-lite의 branch/test/proposal/Pilot
+현재 Foundry-lite AI FDE catalog는 9개 mode와 69개 server-owned tool입니다. 이 중 43개는 Palantir의
+공개 72개 catalog와 이름이 정확히 일치하고, 나머지 26개는 Foundry-lite의 branch/test/proposal/Pilot
 계약을 표현하는 고유 도구입니다. 공식명 43개는 catalog placeholder가 아니라 Compass Project/Resource,
 committed Dataset manifest, lineage, Ontology branch, Object Query, OSDK/Platform SDK registry, Developer
 Console, governed Source/Webhook/egress policy, curated documentation의 실제 application service를 호출합니다.
