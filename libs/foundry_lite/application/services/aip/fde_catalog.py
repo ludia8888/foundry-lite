@@ -280,6 +280,20 @@ _FDE_TOOLS = (
         "USER",
     ),
     _tool(
+        "ontology.branch.rebase",
+        "Re-anchor the selected Ontology branch on the active Ontology, settling each conflicting "
+        "resource explicitly. Use this when a branch reports baseStale: validating or proposing a "
+        "branch built on a superseded base reads deletions for everything added to main since.",
+        "ontology:validate",
+        {
+            "resolutions": {"type": "array"},
+            "expectedFingerprint": {"type": "string"},
+        },
+        ["resolutions", "expectedFingerprint"],
+        "WRITE",
+        "USER",
+    ),
+    _tool(
         "ontology.branch.propose",
         "Submit the selected Ontology branch for human review without merging it.",
         "ontology:validate",
@@ -388,7 +402,7 @@ _TOOLS_BY_CAPABILITY = {
     "resource.inspect": ("resource.inspect",),
     "governance.project.inspect": ("governance.project.inspect",),
     "ontology.inspect": ("ontology.branch.inspect",),
-    "ontology.validate": ("ontology.branch.validate",),
+    "ontology.validate": ("ontology.branch.validate", "ontology.branch.rebase"),
     "ontology.edit": ("ontology.branch.apply_patch",),
     "ontology.propose": ("ontology.branch.propose",),
     "pipeline.inspect": ("pipeline.branch.inspect",),

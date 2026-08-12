@@ -21,6 +21,7 @@ from foundry_lite.application.services.ontology_mcp_contracts import (
     OntologyMcpFunctionRuntime,
     OntologyMcpObjectRuntime,
     OntologyMcpToolCall,
+    require_ontology_mcp_session_namespace,
 )
 from foundry_lite.application.services.ontology_mcp_schema import validate_tool_arguments
 from foundry_lite.application.services.ontology_mcp_tools import (
@@ -150,35 +151,42 @@ class OntologyMcpGateway:
     def open_session(
         self, ctx: RequestContext, application_id: str, session_id: str, *, origin: str | None = None
     ) -> Mapping[str, object]:
+        require_ontology_mcp_session_namespace(session_id)
         self.access_sessions.require_active(ctx, application_id)
         return self.applications.open_mcp_session(ctx, application_id, session_id, origin=origin)
 
     def resume_session(
         self, ctx: RequestContext, application_id: str, session_id: str, *, origin: str | None = None
     ) -> Mapping[str, object]:
+        require_ontology_mcp_session_namespace(session_id)
         self.access_sessions.require_active(ctx, application_id)
         return self.applications.resume_mcp_session(ctx, application_id, session_id, origin=origin)
 
     def claim_session_stream(
         self, ctx: RequestContext, application_id: str, session_id: str, *, origin: str | None = None
     ) -> OsdkMcpStreamLease:
+        require_ontology_mcp_session_namespace(session_id)
         self.access_sessions.require_active(ctx, application_id)
         return self.applications.claim_mcp_session_stream(ctx, application_id, session_id, origin=origin)
 
     def release_session_stream(self, ctx: RequestContext, application_id: str, session_id: str, lease_id: str) -> bool:
+        require_ontology_mcp_session_namespace(session_id)
         return self.applications.release_mcp_session_stream(ctx, application_id, session_id, lease_id)
 
     def session_events(
         self, ctx: RequestContext, application_id: str, session_id: str, *, after_sequence: int = 0
     ) -> list[OsdkMcpSessionEventRow]:
+        require_ontology_mcp_session_namespace(session_id)
         self.access_sessions.require_active(ctx, application_id)
         return self.applications.list_mcp_session_events(ctx, application_id, session_id, after_sequence=after_sequence)
 
     def close_session(self, ctx: RequestContext, application_id: str, session_id: str) -> Mapping[str, object]:
+        require_ontology_mcp_session_namespace(session_id)
         self.access_sessions.require_active(ctx, application_id)
         return self.applications.close_mcp_session(ctx, application_id, session_id)
 
     def execute_tool(self, ctx: RequestContext, call: OntologyMcpToolCall) -> dict[str, object]:
+        require_ontology_mcp_session_namespace(call.session_id)
         listed = self.list_tools(ctx, call.application_id, origin=call.origin)
         validate_tool_arguments(call.arguments, _tool_input_schema(listed, call.tool_name))
         tool_kind, resource_name, operation = _parse_tool_name(call.tool_name)

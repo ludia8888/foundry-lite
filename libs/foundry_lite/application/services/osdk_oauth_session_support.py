@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -11,8 +12,17 @@ from foundry_lite.application.ports import TransactionContext
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import RateLimited
 
-_RATE_LIMIT_CAPACITY = 5
-_RATE_LIMIT_WINDOW_SECONDS = 60.0
+OAUTH_RATE_LIMIT_CAPACITY_ENV = "FOUNDRY_LITE_OAUTH_RATE_LIMIT_CAPACITY"
+OAUTH_RATE_LIMIT_WINDOW_ENV = "FOUNDRY_LITE_OAUTH_RATE_LIMIT_WINDOW_SECONDS"
+
+# Sized for an MCP host, not a human at a login form. A remote host re-exchanges its token
+# around each tool-call cycle, so a per-minute budget tuned to interactive sign-ins starves a
+# working session: the host reports "couldn't connect your account" and the whole connector
+# looks broken. The exchanges being counted all present a credential (one-time PKCE code,
+# rotating refresh token, or client secret), so this budget bounds abuse rather than being the
+# thing that stops a guess.
+_RATE_LIMIT_CAPACITY = int(os.getenv(OAUTH_RATE_LIMIT_CAPACITY_ENV, "60"))
+_RATE_LIMIT_WINDOW_SECONDS = float(os.getenv(OAUTH_RATE_LIMIT_WINDOW_ENV, "60"))
 
 
 class _OAuthAuditBoundary(Protocol):

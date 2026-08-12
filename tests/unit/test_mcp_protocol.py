@@ -16,12 +16,27 @@ from foundry_lite_api.routers.ontology_mcp import _json_body as parse_ontology_b
 from starlette.requests import Request
 
 
-def test_missing_post_initialize_header_is_rejected_without_assuming_latest() -> None:
+def test_missing_post_initialize_header_resolves_to_the_negotiated_version() -> None:
+    """Regression: rejecting a missing header made ChatGPT's first post-initialize call 400.
+
+    The transport spec reserves the MUST-400 for a header that is present and unsupported,
+    and prefers a server to rely on the version negotiated during initialization when the
+    header is absent. This server only ever negotiates SUPPORTED_PROTOCOL_VERSION.
+    """
+
     request = Request({"type": "http", "headers": []})
+
+    assert require_mcp_protocol_version(request) == SUPPORTED_PROTOCOL_VERSION
+    assert require_mcp_protocol_version(request, is_initialization=True) is None
+
+
+def test_present_but_unsupported_protocol_version_is_still_rejected() -> None:
+    request = Request({"type": "http", "headers": [(b"mcp-protocol-version", b"1900-01-01")]})
 
     with pytest.raises(ValidationFailed):
         require_mcp_protocol_version(request)
-    assert require_mcp_protocol_version(request, is_initialization=True) is None
+    with pytest.raises(ValidationFailed):
+        require_mcp_protocol_version(request, is_initialization=True)
 
 
 def test_initialize_negotiates_supported_and_latest_alternative_versions() -> None:

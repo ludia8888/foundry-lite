@@ -60,6 +60,9 @@ from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import 
 from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
     terminal_replay as _terminal_replay,
 )
+from foundry_lite.application.services.aip.fde_mcp_widget_confirmation import (
+    FdeMcpWidgetConfirmationLedger,
+)
 from foundry_lite.application.services.mcp_tool_results import tool_error_structured
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
@@ -70,11 +73,13 @@ class FdeMcpSecurityLedger:
     """Own durable replay conflicts and confirmation challenge transitions."""
 
     repository: AiRunRepository
+    widget_confirmation: FdeMcpWidgetConfirmationLedger
 
     def __init__(self, engine: TransactionManager, repository: AiRunRepository, policy: PolicyService) -> None:
         self.engine = engine
         self.repository = repository
         self.policy = policy
+        self.widget_confirmation = FdeMcpWidgetConfirmationLedger(engine, repository, policy)
 
     def replay(self, ctx: RequestContext, run_id: str, binding: FdeMcpRequestBinding) -> FdeMcpReplay | None:
         conflict_reason: str | None = None
@@ -126,8 +131,7 @@ class FdeMcpSecurityLedger:
         run_id: str,
         binding: FdeMcpRequestBinding,
     ) -> dict[str, object]:
-        now = _now()
-        expires_at = _expires_at(now)
+        expires_at = _expires_at(now := _now())
         challenge_id = _challenge_id(run_id)
         replay_result: tuple[dict[str, object] | None, str | None] | None = None
         with self.engine.begin() as conn:
@@ -137,6 +141,9 @@ class FdeMcpSecurityLedger:
                 record=_challenge_record(ctx, binding, challenge_id, now, expires_at),
             )
             if existing is None:
+                widget_token = self.widget_confirmation.issue_in_transaction(
+                    conn, ctx, binding, challenge_id, now, expires_at
+                )
                 self.repository.append_execution_event(
                     transaction=conn,
                     record=event_record(
@@ -148,7 +155,10 @@ class FdeMcpSecurityLedger:
                         now,
                     ),
                 )
-                return _challenge_payload(challenge_id, binding, expires_at)
+                challenge_result = _challenge_payload(challenge_id, binding, expires_at)
+                if widget_token is not None:
+                    challenge_result["_meta"] = {"widgetApprovalToken": widget_token}
+                return challenge_result
             ledger = self.repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=challenge_id)
             replay_result = self._replayed_challenge(conn, ctx, challenge_id, binding, ledger, now)
         payload, reason = replay_result or (None, "challenge_insert_conflict")
@@ -173,7 +183,21 @@ class FdeMcpSecurityLedger:
             events = [row for row in event_value if isinstance(row, Mapping)] if isinstance(event_value, list) else []
             self._append_conflict(conn, ctx, challenge_id, events, reason, binding)
             return None, reason
-        return _existing_challenge_payload(ledger, challenge_id, binding), None
+        payload = _existing_challenge_payload(ledger, challenge_id, binding)
+        run = ledger.get("run")
+        if isinstance(run, Mapping) and run.get("status") == "succeeded":
+            recovered = self.widget_confirmation.recover_receipt_in_transaction(
+                conn, ctx, ledger, binding, challenge_id, now
+            )
+            if recovered is not None:
+                payload["_meta"] = {"confirmationReceipt": recovered[0]}
+            return payload, None
+        widget_token = self.widget_confirmation.rotate_in_transaction(
+            conn, ctx, binding, challenge_id, ledger, now, _expires_at(now)
+        )
+        if widget_token is not None:
+            payload["_meta"] = {"widgetApprovalToken": widget_token}
+        return payload, None
 
     def approve(self, ctx: RequestContext, application_id: str, challenge_id: str) -> dict[str, object]:
         _require_human_control_principal(ctx)
@@ -187,6 +211,7 @@ class FdeMcpSecurityLedger:
             self.policy.require(ctx, binding.required_permission)
             if ledger is not None and ledger["run"].get("status") == "succeeded":
                 return self._approved_receipt_response(conn, ctx, ledger, binding, now)
+            self._revoke_widget_token_for_control(conn, ctx, ledger, now)
             updated = self.repository.update_execution_run_status(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -213,6 +238,52 @@ class FdeMcpSecurityLedger:
             "confirmationReceipt": receipt_id,
             "expiresAt": expires_at,
         }
+
+    def _revoke_widget_token_for_control(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ledger: Mapping[str, object] | None,
+        now: str,
+    ) -> None:
+        if ledger is not None:
+            self.widget_confirmation.revoke_active_in_transaction(conn, ctx, ledger, now, "human_control_approval")
+
+    def approve_widget(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+        challenge_id: str,
+        widget_approval_token: str,
+        origin: str | None,
+    ) -> dict[str, object]:
+        return self.widget_confirmation.approve(
+            ctx,
+            application_id,
+            session_id,
+            challenge_id,
+            widget_approval_token,
+            origin,
+        )
+
+    def is_widget_approval_recovery(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+        challenge_id: str,
+        widget_approval_token: str,
+        origin: str | None,
+    ) -> bool:
+        return self.widget_confirmation.is_recovery(
+            ctx,
+            application_id,
+            session_id,
+            challenge_id,
+            widget_approval_token,
+            origin,
+        )
 
     def _approved_receipt_response(
         self,

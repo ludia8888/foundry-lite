@@ -74,6 +74,7 @@ class LocalOAuthTokenIssuer:
             "scope": " ".join(claims["scopes"]),
             "sid": claims["session_id"],
             "foundry_lite_session_id": claims["session_id"],
+            "gty": "authorization_code",
             "jti": f"osdk_access_{uuid.uuid4().hex}",
         }
         token = jwt.encode(payload, self.private_key, algorithm="RS256", headers={"kid": self.key_id})

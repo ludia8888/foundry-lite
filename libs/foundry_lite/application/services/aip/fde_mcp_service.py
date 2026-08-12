@@ -18,7 +18,6 @@ from foundry_lite.application.services.aip.fde_mcp_contract import (
     FdeOntologyToolError,
     FdePlatformToolError,
     ToolSpec,
-    hash_json,
     is_scope_allowed,
     tool_error_result,
     validate_outer_shape,
@@ -66,6 +65,9 @@ from foundry_lite.application.services.aip.fde_mcp_contract import (
     validated_outer_input as _validated_outer_input,
 )
 from foundry_lite.application.services.aip.fde_mcp_discovery import (
+    activate_tools as _activate_tools,
+)
+from foundry_lite.application.services.aip.fde_mcp_discovery import (
     allowed_modes as _allowed_modes,
 )
 from foundry_lite.application.services.aip.fde_mcp_discovery import (
@@ -89,7 +91,6 @@ from foundry_lite.application.services.aip.fde_mcp_discovery import (
 from foundry_lite.application.services.aip.fde_mcp_run_ledger import FdeMcpRunLedger
 from foundry_lite.application.services.aip.fde_mcp_security import FdeMcpSecurityLedger
 from foundry_lite.application.services.aip.fde_mcp_sessions import LAZY_DISCOVERY_MARKER, FdeMcpSessionLedger
-from foundry_lite.application.services.aip.fde_mcp_sessions import activation_record as _activation_record
 from foundry_lite.application.services.aip.fde_mcp_types import (
     FdeMcpAccessSessionValidator,
     FdeMcpApplicationReader,
@@ -195,6 +196,29 @@ class FdeMcpGateway:
         if not isinstance(application, Mapping) or application.get("status") != "active":
             raise PermissionDenied("Builder MCP application is not active")
         return self.security_ledger.approve(ctx, application_id, challenge_id)
+
+    def approve_widget_confirmation(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+        challenge_id: str,
+        widget_approval_token: str,
+        origin: str | None,
+    ) -> Mapping[str, object]:
+        self._authorized_application_bundle(ctx, application_id)
+        self.session_ledger.require_active(ctx, application_id, session_id)
+        is_recovery = self.security_ledger.is_widget_approval_recovery(
+            ctx, application_id, session_id, challenge_id, widget_approval_token, origin
+        )
+        if not is_recovery:
+            try:
+                self.rate_limits.consume_tool(ctx, plane="builder", application_id=application_id)
+            except RateLimited as exc:
+                return tool_error_result(exc, request_id=ctx.request_id)
+        return self.security_ledger.approve_widget(
+            ctx, application_id, session_id, challenge_id, widget_approval_token, origin
+        )
 
     def list_tools(
         self,
@@ -350,53 +374,21 @@ class FdeMcpGateway:
         claimed = self._claim_run(ctx, request, binding, run_id, catalog)
         if claimed is not None:
             return claimed
-        output = self._activate_tools(ctx, request, query, matches)
+        output = _activate_tools(
+            self.engine,
+            self.osdk_application_repository,
+            self.session_ledger,
+            ctx,
+            request,
+            query,
+            matches,
+        )
         record = _search_ledger(ctx, request, run_id, output)
         self.run_ledger.complete(ctx, run_id, record)
         self.session_ledger.record_tool_completed(
             ctx, request.application_id, request.session_id, request.tool_id, run_id
         )
         return _result_payload(run_id, record.id, output, is_replayed=False)
-
-    def _activate_tools(
-        self,
-        ctx: RequestContext,
-        request: FdeMcpToolCall,
-        query: str,
-        matches: tuple[tuple[ToolSpec, int], ...],
-    ) -> dict[str, object]:
-        query_hash = hash_json({"mode": request.mode, "query": query.casefold()})
-        activated: list[dict[str, object]] = []
-        has_new_activation = False
-        with self.engine.begin() as conn:
-            for tool, score in matches:
-                is_new = self.osdk_application_repository.activate_mcp_tool(
-                    transaction=conn,
-                    record=_activation_record(
-                        ctx,
-                        request.application_id,
-                        request.session_id,
-                        tool.tool_id,
-                        query_hash,
-                    ),
-                )
-                has_new_activation = has_new_activation or is_new
-                activated.append(
-                    {"toolId": tool.tool_id, "description": tool.description, "score": score, "isNew": is_new}
-                )
-        if has_new_activation:
-            self.session_ledger.append_event(
-                ctx,
-                request.application_id,
-                request.session_id,
-                "notifications/tools/list_changed",
-                {"queryHash": query_hash},
-            )
-        return {
-            "queryHash": query_hash,
-            "activatedTools": activated,
-            "toolsListChanged": any(item["isNew"] for item in activated),
-        }
 
     def _activated_tool_ids(self, ctx: RequestContext, application_id: str, session_id: str) -> set[str]:
         return self.session_ledger.activated_tool_ids(ctx, application_id, session_id)

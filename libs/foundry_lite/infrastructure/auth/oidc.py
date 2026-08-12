@@ -7,7 +7,8 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final, cast
+from hashlib import sha256
+from typing import Any, Final, Literal, cast
 
 import jwt
 from jwt import PyJWTError
@@ -19,14 +20,21 @@ from foundry_lite.domain.errors import PermissionDenied
 
 __all__ = [
     "AUTHORIZATION_HEADER",
+    "OIDC_ALLOWED_CLIENT_IDS_JSON_ENV",
     "OIDC_AUDIENCE_ENV",
+    "OIDC_CLIENT_ID_CLAIM_ENV",
     "OIDC_DISCOVERY_JSON_ENV",
+    "OIDC_GRANT_TYPE_CLAIM_ENV",
+    "OIDC_GRANT_TYPE_VALUE_ENV",
+    "OIDC_HUMAN_GRANT_CLAIM_ENV",
+    "OIDC_HUMAN_GRANT_VALUE_ENV",
     "OIDC_ISSUER_ENV",
     "OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV",
     "OIDC_JWKS_JSON_ENV",
     "OIDC_RETIRED_KEY_GRACE_SECONDS_ENV",
     "OIDC_REVOKED_JTIS_JSON_ENV",
     "OIDC_ROLES_CLAIM_ENV",
+    "OIDC_SESSION_CLAIM_ENV",
     "OIDC_OSDK_APP_CLAIM_ENV",
     "OIDC_SCOPE_CLAIM_ENV",
     "OIDC_SERVICE_ACCOUNT_CLAIM_ENV",
@@ -39,14 +47,21 @@ __all__ = [
 
 AUTHORIZATION_HEADER: Final = "authorization"
 OIDC_DISCOVERY_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_DISCOVERY_JSON"
+OIDC_GRANT_TYPE_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_GRANT_TYPE_CLAIM"
+OIDC_GRANT_TYPE_VALUE_ENV: Final = "FOUNDRY_LITE_OIDC_GRANT_TYPE_VALUE"
+OIDC_HUMAN_GRANT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_HUMAN_GRANT_CLAIM"
+OIDC_HUMAN_GRANT_VALUE_ENV: Final = "FOUNDRY_LITE_OIDC_HUMAN_GRANT_VALUE"
 OIDC_ISSUER_ENV: Final = "FOUNDRY_LITE_OIDC_ISSUER"
 OIDC_AUDIENCE_ENV: Final = "FOUNDRY_LITE_OIDC_AUDIENCE"
+OIDC_ALLOWED_CLIENT_IDS_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_ALLOWED_CLIENT_IDS_JSON"
+OIDC_CLIENT_ID_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_CLIENT_ID_CLAIM"
 OIDC_JWKS_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_JWKS_JSON"
 OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV: Final = "FOUNDRY_LITE_OIDC_JWKS_REFRESH_INTERVAL_SECONDS"
 OIDC_RETIRED_KEY_GRACE_SECONDS_ENV: Final = "FOUNDRY_LITE_OIDC_RETIRED_KEY_GRACE_SECONDS"
 OIDC_REVOKED_JTIS_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_REVOKED_JTIS_JSON"
 OIDC_TENANT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_TENANT_CLAIM"
 OIDC_ROLES_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_ROLES_CLAIM"
+OIDC_SESSION_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SESSION_CLAIM"
 OIDC_SERVICE_ACCOUNT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SERVICE_ACCOUNT_CLAIM"
 OIDC_OSDK_APP_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_OSDK_APP_CLAIM"
 OIDC_SCOPE_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SCOPE_CLAIM"
@@ -55,6 +70,7 @@ OIDC_USER_ATTRIBUTES_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_USER_ATTRIBUTES_CLAIM
 _DEFAULT_ALGORITHM: Final = "RS256"
 _DEFAULT_TENANT_CLAIM: Final = "tenant_id"
 _DEFAULT_ROLES_CLAIM: Final = "roles"
+_DEFAULT_CLIENT_ID_CLAIM: Final = "client_id"
 _DEFAULT_SERVICE_ACCOUNT_CLAIM: Final = "client_id"
 _DEFAULT_OSDK_APP_CLAIM: Final = "osdk_app_id"
 _DEFAULT_SCOPE_CLAIM: Final = "scope"
@@ -84,10 +100,18 @@ class JwtOidcAuthConfig:
     jwks: Mapping[str, object]
     tenant_claim: str = _DEFAULT_TENANT_CLAIM
     roles_claim: str = _DEFAULT_ROLES_CLAIM
+    client_id_claim: str = _DEFAULT_CLIENT_ID_CLAIM
     service_account_claim: str = _DEFAULT_SERVICE_ACCOUNT_CLAIM
     osdk_app_claim: str = _DEFAULT_OSDK_APP_CLAIM
     scope_claim: str = _DEFAULT_SCOPE_CLAIM
     user_attributes_claim: str = _DEFAULT_USER_ATTRIBUTES_CLAIM
+    session_claim: str = _OSDK_SESSION_CLAIM
+    oauth_session_authority: Literal["local", "issuer"] = "local"
+    human_grant_claim: str | None = None
+    human_grant_value: str | None = None
+    grant_type_claim: str | None = None
+    grant_type_value: str | None = None
+    allowed_client_ids: frozenset[str] = field(default_factory=frozenset)
     revoked_token_ids: frozenset[str] = field(default_factory=frozenset)
     algorithm: str = _DEFAULT_ALGORITHM
     leeway_seconds: int = 0
@@ -149,14 +173,28 @@ class JwtOidcAuthProvider:
         if is_exact_audience and payload.get("aud") != audience:
             raise _permission_denied(self.profile_name, "invalid_token", "ExactAudienceRequired")
         _reject_revoked_token(payload, self.config.revoked_token_ids, self.profile_name)
+        actor_user_id = _actor_user_id(payload, self.config.service_account_claim, self.profile_name)
+        client_id = _optional_payload_string(payload, self.config.client_id_claim)
+        _require_allowed_client_id(self.config.allowed_client_ids, client_id, self.profile_name)
+        raw_session_id = _optional_payload_string(payload, self.config.session_claim)
+        oauth_session_id = _oauth_session_id(self.config, client_id, raw_session_id)
+        oauth_session_hash = _oauth_session_hash(self.config, client_id, raw_session_id)
         return Principal(
             tenant_id=_required_payload_string(payload, self.config.tenant_claim, self.profile_name),
-            actor_user_id=_actor_user_id(payload, self.config.service_account_claim, self.profile_name),
+            actor_user_id=actor_user_id,
             roles=_roles_from_payload(payload, self.config.roles_claim, self.profile_name),
             application_id=_optional_payload_string(payload, self.config.osdk_app_claim),
-            client_id=_optional_payload_string(payload, self.config.service_account_claim),
+            client_id=client_id,
             token_scopes=_scopes_from_payload(payload, self.config.scope_claim),
-            oauth_session_id=_optional_payload_string(payload, _OSDK_SESSION_CLAIM),
+            oauth_session_id=oauth_session_id,
+            oauth_session_hash=oauth_session_hash,
+            oauth_session_authority=self.config.oauth_session_authority if oauth_session_id else None,
+            authorization_server_issuer=self.config.issuer,
+            oauth_grant_type=_oauth_grant_type(self.config, payload),
+            oauth_resource=audience if is_exact_audience else None,
+            oauth_token_issued_at=_numeric_date(payload, "iat", self.profile_name) if is_exact_audience else None,
+            oauth_token_expires_at=_numeric_date(payload, "exp", self.profile_name) if is_exact_audience else None,
+            is_human_oauth=_is_human_oauth(self.config, payload, actor_user_id, raw_session_id),
             user_attributes=_user_attributes_from_payload(
                 payload,
                 self.config.user_attributes_claim,
@@ -250,12 +288,15 @@ def _oidc_config_from_env(source: Mapping[str, str]) -> JwtOidcAuthConfig:
     )
     audience = _required_oidc_value(_env_value(source, OIDC_AUDIENCE_ENV), OIDC_AUDIENCE_ENV)
     jwks = _json_object_from_env(source, OIDC_JWKS_JSON_ENV)
+    human_grant_claim, human_grant_value = _human_grant_pair(source)
+    grant_type_claim, grant_type_value = _grant_type_pair(source)
     return JwtOidcAuthConfig(
         issuer=issuer,
         audience=audience,
         jwks=jwks,
         tenant_claim=_oidc_claim(source, OIDC_TENANT_CLAIM_ENV, _DEFAULT_TENANT_CLAIM),
         roles_claim=_oidc_claim(source, OIDC_ROLES_CLAIM_ENV, _DEFAULT_ROLES_CLAIM),
+        client_id_claim=_oidc_claim(source, OIDC_CLIENT_ID_CLAIM_ENV, _DEFAULT_CLIENT_ID_CLAIM),
         service_account_claim=_oidc_claim(source, OIDC_SERVICE_ACCOUNT_CLAIM_ENV, _DEFAULT_SERVICE_ACCOUNT_CLAIM),
         osdk_app_claim=_oidc_claim(source, OIDC_OSDK_APP_CLAIM_ENV, _DEFAULT_OSDK_APP_CLAIM),
         scope_claim=_oidc_claim(source, OIDC_SCOPE_CLAIM_ENV, _DEFAULT_SCOPE_CLAIM),
@@ -264,6 +305,13 @@ def _oidc_config_from_env(source: Mapping[str, str]) -> JwtOidcAuthConfig:
             OIDC_USER_ATTRIBUTES_CLAIM_ENV,
             _DEFAULT_USER_ATTRIBUTES_CLAIM,
         ),
+        session_claim=_oidc_claim(source, OIDC_SESSION_CLAIM_ENV, _OSDK_SESSION_CLAIM),
+        oauth_session_authority="issuer",
+        human_grant_claim=human_grant_claim,
+        human_grant_value=human_grant_value,
+        grant_type_claim=grant_type_claim,
+        grant_type_value=grant_type_value,
+        allowed_client_ids=_json_string_set_from_env(source, OIDC_ALLOWED_CLIENT_IDS_JSON_ENV),
         revoked_token_ids=_json_string_set_from_env(source, OIDC_REVOKED_JTIS_JSON_ENV),
         jwks_refresh_interval_seconds=_int_from_env(source, OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV, 300),
         retired_key_grace_seconds=_int_from_env(source, OIDC_RETIRED_KEY_GRACE_SECONDS_ENV, 300),
@@ -274,6 +322,22 @@ def _required_oidc_value(value: str | None, setting: str) -> str:
     if value is None:
         raise ValueError(f"{setting} is required for JWT/OIDC auth")
     return value
+
+
+def _human_grant_pair(source: Mapping[str, str]) -> tuple[str | None, str | None]:
+    claim = _env_value(source, OIDC_HUMAN_GRANT_CLAIM_ENV)
+    value = _env_value(source, OIDC_HUMAN_GRANT_VALUE_ENV)
+    if (claim is None) != (value is None):
+        raise ValueError(f"{OIDC_HUMAN_GRANT_CLAIM_ENV} and {OIDC_HUMAN_GRANT_VALUE_ENV} must be configured together")
+    return claim, value
+
+
+def _grant_type_pair(source: Mapping[str, str]) -> tuple[str | None, str | None]:
+    claim = _env_value(source, OIDC_GRANT_TYPE_CLAIM_ENV)
+    value = _env_value(source, OIDC_GRANT_TYPE_VALUE_ENV)
+    if (claim is None) != (value is None):
+        raise ValueError(f"{OIDC_GRANT_TYPE_CLAIM_ENV} and {OIDC_GRANT_TYPE_VALUE_ENV} must be configured together")
+    return claim, value
 
 
 def _oidc_claim(source: Mapping[str, str], setting: str, default: str) -> str:
@@ -331,6 +395,75 @@ def _actor_user_id(payload: Mapping[str, object], service_account_claim: str, pr
     if service_account_id is None:
         raise _permission_denied(profile_name, "missing_sub_or_service_account")
     return f"{_SERVICE_ACCOUNT_ACTOR_PREFIX}{service_account_id}"
+
+
+def _oauth_session_id(
+    config: JwtOidcAuthConfig,
+    client_id: str | None,
+    raw_session_id: str | None,
+) -> str | None:
+    if raw_session_id is None:
+        return None
+    if config.oauth_session_authority == "local":
+        return raw_session_id
+    if client_id is None:
+        return None
+    material = "\x1f".join((config.issuer, client_id, raw_session_id))
+    return f"issuer-session:{sha256(material.encode()).hexdigest()}"
+
+
+def _oauth_session_hash(
+    config: JwtOidcAuthConfig,
+    client_id: str | None,
+    raw_session_id: str | None,
+) -> str | None:
+    if client_id is None or raw_session_id is None:
+        return None
+    material = "\x1f".join((config.issuer, client_id, raw_session_id))
+    return f"oauth-session:sha256:{sha256(material.encode()).hexdigest()}"
+
+
+def _oauth_grant_type(config: JwtOidcAuthConfig, payload: Mapping[str, object]) -> Literal["authorization_code"] | None:
+    claim = config.grant_type_claim
+    expected = config.grant_type_value
+    if claim and expected and payload.get(claim) == expected:
+        return "authorization_code"
+    return None
+
+
+def _numeric_date(payload: Mapping[str, object], claim: str, profile_name: str) -> int:
+    value = payload.get(claim)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _permission_denied(profile_name, "invalid_token", f"Invalid{claim.title()}")
+    return int(value)
+
+
+def _require_allowed_client_id(
+    allowed_client_ids: frozenset[str],
+    client_id: str | None,
+    profile_name: str,
+) -> None:
+    if allowed_client_ids and client_id not in allowed_client_ids:
+        raise _permission_denied(profile_name, "client_id_not_allowed")
+
+
+def _is_human_oauth(
+    config: JwtOidcAuthConfig,
+    payload: Mapping[str, object],
+    actor_user_id: str,
+    raw_session_id: str | None,
+) -> bool:
+    if raw_session_id is None or _is_machine_actor(actor_user_id):
+        return False
+    if config.oauth_session_authority == "local":
+        return True
+    claim = config.human_grant_claim
+    expected = config.human_grant_value
+    return bool(claim and expected and payload.get(claim) == expected)
+
+
+def _is_machine_actor(actor_user_id: str) -> bool:
+    return actor_user_id.startswith(("service-account:", "service-principal:"))
 
 
 def _reject_revoked_token(

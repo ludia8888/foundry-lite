@@ -192,9 +192,9 @@ class _FullSurfaceRunner:
     def assert_complete(self) -> None:
         expected = set(self.catalog)
         mutations = {tool_id for tool_id, spec in self.catalog.items() if spec.effect != "READ"}
-        assert len(expected) == 68
+        assert len(expected) == 69
         assert len(expected - mutations) == 49
-        assert len(mutations) == 19
+        assert len(mutations) == 20
         assert self.executed == expected
         assert self.challenged == mutations
         assert len(self.receipts) == len(mutations)
@@ -455,6 +455,22 @@ def _run_ontology_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         ("branch", "changeSummary", "validation", "diff"),
     )
     runner.call("ontology_editing", workspace, "ontology.branch.validate", {}, ("branch", "validation", "diff"))
+    # Rebase only means something once main has moved on, so advance the active Ontology first and
+    # then re-anchor the branch on it -- the stale-base path an author actually hits.
+    runner.foundry.ontology.apply_text(_surface_ontology_yaml_after_main_moved(), ctx=FDE_USER)
+    branch_id = workspace.removeprefix("ontology-branch:")
+    stranded = runner.foundry.ontology.get_branch(branch_id, ctx=FDE_USER)
+    assert stranded["baseStale"] is True
+    runner.call(
+        "ontology_editing",
+        workspace,
+        "ontology.branch.rebase",
+        {
+            "resolutions": [],
+            "expectedFingerprint": stranded["contentFingerprint"],
+        },
+        ("id", "baseVersionId", "rebasedAt"),
+    )
     runner.call(
         "ontology_editing",
         workspace,
@@ -813,14 +829,23 @@ def _initialize_params() -> dict[str, object]:
 def _advertised_tools(tools: object) -> dict[str, dict[str, object]]:
     assert isinstance(tools, list)
     advertised: dict[str, dict[str, object]] = {}
+    has_private_approval = False
     for raw_tool in tools:
         assert isinstance(raw_tool, Mapping)
         wire_name = raw_tool.get("name")
         input_schema = raw_tool.get("inputSchema")
         assert isinstance(wire_name, str) and isinstance(input_schema, Mapping)
+        if wire_name == "approve_builder_mutation":
+            metadata = raw_tool.get("_meta")
+            assert isinstance(metadata, Mapping)
+            assert metadata.get("openai/visibility") == "private"
+            assert metadata.get("ui") == {"visibility": ["app"]}
+            has_private_approval = True
+            continue
         canonical_id = "fde.tools.search" if wire_name == "search_tools" else wire_name
         assert canonical_id not in advertised
         advertised[canonical_id] = {"name": wire_name, "inputSchema": dict(input_schema)}
+    assert has_private_approval is True
     return advertised
 
 
@@ -894,6 +919,18 @@ class _SurfaceKafkaAdminClient:
     def list_topics(self, *, timeout: float) -> Any:
         assert timeout == 10.0
         return _SurfaceKafkaClusterMetadata()
+
+
+def _surface_ontology_yaml_after_main_moved() -> str:
+    """The active Ontology with one extra object type, which strands the open branch on an old base."""
+
+    extra = """  - apiName: SurfaceAudit
+    primaryKey: auditId
+    backing: {dataset: clean.mcp_surface_orders, mode: snapshot, primaryKeyColumns: [order_id]}
+    properties:
+      - {apiName: auditId, column: order_id, type: string, nullable: false}
+linkTypes:"""
+    return _surface_ontology_yaml().replace("linkTypes:", extra, 1)
 
 
 def _surface_ontology_yaml() -> str:

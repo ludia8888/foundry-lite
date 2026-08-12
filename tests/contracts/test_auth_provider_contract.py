@@ -19,11 +19,18 @@ from foundry_lite.infrastructure.auth import (
     HEADER_TENANT_KEY,
     HEADER_USER_ATTRIBUTES_KEY,
     HEADER_USER_KEY,
+    OIDC_ALLOWED_CLIENT_IDS_JSON_ENV,
     OIDC_AUDIENCE_ENV,
+    OIDC_CLIENT_ID_CLAIM_ENV,
     OIDC_DISCOVERY_JSON_ENV,
+    OIDC_GRANT_TYPE_CLAIM_ENV,
+    OIDC_GRANT_TYPE_VALUE_ENV,
+    OIDC_HUMAN_GRANT_CLAIM_ENV,
+    OIDC_HUMAN_GRANT_VALUE_ENV,
     OIDC_JWKS_JSON_ENV,
     OIDC_REVOKED_JTIS_JSON_ENV,
     OIDC_SERVICE_ACCOUNT_CLAIM_ENV,
+    OIDC_SESSION_CLAIM_ENV,
     DemoAuthProvider,
     HeaderTrustAuthProvider,
     JwtOidcAuthConfig,
@@ -143,7 +150,13 @@ def test_jwt_auth_provider_maps_verified_token_to_principal() -> None:
 
     principal = provider.authenticate({"Authorization": f"Bearer {token}"})
 
-    assert principal == Principal(tenant_id="tenant-A", actor_user_id="user-oidc", roles=("admin", "ops_manager"))
+    assert principal == Principal(
+        tenant_id="tenant-A",
+        actor_user_id="user-oidc",
+        roles=("admin", "ops_manager"),
+        authorization_server_issuer="https://issuer.example.test",
+        is_human_oauth=False,
+    )
 
 
 def test_jwt_auth_provider_extracts_application_claims() -> None:
@@ -187,6 +200,8 @@ def test_jwt_auth_provider_extracts_local_oauth_session_claims(tmp_path) -> None
             issuer=issuer.issuer,
             audience=issuer.audience,
             jwks=issuer.public_jwks(),
+            grant_type_claim="gty",
+            grant_type_value="authorization_code",
         )
     )
     token = issuer.issue_access_token(
@@ -202,7 +217,10 @@ def test_jwt_auth_provider_extracts_local_oauth_session_claims(tmp_path) -> None
         ttl_seconds=900,
     )
 
-    principal = provider.authenticate({"Authorization": f"Bearer {token['accessToken']}"})
+    principal = provider.authenticate_for_audience(
+        {"Authorization": f"Bearer {token['accessToken']}"},
+        issuer.audience,
+    )
 
     assert principal.tenant_id == "tenant-osdk"
     assert principal.actor_user_id == "user-osdk"
@@ -210,6 +228,114 @@ def test_jwt_auth_provider_extracts_local_oauth_session_claims(tmp_path) -> None
     assert principal.application_id == "osdk_app_orders"
     assert principal.client_id == "orders-web-client"
     assert principal.token_scopes == ("osdk:object:Order:read", "osdk:object:Order:subscribe")
+    assert principal.oauth_session_hash is not None
+    assert "session-1" not in principal.oauth_session_hash
+    assert principal.oauth_grant_type == "authorization_code"
+    assert principal.oauth_resource == issuer.audience
+    assert isinstance(principal.oauth_token_issued_at, int)
+    assert isinstance(principal.oauth_token_expires_at, int)
+
+
+def test_external_oidc_principal_uses_verified_human_grant_and_hashed_session_binding() -> None:
+    private_key, jwk = _rsa_key("kid-external-human")
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer="https://issuer.example.test",
+            audience="foundry-lite",
+            jwks={"keys": [jwk]},
+            client_id_claim="azp",
+            session_claim="sid",
+            oauth_session_authority="issuer",
+            human_grant_claim="gty",
+            human_grant_value="authorization_code",
+            grant_type_claim="gty",
+            grant_type_value="authorization_code",
+            allowed_client_ids=frozenset({"https://chatgpt.com/oauth/client.json"}),
+        )
+    )
+    token = _jwt_token(
+        private_key,
+        "kid-external-human",
+        extra_claims={
+            "azp": "https://chatgpt.com/oauth/client.json",
+            "sid": "raw-idp-session-must-not-leak",
+            "gty": "authorization_code",
+            "scope": "osdk:connector:governed_release:execute",
+        },
+    )
+
+    principal = provider.authenticate_for_audience(
+        {"Authorization": f"Bearer {token}"},
+        "foundry-lite",
+    )
+
+    assert principal.application_id is None
+    assert principal.client_id == "https://chatgpt.com/oauth/client.json"
+    assert principal.oauth_session_authority == "issuer"
+    assert principal.oauth_session_id is not None
+    assert principal.oauth_session_id.startswith("issuer-session:")
+    assert "raw-idp-session" not in principal.oauth_session_id
+    assert principal.oauth_session_hash is not None
+    assert "raw-idp-session" not in principal.oauth_session_hash
+    assert principal.authorization_server_issuer == "https://issuer.example.test"
+    assert principal.oauth_grant_type == "authorization_code"
+    assert principal.oauth_resource == "foundry-lite"
+    assert isinstance(principal.oauth_token_issued_at, int)
+    assert isinstance(principal.oauth_token_expires_at, int)
+    assert principal.is_human_oauth is True
+
+
+def test_external_oidc_rejects_a_token_from_an_unlisted_oauth_client() -> None:
+    private_key, jwk = _rsa_key("kid-external-wrong-client")
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer="https://issuer.example.test",
+            audience="foundry-lite",
+            jwks={"keys": [jwk]},
+            client_id_claim="azp",
+            allowed_client_ids=frozenset({"https://chatgpt.com/oauth/client.json"}),
+        )
+    )
+    token = _jwt_token(
+        private_key,
+        "kid-external-wrong-client",
+        extra_claims={"azp": "https://attacker.example.test/oauth/client.json"},
+    )
+
+    with pytest.raises(PermissionDenied, match="authentication failed") as error:
+        provider.authenticate({"Authorization": f"Bearer {token}"})
+
+    assert error.value.details["reason"] == "client_id_not_allowed"
+
+
+@pytest.mark.parametrize(
+    "extra_claims",
+    [
+        {"azp": "chatgpt-client", "sid": "session-1", "gty": "client_credentials"},
+        {"azp": "chatgpt-client", "gty": "authorization_code"},
+    ],
+)
+def test_external_oidc_principal_fails_human_evidence_closed(extra_claims: dict[str, object]) -> None:
+    private_key, jwk = _rsa_key("kid-external-non-human")
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer="https://issuer.example.test",
+            audience="foundry-lite",
+            jwks={"keys": [jwk]},
+            client_id_claim="azp",
+            session_claim="sid",
+            oauth_session_authority="issuer",
+            human_grant_claim="gty",
+            human_grant_value="authorization_code",
+            grant_type_claim="gty",
+            grant_type_value="authorization_code",
+        )
+    )
+    token = _jwt_token(private_key, "kid-external-non-human", extra_claims=extra_claims)
+
+    principal = provider.authenticate({"Authorization": f"Bearer {token}"})
+
+    assert principal.is_human_oauth is False
 
 
 def test_expired_or_wrong_audience_jwt_is_denied() -> None:
@@ -296,6 +422,35 @@ def test_oidc_profile_loads_discovery_and_jwks_from_env() -> None:
     assert provider.authenticate({"Authorization": f"Bearer {token}"}).tenant_id == "tenant-A"
 
 
+def test_oidc_profile_loads_external_mcp_client_session_and_human_grant_claims() -> None:
+    _private_key, jwk = _rsa_key("kid-external-env")
+    provider = auth_provider_from_env(
+        {
+            AUTH_PROFILE_ENV: "oidc",
+            OIDC_DISCOVERY_JSON_ENV: json.dumps({"issuer": "https://issuer.example.test"}),
+            OIDC_AUDIENCE_ENV: "foundry-lite",
+            OIDC_JWKS_JSON_ENV: json.dumps({"keys": [jwk]}),
+            OIDC_CLIENT_ID_CLAIM_ENV: "azp",
+            OIDC_SESSION_CLAIM_ENV: "sid",
+            OIDC_HUMAN_GRANT_CLAIM_ENV: "gty",
+            OIDC_HUMAN_GRANT_VALUE_ENV: "authorization_code",
+            OIDC_GRANT_TYPE_CLAIM_ENV: "gty",
+            OIDC_GRANT_TYPE_VALUE_ENV: "authorization_code",
+            OIDC_ALLOWED_CLIENT_IDS_JSON_ENV: '["https://chatgpt.com/oauth/client.json"]',
+        }
+    )
+
+    assert isinstance(provider, JwtOidcAuthProvider)
+    assert provider.config.client_id_claim == "azp"
+    assert provider.config.session_claim == "sid"
+    assert provider.config.oauth_session_authority == "issuer"
+    assert provider.config.human_grant_claim == "gty"
+    assert provider.config.human_grant_value == "authorization_code"
+    assert provider.config.grant_type_claim == "gty"
+    assert provider.config.grant_type_value == "authorization_code"
+    assert provider.config.allowed_client_ids == frozenset({"https://chatgpt.com/oauth/client.json"})
+
+
 def test_service_account_is_tenant_scoped() -> None:
     private_key, jwk = _rsa_key("kid-service")
     provider = _jwt_provider({"keys": [jwk]})
@@ -314,6 +469,8 @@ def test_service_account_is_tenant_scoped() -> None:
         actor_user_id="service-account:connector-sync",
         roles=("data_engineer",),
         client_id="connector-sync",
+        authorization_server_issuer="https://issuer.example.test",
+        is_human_oauth=False,
     )
 
     tenantless = _jwt_token(private_key, "kid-service", subject=None, client_id="connector-sync", tenant_id=None)

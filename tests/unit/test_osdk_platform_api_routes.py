@@ -12,6 +12,7 @@ import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services.osdk_oauth_session_support import _RATE_LIMIT_CAPACITY
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -172,7 +173,7 @@ def test_osdk_oauth_api_routes_rate_limit_returns_retryable_429(monkeypatch, tmp
         "scope": "osdk:object:Order:read",
     }
 
-    for _index in range(5):
+    for _index in range(_RATE_LIMIT_CAPACITY):
         assert client.get("/api/auth/osdk/oauth/authorize", params=params, headers=_admin_headers()).status_code == 200
     limited = client.get("/api/auth/osdk/oauth/authorize", params=params, headers=_admin_headers())
 

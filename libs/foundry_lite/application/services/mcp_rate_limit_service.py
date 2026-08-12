@@ -1,4 +1,4 @@
-"""Durable admission policy shared by Builder and Ontology MCP planes."""
+"""Durable admission policy shared by Builder, Ontology, and Release MCP planes."""
 
 from __future__ import annotations
 

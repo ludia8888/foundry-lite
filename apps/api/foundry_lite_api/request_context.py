@@ -68,6 +68,14 @@ def _principal_context(principal: Principal, request: Request | None, default_re
         client_id=principal.client_id,
         token_scopes=principal.token_scopes,
         oauth_session_id=principal.oauth_session_id,
+        oauth_session_hash=principal.oauth_session_hash,
+        oauth_session_authority=principal.oauth_session_authority,
+        authorization_server_issuer=principal.authorization_server_issuer,
+        oauth_grant_type=principal.oauth_grant_type,
+        oauth_resource=principal.oauth_resource,
+        oauth_token_issued_at=principal.oauth_token_issued_at,
+        oauth_token_expires_at=principal.oauth_token_expires_at,
+        is_human_oauth=principal.is_human_oauth,
         user_attributes=principal.user_attributes,
     )
 
@@ -86,6 +94,14 @@ def _websocket_ctx(websocket: WebSocket) -> RequestContext:
         client_id=principal.client_id,
         token_scopes=principal.token_scopes,
         oauth_session_id=principal.oauth_session_id,
+        oauth_session_hash=principal.oauth_session_hash,
+        oauth_session_authority=principal.oauth_session_authority,
+        authorization_server_issuer=principal.authorization_server_issuer,
+        oauth_grant_type=principal.oauth_grant_type,
+        oauth_resource=principal.oauth_resource,
+        oauth_token_issued_at=principal.oauth_token_issued_at,
+        oauth_token_expires_at=principal.oauth_token_expires_at,
+        is_human_oauth=principal.is_human_oauth,
         user_attributes=principal.user_attributes,
     )
 

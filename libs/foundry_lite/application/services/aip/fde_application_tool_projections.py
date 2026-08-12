@@ -10,7 +10,7 @@ from foundry_lite.domain.context import RequestContext
 
 
 class FdeLineageReader(Protocol):
-    def lineage_for_resource(
+    def catalog_lineage_for_resource(
         self,
         resource_id: str,
         *,
@@ -33,7 +33,7 @@ def lineage_graph(
         if current in visited or depth >= max_depth:
             continue
         visited.add(current)
-        for raw in service.lineage_for_resource(current, ctx=ctx):
+        for raw in service.catalog_lineage_for_resource(current, ctx=ctx):
             edge = _public_lineage_edge(raw)
             edge_id = str(edge["id"])
             edges[edge_id] = edge

@@ -12,7 +12,7 @@ from foundry_lite_api.mcp_envelope import JsonRpcEnvelope
 
 SUPPORTED_PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({SUPPORTED_PROTOCOL_VERSION})
-_REQUEST_METHODS = frozenset({"initialize", "ping", "tools/list", "tools/call"})
+_REQUEST_METHODS = frozenset({"initialize", "ping", "tools/list", "tools/call", "resources/list", "resources/read"})
 
 
 class McpMethodNotFound(FoundryLiteError):
@@ -44,16 +44,22 @@ class _McpInitializeParams(BaseModel):
 
 
 def require_mcp_protocol_version(request: Request, *, is_initialization: bool = False) -> str | None:
-    """Require the negotiated version after initialize; initialization itself has no header requirement."""
+    """Resolve the protocol version for one HTTP request, rejecting only unsupported values.
+
+    The 2025-06-18 transport says a client MUST send `MCP-Protocol-Version` after initialize,
+    but it also says a server that can identify the version another way -- "by relying on the
+    protocol version negotiated during initialization" -- SHOULD do that rather than fail, and
+    reserves the MUST-400 for a header that is present and unsupported. This server negotiates
+    exactly one version, so an established session's negotiated value is always
+    SUPPORTED_PROTOCOL_VERSION; resolving a missing header to it is that negotiated-version
+    path, not an optimistic guess at whatever release is newest. Rejecting instead cost a
+    wasted round trip against real hosts: ChatGPT sends its first post-initialize call without
+    the header, takes the 400, then retries with it.
+    """
 
     received = request.headers.get("MCP-Protocol-Version")
     if received is None:
-        if is_initialization:
-            return None
-        raise ValidationFailed(
-            "MCP-Protocol-Version header is required after initialize",
-            details={"supportedProtocolVersions": sorted(SUPPORTED_PROTOCOL_VERSIONS)},
-        )
+        return None if is_initialization else SUPPORTED_PROTOCOL_VERSION
     if received in SUPPORTED_PROTOCOL_VERSIONS:
         return received
     raise ValidationFailed(

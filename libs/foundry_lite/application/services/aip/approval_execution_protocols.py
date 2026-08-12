@@ -23,6 +23,19 @@ class ActionRunner(Protocol):
         ctx: RequestContext | None = None,
     ) -> Mapping[str, object]: ...
 
+    def start_action_run(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        wait_seconds: int,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]: ...
+
 
 class ActionPlanner(Protocol):
     def plan_action(

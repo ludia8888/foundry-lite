@@ -14,6 +14,8 @@ from uuid import uuid4
 import jwt
 from fastapi.testclient import TestClient
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
+from foundry_lite.application.services.aip.fde_mcp_widget_confirmation import widget_token_id
+from foundry_lite.application.services.mcp_rate_limit_service import McpRateLimitConfig
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -21,7 +23,7 @@ from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider, JwtOidcAut
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
 from foundry_lite_api.routers import builder_mcp as builder_mcp_router
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 FDE_USER = RequestContext(
     tenant_id="tenant-demo",
@@ -265,7 +267,10 @@ def test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session(fou
 
     assert {tool["name"] for tool in pure_read["tools"]} == {"search_tools"}
     assert activations_before_negotiation == []
-    assert {tool["name"] for tool in before.json()["result"]["tools"]} == {"search_tools"}
+    assert {tool["name"] for tool in before.json()["result"]["tools"]} == {
+        "search_tools",
+        "approve_builder_mutation",
+    }
     activated = searched.json()["result"]["structuredContent"]["activatedTools"]
     assert "platform.docs.search" in {tool["toolId"] for tool in activated}
     assert "ontology.branch.apply_patch" not in {tool["toolId"] for tool in activated}
@@ -278,8 +283,12 @@ def test_builder_mcp_lazy_search_activates_only_scoped_tools_for_one_session(fou
         "search_tools",
         "search_foundry_documentation",
         "platform.docs.search",
+        "approve_builder_mutation",
     }
-    assert {tool["name"] for tool in new_session.json()["result"]["tools"]} == {"search_tools"}
+    assert {tool["name"] for tool in new_session.json()["result"]["tools"]} == {
+        "search_tools",
+        "approve_builder_mutation",
+    }
     assert "notifications/tools/list_changed" in events.text
 
 
@@ -573,6 +582,33 @@ def test_builder_mcp_replay_schema_lazy_and_legacy_header_fail_closed(foundry: A
     assert "confirmationReceipt" not in schemas["search_foundry_projects"]["properties"]
 
 
+def test_builder_mcp_rejects_foreign_session_namespaces_on_every_transport_method(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    path = f"/mcp/builder/{app_id}"
+
+    for session_id in ("ontology-mcp-foreign-0001", "mcp-release-foreign-0001"):
+        foreign_headers = {**headers, "Mcp-Session-Id": session_id}
+        responses = (
+            client.post(
+                path,
+                headers=foreign_headers,
+                json={"jsonrpc": "2.0", "id": session_id, "method": "tools/list", "params": {}},
+            ),
+            client.get(path, headers=foreign_headers),
+            client.delete(path, headers=foreign_headers),
+        )
+
+        assert {response.status_code for response in responses} == {400}
+        assert {response.json()["detail"]["details"]["reason"] for response in responses} == {
+            "builder_session_namespace_required"
+        }
+
+
 def test_builder_mcp_durable_session_protocol_and_sse_contract(foundry: Any, monkeypatch: Any) -> None:
     app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
@@ -694,7 +730,10 @@ def test_builder_mcp_durable_session_protocol_and_sse_contract(foundry: Any, mon
     assert ping.json() == {"jsonrpc": "2.0", "id": "ping", "result": {}}
     assert rejected_notification.status_code == 400
     assert "jsonrpc" not in rejected_notification.text
-    assert initialized.json()["result"]["capabilities"] == {"tools": {"listChanged": True}}
+    assert initialized.json()["result"]["capabilities"] == {
+        "tools": {"listChanged": True},
+        "resources": {"subscribe": False, "listChanged": False},
+    }
     assert concurrent_stream.status_code == 409
     assert concurrent_stream.json()["detail"]["code"] == "CONFLICT"
     assert concurrent_stream.json()["detail"]["details"]["resource"] == "mcp_session_stream"
@@ -757,7 +796,7 @@ def test_builder_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(foundry: An
         headers=session_headers,
         json={"jsonrpc": "2.0", "id": None, "method": "notifications/initialized", "params": {}},
     )
-    unknown_request = client.post(
+    resource_list = client.post(
         path,
         headers=session_headers,
         json={"jsonrpc": "2.0", "id": "unknown", "method": "resources/list", "params": {}},
@@ -803,12 +842,15 @@ def test_builder_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(foundry: An
     assert "Mcp-Session-Id" not in reinitialized.headers
     assert initialized.status_code == 202 and initialized.content == b""
     assert initialized_with_null_id.json()["error"]["code"] == -32600
-    assert unknown_request.json()["error"]["code"] == -32601
+    assert resource_list.json()["result"]["resources"][0]["uri"] == ("ui://foundry-lite/builder-confirmation-v1.html")
     assert unknown_notification.status_code == 400 and unknown_notification.content == b""
     assert invalid_cursor.json()["error"]["code"] == -32602
     assert "nextCursor" not in complete_list.json()["result"]
     assert len(complete_list.json()["result"]["tools"]) > 0
-    assert missing_protocol.status_code == 400
+    # A missing header resolves to the version this session negotiated; only a header that is
+    # present and unsupported is a 400.
+    assert missing_protocol.status_code == 200
+    assert missing_protocol.json()["result"] == {}
     assert overlong_session.status_code == 400
     assert overlong_session.json()["detail"]["details"] == {"resource": "mcp_session"}
 
@@ -904,6 +946,312 @@ def test_builder_mcp_confirmation_receipt_is_human_idempotent_and_one_time(found
     assert len(_tool_rows(foundry, completed["result"]["aiRunId"])) == 1
     assert events.count("notifications/foundry-lite/approval_required") == 1
     assert events.count("notifications/foundry-lite/tool_completed") == 1
+
+
+def test_builder_mcp_widget_approves_and_retries_without_the_raw_control_api(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    origin = "http://localhost:4173"
+    session_headers = _builder_session_headers(client, app_id, {**headers, "Origin": origin})
+    path = f"/mcp/builder/{app_id}"
+    listed = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "widget-list", "method": "tools/list", "params": {}},
+    ).json()["result"]
+    tools = {tool["name"]: tool for tool in listed["tools"]}
+    mutation = tools["create_foundry_project"]
+    approval_tool = tools["approve_builder_mutation"]
+    resources = client.post(
+        path,
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "widget-resources", "method": "resources/list", "params": {}},
+    ).json()["result"]
+    resource_uri = resources["resources"][0]["uri"]
+    resource = client.post(
+        path,
+        headers=session_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "widget-resource",
+            "method": "resources/read",
+            "params": {"uri": resource_uri},
+        },
+    ).json()["result"]
+    inactive_headers = {**session_headers, "Mcp-Session-Id": "mcp-builder-missing-widget-session"}
+    inactive_resources = client.post(
+        path,
+        headers=inactive_headers,
+        json={"jsonrpc": "2.0", "id": "inactive-resources", "method": "resources/list", "params": {}},
+    )
+    inactive_resource_read = client.post(
+        path,
+        headers=inactive_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "inactive-resource-read",
+            "method": "resources/read",
+            "params": {"uri": resource_uri},
+        },
+    )
+    payload = _mcp_tool_call_payload(
+        "widget-project",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "GPT Complete", "idempotencyKey": "gpt-complete-project"},
+    )
+    challenged = client.post(path, headers=session_headers, json=payload).json()["result"]
+    replayed = client.post(path, headers=session_headers, json=payload).json()["result"]
+    challenge_id = str(challenged["structuredContent"]["challengeId"])
+    first_token = str(challenged["_meta"]["widgetApprovalToken"])
+    active_token = str(replayed["_meta"]["widgetApprovalToken"])
+    with foundry.engine.begin() as conn:
+        security_rows = [
+            dict(row)
+            for row in conn.execute(
+                select(db.ai_execution_runs).where(
+                    db.ai_execution_runs.c.id.in_(
+                        (challenge_id, widget_token_id(first_token), widget_token_id(active_token))
+                    )
+                )
+            ).mappings()
+        ]
+    serialized_security_rows = json.dumps(security_rows, sort_keys=True, default=str)
+
+    assert mutation["_meta"]["openai/outputTemplate"] == resource_uri
+    assert mutation["_meta"]["ui"]["resourceUri"] == resource_uri
+    assert approval_tool["_meta"]["ui"]["visibility"] == ["app"]
+    assert approval_tool["_meta"]["openai/visibility"] == "private"
+    assert "확인하고 변경 실행" in resource["contents"][0]["text"]
+    assert inactive_resources.status_code == inactive_resource_read.status_code == 404
+    assert inactive_resources.json()["detail"]["details"]["resource"] == "mcp_session"
+    assert inactive_resource_read.json()["detail"]["details"]["resource"] == "mcp_session"
+    assert first_token != active_token and replayed["isReplayed"] is True
+    assert first_token not in json.dumps(challenged["structuredContent"])
+    assert first_token not in json.dumps(challenged["content"])
+    assert {row["id"] for row in security_rows} == {
+        challenge_id,
+        widget_token_id(first_token),
+        widget_token_id(active_token),
+    }
+    assert first_token not in serialized_security_rows and active_token not in serialized_security_rows
+
+    def approve(token: str, request_id: str, selected_headers: dict[str, str]) -> dict[str, Any]:
+        return client.post(
+            path,
+            headers=selected_headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": "tools/call",
+                "params": {
+                    "name": "approve_builder_mutation",
+                    "arguments": {"challengeId": challenge_id, "widgetApprovalToken": token},
+                },
+            },
+        ).json()
+
+    replaced = approve(first_token, "widget-replaced", session_headers)
+    wrong_token = approve("wrong-widget-token", "widget-wrong", session_headers)
+    wrong_origin = approve(
+        active_token,
+        "widget-origin",
+        {**session_headers, "Origin": "http://127.0.0.1:4173"},
+    )
+    # Approval leaves the originating MCP session by design: the host renders the card in its
+    # own frame, the way Foundry surfaces an agent proposal on a separate review surface. The
+    # boundary is the approving identity, not the transport session.
+    other_session = _builder_session_headers(client, app_id, {**headers, "Origin": origin})
+    approved_off_session = approve(active_token, "widget-session", other_session)
+    approved = approve(active_token, "widget-approved", session_headers)["result"]
+    receipt = str(approved["_meta"]["confirmationReceipt"])
+    replay_approval = approve(active_token, "widget-recovered", session_headers)["result"]
+    recovered_original = client.post(path, headers=session_headers, json=payload).json()["result"]
+    second_oauth = _builder_oauth_token(
+        foundry,
+        app_id=app_id,
+        client_id="builder-user-governance",
+        redirect_uri="https://chat.example.test/oauth/governance",
+        scopes=("osdk:connector:fde_governance:execute",),
+        verifier="builder-widget-second-oauth-verifier",
+        resource=f"http://testserver/mcp/builder/{app_id}",
+        ctx=FDE_USER,
+    )
+    cross_oauth_payload = json.loads(json.dumps(payload))
+    cross_oauth_payload["params"]["arguments"]["confirmationReceipt"] = receipt
+    cross_oauth = client.post(
+        path,
+        headers={
+            **session_headers,
+            "Authorization": f"Bearer {second_oauth['accessToken']}",
+            "X-Request-ID": "widget-cross-oauth",
+        },
+        json=cross_oauth_payload,
+    ).json()
+    payload["params"]["arguments"]["confirmationReceipt"] = receipt
+    completed = client.post(path, headers=session_headers, json=payload).json()["result"]
+    consumed_approval = approve(active_token, "widget-consumed", session_headers)
+    original_without_receipt = json.loads(json.dumps(payload))
+    original_without_receipt["params"]["arguments"].pop("confirmationReceipt")
+    consumed_original = client.post(path, headers=session_headers, json=original_without_receipt).json()
+
+    assert {body["error"]["data"]["reason"] for body in (replaced, wrong_token, wrong_origin)} == {
+        "widget_token_binding_mismatch"
+    }
+    assert approved_off_session["result"]["structuredContent"]["status"] == "approved"
+    assert replay_approval["_meta"]["confirmationReceipt"] == receipt
+    assert recovered_original["_meta"]["confirmationReceipt"] == receipt
+    assert receipt not in json.dumps(recovered_original["structuredContent"])
+    assert receipt not in json.dumps(recovered_original["content"])
+    # A second OAuth identity still cannot spend this approval: it never owned the MCP session
+    # the receipt was issued under, so it is refused before the receipt is even examined.
+    assert cross_oauth["detail"]["code"] == "NOT_FOUND"
+    assert cross_oauth["detail"]["details"]["resource"] == "mcp_session"
+    assert receipt not in json.dumps(approved["structuredContent"])
+    assert receipt not in json.dumps(approved["content"])
+    assert completed["structuredContent"]["project"]["displayName"] == "GPT Complete"
+    assert consumed_approval["error"]["data"]["reason"] == "receipt_already_consumed"
+    assert consumed_original["result"]["isReplayed"] is True
+    assert consumed_original["result"]["structuredContent"]["project"]["displayName"] == "GPT Complete"
+
+
+def test_builder_mcp_widget_rejects_missing_and_expired_tokens(foundry: Any, monkeypatch: Any) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _builder_session_headers(client, app_id, headers)
+    path = f"/mcp/builder/{app_id}"
+    payload = _mcp_tool_call_payload(
+        "widget-expired",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Expired", "idempotencyKey": "expired-widget-project"},
+    )
+    challenged = client.post(path, headers=session_headers, json=payload).json()["result"]
+    challenge_id = str(challenged["structuredContent"]["challengeId"])
+    token = str(challenged["_meta"]["widgetApprovalToken"])
+    with foundry.engine.begin() as conn:
+        token_run = conn.execute(
+            select(db.ai_execution_runs.c.budget_json).where(db.ai_execution_runs.c.id == widget_token_id(token))
+        ).scalar_one()
+        conn.execute(
+            update(db.ai_execution_runs)
+            .where(db.ai_execution_runs.c.id == widget_token_id(token))
+            .values(budget_json={**token_run, "expiresAt": "2000-01-01T00:00:00+00:00"})
+        )
+    missing = client.post(
+        path,
+        headers=session_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "widget-missing",
+            "method": "tools/call",
+            "params": {"name": "approve_builder_mutation", "arguments": {"challengeId": challenge_id}},
+        },
+    ).json()
+    expired = client.post(
+        path,
+        headers=session_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "widget-expired-token",
+            "method": "tools/call",
+            "params": {
+                "name": "approve_builder_mutation",
+                "arguments": {"challengeId": challenge_id, "widgetApprovalToken": token},
+            },
+        },
+    ).json()
+
+    assert missing["error"]["data"]["type"] == "VALIDATION_FAILED"
+    assert expired["error"]["data"]["reason"] == "widget_token_expired"
+
+
+def test_builder_widget_recovery_and_exact_mutation_replay_do_not_reconsume_tool_quota(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    foundry._services.mcp_rate_limits.config = McpRateLimitConfig(
+        endpoint_limit=50,
+        tool_limit=3,
+        window_seconds=60,
+    )
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _builder_session_headers(client, app_id, headers)
+    path = f"/mcp/builder/{app_id}"
+    payload = _mcp_tool_call_payload(
+        "widget-quota-project",
+        "governance",
+        "tenant:tenant-demo",
+        "create_foundry_project",
+        {"displayName": "Quota Replay", "idempotencyKey": "widget-quota-project"},
+    )
+    challenged = client.post(path, headers=session_headers, json=payload).json()["result"]
+    challenge_id = str(challenged["structuredContent"]["challengeId"])
+    token = str(challenged["_meta"]["widgetApprovalToken"])
+
+    def tool_count() -> int:
+        with foundry.engine.connect() as conn:
+            return int(
+                conn.execute(
+                    select(db.mcp_rate_limit_windows.c.request_count).where(
+                        db.mcp_rate_limit_windows.c.tenant_id == FDE_USER.tenant_id,
+                        db.mcp_rate_limit_windows.c.plane == "builder",
+                        db.mcp_rate_limit_windows.c.application_id == app_id,
+                        db.mcp_rate_limit_windows.c.limit_scope == "tool",
+                    )
+                ).scalar_one()
+            )
+
+    approval_payload = {
+        "jsonrpc": "2.0",
+        "id": "widget-quota-approval",
+        "method": "tools/call",
+        "params": {
+            "name": "approve_builder_mutation",
+            "arguments": {"challengeId": challenge_id, "widgetApprovalToken": token},
+        },
+    }
+    approved = client.post(path, headers=session_headers, json=approval_payload).json()["result"]
+    count_after_approval = tool_count()
+    recovered = client.post(path, headers=session_headers, json=approval_payload).json()["result"]
+    count_after_approval_recovery = tool_count()
+    receipt = str(approved["_meta"]["confirmationReceipt"])
+    payload["params"]["arguments"]["confirmationReceipt"] = receipt
+    completed = client.post(path, headers=session_headers, json=payload).json()["result"]
+    count_after_mutation = tool_count()
+    replayed = client.post(path, headers=session_headers, json=payload).json()["result"]
+    count_after_mutation_replay = tool_count()
+    denied = client.post(
+        path,
+        headers={**session_headers, "X-Request-ID": "widget-quota-denied"},
+        json=_mcp_tool_call_payload(
+            "widget-quota-denied",
+            "governance",
+            "tenant:tenant-demo",
+            "resource.search",
+            {"query": "denied after exact replays"},
+        ),
+    )
+
+    assert count_after_approval == count_after_approval_recovery == 2
+    assert approved["_meta"]["confirmationReceipt"] == recovered["_meta"]["confirmationReceipt"]
+    assert count_after_mutation == count_after_mutation_replay == 3
+    assert completed["structuredContent"]["project"]["displayName"] == "Quota Replay"
+    assert replayed["isReplayed"] is True
+    assert replayed["aiRunId"] == completed["aiRunId"]
+    assert len(_tool_rows(foundry, completed["aiRunId"])) == 1
+    assert denied.json()["result"]["structuredContent"]["error"]["type"] == "RATE_LIMITED"
+    assert tool_count() == 4
+    assert int(denied.headers["Retry-After"]) >= 1
 
 
 def test_builder_mcp_receipt_consumption_rolls_back_with_run_claim(foundry: Any, monkeypatch: Any) -> None:

@@ -19,6 +19,7 @@ from tests.integration.test_ai_fde_platform import (
 from tests.integration.test_ai_fde_platform import (
     _mcp_initialize_params as _builder_initialize_params,
 )
+from tests.integration.test_governed_release_mcp_transport import RELEASE_USER, _release_application
 from tests.integration.test_ontology_mcp import (
     MCP_USER,
     _mcp_application,
@@ -27,6 +28,70 @@ from tests.integration.test_ontology_mcp import (
 from tests.integration.test_ontology_mcp import (
     _mcp_initialize_params as _ontology_initialize_params,
 )
+
+
+def test_release_action_replay_does_not_consume_the_shared_tool_bucket(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    foundry.ontology.apply_text(
+        "objectTypes: []\nactionTypes: []\nlinkTypes: []\n",
+        ctx=RELEASE_USER,
+    )
+    app_id, headers, _ = _release_application(foundry, monkeypatch, suffix="ratelimittool")
+    _configure_limits(foundry, endpoint_limit=20, tool_limit=2)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _initialize_release(client, app_id, headers)
+    arguments = {
+        "releaseKind": "ontology",
+        "branchName": "rate-limit-release-branch",
+        "idempotencyKey": "rate-limit-release-branch",
+    }
+    prepared = client.post(
+        f"/mcp/release/{app_id}",
+        headers={**session_headers, "X-Request-ID": "release-tool-prepare"},
+        json=_release_call(
+            "release-tool-prepare",
+            "prepare_release_action",
+            {"targetTool": "create_release_branch", "arguments": arguments},
+        ),
+    )
+    token = prepared.json()["result"]["_meta"]["widgetConfirmationToken"]
+    action_payload = _release_call(
+        "release-tool-action",
+        "create_release_branch",
+        {**arguments, "widgetConfirmationToken": token},
+    )
+    first = client.post(
+        f"/mcp/release/{app_id}",
+        headers={**session_headers, "X-Request-ID": "release-tool-first"},
+        json=action_payload,
+    )
+    replay = client.post(
+        f"/mcp/release/{app_id}",
+        headers={**session_headers, "X-Request-ID": "release-tool-replay"},
+        json=action_payload,
+    )
+    denied = client.post(
+        f"/mcp/release/{app_id}",
+        headers={**session_headers, "X-Request-ID": "release-tool-denied"},
+        json=_release_call(
+            "release-tool-denied",
+            "open_release_workspace",
+            {"releaseKind": "ontology", "branchName": "denied-branch"},
+        ),
+    )
+
+    assert prepared.status_code == 200, prepared.text
+    assert first.status_code == 200, first.text
+    assert first.json()["result"]["isError"] is False, first.json()
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["result"]["isReplayed"] is True
+    assert replay.json()["result"]["structuredContent"] == first.json()["result"]["structuredContent"]
+    assert "Retry-After" not in replay.headers
+    _assert_tool_denial(denied, "release-tool-denied")
+    _assert_one_denial_pair(foundry, plane="release", application_id=app_id, request_count=3)
 
 
 def test_builder_tool_names_cannot_rotate_the_shared_tool_bucket(
@@ -148,7 +213,7 @@ def test_ontology_tool_names_cannot_rotate_the_shared_tool_bucket(
     _assert_one_denial_pair(foundry, plane="ontology", application_id=app_id, request_count=3)
 
 
-def test_both_mcp_endpoint_limits_return_http_429_with_exact_retry_after(
+def test_all_mcp_endpoint_limits_return_http_429_with_exact_retry_after(
     foundry: Any,
     tmp_path: Any,
     monkeypatch: Any,
@@ -157,6 +222,7 @@ def test_both_mcp_endpoint_limits_return_http_429_with_exact_retry_after(
     ontology_app_id = _mcp_application(foundry)
     ontology_headers = _user_mcp_headers(foundry, monkeypatch, ontology_app_id, suffix="rate-limit-http")
     builder_app_id, builder_headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
+    release_app_id, release_headers, _ = _release_application(foundry, monkeypatch, suffix="ratelimitendpoint")
     _configure_limits(foundry, endpoint_limit=1, tool_limit=20)
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
@@ -173,12 +239,19 @@ def test_both_mcp_endpoint_limits_return_http_429_with_exact_retry_after(
         headers={**ontology_headers, "X-Request-ID": "ontology-endpoint-denied"},
         json={"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}},
     )
+    _initialize_release(client, release_app_id, release_headers)
+    release_denied = client.post(
+        f"/mcp/release/{release_app_id}",
+        headers={**release_headers, "X-Request-ID": "release-endpoint-denied"},
+        json={"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}},
+    )
 
     _assert_http_denial(builder_denied, "builder-endpoint-denied")
     _assert_http_denial(ontology_denied, "ontology-endpoint-denied")
+    _assert_http_denial(release_denied, "release-endpoint-denied")
 
 
-@pytest.mark.parametrize("plane", ["builder", "ontology"])
+@pytest.mark.parametrize("plane", ["builder", "ontology", "release"])
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
 def test_mcp_get_and_delete_consume_endpoint_quota_before_session_mutation(
     foundry: Any,
@@ -210,7 +283,7 @@ def test_mcp_get_and_delete_consume_endpoint_quota_before_session_mutation(
     assert session["stream_lease_id"] is None
 
 
-@pytest.mark.parametrize("plane", ["builder", "ontology"])
+@pytest.mark.parametrize("plane", ["builder", "ontology", "release"])
 def test_mcp_unknown_and_terminated_notifications_and_repeated_delete_return_404(
     foundry: Any,
     tmp_path: Any,
@@ -218,7 +291,12 @@ def test_mcp_unknown_and_terminated_notifications_and_repeated_delete_return_404
     plane: str,
 ) -> None:
     client, app_id, session_headers = _plane_session(foundry, tmp_path, monkeypatch, plane)
-    unknown_id = f"{plane}-mcp-unknown000" if plane == "ontology" else f"mcp-{'0' * 32}"
+    if plane == "ontology":
+        unknown_id = "ontology-mcp-unknown000"
+    elif plane == "release":
+        unknown_id = "mcp-release-unknown000"
+    else:
+        unknown_id = f"mcp-{'0' * 32}"
     unknown = client.post(
         f"/mcp/{plane}/{app_id}",
         headers={**session_headers, "Mcp-Session-Id": unknown_id},
@@ -333,13 +411,20 @@ def _plane_session(foundry: Any, tmp_path: Any, monkeypatch: Any, plane: str) ->
     _configure_limits(foundry, endpoint_limit=20, tool_limit=20)
     if plane == "builder":
         app_id, headers = _builder_mcp_application(foundry, monkeypatch, "platform_qa")
-    else:
+    elif plane == "ontology":
         _prepare_v3_demo(foundry, tmp_path)
         app_id = _mcp_application(foundry)
         headers = _user_mcp_headers(foundry, monkeypatch, app_id, suffix=f"session-{plane}")
+    else:
+        app_id, headers, _ = _release_application(foundry, monkeypatch, suffix="ratelimitsession")
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
-    initializer = _initialize_builder if plane == "builder" else _initialize_ontology
+    initializers = {
+        "builder": _initialize_builder,
+        "ontology": _initialize_ontology,
+        "release": _initialize_release,
+    }
+    initializer = initializers[plane]
     return client, app_id, initializer(client, app_id, headers)
 
 
@@ -371,6 +456,16 @@ def _initialize_ontology(client: TestClient, app_id: str, headers: dict[str, str
     return {**headers, "Mcp-Session-Id": response.headers["Mcp-Session-Id"]}
 
 
+def _initialize_release(client: TestClient, app_id: str, headers: dict[str, str]) -> dict[str, str]:
+    response = client.post(
+        f"/mcp/release/{app_id}",
+        headers={**headers, "X-Request-ID": "release-rate-limit-init"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _builder_initialize_params()},
+    )
+    assert response.status_code == 200, response.text
+    return {**headers, "Mcp-Session-Id": response.headers["Mcp-Session-Id"]}
+
+
 def _builder_call(rpc_id: str | int, tool_name: str, arguments: dict[str, object]) -> dict[str, object]:
     return {
         "jsonrpc": "2.0",
@@ -388,6 +483,15 @@ def _builder_call(rpc_id: str | int, tool_name: str, arguments: dict[str, object
 
 
 def _ontology_call(rpc_id: str | int, tool_name: str, arguments: dict[str, object]) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+
+
+def _release_call(rpc_id: str | int, tool_name: str, arguments: dict[str, object]) -> dict[str, object]:
     return {
         "jsonrpc": "2.0",
         "id": rpc_id,

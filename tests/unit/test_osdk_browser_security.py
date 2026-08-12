@@ -10,7 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_osdk_browser_security_cors_and_websocket_origin_allowlist_is_explicit() -> None:
     origins = set(api_main.ALLOWED_BROWSER_ORIGINS)
 
-    assert origins == {"http://127.0.0.1:4173", "http://localhost:4173"}
+    assert origins == {
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+        "https://chatgpt.com",
+    }
     assert "*" not in origins
 
 

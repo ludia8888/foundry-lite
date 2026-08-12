@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
+from foundry_lite.application.ports import OsdkApplicationRepository, TransactionManager
 from foundry_lite.application.ports.ai_run_repository import AiToolCallRecord
 from foundry_lite.application.ports.osdk_security_repository import OsdkMcpToolActivationRecord
 from foundry_lite.application.primitives import _new_id, _now
@@ -22,7 +23,21 @@ class McpSearchCall(Protocol):
     def session_id(self) -> str: ...
 
     @property
+    def mode(self) -> str: ...
+
+    @property
     def arguments(self) -> Mapping[str, object]: ...
+
+
+class McpDiscoverySessionLedger(Protocol):
+    def append_event(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        session_id: str,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> object: ...
 
 
 def mcp_search_tool(modes: tuple[str, ...]) -> dict[str, object]:
@@ -100,6 +115,41 @@ def activation_record(
         query_hash=query_hash,
         activated_at=_now(),
     )
+
+
+def activate_tools(
+    engine: TransactionManager,
+    repository: OsdkApplicationRepository,
+    session_ledger: McpDiscoverySessionLedger,
+    ctx: RequestContext,
+    request: McpSearchCall,
+    query: str,
+    matches: tuple[tuple[ToolSpec, int], ...],
+) -> dict[str, object]:
+    query_hash = hash_json({"mode": request.mode, "query": query.casefold()})
+    activated: list[dict[str, object]] = []
+    has_new_activation = False
+    with engine.begin() as conn:
+        for tool, score in matches:
+            is_new = repository.activate_mcp_tool(
+                transaction=conn,
+                record=activation_record(ctx, request, tool.tool_id, query_hash),
+            )
+            has_new_activation = has_new_activation or is_new
+            activated.append({"toolId": tool.tool_id, "description": tool.description, "score": score, "isNew": is_new})
+    if has_new_activation:
+        session_ledger.append_event(
+            ctx,
+            request.application_id,
+            request.session_id,
+            "notifications/tools/list_changed",
+            {"queryHash": query_hash},
+        )
+    return {
+        "queryHash": query_hash,
+        "activatedTools": activated,
+        "toolsListChanged": any(item["isNew"] for item in activated),
+    }
 
 
 def search_ledger(

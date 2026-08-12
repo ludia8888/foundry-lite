@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -16,6 +15,7 @@ from foundry_lite.application.ports.osdk_application_repository import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.mcp_session_namespace import require_mcp_session_namespace
 from foundry_lite.application.services.mcp_stream_lease import mcp_stream_conflict, new_mcp_stream_lease
 from foundry_lite.application.services.osdk_application_idempotency import OsdkApplicationIdempotencyService
 from foundry_lite.application.services.osdk_application_records import _require_idempotency_key
@@ -25,7 +25,6 @@ from foundry_lite.domain.errors import NotFound, PermissionDenied, ValidationFai
 
 _MCP_STATUSES = frozenset({"enabled", "disabled"})
 _MAX_DESCRIPTION_LENGTH = 8_000
-_SESSION_ID_PATTERN = re.compile(r"ontology-mcp-[A-Za-z0-9_-]{8,240}")
 
 
 class OsdkMcpServerService(CoreService):
@@ -244,6 +243,7 @@ class OsdkMcpServerService(CoreService):
         }
 
     def _required_session(self, conn: TransactionContext, ctx: RequestContext, session_id: str) -> OsdkMcpSessionRow:
+        _require_session_identity(ctx, session_id)
         row = self.osdk_application_repository.mcp_session_by_id(
             transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id
         )
@@ -317,8 +317,9 @@ def _session_record(ctx: RequestContext, app_id: str, session_id: str, now: str)
 
 
 def _require_session_identity(ctx: RequestContext, session_id: str) -> None:
-    if not ctx.client_id or _SESSION_ID_PATTERN.fullmatch(session_id) is None:
+    if not ctx.client_id:
         raise NotFound("Ontology MCP session is not found", details={"resource": "mcp_session"})
+    require_mcp_session_namespace(session_id, "ontology")
 
 
 def _require_session_owner(
