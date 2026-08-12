@@ -116,6 +116,42 @@ def test_pipeline_repository_contract_branch_cas_and_tenant_scope(tmp_path: Path
     assert hidden is None
 
 
+def test_pipeline_unassigned_claim_cannot_be_stolen_by_a_second_reviewer(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline_claim_contract.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyPipelineRepository(engine)
+
+    with engine.begin() as transaction:
+        repository.insert_branch_if_name_free(transaction=transaction, record=_branch_record())
+        proposal = repository.insert_proposal(transaction=transaction, record=_proposal_record())
+        first = repository.update_proposal_assignment(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            proposal_id=proposal["id"],
+            assigned_to="reviewer-1",
+            updated_at="2026-07-05T00:01:00Z",
+            is_unassigned_only=True,
+        )
+        stolen = repository.update_proposal_assignment(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            proposal_id=proposal["id"],
+            assigned_to="reviewer-2",
+            updated_at="2026-07-05T00:02:00Z",
+            is_unassigned_only=True,
+        )
+        current = repository.proposal_by_id(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            proposal_id=proposal["id"],
+        )
+
+    assert first is not None
+    assert stolen is None
+    assert current is not None
+    assert current["assigned_to"] == "reviewer-1"
+
+
 def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'pipeline_flow_contract.db'}", future=True)
     db.create_database(engine)
@@ -233,6 +269,26 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
         )
         disabled_schedule = repository.upsert_schedule(transaction=transaction, record=_schedule_record(enabled=False))
         test_result = repository.insert_test_result(transaction=transaction, record=_test_result_record())
+        repository.insert_test_result(
+            transaction=transaction,
+            record=replace(
+                _test_result_record(),
+                result_id="test_result_latest",
+                result={"valid": False},
+                status="failed",
+                created_at="2026-07-05T00:08:00Z",
+            ),
+        )
+        latest_test_result = repository.latest_test_result(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            branch_id="branch_a",
+        )
+        hidden_test_result = repository.latest_test_result(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            branch_id="branch_a",
+        )
         due_after_disable = repository.list_due_schedules(
             transaction=transaction,
             tenant_id="tenant-a",
@@ -280,6 +336,9 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
     assert deleted is True
     assert deleted_again is False
     assert test_result["result"] == {"valid": True}
+    assert latest_test_result is not None
+    assert latest_test_result["id"] == "test_result_latest"
+    assert hidden_test_result is None
     assert hidden_run is None
 
 

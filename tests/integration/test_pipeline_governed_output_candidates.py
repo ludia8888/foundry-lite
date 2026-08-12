@@ -231,6 +231,7 @@ def _execute_graph_version(
         expected_fingerprint=str(branch["graphFingerprint"]),
         ctx=fixture.ctx,
     )
+    fixture.foundry.pipelines.run_tests(str(branch["id"]), ctx=fixture.ctx)
     proposal = fixture.foundry.pipelines.propose(
         str(branch["id"]),
         title="Deploy governed output candidates",

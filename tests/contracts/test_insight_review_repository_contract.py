@@ -160,6 +160,44 @@ def test_insight_review_assignment_does_not_mutate_terminal_review() -> None:
     assert current["assignment_idempotency_key"] is None
 
 
+def test_insight_review_unassigned_claim_cannot_be_stolen_by_a_second_reviewer() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_1", create_key="create-1"),
+        )
+        first = harness.repository.assign_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            assignee_user_id="reviewer-1",
+            assignment_idempotency_key="claim-1",
+            updated_at="2026-06-19T00:00:01Z",
+            is_unassigned_only=True,
+        )
+        stolen = harness.repository.assign_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            assignee_user_id="reviewer-2",
+            assignment_idempotency_key="claim-2",
+            updated_at="2026-06-19T00:00:02Z",
+            is_unassigned_only=True,
+        )
+        current = harness.repository.review_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+        )
+
+    assert first is not None
+    assert stolen is None
+    assert current is not None
+    assert current["assignee_user_id"] == "reviewer-1"
+    assert current["assignment_idempotency_key"] == "claim-1"
+
+
 def test_insight_review_execution_status_links_action_once() -> None:
     harness = _sqlalchemy_harness()
     with harness.transaction() as transaction:

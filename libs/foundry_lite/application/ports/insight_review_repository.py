@@ -159,6 +159,7 @@ class InsightReviewRepository(Protocol):
         assignee_user_id: str,
         assignment_idempotency_key: str,
         updated_at: str,
+        is_unassigned_only: bool = False,
     ) -> InsightReviewRow | None:
         """Assign a pending review if it has not been terminally decided."""
         ...
@@ -189,6 +190,19 @@ class InsightReviewRepository(Protocol):
         updated_at: str,
     ) -> InsightReviewRow | None:
         """Move an approved action proposal review into executing state."""
+        ...
+
+    def reclaim_execution(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        execution_idempotency_key: str,
+        expected_updated_at: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """CAS a stale executing proposal to one recovery owner."""
         ...
 
     def mark_execution_succeeded(

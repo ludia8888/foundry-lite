@@ -14,15 +14,27 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineScheduleRecord,
     PipelineScheduleRow,
     PipelineTestResultRecord,
+    PipelineTestResultRow,
     PipelineVersionRecord,
     PipelineVersionRow,
 )
 from foundry_lite.application.primitives import _new_id
+from foundry_lite.application.services.pipeline_deployment_admission import (
+    locked_deployment_replay as locked_deployment_replay,
+)
+from foundry_lite.application.services.pipeline_deployment_admission import optional_text as optional_text
+from foundry_lite.application.services.pipeline_deployment_admission import (
+    require_expected_current_deployment as require_expected_current_deployment,
+)
+from foundry_lite.application.services.pipeline_deployment_admission import (
+    require_matching_deployment as require_matching_deployment,
+)
 from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
 from foundry_lite.application.services.pipeline_graph_normalizer import (
     empty_pipeline_graph_v2,
     pipeline_graph_schema_version,
 )
+from foundry_lite.application.services.pipeline_proposal_review_evidence import public_proposal_description
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
@@ -207,6 +219,18 @@ def test_result_record(
     )
 
 
+def test_result_payload(row: PipelineTestResultRow) -> JsonObject:
+    return {
+        "id": row["id"],
+        "pipelineId": row["pipeline_id"],
+        "branchId": row["branch_id"],
+        "status": row["status"],
+        "result": row["result"],
+        "createdBy": row["created_by"],
+        "createdAt": row["created_at"],
+    }
+
+
 def branch_payload(row: PipelineBranchRow) -> JsonObject:
     return {
         "id": row["id"],
@@ -224,7 +248,7 @@ def branch_payload(row: PipelineBranchRow) -> JsonObject:
         "mergedVersionId": row["merged_version_id"],
         "protection": {
             "requiresProposal": True,
-            "requiresSeparateReviewer": True,
+            "requiresSeparateReviewer": False,
             "blocksStaleProposal": True,
         },
     }
@@ -236,7 +260,7 @@ def proposal_payload(row: PipelineProposalRow) -> JsonObject:
         "pipelineId": row["pipeline_id"],
         "branchId": row["branch_id"],
         "title": row["title"],
-        "description": row["description"],
+        "description": public_proposal_description(row["description"]),
         "status": row["status"],
         "graph": row["graph"],
         "graphFingerprint": row["graph_fingerprint"],

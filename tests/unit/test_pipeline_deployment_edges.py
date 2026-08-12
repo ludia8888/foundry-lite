@@ -17,6 +17,7 @@ from foundry_lite.application.ports.trained_model_inference import (
 from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.services.pipeline_deployment_service import (
     PipelineDeploymentService,
+    _deployment_request_fingerprint,
     _engine_neutral_plan_summary,
     _function_pins,
     _has_dataset_source,
@@ -162,6 +163,33 @@ def test_deployment_helpers_detect_dataset_sources_and_idempotency_conflicts() -
     assert captured.value.details["deployment_id"] == "deployment-1"
 
 
+def test_locked_same_key_replay_precedes_expected_head_cas() -> None:
+    version = _deployment_version()
+    options = {"expectedCurrentDeploymentId": "deployment-before-race"}
+    fingerprint = _deployment_request_fingerprint("pipe-1", "version-2", options)
+    pipeline_repository = _LockedReplayPipelineRepository(version)
+    execution_repository = _LockedReplayExecutionRepository(pipeline_repository, fingerprint)
+    service = object.__new__(PipelineDeploymentService)
+    service.engine = cast(TransactionManager, _TransactionManager())
+    service.pipeline_repository = cast(PipelineRepository, pipeline_repository)
+    service.pipeline_execution_repository = cast(PipelineExecutionRepository, execution_repository)
+
+    result = service._commit_deployment(
+        RequestContext(tenant_id="tenant-1", actor_user_id="reviewer-1"),
+        version,
+        "deploy-same-key",
+        fingerprint,
+        _deployment_plan(),
+        {"shouldNotBeReturned": True},
+        options,
+    )
+
+    assert result["deployment"]["id"] == "deployment-winner"
+    assert result["compiled"] == {"replayed": True}
+    assert pipeline_repository.events == ["lock", "version_by_id"]
+    assert execution_repository.events == ["idempotency_lookup"]
+
+
 def test_implicit_pipeline_run_uses_latest_promoted_deployment_after_rollback() -> None:
     versions = {
         "version-1": cast(
@@ -237,3 +265,93 @@ class _CurrentDeploymentRepository:
                 },
             )
         ]
+
+
+def _deployment_version() -> PipelineVersionRow:
+    return cast(
+        PipelineVersionRow,
+        {
+            "id": "version-2",
+            "pipeline_id": "pipe-1",
+            "version_number": 2,
+            "graph": {"nodes": [], "edges": []},
+            "graph_fingerprint": "sha256:graph",
+            "graph_schema_version": 2,
+            "execution_plan": None,
+            "plan_fingerprint": None,
+            "compiler_version": None,
+            "proposal_id": "proposal-2",
+            "created_by": "builder-1",
+            "created_at": "2026-08-09T00:00:00Z",
+            "deployed_at": "2026-08-09T00:01:00Z",
+        },
+    )
+
+
+def _deployment_plan() -> dict[str, object]:
+    return {
+        "planFingerprint": "sha256:plan",
+        "compilerVersion": "pipeline-plan-v2",
+        "nodes": [],
+        "modelRefs": [],
+        "computeProfile": {},
+    }
+
+
+class _LockedReplayPipelineRepository:
+    def __init__(self, version: PipelineVersionRow) -> None:
+        self.version = version
+        self.is_locked = False
+        self.events: list[str] = []
+
+    def lock_pipeline_for_deployment(self, **_kwargs: object) -> None:
+        self.is_locked = True
+        self.events.append("lock")
+
+    def version_by_id(self, **_kwargs: object) -> PipelineVersionRow:
+        assert self.is_locked is True
+        self.events.append("version_by_id")
+        return self.version
+
+    def mark_version_deployed(self, **_kwargs: object) -> PipelineVersionRow:
+        raise AssertionError("same-key replay must not mark the version again")
+
+
+class _LockedReplayExecutionRepository:
+    def __init__(self, pipeline_repository: _LockedReplayPipelineRepository, fingerprint: str) -> None:
+        self.pipeline_repository = pipeline_repository
+        self.fingerprint = fingerprint
+        self.events: list[str] = []
+
+    def deployment_by_idempotency_key(self, **_kwargs: object) -> PipelineDeploymentRow:
+        assert self.pipeline_repository.is_locked is True
+        self.events.append("idempotency_lookup")
+        return cast(
+            PipelineDeploymentRow,
+            {
+                "id": "deployment-winner",
+                "pipeline_id": "pipe-1",
+                "version_id": "version-2",
+                "deployment_number": 2,
+                "status": "PROMOTED",
+                "execution_plan": _deployment_plan(),
+                "plan_fingerprint": "sha256:plan",
+                "compiler_version": "pipeline-plan-v2",
+                "processor_pins": [],
+                "model_pins": [],
+                "function_pins": [],
+                "compute_profile": {},
+                "idempotency_key": "deploy-same-key",
+                "request_fingerprint": self.fingerprint,
+                "promoted_by": "reviewer-1",
+                "promoted_at": "2026-08-09T00:01:00Z",
+                "rolled_back_from_id": None,
+                "created_at": "2026-08-09T00:01:00Z",
+            },
+        )
+
+    def list_deployments(self, **_kwargs: object) -> list[PipelineDeploymentRow]:
+        raise AssertionError("same-key replay must bypass expected-head CAS")
+
+    def insert_deployment(self, **_kwargs: object) -> PipelineDeploymentRow:
+        raise AssertionError("same-key replay must not insert a second deployment")

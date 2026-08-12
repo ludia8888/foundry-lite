@@ -253,6 +253,46 @@ class AiRunRepository(Protocol):
         """Update the run terminal/intermediate status and return the updated row."""
         ...
 
+    def update_execution_run_status_if_budget(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ai_run_id: str,
+        transition: StatusTransition,
+        expected_budget_json: AiJsonObject,
+        usage_json: AiJsonObject | None,
+        error_json: AiJsonObject | None,
+        completed_at: str | None,
+    ) -> AiLedgerRow | None:
+        """Terminalize only while the caller still owns the exact execution lease."""
+        ...
+
+    def claim_execution_run_recovery(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ai_run_id: str,
+        expected_budget_json: AiJsonObject,
+        recovery_budget_json: AiJsonObject,
+    ) -> AiLedgerRow | None:
+        """CAS one still-running execution into a bounded recovery lease."""
+        ...
+
+    def compare_and_swap_execution_run_budget(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ai_run_id: str,
+        expected_status: str,
+        expected_budget_json: AiJsonObject,
+        replacement_budget_json: AiJsonObject,
+    ) -> AiLedgerRow | None:
+        """Replace security metadata only when status and the prior budget still match."""
+        ...
+
     def append_execution_event(self, *, transaction: TransactionContext, record: AiExecutionEventRecord) -> bool:
         """Append a sequence-idempotent run event."""
         ...
@@ -267,6 +307,12 @@ class AiRunRepository(Protocol):
 
     def record_tool_call(self, *, transaction: TransactionContext, record: AiToolCallRecord) -> None:
         """Persist one tool authorization/execution row."""
+        ...
+
+    def insert_tool_call_or_get_existing(
+        self, *, transaction: TransactionContext, record: AiToolCallRecord
+    ) -> AiLedgerRow | None:
+        """Insert a deterministic tool result, returning its exact concurrent winner."""
         ...
 
     def link_tool_call_to_action_run(

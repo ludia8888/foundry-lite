@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from foundry_lite.application.dependency_aip_ports import (
+    CitationSourceVerifier,
+    CompletionModelAdapter,
+    EmbeddingModelAdapter,
+    GovernedSemanticModelPort,
+    LanguageModelAdapter,
+    ModelRegistryRepository,
+    SemanticRowCacheRepository,
+    ToolExecutor,
+    TrainedModelInferencePort,
+    VisionEmbeddingModelAdapter,
+)
+from foundry_lite.application.dependency_release import GovernedReleaseDependencies
 from foundry_lite.application.ports import AiEvalRepository, AiRunRepository, ContextProvider
-from foundry_lite.application.ports.citation_source import CitationSourceVerifier
-from foundry_lite.application.ports.completion_model import CompletionModelAdapter
-from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
-from foundry_lite.application.ports.language_model import GovernedSemanticModelPort, LanguageModelAdapter
-from foundry_lite.application.ports.model_registry_repository import ModelCatalogSeed, ModelRegistryRepository
-from foundry_lite.application.ports.semantic_row_cache_repository import SemanticRowCacheRepository
-from foundry_lite.application.ports.tool_executor import ToolExecutor
-from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
-from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
+from foundry_lite.application.ports.model_registry_repository import ModelCatalogSeed
 
 
 @dataclass(frozen=True)
@@ -33,3 +38,4 @@ class AipDependencies:
     governed_semantic_model_port: GovernedSemanticModelPort | None = None
     trained_model_inference_port: TrainedModelInferencePort | None = None
     model_catalog_seed: ModelCatalogSeed | None = None
+    governed_release: GovernedReleaseDependencies = field(default_factory=GovernedReleaseDependencies)

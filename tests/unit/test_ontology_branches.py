@@ -184,6 +184,8 @@ def test_full_branch_lifecycle_merges_through_proposal_and_updates_catalog(found
     assert proposed["proposalId"] == proposal["id"]
     assert proposal["status"] == "submitted"
 
+    # A human reviewer must be assigned before a decision is accepted.
+    foundry.ontology.assign_proposal(str(proposal["id"]), reviewer_user_id=REVIEWER.actor_user_id, ctx=REVIEWER)
     foundry.ontology.decide_proposal(
         str(proposal["id"]),
         decision="approve",
@@ -344,6 +346,8 @@ def test_branch_action_activation_preserves_canonical_consumer_schema(foundry, t
         ctx=CREATOR,
     )
     proposal = cast(dict[str, Any], proposed["proposal"])
+    # A human reviewer must be assigned before a decision is accepted.
+    foundry.ontology.assign_proposal(str(proposal["id"]), reviewer_user_id=REVIEWER.actor_user_id, ctx=REVIEWER)
     foundry.ontology.decide_proposal(
         str(proposal["id"]),
         decision="approve",
@@ -830,6 +834,13 @@ def test_api_branch_flow_and_error_mapping(foundry, tmp_path, monkeypatch: Monke
     assert proposed.status_code == 200
     proposal = proposed.json()["proposal"]
 
+    # Review requires an explicitly assigned human reviewer before a decision lands.
+    assigned = client.post(
+        f"/api/ontology/proposals/{proposal['id']}/assign",
+        headers=REVIEWER_HEADERS,
+        json={"reviewerUserId": "user-reviewer"},
+    )
+    assert assigned.status_code == 200
     decided = client.post(
         f"/api/ontology/proposals/{proposal['id']}/decide",
         headers=REVIEWER_HEADERS,

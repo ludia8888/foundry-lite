@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-import yaml
-
 from foundry_lite.application.ports import (
     LinkTypeRecord,
     ObjectTypeRecord,
@@ -27,6 +25,12 @@ from foundry_lite.application.services.ontology_activation_contracts import (
     object_type_implements,
     ontology_validation_result,
     validate_activation_contracts,
+)
+from foundry_lite.application.services.ontology_activation_receipts import (
+    activation_fingerprint,
+    record_activation_receipt,
+    replay_activation,
+    required_activation_key,
 )
 from foundry_lite.application.services.ontology_datasource_validation import yaml_property_datasources
 from foundry_lite.application.services.ontology_migration import (
@@ -56,9 +60,8 @@ from foundry_lite.application.services.ontology_yaml import (
     require_yaml_text_within_limit,
     required_str,
     schema_columns,
-    yaml_object,
-    yaml_parse_error_details,
 )
+from foundry_lite.application.services.ontology_yaml_loading import load_ontology_yaml_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
@@ -94,9 +97,33 @@ class OntologyActivationService(CoreService):
         self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
         require_ontology_write_open(self.runtime_service, ctx, "apply_ontology", "ontology", "draft")
         require_yaml_text_within_limit(yaml_text)
-        definition = self._load_ontology_text(yaml_text)
+        definition = load_ontology_yaml_text(yaml_text)
         with self.engine.begin() as conn:
             return self._apply_loaded_ontology(conn, ctx, definition)
+
+    def apply_ontology_text_once(
+        self,
+        yaml_text: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> OntologyApplyResult:
+        """Apply once under the activation lock and replay the committed receipt."""
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
+        require_ontology_write_open(self.runtime_service, ctx, "apply_ontology", "ontology", "draft")
+        require_yaml_text_within_limit(yaml_text)
+        definition = load_ontology_yaml_text(yaml_text)
+        receipt_key = required_activation_key(idempotency_key)
+        fingerprint = activation_fingerprint(definition)
+        with self.engine.begin() as conn:
+            self.ontology_repository.lock_ontology_for_activation(transaction=conn, tenant_id=ctx.tenant_id)
+            replay = replay_activation(self.runtime_service, conn, ctx, receipt_key, fingerprint)
+            if replay is not None:
+                return replay
+            result = self._apply_loaded_ontology_after_lock(conn, ctx, definition)
+            record_activation_receipt(self.runtime_service, conn, ctx, receipt_key, fingerprint, result)
+            return result
 
     def validate_yaml_text(
         self,
@@ -107,7 +134,7 @@ class OntologyActivationService(CoreService):
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:validate", "ontology", "draft")
         require_yaml_text_within_limit(yaml_text)
-        definition = self._load_ontology_text(yaml_text)
+        definition = load_ontology_yaml_text(yaml_text)
         with self.engine.begin() as conn:
             validate_activation_contracts(
                 self.media_repository,
@@ -121,6 +148,15 @@ class OntologyActivationService(CoreService):
         return ontology_validation_result(definition, migration_plan)
 
     def _apply_loaded_ontology(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        definition: YamlObject,
+    ) -> OntologyApplyResult:
+        self.ontology_repository.lock_ontology_for_activation(transaction=conn, tenant_id=ctx.tenant_id)
+        return self._apply_loaded_ontology_after_lock(conn, ctx, definition)
+
+    def _apply_loaded_ontology_after_lock(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
@@ -151,13 +187,6 @@ class OntologyActivationService(CoreService):
             "version_number": version_number,
             "migration_plan": migration_plan.to_payload(),
         }
-
-    def _load_ontology_text(self, yaml_text: str) -> YamlObject:
-        try:
-            definition: object = yaml.safe_load(yaml_text)
-        except yaml.YAMLError as exc:
-            raise ValidationFailed("ontology yaml parse failed", details=yaml_parse_error_details(exc)) from exc
-        return yaml_object(definition, "ontology yaml")
 
     def _create_draft_version(self, conn: TransactionContext, ctx: RequestContext) -> tuple[str, int]:
         version_number = self.ontology_repository.next_ontology_version_number(

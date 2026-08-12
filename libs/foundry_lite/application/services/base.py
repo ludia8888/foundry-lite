@@ -13,6 +13,14 @@ from foundry_lite.application.dependencies import (
     ActionRunOrchestrator,
     CoreDependencies,
 )
+from foundry_lite.application.dependency_release import (
+    GovernedReleaseDeliveryConfig,
+    GovernedReleaseLiveAttestationRepository,
+    GovernedReleaseLiveAuthority,
+    InfrastructureDeploymentAdapter,
+    ReleaseDeliveryRepository,
+    SourceControlReleasePort,
+)
 from foundry_lite.application.pipeline_runtime_dependencies import (
     GovernedSemanticModelPort,
     MediaProcessorRegistry,
@@ -288,6 +296,12 @@ class CoreService:
     action_run_orchestrator: ActionRunOrchestrator
     ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
+    governed_release_delivery_config: GovernedReleaseDeliveryConfig
+    source_control_release_adapter: SourceControlReleasePort
+    infrastructure_deployment_adapter: InfrastructureDeploymentAdapter
+    release_delivery_repository: ReleaseDeliveryRepository
+    governed_release_live_attestation_repository: GovernedReleaseLiveAttestationRepository
+    governed_release_live_authority: GovernedReleaseLiveAuthority
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
     pipeline_repository: PipelineRepository

@@ -49,8 +49,14 @@ class OntologyRegistry:
     def validate(self, yaml_text: str, *, ctx: RequestContext | None = None) -> OntologyValidationResult:
         return self._ontology.validate_yaml_text(yaml_text, ctx=ctx)
 
-    def rollback(self, version_number: int, *, ctx: RequestContext | None = None) -> OntologyRollbackResult:
-        return self._ontology.rollback_to_version(version_number, ctx=ctx)
+    def rollback(
+        self,
+        version_number: int,
+        *,
+        idempotency_key: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> OntologyRollbackResult:
+        return self._ontology.rollback_to_version(version_number, idempotency_key=idempotency_key, ctx=ctx)
 
     def catalog(self, *, ctx: RequestContext | None = None) -> OntologyCatalogResult:
         return self._ontology.active_catalog(ctx=ctx)
@@ -96,9 +102,15 @@ class OntologyRegistry:
         proposal_id: str,
         *,
         reviewer_user_id: str,
+        is_unassigned_only: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
-        return self._proposals.assign_reviewer(proposal_id, reviewer_user_id=reviewer_user_id, ctx=ctx)
+        return self._proposals.assign_reviewer(
+            proposal_id,
+            reviewer_user_id=reviewer_user_id,
+            is_unassigned_only=is_unassigned_only,
+            ctx=ctx,
+        )
 
     def decide_proposal(
         self,

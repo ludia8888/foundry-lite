@@ -139,6 +139,86 @@ class SqlAlchemyAiRunRepository:
             return None
         return self.execution_run_by_id(transaction=transaction, tenant_id=tenant_id, ai_run_id=ai_run_id)
 
+    def update_execution_run_status_if_budget(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ai_run_id: str,
+        transition: StatusTransition,
+        expected_budget_json: AiJsonObject,
+        usage_json: AiJsonObject | None,
+        error_json: AiJsonObject | None,
+        completed_at: str | None,
+    ) -> AiLedgerRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.ai_execution_runs,
+            tenant_id=tenant_id,
+            row_id=ai_run_id,
+            transition=transition,
+            values={
+                "usage_json": _json_or_none(usage_json),
+                "error_json": _json_or_none(error_json),
+                "completed_at": completed_at,
+            },
+            conditions=(db.ai_execution_runs.c.budget_json == dict(expected_budget_json),),
+        )
+        if not updated:
+            return None
+        return self.execution_run_by_id(transaction=transaction, tenant_id=tenant_id, ai_run_id=ai_run_id)
+
+    def claim_execution_run_recovery(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ai_run_id: str,
+        expected_budget_json: AiJsonObject,
+        recovery_budget_json: AiJsonObject,
+    ) -> AiLedgerRow | None:
+        updated = transaction.execute(
+            update(db.ai_execution_runs)
+            .where(
+                and_(
+                    db.ai_execution_runs.c.tenant_id == tenant_id,
+                    db.ai_execution_runs.c.id == ai_run_id,
+                    db.ai_execution_runs.c.status == "running",
+                    db.ai_execution_runs.c.budget_json == dict(expected_budget_json),
+                )
+            )
+            .values(budget_json=dict(recovery_budget_json))
+        )
+        if updated.rowcount != 1:
+            return None
+        return self.execution_run_by_id(transaction=transaction, tenant_id=tenant_id, ai_run_id=ai_run_id)
+
+    def compare_and_swap_execution_run_budget(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ai_run_id: str,
+        expected_status: str,
+        expected_budget_json: AiJsonObject,
+        replacement_budget_json: AiJsonObject,
+    ) -> AiLedgerRow | None:
+        updated = transaction.execute(
+            update(db.ai_execution_runs)
+            .where(
+                and_(
+                    db.ai_execution_runs.c.tenant_id == tenant_id,
+                    db.ai_execution_runs.c.id == ai_run_id,
+                    db.ai_execution_runs.c.status == expected_status,
+                    db.ai_execution_runs.c.budget_json == dict(expected_budget_json),
+                )
+            )
+            .values(budget_json=dict(replacement_budget_json))
+        )
+        if updated.rowcount != 1:
+            return None
+        return self.execution_run_by_id(transaction=transaction, tenant_id=tenant_id, ai_run_id=ai_run_id)
+
     def append_execution_event(self, *, transaction: Any, record: AiExecutionEventRecord) -> bool:
         savepoint = transaction.begin_nested()
         try:
@@ -167,6 +247,22 @@ class SqlAlchemyAiRunRepository:
         transaction.execute(
             insert(db.ai_tool_calls).values({"tenant_id": record.tenant_id, **_tool_call_values(record)})
         )
+
+    def insert_tool_call_or_get_existing(self, *, transaction: Any, record: AiToolCallRecord) -> AiLedgerRow | None:
+        values = {"tenant_id": record.tenant_id, **_tool_call_values(record)}
+        statement: Any
+        if transaction.dialect.name == "postgresql":
+            statement = (
+                postgres_insert(db.ai_tool_calls).values(**values).on_conflict_do_nothing(index_elements=("id",))
+            )
+        elif transaction.dialect.name == "sqlite":
+            statement = sqlite_insert(db.ai_tool_calls).values(**values).on_conflict_do_nothing(index_elements=("id",))
+        else:
+            statement = insert(db.ai_tool_calls).values(**values)
+        inserted = transaction.execute(statement.returning(db.ai_tool_calls.c.id)).scalar_one_or_none()
+        if inserted == record.id:
+            return None
+        return _one_by_id(transaction, db.ai_tool_calls, record.tenant_id, record.id)
 
     def link_tool_call_to_action_run(
         self,

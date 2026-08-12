@@ -56,6 +56,13 @@ class RuntimeEvidenceBoundary(Protocol):
         correlation_id: str,
     ) -> str | None: ...
 
+    def _outbox_event_by_idempotency_key(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        idempotency_key: str,
+    ) -> Mapping[str, object] | None: ...
+
     def _lineage(
         self,
         conn: TransactionContext,

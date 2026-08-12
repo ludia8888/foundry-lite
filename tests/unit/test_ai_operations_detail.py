@@ -15,6 +15,7 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiToolCallRecord,
     AiUsageLedgerRecord,
 )
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.ai_operations_payload import ai_operations_payload
 from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
 from foundry_lite.application.services.runtime_service import RuntimeService
@@ -49,8 +50,10 @@ def test_ai_operations_run_list_and_detail_expose_safe_ledger_trace() -> None:
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
     )
     service.evidence_service = RuntimeEvidenceService(
+        ai_run_repository=ai_repository,
         engine=engine,
         policy=policy,
+        profile=RuntimeProfile(),
         runtime_repository=runtime_repository,
     )
 

@@ -19,6 +19,7 @@ from foundry_lite.application.services.pipeline_graph_model import (
     node_data,
     output_contract_columns,
     output_dataset_ref,
+    pipeline_graph_fingerprint,
     source_dataset_refs,
     topological_node_ids,
     validate_pipeline_graph,
@@ -495,17 +496,57 @@ def test_pipeline_validation_and_run_helpers_cover_failure_shapes() -> None:
         "schedule": None,
     }
 
-    result = _test_result(cast(dict, {"pipeline_id": "p", "id": "b", "graph": missing_output_graph}))
+    result = _test_result(
+        cast(
+            dict,
+            {
+                "pipeline_id": "p",
+                "id": "b",
+                "graph": missing_output_graph,
+                "graph_fingerprint": pipeline_graph_fingerprint(missing_output_graph),
+            },
+        )
+    )
 
     assert result["status"] == "failed"
     assert result["testCount"] == 1
     assert result["declaredTestCount"] == 0
     assert result["proofKind"] == "static_graph_output_contract"
     assert result["isDataExecution"] is False
-    assert result["evaluatedChecks"] == ["graph_validation", "output_dataset_and_contract"]
-    assert _output_contract_test_failures({"nodes": [], "outputContract": {"columns": []}}) == [
-        {"test": "output_dataset", "message": "output dataset reference is missing"}
-    ]
+    assert result["evaluatedChecks"] == ["graph_validation", "output_descriptor_contracts"]
+    assert _output_contract_test_failures({"nodes": [], "outputContract": {"columns": []}}) == []
+    assert (
+        _output_contract_test_failures(
+            {
+                "nodes": [
+                    {
+                        "id": "media-out",
+                        "kind": "output",
+                        "descriptorId": "output.media_set",
+                        "config": {"mediaSetRef": "media.target"},
+                    }
+                ],
+                "outputContract": {"columns": []},
+            }
+        )
+        == []
+    )
+    assert (
+        _output_contract_test_failures(
+            {
+                "nodes": [
+                    {
+                        "id": "dataset-out",
+                        "kind": "output",
+                        "descriptorId": "output.dataset",
+                        "config": {"outputDatasetRef": "analytics.orders"},
+                    }
+                ],
+                "outputContract": {"columns": []},
+            }
+        )
+        == []
+    )
     assert _cast_suggestions(
         [
             _column("unit_price"),

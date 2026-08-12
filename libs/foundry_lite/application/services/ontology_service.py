@@ -67,6 +67,19 @@ class OntologyService(CoreService):
     ) -> OntologyApplyResult:
         return self.activation_service.apply_ontology_text(yaml_text, ctx=ctx)
 
+    def apply_ontology_text_once(
+        self,
+        yaml_text: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> OntologyApplyResult:
+        return self.activation_service.apply_ontology_text_once(
+            yaml_text,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
     def validate_yaml_text(
         self,
         yaml_text: str,
@@ -79,12 +92,37 @@ class OntologyService(CoreService):
         self,
         version_number: int,
         *,
+        expected_active_version_number: int | None = None,
+        idempotency_key: str | None = None,
         ctx: RequestContext | None = None,
     ) -> OntologyRollbackResult:
-        return self.rollback_service.rollback_to_version(version_number, ctx=ctx)
+        return self.rollback_service.rollback_to_version(
+            version_number,
+            expected_active_version_number=expected_active_version_number,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def replay_rollback(
+        self,
+        version_number: int,
+        *,
+        expected_active_version_number: int,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> OntologyRollbackResult | None:
+        return self.rollback_service.replay_rollback(
+            version_number,
+            expected_active_version_number=expected_active_version_number,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
 
     def active_catalog(self, *, ctx: RequestContext | None = None) -> OntologyCatalogResult:
         return self.catalog_service.active_catalog(ctx=ctx)
+
+    def release_active_version_summary(self, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self.catalog_service.release_active_version_summary(ctx=ctx)
 
     def _active_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> OntologyVersionRow:
         return self.lookup_service._active_ontology_version(conn, ctx)

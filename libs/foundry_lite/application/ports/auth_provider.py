@@ -17,13 +17,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 
 __all__ = ["Credentials", "Principal", "AuthProvider"]
 
 Credentials = Mapping[str, str]
+OAuthSessionAuthority = Literal["local", "issuer"]
+OAuthGrantType = Literal["authorization_code"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,14 @@ class Principal:
     client_id: str | None = None
     token_scopes: tuple[str, ...] = ()
     oauth_session_id: str | None = None
+    oauth_session_hash: str | None = None
+    oauth_session_authority: OAuthSessionAuthority | None = None
+    authorization_server_issuer: str | None = None
+    oauth_grant_type: OAuthGrantType | None = None
+    oauth_resource: str | None = None
+    oauth_token_issued_at: int | None = None
+    oauth_token_expires_at: int | None = None
+    is_human_oauth: bool | None = None
     user_attributes: Mapping[str, object] = field(default_factory=dict[str, object])
 
 

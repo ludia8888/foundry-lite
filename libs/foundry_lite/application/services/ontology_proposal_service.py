@@ -1,10 +1,4 @@
-"""Ontology change proposal service: review-then-apply governance for ontology YAML.
-
-A submitter records the YAML plus its migration plan, a *different* reviewer
-approves against the current active ontology, and only an approved proposal is
-executed through the same validate/apply black boxes the direct endpoint uses.
-Proposals persist in the reusable insight-review storage (idempotent create,
-CAS assign/decide, exactly-once execution)."""
+"""Review, approve, and exactly-once apply ontology YAML proposals."""
 
 from __future__ import annotations
 
@@ -12,6 +6,11 @@ from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_proposal_governance import (
+    require_assigned_decider,
+    require_decidable,
+    require_execution_approval,
+)
 from foundry_lite.application.services.ontology_proposal_payloads import (
     ONTOLOGY_PROPOSAL_TYPE,
     PROPOSAL_EVENT_ACTIONS,
@@ -34,6 +33,12 @@ from foundry_lite.application.services.ontology_proposal_payloads import (
     require_fingerprint_match,
     required_text,
     withdrawal_record,
+)
+from foundry_lite.application.services.ontology_proposal_recovery import (
+    claim_new_execution,
+    finish_execution_after_activation,
+    reconcile_executing_proposal,
+    recover_apply_exception,
 )
 from foundry_lite.application.services.ontology_proposal_update import decision_time_plan, update_ontology_proposal
 from foundry_lite.application.services.ontology_protocols import OntologyRuntimeBoundary
@@ -94,6 +99,7 @@ class OntologyProposalService(CoreService):
         proposal_id: str,
         *,
         reviewer_user_id: str,
+        is_unassigned_only: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
@@ -112,8 +118,14 @@ class OntologyProposalService(CoreService):
                 assignee_user_id=reviewer,
                 assignment_idempotency_key=key,
                 updated_at=_now(),
+                is_unassigned_only=is_unassigned_only,
             )
             if after is None:
+                if is_unassigned_only:
+                    raise ConflictDetected(
+                        "ontology proposal was already claimed by another reviewer",
+                        details={"proposal_id": proposal_id},
+                    )
                 raise ConflictDetected(
                     "ontology proposal is no longer awaiting review",
                     details={"proposal_id": proposal_id, "status": proposal_status(before)},
@@ -137,10 +149,11 @@ class OntologyProposalService(CoreService):
         with self.engine.begin() as conn:
             row = self._require_proposal_row(conn, ctx, proposal_id)
             require_fingerprint_match(row, expected_fingerprint)
+            require_assigned_decider(row, ctx)
             replay = decision_replay(row, parsed, comment)
             if replay is not None:
                 return replay
-            self._require_decidable(conn, ctx, row, parsed)
+            require_decidable(row)
         # The plan may have drifted since submit: recompute it against the
         # CURRENT active ontology outside the storage transaction (the validate
         # black box owns its own transaction) and store the decision-time plan.
@@ -182,11 +195,23 @@ class OntologyProposalService(CoreService):
         if replay is not None:
             return replay
         try:
-            applied = self.ontology_service.apply_ontology_text(yaml_text, ctx=ctx)
+            applied = self.ontology_service.apply_ontology_text_once(
+                yaml_text,
+                idempotency_key=f"{proposal_id}:execute",
+                ctx=ctx,
+            )
         except Exception as exc:
-            self._record_execution_failure(ctx, proposal_id, exc)
-            raise
-        return self._finish_execution(ctx, proposal_id, dict(applied))
+            return recover_apply_exception(
+                self.engine,
+                ctx,
+                proposal_id,
+                self.runtime_service,
+                self._require_proposal_row,
+                self._store_execution_success,
+                self._record_execution_failure,
+                exc,
+            )
+        return finish_execution_after_activation(self._finish_execution, ctx, proposal_id, dict(applied))
 
     def withdraw_proposal(
         self,
@@ -267,6 +292,7 @@ class OntologyProposalService(CoreService):
         )
         with self.engine.begin() as conn:
             before = self._require_proposal_row(conn, ctx, proposal_id)
+            require_assigned_decider(before, ctx)
             after = self.insight_review_repository.decide_review(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -307,29 +333,29 @@ class OntologyProposalService(CoreService):
         with self.engine.begin() as conn:
             row = self._require_proposal_row(conn, ctx, proposal_id)
             require_fingerprint_match(row, expected_fingerprint)
+            if row["status"] == "approved":
+                require_execution_approval(row)
             if row["execution_status"] == "executed":
                 return proposal_payload(row), ""
-            if proposal_status(row) != "approved":
-                raise ConflictDetected(
-                    "only approved ontology proposals can be executed",
-                    details={"proposal_id": proposal_id, "status": proposal_status(row)},
+            if row["execution_status"] == "executing":
+                replay = reconcile_executing_proposal(
+                    conn,
+                    ctx,
+                    row,
+                    self.runtime_service,
+                    self._store_execution_success,
+                    _now(),
                 )
-            fingerprint = str(row["proposal_fingerprint"])
-            claimed = self.insight_review_repository.mark_execution_started(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                review_id=proposal_id,
-                execution_idempotency_key=f"{proposal_id}:execute",
-                execution_request_fingerprint=fingerprint,
-                proposal_fingerprint=fingerprint,
-                updated_at=_now(),
+                if replay is not None:
+                    return replay, ""
+                return None, proposal_yaml_text(row)
+            return None, claim_new_execution(
+                self.insight_review_repository,
+                conn,
+                ctx,
+                row,
+                _now(),
             )
-            if claimed is None:
-                raise ConflictDetected(
-                    "ontology proposal execution was already claimed",
-                    details={"proposal_id": proposal_id, "executionStatus": row["execution_status"]},
-                )
-            return None, proposal_yaml_text(claimed)
 
     def _finish_execution(
         self,
@@ -345,22 +371,34 @@ class OntologyProposalService(CoreService):
             "appliedByUserId": ctx.actor_user_id,
         }
         with self.engine.begin() as conn:
-            row = self.insight_review_repository.mark_execution_succeeded(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                review_id=proposal_id,
-                action_run_id=str(applied["ontology_version_id"]),
-                updated_at=_now(),
-                metadata={"appliedOntologyVersion": applied_info},
-            )
-            if row is None:
-                raise ConflictDetected(
-                    "ontology proposal execution state changed concurrently",
-                    details={"proposal_id": proposal_id},
-                )
-            self._audit_event(conn, ctx, "applied", row)
-            self._outbox_applied(conn, ctx, row, applied_info)
-            return proposal_payload(row)
+            current = self._require_proposal_row(conn, ctx, proposal_id)
+            if current["execution_status"] == "executed":
+                return proposal_payload(current)
+            return self._store_execution_success(conn, ctx, current, applied_info)
+
+    def _store_execution_success(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        current: InsightReviewRow,
+        applied_info: dict[str, object],
+    ) -> dict[str, object]:
+        row = self.insight_review_repository.mark_execution_succeeded(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            review_id=current["id"],
+            action_run_id=str(applied_info["ontologyVersionId"]),
+            updated_at=_now(),
+            metadata={"appliedOntologyVersion": applied_info},
+        )
+        if row is None:
+            latest = self._require_proposal_row(conn, ctx, current["id"])
+            if latest["execution_status"] == "executed":
+                return proposal_payload(latest)
+            raise ConflictDetected("ontology proposal execution state changed concurrently")
+        self._audit_event(conn, ctx, "applied", row)
+        self._outbox_applied(conn, ctx, row, applied_info)
+        return proposal_payload(row)
 
     def _outbox_applied(
         self,
@@ -399,26 +437,6 @@ class OntologyProposalService(CoreService):
                 resource_id=proposal_id,
                 action="ontology:activate",
                 after_ref={"error": str(exc), "errorType": exc.__class__.__name__},
-            )
-
-    def _require_decidable(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        row: InsightReviewRow,
-        decision: ProposalDecision,
-    ) -> None:
-        if proposal_status(row) not in ("submitted", "in_review"):
-            raise ConflictDetected(
-                "ontology proposal is no longer decidable",
-                details={"proposal_id": row["id"], "status": proposal_status(row)},
-            )
-        if decision == "approved" and row["created_by_user_id"] == ctx.actor_user_id:
-            # Separation of duties: the submitter can never be the approver.
-            self._audit_denied(conn, ctx, "ontology:proposal:approve", row["id"])
-            raise PermissionDenied(
-                "ontology proposal submitters may not approve their own proposal",
-                details={"proposal_id": row["id"], "submittedByUserId": row["created_by_user_id"]},
             )
 
     def _require_submitter(self, conn: TransactionContext, ctx: RequestContext, row: InsightReviewRow) -> None:

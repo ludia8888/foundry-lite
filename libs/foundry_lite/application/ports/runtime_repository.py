@@ -71,6 +71,17 @@ class RuntimeRepository(Protocol):
         """Return lineage edges touching a resource for one tenant."""
         ...
 
+    def catalog_lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[LineageEdgeRow]:
+        """Return lineage edges touching a catalog resource, folded to resource granularity.
+
+        Edges are recorded per dataset version because that is what a build actually consumes
+        and produces. A lineage graph is browsed at catalog granularity though -- "which
+        datasets feed this one" -- so version edges are collapsed onto the resources that own
+        them and deduplicated. Callers that need the per-version provenance behind an edge use
+        `lineage_for_resource` instead.
+        """
+        ...
+
     def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
         """Return operational run, audit, and outbox rows for one tenant.
 
@@ -197,8 +208,42 @@ class RuntimeRepository(Protocol):
         """
         ...
 
+    def audit_event_for_resource(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        event_type: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> RuntimeRow | None:
+        """Return the newest exact durable audit event for one tenant resource."""
+        ...
+
+    def audit_events_for_resources(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        resource_refs: Sequence[tuple[str, str]],
+        event_types: Sequence[str],
+        limit: int,
+    ) -> list[RuntimeRow]:
+        """Return a bounded newest-first audit window for exact tenant resources and event types."""
+        ...
+
     def pending_outbox_events(self, *, transaction: TransactionContext, tenant_id: str, limit: int) -> list[RuntimeRow]:
         """Return bounded pending outbox rows in publish order."""
+        ...
+
+    def outbox_event_by_idempotency_key(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> RuntimeRow | None:
+        """Return one tenant-scoped durable mutation receipt by exact key."""
         ...
 
     def mark_outbox_event_publishing(

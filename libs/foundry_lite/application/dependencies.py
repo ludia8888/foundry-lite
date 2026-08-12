@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 
 from foundry_lite.application.dependency_action import (
     ActionBranchRepository,
@@ -20,6 +19,18 @@ from foundry_lite.application.dependency_action import (
     ActionRunOrchestrator,
 )
 from foundry_lite.application.dependency_aip import AipDependencies
+from foundry_lite.application.dependency_aip_ports import (
+    CitationSourceVerifier,
+    CompletionModelAdapter,
+    EmbeddingModelAdapter,
+    GovernedSemanticModelPort,
+    LanguageModelAdapter,
+    ModelRegistryRepository,
+    SemanticRowCacheRepository,
+    ToolExecutor,
+    TrainedModelInferencePort,
+    VisionEmbeddingModelAdapter,
+)
 from foundry_lite.application.dependency_compat import (
     BundleFactory,
     apply_flat_dependency_overrides,
@@ -28,6 +39,27 @@ from foundry_lite.application.dependency_compat import (
     fill_missing_bundles_from_flat_overrides,
     preserve_media_processor_override,
     required_dependency,
+)
+from foundry_lite.application.dependency_core import (
+    DestructiveDevelopmentAdmin,
+    McpRateLimiter,
+    MetadataRepository,
+    OAuthSessionRepository,
+    OAuthTokenIssuer,
+    ObjectDependencies,
+    ObjectIndexRepository,
+    ObjectIndexRowHashRepository,
+    ObjectReadRepository,
+    ObjectSetRepository,
+    OsdkApplicationRepository,
+    Path,
+    PathDependencies,
+    PolicyService,
+    SearchAdapter,
+    SecretProvider,
+    SecretVault,
+    SecurityDependencies,
+    TransactionManager,
 )
 from foundry_lite.application.dependency_data import DataDependencies
 from foundry_lite.application.dependency_media import (
@@ -43,6 +75,19 @@ from foundry_lite.application.dependency_media import (
     MediaRepository,
     MediaStorageAdapter,
 )
+from foundry_lite.application.dependency_release import (
+    GovernedReleaseDeliveryConfig,
+    GovernedReleaseDependencies,
+    GovernedReleaseDependencyAccessors,
+    GovernedReleaseLiveAttestationRepository,
+    GovernedReleaseLiveAuthority,
+    InfrastructureDeploymentAdapter,
+    ReleaseDeliveryRepository,
+    SourceControlReleasePort,
+)
+from foundry_lite.application.dependency_release import (
+    GovernedReleaseMcpAuthority as GovernedReleaseMcpAuthority,
+)
 from foundry_lite.application.dependency_source import SourceDependencies
 from foundry_lite.application.ports import (
     AiEvalRepository,
@@ -55,83 +100,32 @@ from foundry_lite.application.ports import (
     DatasetTransactionRepository,
     DatasetVersionRepository,
     MaterializationRepository,
-    MetadataRepository,
-    ObjectIndexRepository,
-    ObjectIndexRowHashRepository,
-    ObjectReadRepository,
-    ObjectSetRepository,
     OntologyRepository,
     PipelineRepository,
     ResourceCatalogRepository,
     RuntimeRepository,
-    TransactionManager,
     TransformRepository,
 )
 from foundry_lite.application.ports.backup_artifact_store import BackupArtifactStore
-from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.code_execution import CodeExecutionAdapter
-from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
-from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
-from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
-from foundry_lite.application.ports.language_model import GovernedSemanticModelPort, LanguageModelAdapter
-from foundry_lite.application.ports.mcp_rate_limiter import McpRateLimiter
-from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
-from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
-from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
 from foundry_lite.application.ports.pipeline_dag_orchestrator import (
     PipelineDagOrchestrator,
     UnavailablePipelineDagOrchestrator,
 )
 from foundry_lite.application.ports.pipeline_execution_repository import PipelineExecutionRepository
-from foundry_lite.application.ports.search_adapter import SearchAdapter
-from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
-from foundry_lite.application.ports.semantic_row_cache_repository import SemanticRowCacheRepository
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
 from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
-from foundry_lite.application.ports.tool_executor import ToolExecutor
-from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
 from foundry_lite.application.ports.virtual_table import VirtualTableReader, VirtualTableRepository
-from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.runtime_profile import RuntimeProfile
-from foundry_lite.security.policy import PolicyService
-
-
-@dataclass(frozen=True)
-class PathDependencies:
-    root: Path
-    storage_root: Path
-
-
-@dataclass(frozen=True)
-class SecurityDependencies:
-    engine: TransactionManager
-    policy: PolicyService
-    metadata_repository: MetadataRepository
-    destructive_development_admin: DestructiveDevelopmentAdmin
-    osdk_application_repository: OsdkApplicationRepository
-    oauth_session_repository: OAuthSessionRepository
-    oauth_token_issuer: OAuthTokenIssuer
-    secret_provider: SecretProvider
-    secret_vault: SecretVault
-    mcp_rate_limiter: McpRateLimiter
-
-
-@dataclass(frozen=True)
-class ObjectDependencies:
-    object_index_repository: ObjectIndexRepository
-    object_index_row_hash_repository: ObjectIndexRowHashRepository
-    object_read_repository: ObjectReadRepository
-    object_set_repository: ObjectSetRepository
-    search_adapter: SearchAdapter
 
 
 @dataclass(frozen=True)
@@ -145,7 +139,7 @@ class RuntimeDependencies:
 
 
 @dataclass(frozen=True, init=False)
-class CoreDependencies(ActionDependencyAccessors):
+class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAccessors):
     """Dependencies that compose the core facade without hard-coding local infrastructure."""
 
     action_repository: ActionRepository
@@ -157,6 +151,12 @@ class CoreDependencies(ActionDependencyAccessors):
     action_run_orchestrator: ActionRunOrchestrator
     action_notification_policy_repository: ActionNotificationPolicyRepository
     action_notification_recipient_directory: ActionNotificationRecipientDirectory
+    governed_release_delivery_config: ClassVar[GovernedReleaseDeliveryConfig]
+    source_control_release_adapter: ClassVar[SourceControlReleasePort]
+    infrastructure_deployment_adapter: ClassVar[InfrastructureDeploymentAdapter]
+    release_delivery_repository: ClassVar[ReleaseDeliveryRepository]
+    governed_release_live_attestation_repository: ClassVar[GovernedReleaseLiveAttestationRepository]
+    governed_release_live_authority: ClassVar[GovernedReleaseLiveAuthority]
     paths: PathDependencies
     security: SecurityDependencies
     action: ActionDependencies
@@ -363,6 +363,9 @@ class CoreDependencies(ActionDependencyAccessors):
     @property
     def ai_run_repository(self) -> AiRunRepository:
         return self.aip.ai_run_repository
+
+    def _governed_release_dependencies(self) -> GovernedReleaseDependencies:
+        return self.aip.governed_release
 
     @property
     def embedding_model_adapter(self) -> EmbeddingModelAdapter:

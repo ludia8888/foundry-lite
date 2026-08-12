@@ -19,6 +19,7 @@ from foundry_lite.application.services.pipeline_graph_normalizer import (
     empty_pipeline_graph_v2,
     normalize_pipeline_graph,
 )
+from foundry_lite.application.services.pipeline_graph_release_diff import pipeline_graph_release_diff
 from foundry_lite.application.services.pipeline_graph_three_way_merge import (
     merge_pipeline_graphs,
 )
@@ -313,14 +314,7 @@ class PipelineDefinitionService(CoreService):
 
 
 def _graph_diff(base: Mapping[str, object], graph: Mapping[str, object]) -> dict[str, object]:
-    base_fp = pipeline_graph_fingerprint(base)
-    graph_fp = pipeline_graph_fingerprint(graph)
-    return {
-        "changed": base_fp != graph_fp,
-        "baseFingerprint": base_fp,
-        "graphFingerprint": graph_fp,
-        "summary": {"nodeCount": len(_list(base, "nodes")), "newNodeCount": len(_list(graph, "nodes"))},
-    }
+    return pipeline_graph_release_diff(base, graph)
 
 
 def _three_way_rebase_graphs(
@@ -342,11 +336,6 @@ def _three_way_rebase_graphs(
             },
         )
     return dict(latest_graph), dict(normalize_pipeline_graph(result.graph))
-
-
-def _list(graph: Mapping[str, object], key: str) -> list[object]:
-    value = graph.get(key)
-    return value if isinstance(value, list) else []
 
 
 def _branch_audit_ref(row: PipelineBranchRow | None) -> dict[str, object] | None:

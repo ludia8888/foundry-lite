@@ -188,9 +188,15 @@ class PipelineWorkspace:
         proposal_id: str,
         *,
         assignee_user_id: str,
+        is_unassigned_only: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
-        return self._pipeline.assign_proposal(proposal_id, assignee_user_id=assignee_user_id, ctx=ctx)
+        return self._pipeline.assign_proposal(
+            proposal_id,
+            assignee_user_id=assignee_user_id,
+            is_unassigned_only=is_unassigned_only,
+            ctx=ctx,
+        )
 
     def decide(
         self,
@@ -242,6 +248,14 @@ class PipelineWorkspace:
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         return self._pipeline.list_deployments(pipeline_id, limit=limit, ctx=ctx)
+
+    def replay_deployment(
+        self,
+        idempotency_key: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object] | None:
+        return self._pipeline.replay_deployment(idempotency_key, ctx=ctx)
 
     def run(
         self,

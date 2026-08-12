@@ -6,15 +6,20 @@ from threading import Event
 from types import SimpleNamespace
 from typing import Any
 
+import foundry_lite.application.services.pipeline_deployment_service as pipeline_deployment_module
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services.pipeline_deployment_admission import PipelineDeploymentOutcomeUnknown
 from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
 from foundry_lite.application.services.pipeline_graph_normalizer import normalize_pipeline_graph
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_api import main as api_main
 from foundry_lite_api import runtime as api_runtime
+from pytest import raises
+from sqlalchemy import delete, update
 
 
 def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
@@ -104,6 +109,24 @@ def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
     version = _ok(client.post(f"/api/pipelines/proposals/{proposal['id']}/execute", headers=headers))
     versions = _ok(client.get("/api/pipelines/api_orders_readiness/versions?limit=10", headers=headers))
     version_detail = _ok(client.get(f"/api/pipelines/versions/{version['id']}", headers=headers))
+    deployment_result = pipeline_deployment_module._deployment_result
+    has_failed_projection = False
+
+    def fail_first_committed_projection(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal has_failed_projection
+        if not has_failed_projection:
+            has_failed_projection = True
+            raise RuntimeError("deployment projection failed after commit")
+        return deployment_result(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline_deployment_module, "_deployment_result", fail_first_committed_projection)
+    with raises(PipelineDeploymentOutcomeUnknown):
+        client.post(
+            f"/api/pipelines/api_orders_readiness/deploy/{version['id']}",
+            json={"options": {"mode": "api-test"}},
+            headers={**headers, "Idempotency-Key": "api-pipeline-deployment"},
+        )
+    monkeypatch.setattr(pipeline_deployment_module, "_deployment_result", deployment_result)
     deployed = _ok(
         client.post(
             f"/api/pipelines/api_orders_readiness/deploy/{version['id']}",
@@ -186,6 +209,7 @@ def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
     assert version_detail["pipelineId"] == "api_orders_readiness"
     assert deployed["options"] == {"mode": "api-test"}
     assert deployments["items"][0]["id"] == deployed["deployment"]["id"]
+    assert len(deployments["items"]) == 1
     assert run["status"] == "succeeded"
     assert run_detail["outputDatasetRef"] == "clean.api_orders_readiness"
     assert [node["nodeId"] for node in run_detail["nodeRuns"]] == ["raw_orders", "clean_sql", "out"]
@@ -254,6 +278,7 @@ def test_pipeline_api_routes_cover_rebase_abandon_and_withdraw(
         branch_key="api-rebase-seed",
         output_ref="clean.api_rebase_seed",
     )
+    _ok(client.post(f"/api/pipelines/branches/{seed['id']}/tests/run", headers=headers))
     seed_proposal = _ok(
         client.post(
             f"/api/pipelines/branches/{seed['id']}/propose",
@@ -317,7 +342,7 @@ def test_pipeline_api_routes_cover_rebase_abandon_and_withdraw(
     assert withdrawn["status"] == "withdrawn"
 
 
-def test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execution(
+def test_pipeline_proposal_allows_author_review_but_blocks_unassigned_and_stale_execution(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -336,6 +361,7 @@ def test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execut
     client = TestClient(api_main.app)
     creator_headers = _context_headers(ctx.actor_user_id, ctx.tenant_id, ctx.roles)
     reviewer_headers = _context_headers("reviewer-api", ctx.tenant_id, ctx.roles)
+    third_party_headers = _context_headers("reviewer-other", ctx.tenant_id, ctx.roles)
 
     candidate = _create_graph_branch(
         client,
@@ -351,23 +377,60 @@ def test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execut
         json={"assigneeUserId": ctx.actor_user_id},
         headers=creator_headers,
     )
+    assert self_assignment.status_code == 200
+    self_approved = _decide(client, creator_headers, proposal, "approve")
+    assert self_approved["canCurrentUserReview"] is True
+    assert self_approved["reviewPolicy"]["requiresSeparateReviewer"] is False
+
+    candidate = _create_graph_branch(
+        client,
+        creator_headers,
+        pipeline_id="protected_pipeline",
+        name="reviewed-candidate",
+        branch_key="protected-reviewed-candidate",
+        output_ref="clean.protected_reviewed_candidate",
+    )
+    proposal = _propose(client, creator_headers, candidate, "reviewed-candidate-proposal")
     unassigned_decision = client.post(
         f"/api/pipelines/proposals/{proposal['id']}/decision",
         json={"decision": "approve"},
         headers=reviewer_headers,
     )
-    assert self_assignment.status_code == 400
     assert unassigned_decision.status_code == 400
 
     _assign(client, creator_headers, proposal, "reviewer-api")
+    third_party_decision = client.post(
+        f"/api/pipelines/proposals/{proposal['id']}/decision",
+        json={"decision": "approve"},
+        headers=third_party_headers,
+    )
     creator_decision = client.post(
         f"/api/pipelines/proposals/{proposal['id']}/decision",
         json={"decision": "approve"},
         headers=creator_headers,
     )
+    assert third_party_decision.status_code == 400
     assert creator_decision.status_code == 400
     approved = _decide(client, reviewer_headers, proposal, "approve")
     assert approved["canCurrentUserReview"] is True
+    reviewer_replay = client.post(
+        f"/api/pipelines/proposals/{proposal['id']}/decision",
+        json={"decision": "approve"},
+        headers=reviewer_headers,
+    )
+    third_party_replay = client.post(
+        f"/api/pipelines/proposals/{proposal['id']}/decision",
+        json={"decision": "approve"},
+        headers=third_party_headers,
+    )
+    creator_replay = client.post(
+        f"/api/pipelines/proposals/{proposal['id']}/decision",
+        json={"decision": "approve"},
+        headers=creator_headers,
+    )
+    assert reviewer_replay.status_code == 200
+    assert third_party_replay.status_code == 400
+    assert creator_replay.status_code == 400
 
     winner = _create_graph_branch(
         client,
@@ -385,6 +448,54 @@ def test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execut
             f"/api/pipelines/proposals/{winner_proposal['id']}/execute",
             headers=creator_headers,
         )
+    )
+
+    corrupt_actor = _create_graph_branch(
+        client,
+        creator_headers,
+        pipeline_id="corrupt_actor_pipeline",
+        name="candidate",
+        branch_key="corrupt-actor-branch",
+        output_ref="clean.corrupt_actor",
+    )
+    corrupt_actor_proposal = _propose(client, creator_headers, corrupt_actor, "corrupt-actor-proposal")
+    _assign(client, creator_headers, corrupt_actor_proposal, "reviewer-api")
+    _decide(client, reviewer_headers, corrupt_actor_proposal, "approve")
+    with foundry.engine.begin() as conn:
+        conn.execute(
+            update(db.audit_events)
+            .where(
+                db.audit_events.c.event_type == "pipeline.proposal.approved",
+                db.audit_events.c.resource_id == corrupt_actor_proposal["id"],
+            )
+            .values(actor_user_id="reviewer-other")
+        )
+    corrupt_actor_execute = client.post(
+        f"/api/pipelines/proposals/{corrupt_actor_proposal['id']}/execute",
+        headers=creator_headers,
+    )
+
+    missing_audit = _create_graph_branch(
+        client,
+        creator_headers,
+        pipeline_id="missing_audit_pipeline",
+        name="candidate",
+        branch_key="missing-audit-branch",
+        output_ref="clean.missing_audit",
+    )
+    missing_audit_proposal = _propose(client, creator_headers, missing_audit, "missing-audit-proposal")
+    _assign(client, creator_headers, missing_audit_proposal, "reviewer-api")
+    _decide(client, reviewer_headers, missing_audit_proposal, "approve")
+    with foundry.engine.begin() as conn:
+        conn.execute(
+            delete(db.audit_events).where(
+                db.audit_events.c.event_type == "pipeline.proposal.approved",
+                db.audit_events.c.resource_id == missing_audit_proposal["id"],
+            )
+        )
+    missing_audit_execute = client.post(
+        f"/api/pipelines/proposals/{missing_audit_proposal['id']}/execute",
+        headers=creator_headers,
     )
 
     stale_execute = client.post(
@@ -405,6 +516,8 @@ def test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execut
         )
     )
     assert stale_execute.status_code == 409
+    assert corrupt_actor_execute.status_code == 403
+    assert missing_audit_execute.status_code == 403
     assert stale_view["isStale"] is True
     assert "newer_pipeline_version_exists" in stale_view["staleReasons"]
     withdrawn = _ok(
@@ -901,6 +1014,8 @@ def _decide(
     proposal: dict[str, Any],
     decision: str,
 ) -> dict[str, Any]:
+    if decision == "approve":
+        _ok(client.post(f"/api/pipelines/branches/{proposal['branchId']}/tests/run", headers=headers))
     return _ok(
         client.post(
             f"/api/pipelines/proposals/{proposal['id']}/decision",

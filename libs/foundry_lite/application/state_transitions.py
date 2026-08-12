@@ -158,7 +158,9 @@ WORKFLOW_RUN_LEASE_RUNNING = StatusTransition(
     ("requested", "starting", "running", "succeeded", "failed", "cancelled", "start_unknown"), "running"
 )
 AI_RUN_SUCCEEDED = StatusTransition(("started", "running"), "succeeded")
+AI_RUN_CHALLENGE_REFRESHED = StatusTransition(("started",), "started")
 AI_RUN_FAILED = StatusTransition(("started", "running"), "failed")
+AI_RUN_RETRY_RUNNING = StatusTransition(("failed",), "running")
 AI_RUN_CANCELLED = StatusTransition(("started", "running"), "cancelled")
 AI_EVAL_RUN_PASSED = StatusTransition(("running",), "passed")
 AI_EVAL_RUN_FAILED = StatusTransition(("running",), "failed")

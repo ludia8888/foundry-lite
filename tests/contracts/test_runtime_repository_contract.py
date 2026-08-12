@@ -88,6 +88,11 @@ class FakeRuntimeRepository:
             and (row["from_resource_id"] == resource_id or row["to_resource_id"] == resource_id)
         ]
 
+    def catalog_lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[LineageEdgeRow]:
+        """Fold version edges onto owning resources; this fake stores no dataset catalog."""
+
+        return []
+
     def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
         def window(table: RuntimeRowsTable) -> list[RuntimeRow]:
             rows = self.rows_for_tenant(transaction=None, table=table, tenant_id=tenant_id)
@@ -144,9 +149,61 @@ class FakeRuntimeRepository:
                 return cast(RuntimeRow, dict(row))
         return None
 
-    def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[RuntimeRow]:
+    def rows_for_tenant(
+        self,
+        *,
+        transaction: Any,
+        table: RuntimeRowsTable,
+        tenant_id: str,
+        event_types: Sequence[str] | None = None,
+    ) -> list[RuntimeRow]:
         del transaction
-        return [cast(RuntimeRow, dict(row)) for row in self.tables[table] if row["tenant_id"] == tenant_id]
+        rows = [row for row in self.tables[table] if row["tenant_id"] == tenant_id]
+        if event_types is not None:
+            rows = [row for row in rows if row.get("event_type") in event_types]
+        return [cast(RuntimeRow, dict(row)) for row in rows]
+
+    def audit_event_for_resource(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        event_type: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> RuntimeRow | None:
+        rows = self.audit_events_for_resources(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            resource_refs=[(resource_type, resource_id)],
+            event_types=[event_type],
+            limit=1,
+        )
+        return rows[0] if rows else None
+
+    def audit_events_for_resources(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        resource_refs: Sequence[tuple[str, str]],
+        event_types: Sequence[str],
+        limit: int,
+    ) -> list[RuntimeRow]:
+        del transaction
+        refs = set(resource_refs)
+        types = set(event_types)
+        if not refs or not types or limit < 1:
+            return []
+        rows = [
+            row
+            for row in self.tables["audit_events"]
+            if row["tenant_id"] == tenant_id
+            and row["event_type"] in types
+            and (str(row["resource_type"]), str(row["resource_id"])) in refs
+        ]
+        rows.sort(key=lambda row: (str(row["created_at"]), str(row["id"])), reverse=True)
+        return [cast(RuntimeRow, dict(row)) for row in rows[:limit]]
 
     def pending_outbox_events(self, *, transaction: Any, tenant_id: str, limit: int) -> list[RuntimeRow]:
         del transaction
@@ -698,14 +755,22 @@ class SqlAlchemyRuntimeRepositoryHarness:
             )
 
 
-def _audit_record(*, event_id: str = "audit_1", tenant_id: str = "tenant-demo") -> AuditEventRecord:
+def _audit_record(
+    *,
+    event_id: str = "audit_1",
+    tenant_id: str = "tenant-demo",
+    event_type: str = "permission.denied",
+    resource_type: str = "dataset",
+    resource_id: str = "raw.orders",
+    created_at: str = "2026-06-10T00:00:00Z",
+) -> AuditEventRecord:
     return AuditEventRecord(
         event_id=event_id,
         tenant_id=tenant_id,
         actor_user_id="user-demo",
-        event_type="permission.denied",
-        resource_type="dataset",
-        resource_id="raw.orders",
+        event_type=event_type,
+        resource_type=resource_type,
+        resource_id=resource_id,
         action="dataset:write",
         decision="deny",
         policy_decision={},
@@ -714,7 +779,7 @@ def _audit_record(*, event_id: str = "audit_1", tenant_id: str = "tenant-demo") 
         correlation_id="req-demo",
         request_id="req-demo",
         metadata={},
-        created_at="2026-06-10T00:00:00Z",
+        created_at=created_at,
     )
 
 
@@ -1344,6 +1409,61 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
 
 
+def test_runtime_repository_contract_audit_resource_window_is_exact_bounded_and_tenant_scoped(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    records = [
+        _audit_record(
+            event_id="target-old",
+            event_type="governed_release.action.started",
+            resource_type="governed_release_proposal",
+            resource_id="proposal-1",
+            created_at="2026-06-10T00:00:01Z",
+        ),
+        _audit_record(
+            event_id="target-new",
+            event_type="governed_release.action.succeeded",
+            resource_type="governed_release_proposal",
+            resource_id="proposal-1",
+            created_at="2026-06-10T00:00:02Z",
+        ),
+        _audit_record(
+            event_id="wrong-resource",
+            event_type="governed_release.action.succeeded",
+            resource_type="pipeline_release_proposal",
+            resource_id="proposal-1",
+            created_at="2026-06-10T00:00:03Z",
+        ),
+        _audit_record(
+            event_id="wrong-event",
+            event_type="permission.denied",
+            resource_type="governed_release_proposal",
+            resource_id="proposal-1",
+            created_at="2026-06-10T00:00:04Z",
+        ),
+        _audit_record(
+            event_id="wrong-tenant",
+            tenant_id="tenant-other",
+            event_type="governed_release.action.succeeded",
+            resource_type="governed_release_proposal",
+            resource_id="proposal-1",
+            created_at="2026-06-10T00:00:05Z",
+        ),
+    ]
+    with harness.transaction() as transaction:
+        for record in records:
+            harness.repository.insert_audit_event(transaction=transaction, record=record)
+        rows = harness.repository.audit_events_for_resources(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            resource_refs=[("governed_release_proposal", "proposal-1")],
+            event_types=["governed_release.action.started", "governed_release.action.succeeded"],
+            limit=1,
+        )
+
+    assert [row["id"] for row in rows] == ["target-new"]
+
+
 def test_runtime_repository_contract_list_runs_windows_to_recent_rows(
     harness: RuntimeRepositoryHarness,
 ) -> None:
@@ -1506,6 +1626,29 @@ def test_runtime_repository_contract_lineage_lookup_is_tenant_scoped(
     assert [row["id"] for row in by_input] == ["lineage_1"]
     assert [row["id"] for row in by_output] == ["lineage_1"]
     assert [row["id"] for row in other_tenant] == ["lineage_other"]
+
+
+def test_runtime_repository_contract_catalog_lineage_is_empty_without_a_dataset_resource(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    """Catalog lineage is keyed by the resource that owns a version, not by the version id.
+
+    Regression: `resource.search` hands back catalog resource ids while edges are stored per
+    dataset version, so passing a search result straight to the graph returned nothing. An id
+    that owns no dataset version must fold to an empty graph rather than leaking raw version
+    edges.
+    """
+
+    with harness.transaction() as transaction:
+        harness.repository.insert_lineage_edge(transaction=transaction, record=_lineage_record())
+
+    version_level = harness.repository.lineage_for_resource(tenant_id="tenant-demo", resource_id="dsv_input")
+    catalog_level = harness.repository.catalog_lineage_for_resource(
+        tenant_id="tenant-demo", resource_id="resource_unknown"
+    )
+
+    assert [row["id"] for row in version_level] == ["lineage_1"]
+    assert catalog_level == []
 
 
 def test_runtime_repository_contract_run_relations_are_tenant_scoped_and_idempotent(

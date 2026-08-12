@@ -80,6 +80,17 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         ctx = ctx or RequestContext()
         return self.runtime_repository.lineage_for_resource(tenant_id=ctx.tenant_id, resource_id=resource_id)
 
+    def catalog_lineage_for_resource(
+        self,
+        resource_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> list[LineageEdgeRow]:
+        """Lineage at the granularity a catalog resource is browsed at, not per dataset version."""
+
+        ctx = ctx or RequestContext()
+        return self.runtime_repository.catalog_lineage_for_resource(tenant_id=ctx.tenant_id, resource_id=resource_id)
+
     def source_run_chain(
         self,
         source_dataset_version_id: str,
@@ -126,6 +137,26 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         self.policy.require(ctx, "operations:read:summary")
         snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id, limit=OPERATIONS_RUN_MAX_LIMIT)
         return cast(RuntimeRunSnapshot, redact_sensitive(snapshot, self.policy.sensitive_column_names(ctx)))
+
+    def list_release_audit_events(
+        self,
+        resource_refs: Sequence[tuple[str, str]],
+        event_types: Sequence[str],
+        *,
+        limit: int = 100,
+        ctx: RequestContext | None = None,
+    ) -> list[RuntimeRow]:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "operations:read:detail")
+        with self.engine.begin() as conn:
+            rows = self.runtime_repository.audit_events_for_resources(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                resource_refs=resource_refs,
+                event_types=event_types,
+                limit=max(1, min(limit, OPERATIONS_RUN_MAX_LIMIT)),
+            )
+        return cast(list[RuntimeRow], redact_sensitive(rows, self.policy.sensitive_column_names(ctx)))
 
     def query_runs(
         self,
@@ -354,6 +385,14 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
         )
+
+    def _outbox_event_by_idempotency_key(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        idempotency_key: str,
+    ) -> Mapping[str, object] | None:
+        return self.evidence_service._outbox_event_by_idempotency_key(conn, ctx, idempotency_key)
 
     def _lineage(
         self,

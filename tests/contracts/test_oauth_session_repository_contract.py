@@ -135,6 +135,7 @@ def test_oauth_token_issuer_contract_emits_public_jwks_and_osdk_claims(tmp_path)
     assert token["claims"]["client_id"] == "orders-web"
     assert token["claims"]["scope"] == "osdk:object:Order:read"
     assert token["claims"]["foundry_lite_session_id"] == "session-1"
+    assert token["claims"]["gty"] == "authorization_code"
     assert cast(list[dict[str, Any]], jwks["keys"])[0]["kid"] == "foundry-lite-local-osdk-oauth"
 
 

@@ -13,6 +13,13 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.runtime_profile import RuntimeProfile
+from foundry_lite.application.services.aip.governed_release_mutation_gate import (
+    GovernedReleaseMutationRequirement,
+    governed_release_required,
+    is_authorized_release_run,
+    mutation_requirement,
+)
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.runtime_error_payloads import require_write_traffic_open, runtime_error_payload
 from foundry_lite.domain.context import RequestContext
@@ -22,8 +29,9 @@ from foundry_lite.domain.errors import PermissionDenied
 class RuntimeEvidenceService(CoreService):
     """Owns durable runtime evidence writes shared by application use cases."""
 
-    required_dependencies = ("engine", "policy", "runtime_repository")
+    required_dependencies = ("ai_run_repository", "engine", "policy", "profile", "runtime_repository")
     required_collaborators = ()
+    profile: RuntimeProfile
 
     def _require_write_traffic_open(
         self,
@@ -33,6 +41,7 @@ class RuntimeEvidenceService(CoreService):
         resource_type: str,
         resource_id: str,
     ) -> None:
+        self._require_governed_release_mutation(ctx, operation, resource_type, resource_id)
         require_write_traffic_open(
             self.engine,
             self.runtime_repository,
@@ -40,6 +49,59 @@ class RuntimeEvidenceService(CoreService):
             operation=operation,
             resource_type=resource_type,
             resource_id=resource_id,
+        )
+
+    def _require_governed_release_mutation(
+        self,
+        ctx: RequestContext,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None:
+        requirement = mutation_requirement(operation)
+        if requirement is None or not self.profile.is_protected:
+            return
+        with self.engine.begin() as conn:
+            run = self._governed_release_run(conn, ctx)
+            is_allowed = is_authorized_release_run(run, ctx, requirement, resource_id)
+            if not is_allowed:
+                self._audit_governed_release_denial(conn, ctx, operation, resource_type, resource_id, requirement)
+        if not is_allowed:
+            raise governed_release_required(operation)
+
+    def _governed_release_run(self, conn: TransactionContext, ctx: RequestContext) -> Mapping[str, object] | None:
+        run_id = ctx.governed_release_run_id
+        if not isinstance(run_id, str) or not run_id:
+            return None
+        return self.ai_run_repository.execution_run_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ai_run_id=run_id,
+        )
+
+    def _audit_governed_release_denial(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+        requirement: GovernedReleaseMutationRequirement,
+    ) -> None:
+        self._audit(
+            conn,
+            ctx,
+            event_type="governed_release.mutation.denied",
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=operation,
+            decision="deny",
+            policy_decision={
+                "reason": "governed_release_required",
+                "requiredTools": list(requirement.tool_names),
+                "runtimeProfile": self.profile.name,
+            },
+            correlation_id=ctx.request_id,
         )
 
     def _require_or_audit(
@@ -131,6 +193,18 @@ class RuntimeEvidenceService(CoreService):
             ),
         )
         return event_id if inserted else None
+
+    def _outbox_event_by_idempotency_key(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        idempotency_key: str,
+    ) -> Mapping[str, object] | None:
+        return self.runtime_repository.outbox_event_by_idempotency_key(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            idempotency_key=idempotency_key,
+        )
 
     def _lineage(
         self,

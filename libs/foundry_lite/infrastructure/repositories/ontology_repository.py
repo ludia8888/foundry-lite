@@ -514,3 +514,22 @@ class SqlAlchemyOntologyRepository:
             .first()
         )
         return cast(ActionTypeRow, dict(row)) if row else None
+
+    def lock_ontology_for_activation(self, *, transaction: Any, tenant_id: str) -> None:
+        stable_id = transaction.execute(
+            select(db.ontology_versions.c.id)
+            .where(db.ontology_versions.c.tenant_id == tenant_id)
+            .order_by(db.ontology_versions.c.version_number, db.ontology_versions.c.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if stable_id is not None:
+            transaction.execute(
+                update(db.ontology_versions)
+                .where(
+                    and_(
+                        db.ontology_versions.c.tenant_id == tenant_id,
+                        db.ontology_versions.c.id == stable_id,
+                    )
+                )
+                .values(id=stable_id)
+            )

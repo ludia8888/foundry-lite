@@ -493,6 +493,26 @@ class SqlAlchemyOsdkApplicationRepository:
         )
         return cast(OsdkMcpSessionRow, dict(row)) if row else None
 
+    def active_mcp_sessions_for_application(
+        self, *, transaction: Any, tenant_id: str, app_id: str
+    ) -> list[OsdkMcpSessionRow]:
+        rows = (
+            transaction.execute(
+                select(db.osdk_mcp_sessions)
+                .where(
+                    and_(
+                        db.osdk_mcp_sessions.c.tenant_id == tenant_id,
+                        db.osdk_mcp_sessions.c.app_id == app_id,
+                        db.osdk_mcp_sessions.c.status == "active",
+                    )
+                )
+                .order_by(db.osdk_mcp_sessions.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(OsdkMcpSessionRow, dict(row)) for row in rows]
+
     def claim_mcp_session_stream_lease(
         self,
         *,

@@ -401,6 +401,25 @@ class AipWorkspace:
             challenge_id,
         )
 
+    def approve_fde_mcp_widget_confirmation(
+        self,
+        application_id: str,
+        session_id: str,
+        challenge_id: str,
+        widget_approval_token: str,
+        origin: str | None,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._fde_mcp.approve_widget_confirmation(
+            ctx or RequestContext(),
+            application_id,
+            session_id,
+            challenge_id,
+            widget_approval_token,
+            origin,
+        )
+
     def plan_pilot_application(
         self, arguments: Mapping[str, object], *, ctx: RequestContext | None = None
     ) -> Mapping[str, object]:

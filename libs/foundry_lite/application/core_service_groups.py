@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.services.aip.external_release_delivery_service import ExternalReleaseDeliveryService
+from foundry_lite.application.services.aip.governed_release_live_attestation_service import (
+    GovernedReleaseLiveAttestationService,
+)
 from foundry_lite.application.services.aip.runtime_services import (
     FdeApplicationToolService,
     FdeContextService,
@@ -16,6 +20,7 @@ from foundry_lite.application.services.aip.runtime_services import (
 from foundry_lite.application.services.backup_restore_services import BackupRestoreServices
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset_service import DatasetServices
+from foundry_lite.application.services.mcp_rate_limit_service import McpRateLimitService
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.runtime_bundle import IcebergMaintenanceService, InsightReviewService
@@ -26,6 +31,16 @@ from foundry_lite.application.services.source_services import (
     SourceManagementService,
     SourceSchedulerService,
 )
+
+__all__ = [
+    "CoreServiceGroups",
+    "ExternalReleaseDeliveryService",
+    "GovernedReleaseLiveAttestationService",
+    "McpRateLimitService",
+    "SharedCoreServices",
+    "aip_service_items",
+    "source_service_items",
+]
 
 
 class SharedCoreServices(TypedDict):
@@ -69,6 +84,12 @@ class CoreServiceGroups(Protocol):
 
     @property
     def evals(self) -> CoreService: ...
+
+    @property
+    def external_release_delivery(self) -> CoreService: ...
+
+    @property
+    def governed_release_live_attestation(self) -> CoreService: ...
 
     @property
     def fde_ontology_tools(self) -> CoreService: ...
@@ -136,6 +157,8 @@ def aip_service_items(services: CoreServiceGroups) -> list[CoreService]:
         services.builder_runtime,
         services.context_compiler,
         services.evals,
+        services.external_release_delivery,
+        services.governed_release_live_attestation,
         services.fde_ontology_tools,
         services.fde_application_tools,
         services.fde_context,
