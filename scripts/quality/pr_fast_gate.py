@@ -76,6 +76,7 @@ class PullRequestPlan:
     has_sdk_contract: bool
     is_docs_only: bool
     should_install_node: bool = False
+    should_build_code_execution_image: bool = False
     dropped_linked_tests: tuple[str, ...] = ()
 
 
@@ -228,6 +229,7 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
     existing_tests = tuple(sorted(ROOT.glob("tests/**/test_*.py")))
     changed_python_tests = _changed_python_tests(paths)
     selected_tests, untested, dropped_linked = _source_test_evidence(paths, existing_tests, changed_python_tests)
+    should_build_code_execution_image = _selected_tests_require_code_execution_image(selected_tests)
     return PullRequestPlan(
         changed_files=paths,
         selected_tests=selected_tests,
@@ -237,7 +239,8 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
         has_frontend=any(_is_frontend_path(path) for path in paths),
         has_sdk_contract=any(_needs_sdk_contract(path) for path in paths),
         is_docs_only=bool(paths) and all(_is_docs_path(path) for path in paths),
-        should_install_node=_should_install_node_runtime(paths),
+        should_install_node=_should_install_node_runtime(paths) or should_build_code_execution_image,
+        should_build_code_execution_image=should_build_code_execution_image,
     )
 
 
@@ -254,6 +257,12 @@ def _should_install_node_runtime(paths: tuple[str, ...]) -> bool:
         or any(_needs_sdk_contract(path) for path in paths)
         or _quality_control_changed(paths)
     )
+
+
+def _selected_tests_require_code_execution_image(selected_tests: Sequence[str]) -> bool:
+    """Detect focused tests whose contract executes real user code in the pinned sandbox."""
+    marker = "pytest.mark.code_execution_image"
+    return any(marker in (ROOT / path).read_text(encoding="utf-8") for path in selected_tests)
 
 
 def _changed_python_tests(paths: tuple[str, ...]) -> set[str]:
@@ -311,6 +320,7 @@ def _github_output(plan: PullRequestPlan, path: Path) -> None:
         "has_sdk_contract": str(plan.has_sdk_contract).lower(),
         "is_docs_only": str(plan.is_docs_only).lower(),
         "should_install_node": str(plan.should_install_node).lower(),
+        "should_build_code_execution_image": str(plan.should_build_code_execution_image).lower(),
     }
     with path.open("a", encoding="utf-8") as handle:
         for key, value in values.items():

@@ -197,6 +197,27 @@ def test_quality_control_change_requests_the_node_runtime() -> None:
     assert "has_frontend == 'true' || steps.scope.outputs.has_sdk_contract" not in pr_job
 
 
+def test_pr_plan_prepares_the_pinned_image_for_selected_sandbox_tests(monkeypatch, tmp_path: Path) -> None:
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_code_execution_image")
+    test = tmp_path / "tests/integration/test_sandbox_function.py"
+    test.parent.mkdir(parents=True)
+    test.write_text(
+        "import pytest\npytestmark = pytest.mark.code_execution_image\ndef test_function(): assert True\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+
+    plan = gate.build_plan(("tests/integration/test_sandbox_function.py",))
+
+    assert plan.should_build_code_execution_image is True
+    assert plan.should_install_node is True
+
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    pr_job = workflow.split("quality_pr:", maxsplit=1)[1].split("quality_static:", maxsplit=1)[0]
+    assert "steps.scope.outputs.should_build_code_execution_image == 'true'" in pr_job
+    assert "pnpm --silent quality:code-execution-image" in pr_job
+
+
 def test_pr_plan_keeps_live_infrastructure_tests_out_of_the_budgeted_lane() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_live_infra")
     live_infra_tests = (

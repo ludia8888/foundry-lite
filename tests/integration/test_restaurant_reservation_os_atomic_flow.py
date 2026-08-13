@@ -6,11 +6,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from time import monotonic, sleep
 
+import pytest
 import yaml
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 
 from examples.restaurant_reservation_os.publish_policy_ontology import _add_policy_resources
+
+pytestmark = pytest.mark.code_execution_image
 
 
 def _property(

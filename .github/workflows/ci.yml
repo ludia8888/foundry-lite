@@ -92,6 +92,10 @@ jobs:
         if: steps.scope.outputs.should_install_node == 'true'
         run: pnpm install --frozen-lockfile --prefer-offline
 
+      - name: Build isolated Python execution image
+        if: steps.scope.outputs.should_build_code_execution_image == 'true'
+        run: pnpm --silent quality:code-execution-image
+
       - name: Run budgeted pull-request gate
         env:
           FOUNDRY_LITE_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}

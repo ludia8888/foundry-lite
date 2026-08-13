@@ -22,7 +22,7 @@ def test_portable_domain_os_bundle_builds_without_the_foundry_lite_workspace(tmp
     pnpm = shutil.which("pnpm")
     assert pnpm is not None
     commands = (
-        (pnpm, "install", "--offline", "--no-frozen-lockfile"),
+        (pnpm, "install", "--prefer-offline", "--no-frozen-lockfile"),
         (pnpm, "consumer-osdk:check"),
         (pnpm, "typecheck"),
         (pnpm, "test"),

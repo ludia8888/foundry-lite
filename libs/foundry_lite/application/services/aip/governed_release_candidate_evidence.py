@@ -300,7 +300,7 @@ def _ontology_submitted_risk(
 
 
 def _external_ci_reason(is_passed: bool) -> list[str]:
-    return [] if is_passed else ["Candidate-scoped external CI is not confirmed as passed."]
+    return [] if is_passed else ["External CI receipt is unavailable for this candidate."]
 
 
 def _pipeline_missing_evidence(is_external_ci_passed: bool) -> list[str]:
