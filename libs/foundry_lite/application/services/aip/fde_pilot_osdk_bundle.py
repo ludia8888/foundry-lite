@@ -274,7 +274,8 @@ def _runtime_contract_source() -> str:
         'import { readFileSync } from "node:fs";\n'
         'const runtime = readFileSync("packages/application-osdk/src/runtime.ts", "utf8");\n'
         'const react = readFileSync("packages/application-osdk/src/react.ts", "utf8");\n'
-        'for (const value of ["/api/objects/", "/api/actions/", "Idempotency-Key", "credentials: \\"include\\""]) '
+        'for (const value of ["/api/objects/", "/api/actions/", "/api/functions/", "Idempotency-Key", '
+        '"credentials: \\"include\\""]) '
         "if (!runtime.includes(value)) throw new Error(`portable OSDK runtime is missing ${value}`);\n"
         'if (!react.includes("PilotApplicationProvider")) throw new Error("application provider is missing");\n'
         'process.stdout.write("portable Domain OS runtime contract passed\\n");\n'

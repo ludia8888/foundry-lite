@@ -12,6 +12,7 @@ from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     require_ready_blueprint,
     seed_plan,
 )
+from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import consumer_osdk_plan, react_files
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
 
 
@@ -24,6 +25,7 @@ def test_property_maintenance_brief_compiles_independent_objects_actions_and_see
         "missingCount": 0,
         "questions": [],
     }
+    assert blueprint["functions"] == []
     assert [record["apiName"] for record in blueprint["records"]] == ["WorkOrder", "PropertyAsset"]
     assert [action["apiName"] for action in blueprint["workflow"]["actions"]] == [
         "TriageWorkOrder",
@@ -121,6 +123,75 @@ def test_incomplete_brief_returns_plain_language_questions_and_cannot_generate()
     with pytest.raises(FdePlatformToolError, match="업무 설계에 빈칸") as error:
         require_ready_blueprint(blueprint)
     assert error.value.reason == "domain_blueprint_incomplete"
+
+
+def test_a_natural_language_aggregation_compiles_to_python_osdk_and_least_privilege_scope() -> None:
+    arguments = property_maintenance_arguments()
+    arguments["domainBrief"]["functions"] = [
+        {
+            "name": "긴급 요청 수",
+            "apiName": "CountUrgentWorkOrders",
+            "recordApiName": "WorkOrder",
+            "aggregation": "count",
+            "allowedActors": ["coordinator"],
+            "filters": [{"propertyApiName": "severity", "operator": "eq", "value": "urgent"}],
+        }
+    ]
+
+    blueprint = build_domain_os_blueprint(arguments)
+    function = blueprint["functions"][0]
+    assert function["apiName"] == "CountUrgentWorkOrders"
+    assert function["allowedRoles"] == [blueprint["actorRoles"][1]["role"]]
+    resource = ontology_resources(blueprint, "seed.property_maintenance")[-1]
+    assert resource["kind"] == "functionType"
+    assert resource["definition"]["runtime"] == "python"
+    assert "FoundryClient().ontology.objects.WorkOrder" in resource["definition"]["definition"]["source"]
+    assert "records.where(severity={'$eq': \"urgent\"})" in resource["definition"]["definition"]["source"]
+    assert application_resources(blueprint)[-1] == {
+        "resourceType": "function",
+        "resourceApiName": "CountUrgentWorkOrders",
+        "scopes": ["osdk:function:CountUrgentWorkOrders:execute"],
+    }
+    files = react_files(
+        {
+            **arguments,
+            "applicationName": "Property Care Desk",
+            "domainOsBlueprint": blueprint,
+            "consumerOsdk": consumer_osdk_plan("Property Care Desk", "property-care-desk"),
+        }
+    )
+    generated = files["packages/application-osdk/src/generated.ts"]
+    assert "OsdkFunctionType<Record<string, never>, CountUrgentWorkOrdersOutput>" in generated
+    assert "export const $Functions = { CountUrgentWorkOrders }" in generated
+    assert '"functionApiNames": ["CountUrgentWorkOrders"]' in generated
+    assert "/api/functions/" in files["packages/application-osdk/src/runtime.ts"]
+
+
+def test_a_domain_function_cannot_sum_a_text_field_or_use_an_unknown_actor() -> None:
+    text_metric = property_maintenance_arguments()
+    text_metric["domainBrief"]["functions"] = [
+        {
+            "name": "지역 합계",
+            "recordApiName": "WorkOrder",
+            "aggregation": "sum",
+            "propertyApiName": "location",
+            "allowedActors": ["coordinator"],
+        }
+    ]
+    with pytest.raises(FdePlatformToolError, match="숫자 정보"):
+        build_domain_os_blueprint(text_metric)
+
+    unknown_actor = property_maintenance_arguments()
+    unknown_actor["domainBrief"]["functions"] = [
+        {
+            "name": "요청 수",
+            "recordApiName": "WorkOrder",
+            "aggregation": "count",
+            "allowedActors": ["outsider"],
+        }
+    ]
+    with pytest.raises(FdePlatformToolError, match="정의되지 않은 사용자"):
+        build_domain_os_blueprint(unknown_actor)
 
 
 def test_unknown_transition_and_duplicate_field_api_name_are_rejected() -> None:

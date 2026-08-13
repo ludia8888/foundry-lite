@@ -376,6 +376,7 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
     assert all(policy["evidence"] for policy in policies)
     assert all(action["allowedActors"] for action in actions)
     assert all(action["allowedRoles"] for action in actions)
+    assert blueprint["functions"] == []
     resources = ontology_resources(blueprint, f"seed.{spec['id']}")
     assert len(resources) == len(records) + len(actions)
     assert any(

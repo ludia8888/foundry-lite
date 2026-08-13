@@ -26,6 +26,13 @@ export type OsdkActionType<TPayload, TResult> = {
   readonly __result?: TResult;
 };
 
+export type OsdkFunctionType<TInputs extends object, TOutput> = {
+  readonly kind: "function";
+  readonly apiName: string;
+  readonly __inputs?: TInputs;
+  readonly __output?: TOutput;
+};
+
 export type ActionApplyResponse = {
   readonly status: string;
   readonly actionRunId?: string;
@@ -75,9 +82,14 @@ type ActionInvoker<TResult> = {
   ): Promise<TResult>;
 };
 
+type FunctionInvoker<TInputs extends object, TOutput> = {
+  executeFunction(inputs: TInputs): Promise<TOutput>;
+};
+
 export type FoundryLiteOsdkClient = {
   <TObject extends FoundryLiteObject<string, object>>(resource: OsdkObjectType<TObject>): ObjectSet<TObject>;
   <TPayload extends ActionRequest, TResult>(resource: OsdkActionType<TPayload, TResult>): ActionInvoker<TResult>;
+  <TInputs extends object, TOutput>(resource: OsdkFunctionType<TInputs, TOutput>): FunctionInvoker<TInputs, TOutput>;
 };
 
 type RuntimeConfig = {
@@ -98,9 +110,12 @@ export function createBrowserFoundryLiteOsdkClient(): FoundryLiteOsdkClient {
 }
 
 export function createFoundryLiteOsdkClient(config: RuntimeConfig): FoundryLiteOsdkClient {
-  return ((resource: OsdkObjectType<FoundryLiteObject<string, object>> | OsdkActionType<ActionRequest, object>) => {
+  return ((resource: OsdkObjectType<FoundryLiteObject<string, object>>
+    | OsdkActionType<ActionRequest, object>
+    | OsdkFunctionType<object, object>) => {
     if (resource.kind === "object") return objectSet(config, resource);
-    return actionInvoker(config, resource);
+    if (resource.kind === "action") return actionInvoker(config, resource);
+    return functionInvoker(config, resource);
   }) as FoundryLiteOsdkClient;
 }
 
@@ -142,6 +157,25 @@ function actionInvoker<TResult>(
           params: payload.params,
         }),
       });
+    },
+  };
+}
+
+function functionInvoker<TInputs extends object, TOutput>(
+  config: RuntimeConfig,
+  resource: OsdkFunctionType<TInputs, TOutput>,
+): FunctionInvoker<TInputs, TOutput> {
+  return {
+    executeFunction(inputs) {
+      return request<{ output: { value: TOutput } }>(
+        config,
+        `/api/functions/${encodeURIComponent(resource.apiName)}/execute`,
+        {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs }),
+        },
+      ).then((result) => result.output.value);
     },
   };
 }

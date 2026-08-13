@@ -70,6 +70,49 @@ DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
                 },
             },
         },
+        "functions": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "recordApiName", "aggregation", "allowedActors"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "apiName": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$"},
+                    "description": {"type": "string", "maxLength": 500},
+                    "recordApiName": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$"},
+                    "aggregation": {"type": "string", "enum": ["count", "sum", "avg", "min", "max"]},
+                    "propertyApiName": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$"},
+                    "allowedActors": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                        "minItems": 1,
+                        "maxItems": 12,
+                    },
+                    "filters": {
+                        "type": "array",
+                        "maxItems": 12,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["propertyApiName", "operator", "value"],
+                            "properties": {
+                                "propertyApiName": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$",
+                                },
+                                "operator": {
+                                    "type": "string",
+                                    "enum": ["eq", "in", "gt", "gte", "lt", "lte", "contains"],
+                                },
+                                "value": {},
+                            },
+                        },
+                    },
+                },
+            },
+        },
         "policies": {
             "type": "array",
             "maxItems": 20,

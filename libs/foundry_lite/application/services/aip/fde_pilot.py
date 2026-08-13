@@ -58,6 +58,7 @@ class FdePilotService(CoreService):
         records = _mapping_items(blueprint.get("records"))
         workflow = _mapping(blueprint.get("workflow"), "domainOsBlueprint.workflow")
         actions = _mapping_items(workflow.get("actions"))
+        functions = _mapping_items(blueprint.get("functions") or [])
         return {
             "operationType": "pilot_generation_plan",
             "applicationName": app_name,
@@ -74,6 +75,7 @@ class FdePilotService(CoreService):
                 "routes": ["/", "/work", "/policies", "/evidence"],
                 "objectTypes": [row["apiName"] for row in records],
                 "actionTypes": [row["apiName"] for row in actions],
+                "functionTypes": [row["apiName"] for row in functions],
                 "framework": "react",
             },
             "ci": {"commands": ["pnpm consumer-osdk:check", "pnpm typecheck", "pnpm test", "pnpm build"]},

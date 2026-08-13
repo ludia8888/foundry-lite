@@ -6,6 +6,11 @@ import hashlib
 import re
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.services.aip.fde_domain_os_functions import (
+    compile_domain_functions,
+    function_application_resources,
+    function_ontology_resource,
+)
 from foundry_lite.application.services.aip.fde_domain_os_policy import (
     compile_domain_policies,
     policy_preconditions,
@@ -33,6 +38,7 @@ def build_domain_os_blueprint(arguments: JsonObject) -> dict[str, object]:
     primary_record = records[0] if records else None
     actions = _actions(brief, primary_record, states, actor_roles)
     policies = compile_domain_policies(brief, primary_record, actions)
+    functions = compile_domain_functions(brief, records, actor_roles)
     evidence = _text_items(brief.get("evidence") or [], "domainBrief.evidence", 20)
     gaps = _readiness_gaps(actors, records, states, actions, policies, evidence)
     return {
@@ -43,6 +49,7 @@ def build_domain_os_blueprint(arguments: JsonObject) -> dict[str, object]:
         "records": records,
         "workflow": {"states": states, "actions": actions},
         "policies": policies,
+        "functions": functions,
         "evidence": evidence,
         "integrations": _text_items(brief.get("integrations") or [], "domainBrief.integrations", 20),
         "successMeasures": _text_items(brief.get("successMeasures") or [], "domainBrief.successMeasures", 20),
@@ -70,8 +77,10 @@ def ontology_resources(blueprint: JsonObject, dataset_ref: str) -> list[dict[str
     records = _mapping_items(blueprint.get("records"), "domainOsBlueprint.records", _MAX_RECORDS)
     actions = _workflow_actions(blueprint)
     policies = _mapping_items(blueprint.get("policies"), "domainOsBlueprint.policies", _MAX_POLICIES)
+    functions = _mapping_items(blueprint.get("functions") or [], "domainOsBlueprint.functions", 12)
     resources = [_object_resource(record, _record_dataset_ref(dataset_ref, record)) for record in records]
     resources.extend(_action_resource(action, policies) for action in actions)
+    resources.extend(function_ontology_resource(function) for function in functions)
     return resources
 
 
@@ -80,6 +89,7 @@ def application_resources(blueprint: JsonObject) -> list[dict[str, object]]:
 
     records = _mapping_items(blueprint.get("records"), "domainOsBlueprint.records", _MAX_RECORDS)
     actions = _workflow_actions(blueprint)
+    functions = _mapping_items(blueprint.get("functions") or [], "domainOsBlueprint.functions", 12)
     object_rows = [
         {
             "resourceType": "object",
@@ -96,7 +106,8 @@ def application_resources(blueprint: JsonObject) -> list[dict[str, object]]:
         }
         for row in actions
     ]
-    return [*object_rows, *action_rows]
+    function_rows = function_application_resources(functions)
+    return [*object_rows, *action_rows, *function_rows]
 
 
 def seed_plan(slug: str, blueprint: JsonObject) -> dict[str, object]:

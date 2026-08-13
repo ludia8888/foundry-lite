@@ -22,7 +22,7 @@ def consumer_contract(plan: JsonObject) -> str:
         "domainOsBlueprint": blueprint,
         "objects": _records(blueprint),
         "actions": _actions(blueprint),
-        "functions": [],
+        "functions": _functions(blueprint),
         "requiredGate": "quality:consumer-osdk",
     }
     return json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
@@ -36,12 +36,15 @@ def generated_source(plan: JsonObject) -> str:
     actions = _actions(blueprint)
     object_names = [str(row["apiName"]) for row in records]
     action_names = [str(row["apiName"]) for row in actions]
+    functions = _functions(blueprint)
+    function_names = [str(row["apiName"]) for row in functions]
     lines = [
         "// Generated application OSDK. Do not edit by hand.",
         "import type {",
         "  ActionApplyResponse,",
         "  FoundryLiteObject,",
         "  OsdkActionType,",
+        "  OsdkFunctionType,",
         "  OsdkObjectType,",
         '} from "./runtime";',
         "",
@@ -50,12 +53,14 @@ def generated_source(plan: JsonObject) -> str:
         lines.extend(_object_lines(record))
     for action in actions:
         lines.extend(_action_lines(action))
-    manifest = _manifest(plan, object_names, action_names)
+    for function in functions:
+        lines.extend(_function_lines(function))
+    manifest = _manifest(plan, object_names, action_names, function_names)
     lines.extend(
         [
             f"export const $Objects = {{ {', '.join(object_names)} }} as const;",
             f"export const $Actions = {{ {', '.join(action_names)} }} as const;",
-            "export const $Functions = {} as const;",
+            f"export const $Functions = {{ {', '.join(function_names)} }} as const;",
             f"export const CONSUMER_OSDK_MANIFEST = {json.dumps(manifest, sort_keys=True)} as const;",
             "",
         ]
@@ -262,6 +267,18 @@ def _action_lines(action: JsonObject) -> list[str]:
     return lines
 
 
+def _function_lines(function: JsonObject) -> list[str]:
+    api_name = str(function["apiName"])
+    return [
+        f"export type {api_name}Output = {{ readonly groups: readonly object[]; readonly totalGroups: number }};",
+        f"export const {api_name} = {{",
+        '  kind: "function",',
+        f'  apiName: "{api_name}",',
+        f"}} as const as OsdkFunctionType<Record<string, never>, {api_name}Output>;",
+        "",
+    ]
+
+
 def _action_hook_lines(action: JsonObject) -> list[str]:
     api_name = str(action["apiName"])
     method_name = f"start{api_name}"
@@ -321,7 +338,12 @@ def _field_line(field: JsonObject) -> str:
     return f"  readonly {api_name}{optional}: {scalar}{nullable};"
 
 
-def _manifest(plan: JsonObject, object_names: list[str], action_names: list[str]) -> dict[str, object]:
+def _manifest(
+    plan: JsonObject,
+    object_names: list[str],
+    action_names: list[str],
+    function_names: list[str],
+) -> dict[str, object]:
     boundary = _mapping(plan.get("consumerOsdk"), "consumerOsdk")
     return {
         "schemaVersion": "foundry-lite-consumer-osdk-manifest/v1",
@@ -329,7 +351,7 @@ def _manifest(plan: JsonObject, object_names: list[str], action_names: list[str]
         "profile": "consumer_osdk_strict",
         "objectApiNames": object_names,
         "actionApiNames": action_names,
-        "functionApiNames": [],
+        "functionApiNames": function_names,
     }
 
 
@@ -347,6 +369,10 @@ def _records(blueprint: JsonObject) -> list[dict[str, object]]:
 def _actions(blueprint: JsonObject) -> list[dict[str, object]]:
     workflow = _mapping(blueprint.get("workflow"), "domainOsBlueprint.workflow")
     return _mapping_items(workflow.get("actions"), "domainOsBlueprint.workflow.actions")
+
+
+def _functions(blueprint: JsonObject) -> list[dict[str, object]]:
+    return _mapping_items(blueprint.get("functions") or [], "domainOsBlueprint.functions")
 
 
 def _mapping(value: object, field: str) -> dict[str, object]:
