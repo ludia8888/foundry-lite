@@ -31,7 +31,7 @@ def test_builder_mcp_executes_every_catalog_tool_through_real_json_rpc(
     monkeypatch: Any,
     tmp_path: Any,
 ) -> None:
-    """Ratchet the real Builder MCP surface to exactly the canonical 68 tools."""
+    """Ratchet the real Builder MCP surface to exactly the canonical 69 tools."""
     state = _prepare_surface_state(foundry, monkeypatch, tmp_path)
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     issuer = foundry._services.osdk_oauth_sessions.oauth_token_issuer
@@ -192,9 +192,9 @@ class _FullSurfaceRunner:
     def assert_complete(self) -> None:
         expected = set(self.catalog)
         mutations = {tool_id for tool_id, spec in self.catalog.items() if spec.effect != "READ"}
-        assert len(expected) == 68
+        assert len(expected) == 69
         assert len(expected - mutations) == 49
-        assert len(mutations) == 19
+        assert len(mutations) == 20
         assert self.executed == expected
         assert self.challenged == mutations
         assert len(self.receipts) == len(mutations)
@@ -281,7 +281,7 @@ def _run_governance_tools(runner: _FullSurfaceRunner, foundry: Any) -> dict[str,
         {
             "displayName": "MCP Full Surface",
             "description": "Real JSON-RPC exhaustive proof",
-            "metadata": {"proof": "68-of-68"},
+            "metadata": {"proof": "69-of-69"},
             "idempotencyKey": "mcp-full-surface-project",
         },
         ("project",),
@@ -455,12 +455,28 @@ def _run_ontology_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         ("branch", "changeSummary", "validation", "diff"),
     )
     runner.call("ontology_editing", workspace, "ontology.branch.validate", {}, ("branch", "validation", "diff"))
+    # Rebase only means something once main has moved on, so advance the active Ontology first and
+    # then re-anchor the branch on it -- the stale-base path an author actually hits.
+    runner.foundry.ontology.apply_text(_surface_ontology_yaml_after_main_moved(), ctx=FDE_USER)
+    branch_id = workspace.removeprefix("ontology-branch:")
+    stranded = runner.foundry.ontology.get_branch(branch_id, ctx=FDE_USER)
+    assert stranded["baseStale"] is True
+    runner.call(
+        "ontology_editing",
+        workspace,
+        "ontology.branch.rebase",
+        {
+            "resolutions": [],
+            "expectedFingerprint": stranded["contentFingerprint"],
+        },
+        ("id", "baseVersionId", "rebasedAt"),
+    )
     runner.call(
         "ontology_editing",
         workspace,
         "ontology.branch.propose",
         {
-            "title": "Builder MCP 68-tool ontology proof",
+            "title": "Builder MCP 69-tool ontology proof",
             "description": "Exhaustive JSON-RPC branch proposal",
             "idempotencyKey": "mcp-full-surface-ontology-proposal",
         },
@@ -521,7 +537,7 @@ def _run_pipeline_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         workspace,
         "pipeline.branch.propose",
         {
-            "title": "Builder MCP 68-tool pipeline proof",
+            "title": "Builder MCP 69-tool pipeline proof",
             "description": "Exhaustive JSON-RPC pipeline proposal",
             "idempotencyKey": "mcp-full-surface-pipeline-proposal",
         },
@@ -683,6 +699,34 @@ def _run_osdk_sdk_tools(runner: _FullSurfaceRunner, workspace: str) -> None:
     )
 
 
+def _mcp_surface_domain_brief() -> dict[str, object]:
+    return {
+        "actors": ["operator"],
+        "records": [
+            {
+                "name": "업무 건",
+                "apiName": "WorkItem",
+                "fields": [{"name": "담당 팀", "apiName": "team", "type": "string", "required": True}],
+            }
+        ],
+        "lifecycleStates": ["NEW", "DONE"],
+        "actions": [
+            {
+                "name": "업무 완료",
+                "apiName": "CompleteWorkItem",
+                "fromStates": ["NEW"],
+                "toState": "DONE",
+                "requiredInformation": ["completionNote"],
+                "allowedActors": ["operator"],
+            }
+        ],
+        "policies": [{"name": "완료 기록", "statement": "완료 메모를 남겨야 합니다.", "enforcement": "warning"}],
+        "evidence": ["상태 변경 전후", "담당자"],
+        "integrations": [],
+        "successMeasures": ["미완료 누락 0건"],
+    }
+
+
 def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id: str) -> None:
     runner.call(
         "osdk_react",
@@ -704,7 +748,11 @@ def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id:
         "osdk_react",
         workspace,
         "pilot.application.plan",
-        {"applicationName": "MCP Surface Pilot", "domainDescription": "Exhaustive Builder MCP proof"},
+        {
+            "applicationName": "MCP Surface Pilot",
+            "domainDescription": "업무 건을 접수하고 담당 팀이 완료 증거까지 남깁니다.",
+            "domainBrief": _mcp_surface_domain_brief(),
+        },
         ("operationType", "applicationName", "domainDescription", "slug"),
     )
     generated = runner.call(
@@ -712,9 +760,17 @@ def _run_osdk_mutation_tools(runner: _FullSurfaceRunner, workspace: str, app_id:
         workspace,
         "pilot.application.generate",
         {"plan": plan, "idempotencyKey": "mcp-full-surface-pilot"},
-        ("status", "resource", "ontologyBranch", "osdkApplication", "reactFiles"),
+        ("status", "resource", "ontologyBranch", "osdkApplication", "consumerOsdk", "generatedFiles"),
     )
     assert generated["status"] == "generated_on_branch"
+    assert generated["consumerOsdk"]["profile"] == "consumer_osdk_strict"
+    assert generated["consumerOsdk"]["exceptions"] == []
+    assert generated["generatedFiles"]["isContentIncluded"] is False
+    assert generated["generatedFiles"]["delivery"] == "governed_resource"
+    bundle = runner.foundry.aip.get_pilot_application(generated["resource"]["rid"], ctx=FDE_USER)
+    assert "@foundry-lite/sdk" not in bundle["reactFiles"]["src/App.tsx"]
+    assert "@foundry-lite/mcp-surface-pilot-osdk/react" in bundle["reactFiles"]["src/App.tsx"]
+    assert "OsdkObjectType<WorkItem>" in bundle["reactFiles"]["packages/application-osdk/src/generated.ts"]
     assert app_id
 
 
@@ -813,14 +869,23 @@ def _initialize_params() -> dict[str, object]:
 def _advertised_tools(tools: object) -> dict[str, dict[str, object]]:
     assert isinstance(tools, list)
     advertised: dict[str, dict[str, object]] = {}
+    has_private_approval = False
     for raw_tool in tools:
         assert isinstance(raw_tool, Mapping)
         wire_name = raw_tool.get("name")
         input_schema = raw_tool.get("inputSchema")
         assert isinstance(wire_name, str) and isinstance(input_schema, Mapping)
+        if wire_name == "approve_builder_mutation":
+            metadata = raw_tool.get("_meta")
+            assert isinstance(metadata, Mapping)
+            assert metadata.get("openai/visibility") == "private"
+            assert metadata.get("ui") == {"visibility": ["app"]}
+            has_private_approval = True
+            continue
         canonical_id = "fde.tools.search" if wire_name == "search_tools" else wire_name
         assert canonical_id not in advertised
         advertised[canonical_id] = {"name": wire_name, "inputSchema": dict(input_schema)}
+    assert has_private_approval is True
     return advertised
 
 
@@ -894,6 +959,18 @@ class _SurfaceKafkaAdminClient:
     def list_topics(self, *, timeout: float) -> Any:
         assert timeout == 10.0
         return _SurfaceKafkaClusterMetadata()
+
+
+def _surface_ontology_yaml_after_main_moved() -> str:
+    """The active Ontology with one extra object type, which strands the open branch on an old base."""
+
+    extra = """  - apiName: SurfaceAudit
+    primaryKey: auditId
+    backing: {dataset: clean.mcp_surface_orders, mode: snapshot, primaryKeyColumns: [order_id]}
+    properties:
+      - {apiName: auditId, column: order_id, type: string, nullable: false}
+linkTypes:"""
+    return _surface_ontology_yaml().replace("linkTypes:", extra, 1)
 
 
 def _surface_ontology_yaml() -> str:

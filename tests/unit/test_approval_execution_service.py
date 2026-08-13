@@ -150,6 +150,17 @@ def test_approval_execution_validates_request_shape(foundry: Any) -> None:
     assert missing_idempotency.value.reason == "missing_field"
 
 
+def test_approval_execution_rejects_a_failed_durable_action_run(foundry: Any) -> None:
+    service = foundry._services.approval_execution  # noqa: SLF001 - focused collaborator contract.
+
+    with pytest.raises(ApprovalExecutionError) as failed:
+        service._require_action_run_accepted(  # noqa: SLF001 - focused status contract.
+            {"actionRunId": "action-run-failed", "status": "failed"}
+        )
+
+    assert failed.value.reason == "action_run_failed"
+
+
 def test_approval_execution_runs_approved_proposal_once_and_links_review(foundry: Any) -> None:
     ctx = prepare_indexed_demo(foundry)
     proposal = _approved_proposal(foundry, ctx)

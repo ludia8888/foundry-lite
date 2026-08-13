@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import UTC, datetime
 
 import pytest
@@ -657,6 +658,46 @@ def test_batched_function_contract_requires_one_matching_list_of_struct_input() 
     definition["functionTypes"][0]["inputs"][0]["fields"][0]["type"] = "integer"
     with pytest.raises(ValidationFailed, match="do not match"):
         validate_yaml_action_definitions(definition, {"Order": {"apiName": "Order", "properties": []}}, {})
+
+
+def test_per_request_function_contract_accepts_array_of_struct_parameter() -> None:
+    reservation_fields = [
+        {"apiName": "objectId", "type": "string", "required": True},
+        {"apiName": "objectVersion", "type": "integer", "required": True},
+    ]
+    parameters = [
+        {
+            "apiName": "existingReservations",
+            "type": "array",
+            "itemType": "struct",
+            "required": True,
+            "fields": reservation_fields,
+        }
+    ]
+    definition = {
+        "functionTypes": [
+            {
+                "apiName": "createReservation",
+                "version": "1.0.0",
+                "inputs": copy.deepcopy(parameters),
+            }
+        ],
+        "actionTypes": [
+            {
+                "apiName": "BookReservation",
+                "contractVersion": 3,
+                "target": "Restaurant",
+                "parameters": parameters,
+                "function": {"apiName": "createReservation", "version": "1.0.0"},
+            }
+        ],
+    }
+
+    validate_yaml_action_definitions(
+        definition,
+        {"Restaurant": {"apiName": "Restaurant", "properties": []}},
+        {},
+    )
 
 
 def test_batched_function_contract_rejects_missing_coordinate_and_excessive_limit() -> None:

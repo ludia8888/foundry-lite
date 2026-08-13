@@ -172,6 +172,9 @@ class PipelineService(CoreService):
     def run_tests(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self.pipeline_graph_validation_service.run_tests(branch_id, ctx=ctx)
 
+    def latest_test_result(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object] | None:
+        return self.pipeline_graph_validation_service.latest_test_result(branch_id, ctx=ctx)
+
     def propose_branch(
         self,
         branch_id: str,
@@ -206,11 +209,13 @@ class PipelineService(CoreService):
         proposal_id: str,
         *,
         assignee_user_id: str,
+        is_unassigned_only: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         return self.pipeline_governance_service.assign_proposal(
             proposal_id,
             assignee_user_id=assignee_user_id,
+            is_unassigned_only=is_unassigned_only,
             ctx=ctx,
         )
 
@@ -272,6 +277,14 @@ class PipelineService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         return self.pipeline_deployment_service.list_deployments(pipeline_id, limit=limit, ctx=ctx)
+
+    def replay_deployment(
+        self,
+        idempotency_key: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object] | None:
+        return self.pipeline_deployment_service.replay_deployment(idempotency_key, ctx=ctx)
 
     def start_run(
         self,

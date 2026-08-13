@@ -35,6 +35,7 @@ def _assign_and_approve(
     proposal: dict[str, object],
     ctx: RequestContext,
 ) -> None:
+    foundry.pipelines.run_tests(str(proposal["branchId"]), ctx=ctx)
     reviewer_id = f"{ctx.actor_user_id}-reviewer"
     foundry.pipelines.assign(str(proposal["id"]), assignee_user_id=reviewer_id, ctx=ctx)
     reviewer = RequestContext(
@@ -67,12 +68,13 @@ def test_proposal_decision_cas_race_raises_conflict_not_assertion(tmp_path: Path
         idempotency_key="pipeline-branch-cas-race",
         ctx=ctx,
     )
-    foundry.pipelines.update_graph(
+    updated = foundry.pipelines.update_graph(
         str(branch["id"]),
         graph=_orders_pipeline_graph(output_ref="clean.orders_cas_race"),
         expected_fingerprint=str(branch["graphFingerprint"]),
         ctx=ctx,
     )
+    foundry.pipelines.run_tests(str(updated["id"]), ctx=ctx)
     proposal = foundry.pipelines.propose(
         str(branch["id"]),
         title="CAS race candidate",

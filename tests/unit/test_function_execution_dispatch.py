@@ -113,6 +113,15 @@ def test_a_python_function_runs_in_the_sandbox_and_never_touches_the_logic_dag()
     assert runtime.calls[0]["inputs"] == {"threshold": 4}
 
 
+def test_a_typescript_v2_function_uses_the_code_sandbox_not_the_logic_dag() -> None:
+    service, runtime, _, _ = _service()
+
+    result = service._execute_row(_CTX, _row(runtime="typescript"), {"threshold": 4})
+
+    assert result["status"] == "SUCCEEDED"
+    assert runtime.calls[0]["definition"]["runtime"] == "typescript"
+
+
 def test_a_code_function_reports_no_ai_run_rather_than_inventing_one() -> None:
     """Python source calls nothing through the tool broker, so there is no tool traffic to
     attribute. Reporting an id here would point an auditor at a ledger entry that does not exist."""

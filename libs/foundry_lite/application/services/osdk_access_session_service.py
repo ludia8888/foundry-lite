@@ -17,6 +17,8 @@ class OsdkAccessSessionService(CoreService):
     required_collaborators = ()
 
     def require_active(self, ctx: RequestContext, application_id: str) -> None:
+        if ctx.oauth_session_authority == "issuer":
+            return
         session_id = ctx.oauth_session_id
         if session_id is None:
             return

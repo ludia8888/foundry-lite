@@ -503,6 +503,28 @@ def test_a_python_function_carries_source_and_defaults_its_entry_point() -> None
     assert "blocks" not in normalized["definition"]
 
 
+def test_python_function_activation_validates_source_and_entrypoint() -> None:
+    functions = validate_ontology_functions(
+        {"functionTypes": [_python_function()]},
+        OPS_CTX,
+        VisualBuilderService(),
+    )
+
+    assert functions["TotalSeats"]["runtime"] == "python"
+    with pytest.raises(ValidationFailed, match="invalid syntax"):
+        validate_ontology_functions(
+            {"functionTypes": [_python_function(definition={"source": "def compute(:\n    return 1\n"})]},
+            OPS_CTX,
+            VisualBuilderService(),
+        )
+    with pytest.raises(ValidationFailed, match="entrypoint was not found"):
+        validate_ontology_functions(
+            {"functionTypes": [_python_function(definition={"source": "def other():\n    return 1\n"})]},
+            OPS_CTX,
+            VisualBuilderService(),
+        )
+
+
 def test_normalizing_a_python_function_is_idempotent() -> None:
     """Replaying a persisted snapshot must not read as a spurious definition change."""
     from foundry_lite.domain.ontology.function_types import normalized_function_definition

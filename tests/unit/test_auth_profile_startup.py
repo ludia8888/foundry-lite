@@ -15,6 +15,8 @@ from foundry_lite.infrastructure.auth import (
     AUTHORIZATION_HEADER,
     OIDC_AUDIENCE_ENV,
     OIDC_DISCOVERY_JSON_ENV,
+    OIDC_GRANT_TYPE_CLAIM_ENV,
+    OIDC_HUMAN_GRANT_CLAIM_ENV,
     OIDC_ISSUER_ENV,
     OIDC_JWKS_JSON_ENV,
     OIDC_REVOKED_JTIS_JSON_ENV,
@@ -309,6 +311,8 @@ def test_jwt_oidc_configuration_errors_fail_before_startup() -> None:
         ({**base_env, OIDC_JWKS_JSON_ENV: "[1]"}, "JSON object"),
         ({**base_env, OIDC_REVOKED_JTIS_JSON_ENV: "{}"}, "JSON array"),
         ({**base_env, OIDC_REVOKED_JTIS_JSON_ENV: '[""]'}, "non-empty strings"),
+        ({**base_env, OIDC_HUMAN_GRANT_CLAIM_ENV: "gty"}, "must be configured together"),
+        ({**base_env, OIDC_GRANT_TYPE_CLAIM_ENV: "gty"}, "must be configured together"),
     ):
         with pytest.raises(AuthProfileConfigurationError, match=message):
             auth_provider_from_env(env)

@@ -813,11 +813,54 @@ export type AipFdeRunResult = AipAgentRunResult & {
   toolDiscovery: string;
   structuredOperations: Array<Record<string, unknown>>;
 };
-export type AipPilotPlanRequest = { applicationName: string; domainDescription: string };
+export type AipPilotFieldInput = {
+  name: string;
+  apiName?: string;
+  type?: "string" | "integer" | "float" | "boolean" | "date" | "timestamp";
+  required?: boolean;
+  description?: string;
+};
+export type AipPilotDomainBrief = {
+  actors: string[];
+  records: Array<{ name: string; apiName?: string; description?: string; fields?: AipPilotFieldInput[] }>;
+  lifecycleStates: string[];
+  actions: Array<{
+    name: string;
+    apiName?: string;
+    description?: string;
+    fromStates?: string[];
+    toState: string;
+    requiredInformation?: string[];
+    allowedActors?: string[];
+    requiresApproval?: boolean;
+  }>;
+  policies: Array<{
+    name: string;
+    statement: string;
+    enforcement?: "blocking" | "warning" | "manual_review";
+    evidence?: string;
+    appliesToActions?: string[];
+    conditions?: Array<{
+      propertyApiName: string;
+      operator: "eq" | "neq" | "in" | "notIn" | "lt" | "lte" | "gt" | "gte";
+      value: unknown;
+    }>;
+  }>;
+  evidence: string[];
+  integrations?: string[];
+  successMeasures?: string[];
+};
+export type AipPilotPlanRequest = {
+  applicationName: string;
+  domainDescription: string;
+  domainBrief: AipPilotDomainBrief;
+};
 export type AipPilotPlan = {
   operationType: string;
   applicationName: string;
   domainDescription: string;
+  domainBrief: AipPilotDomainBrief;
+  domainOsBlueprint: Record<string, unknown>;
   slug: string;
   projectDisplayName: string;
   seed: Record<string, unknown>;
@@ -831,6 +874,7 @@ export type AipPilotApplicationBundle = Record<string, unknown> & {
   applicationName: string;
   applicationPath: string;
   status: string;
+  domainOsBlueprint: Record<string, unknown>;
   reactFiles: Record<string, string>;
   resource?: Record<string, unknown>;
   isReplayed?: boolean;
@@ -1087,7 +1131,7 @@ export type ObjectLinkPayload = {
   warning?: { type: string; message: string };
 };
 export type ObjectFilter =
-  | { property: string; op: "eq" | "in" | "gte" | "lte" | "contains" | string; value: unknown }
+  | { property: string; op: "eq" | "in" | "gt" | "gte" | "lt" | "lte" | "contains" | string; value: unknown }
   | { and: ObjectFilter[] }
   | { or: ObjectFilter[] };
 export type ObjectQueryRequest = { filter?: ObjectFilter; orderBy?: Array<Record<string, string>>; limit?: number; cursor?: string | null; search?: string | null };
@@ -3615,11 +3659,13 @@ export type OsdkFunctionInput = {
   readonly type: string;
   readonly required: boolean;
 };
-export type OsdkFunctionType = {
+export type OsdkFunctionType<TInputs extends object = Record<string, unknown>, TOutput = unknown> = {
   readonly kind: "function";
   readonly apiName: string;
   readonly inputs: readonly OsdkFunctionInput[];
   readonly output: string;
+  readonly __inputs?: TInputs;
+  readonly __output?: TOutput;
 };
 export type OsdkInstanceData<TObject extends OsdkObjectType> =
   TObject extends OsdkObjectType<infer TInstance> ? TInstance : never;
@@ -3631,6 +3677,12 @@ export type OsdkActionValidationPayload<TAction extends OsdkActionType> =
   Omit<OsdkActionPayload<TAction>, 'idempotencyKey'>;
 export type OsdkActionResult<TAction extends OsdkActionType> =
   TAction extends OsdkActionType<unknown, infer TResult> ? TResult : never;
+export type OsdkFunctionInputs<TFunction extends OsdkFunctionType> =
+  TFunction extends OsdkFunctionType<infer TInputs, unknown> ? TInputs : never;
+export type OsdkFunctionOutput<TFunction extends OsdkFunctionType> =
+  TFunction extends OsdkFunctionType<object, infer TOutput> ? TOutput : never;
+export type OsdkFunctionExecutionResult<TFunction extends OsdkFunctionType> =
+  Omit<FunctionExecutionResult, 'output'> & { output: OsdkFunctionOutput<TFunction> };
 export type OsdkPropertyMap<TObject extends OsdkObjectType> =
   OsdkInstanceData<TObject> extends FoundryLiteObject<string, infer TProperties>
     ? TProperties
@@ -3697,6 +3749,10 @@ export type OsdkBoundAction<TAction extends OsdkActionType> = {
       onCacheRefresh?: (hint: ActionCacheRefreshHint) => void;
     },
   ): Promise<OsdkActionResult<TAction>>;
+  startAction(
+    params: OsdkActionParams<TAction>,
+    options: { idempotencyKey: string; expectedObjectVersion?: number; waitSeconds?: number },
+  ): Promise<ActionRun>;
 };
 export interface OsdkGeneratedLinkRegistry {}
 export interface OsdkGeneratedObjectActionRegistry {}
@@ -3803,6 +3859,15 @@ export type OsdkActionInvoker<TAction extends OsdkActionType> = {
     payload: OsdkActionPayload<TAction>,
     options?: { idempotencyKey?: string; onCacheRefresh?: (hint: ActionCacheRefreshHint) => void },
   ): Promise<OsdkActionResult<TAction>>;
+  startAction(
+    payload: OsdkActionValidationPayload<TAction>,
+    options: { idempotencyKey: string; waitSeconds?: number },
+  ): Promise<ActionRun>;
+};
+export type OsdkFunctionInvoker<TFunction extends OsdkFunctionType> = {
+  executeFunction(
+    inputs: OsdkFunctionInputs<TFunction>,
+  ): Promise<OsdkFunctionExecutionResult<TFunction>>;
 };
 export type OsdkMediaUploadOptions = { idempotencyKey: string; mode?: string };
 export type OsdkMediaUploadCommitResult = {
@@ -3830,8 +3895,10 @@ export type OsdkMediaClient = {
 export type FoundryLiteOsdkClient = {
   <TObject extends OsdkObjectType>(resource: TObject): OsdkObjectSet<TObject>;
   <TAction extends OsdkActionType>(resource: TAction): OsdkActionInvoker<TAction>;
+  <TFunction extends OsdkFunctionType>(resource: TFunction): OsdkFunctionInvoker<TFunction>;
   readonly objects: typeof $Objects;
   readonly actions: typeof $Actions;
+  readonly functions: typeof $Functions;
   readonly media: OsdkMediaClient;
 };
 
@@ -3879,7 +3946,7 @@ export const Order = {
   titleProperty: "orderId",
   properties: ["orderId", "customerId", "status", "amount", "margin", "riskScore", "operatorNote"],
   propertyDatasources: {"orderId": "erp", "customerId": "erp", "status": "erp", "amount": "erp", "margin": "finance", "riskScore": "erp"},
-} as const satisfies OsdkObjectType<Order>;
+} as const as OsdkObjectType<Order>;
 export const Customer = {
   kind: "object",
   apiName: "Customer",
@@ -3887,7 +3954,7 @@ export const Customer = {
   titleProperty: "name",
   properties: ["customerId", "name", "segment", "region", "riskScore", "approvedOrderCount"],
   propertyDatasources: {"customerId": "primary", "name": "primary", "segment": "primary", "region": "primary", "riskScore": "primary", "approvedOrderCount": "primary"},
-} as const satisfies OsdkObjectType<Customer>;
+} as const as OsdkObjectType<Customer>;
 export const $Objects = { Order, Customer } as const;
 export const Asset = {
   kind: "interface",
@@ -3895,12 +3962,16 @@ export const Asset = {
   properties: ["riskScore"],
   implementers: ["Order", "Customer"],
 } as const satisfies OsdkInterfaceType;
+export type orderRiskSummaryInputs = {
+  objectId: string;
+};
+export type orderRiskSummaryOutput = string;
 export const orderRiskSummary = {
   kind: "function",
   apiName: "orderRiskSummary",
   inputs: [{"apiName": "objectId", "type": "string", "required": true}],
   output: "string",
-} as const satisfies OsdkFunctionType;
+} as const as OsdkFunctionType<orderRiskSummaryInputs, orderRiskSummaryOutput>;
 export const OrderCustomer = {
   kind: "link",
   apiName: "OrderCustomer",
@@ -3908,13 +3979,13 @@ export const OrderCustomer = {
   toObjectType: "Customer",
   fromAlias: "customer",
   toAlias: "order",
-} as const satisfies OsdkLinkType<typeof Order, typeof Customer>;
+} as const as OsdkLinkType<typeof Order, typeof Customer>;
 export const ApproveOrder = {
   kind: "action",
   apiName: "ApproveOrder",
   targetObjectType: "Order",
   targetKind: "object",
-} as const satisfies OsdkActionType<ApproveOrderApplyRequest, ActionApplyResponse>;
+} as const as OsdkActionType<ApproveOrderApplyRequest, ActionApplyResponse>;
 export const $Interfaces = { Asset } as const;
 export const $Functions = { orderRiskSummary } as const;
 export const $Links = { OrderCustomer } as const;
@@ -5965,7 +6036,7 @@ function normalizeOsdkPropertyOperator(
     objectType: objectType.apiName,
     property,
     operator,
-    supportedOperators: ['$eq', '$in', '$gte', '$lte', '$contains', '$isNull'],
+    supportedOperators: ['$eq', '$in', '$gt', '$gte', '$lt', '$lte', '$contains', '$isNull'],
   });
 }
 
@@ -6396,6 +6467,14 @@ function createOsdkBoundAction<TAction extends OsdkActionType>(
         idempotencyKey: options.idempotencyKey,
       } as OsdkActionPayload<TAction>, { onCacheRefresh: options.onCacheRefresh });
     },
+    startAction(params, options) {
+      return createOsdkActionInvoker(client, actionType).startAction({
+        objectType: source.objectType,
+        objectId: source.objectId,
+        expectedObjectVersion: options.expectedObjectVersion ?? source.objectVersion,
+        params,
+      } as unknown as OsdkActionValidationPayload<TAction>, options);
+    },
   };
 }
 
@@ -6547,6 +6626,43 @@ function createOsdkActionInvoker<TAction extends OsdkActionType>(
         return result;
       });
     },
+    startAction(payload, options) {
+      return client.actions.runs.start(
+        actionType.apiName,
+        osdkGenericActionRequest(actionType, payload),
+        {
+          idempotencyKey: requireIdempotencyKey(
+            options.idempotencyKey,
+            `osdk.actions.${actionType.apiName}.startAction`,
+          ),
+          waitSeconds: options.waitSeconds,
+        },
+      );
+    },
+  };
+}
+
+function createOsdkFunctionInvoker<TFunction extends OsdkFunctionType>(
+  client: FoundryLiteGeneratedClient,
+  functionType: TFunction,
+): OsdkFunctionInvoker<TFunction> {
+  return {
+    async executeFunction(inputs) {
+      const functionClient = (client.functions as unknown as Record<string, {
+        execute(payload: FunctionExecuteRequest): Promise<FunctionExecutionResult>;
+      }>)[functionType.apiName];
+      const result = functionClient
+        ? await functionClient.execute({ inputs: inputs as Record<string, unknown> })
+        : await client.functions.generic.execute(
+            functionType.apiName,
+            { inputs: inputs as Record<string, unknown> },
+          );
+      const rawOutput = result.output;
+      const output = isOsdkRecord(rawOutput) && 'value' in rawOutput
+        ? rawOutput.value
+        : rawOutput;
+      return { ...result, output } as OsdkFunctionExecutionResult<TFunction>;
+    },
   };
 }
 
@@ -6577,13 +6693,14 @@ function createOsdkMediaClient(client: FoundryLiteGeneratedClient): OsdkMediaCli
 }
 
 export function createFoundryLiteOsdkClient(client: FoundryLiteGeneratedClient): FoundryLiteOsdkClient {
-  const osdk = ((resource: OsdkObjectType | OsdkActionType) => {
+  const osdk = ((resource: OsdkObjectType | OsdkActionType | OsdkFunctionType) => {
     if (resource.kind === 'object') return createOsdkObjectSet(client, resource);
     if (resource.kind === 'action') return createOsdkActionInvoker(client, resource);
+    if (resource.kind === 'function') return createOsdkFunctionInvoker(client, resource);
     throw new FoundryLiteApiError(
       0,
       "INVALID_OSDK_RESOURCE",
-      'OSDK resource must be an object type or action type',
+      'OSDK resource must be an object, action, or function type',
       { resource },
       null,
       false,
@@ -6592,6 +6709,7 @@ export function createFoundryLiteOsdkClient(client: FoundryLiteGeneratedClient):
   return Object.assign(osdk, {
     objects: $Objects,
     actions: $Actions,
+    functions: $Functions,
     media: createOsdkMediaClient(client),
   });
 }

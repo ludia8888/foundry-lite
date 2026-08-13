@@ -102,6 +102,31 @@ def test_arguments_are_applied_in_declaration_order(tmp_path: Path) -> None:
     assert result["output"] == 6
 
 
+def test_typescript_v2_default_export_can_filter_and_return_a_lazy_object_set(tmp_path: Path) -> None:
+    source = (
+        'import type { ObjectSet } from "@osdk/client";\n'
+        'import type { DiningTable } from "@ontology/sdk";\n'
+        "export default function compute(tables: ObjectSet<DiningTable>): ObjectSet<DiningTable> {\n"
+        "  return tables.where({ status: { $eq: 'FREE' } });\n"
+        "}\n"
+    )
+    result = _run(
+        source,
+        inputs={"tables": {"$foundryObjectSet": {"objectType": "DiningTable", "filter": None, "orderBy": []}}},
+        argument_order=["tables"],
+        output_type="objectSet",
+        tmp_path=tmp_path,
+    )
+
+    assert result["output"] == {
+        "$foundryObjectSet": {
+            "objectType": "DiningTable",
+            "filter": {"property": "status", "op": "eq", "value": "FREE"},
+            "orderBy": [],
+        }
+    }
+
+
 @pytest.mark.parametrize(
     ("source", "output_type", "expected"),
     [

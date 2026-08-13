@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
-McpPlane = Literal["builder", "ontology"]
+McpPlane = Literal["builder", "ontology", "release"]
 McpRateLimitScope = Literal["endpoint", "tool"]
 
 

@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
 from foundry_lite.application.services.runtime_run_cursors import (
     OPERATIONS_CURSOR_SIGNING_KEY_ENV,
@@ -222,17 +223,20 @@ class _RetryDeadLetterRepository:
 def _runtime_service(repository: object) -> RuntimeService:
     engine = _UnusedEngine()
     policy = PolicyService(allow_unwired_classification_provider=True)
+    ai_repository = _UnusedAiRunRepository()
     service = RuntimeService(
         engine=engine,
         policy=policy,
         runtime_repository=repository,
-        ai_run_repository=_UnusedAiRunRepository(),
+        ai_run_repository=ai_repository,
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
         dataset_quality_repository=_UnusedDatasetQualityRepository(),
     )
     service.evidence_service = RuntimeEvidenceService(
+        ai_run_repository=ai_repository,
         engine=engine,
         policy=policy,
+        profile=RuntimeProfile(),
         runtime_repository=repository,
     )
     return service
@@ -241,17 +245,20 @@ def _runtime_service(repository: object) -> RuntimeService:
 def _runtime_service_with_engine(repository: object) -> RuntimeService:
     engine = _BeginEngine()
     policy = PolicyService(allow_unwired_classification_provider=True)
+    ai_repository = _UnusedAiRunRepository()
     service = RuntimeService(
         engine=engine,
         policy=policy,
         runtime_repository=repository,
-        ai_run_repository=_UnusedAiRunRepository(),
+        ai_run_repository=ai_repository,
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
         dataset_quality_repository=_UnusedDatasetQualityRepository(),
     )
     service.evidence_service = RuntimeEvidenceService(
+        ai_run_repository=ai_repository,
         engine=engine,
         policy=policy,
+        profile=RuntimeProfile(),
         runtime_repository=repository,
     )
     return service

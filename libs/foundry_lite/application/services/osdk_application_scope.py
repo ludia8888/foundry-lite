@@ -104,7 +104,39 @@ class OsdkApplicationScopeService(CoreService):
             self._replace_resources(conn, ctx, app_id, resources, _now())
             after = self._application_bundle(conn, ctx, app_id)
             self._audit(conn, ctx, "osdk.application.resources_updated", after["application"], before, after)
+            self._notify_mcp_tools_list_changed(conn, ctx, app_id, before, after)
             return after
+
+    def _notify_mcp_tools_list_changed(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        app_id: str,
+        before: OsdkApplicationBundle,
+        after: OsdkApplicationBundle,
+    ) -> None:
+        """Tell live MCP sessions that this application's tool catalog just changed.
+
+        Consumer MCP projects the granted resources straight into `tools/list`, so editing
+        them silently invalidates whatever catalog every connected client is holding. Those
+        clients only refetch when told to, and a stale name fails at dispatch with
+        "tool is not available" rather than anything that points back to this edit.
+        """
+
+        if _resource_scope_signature(before) == _resource_scope_signature(after):
+            return
+        now = _now()
+        for session in self.osdk_application_repository.active_mcp_sessions_for_application(
+            transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id
+        ):
+            self.osdk_application_repository.append_mcp_session_event(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                session_id=session["id"],
+                event_type="notifications/tools/list_changed",
+                payload={},
+                created_at=now,
+            )
 
     def require_resource_scope(
         self,
@@ -269,3 +301,13 @@ class OsdkApplicationScopeService(CoreService):
             before_ref=before_ref,
             after_ref=after_ref or row,
         )
+
+
+def _resource_scope_signature(bundle: OsdkApplicationBundle) -> frozenset[tuple[str, str, str]]:
+    """Identify the grants that shape the projected MCP tool catalog."""
+
+    return frozenset(
+        (str(resource["resource_type"]), str(resource["resource_api_name"]), str(scope))
+        for resource in bundle["resources"]
+        for scope in resource["scopes"]
+    )

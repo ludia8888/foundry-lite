@@ -71,6 +71,8 @@ class FdeOntologyToolService(CoreService):
             return self._validate(ctx, request.branch_id)
         if request.spec.tool_id == "ontology.branch.apply_patch":
             return self._apply_patch(ctx, request.branch_id, request.arguments)
+        if request.spec.tool_id == "ontology.branch.rebase":
+            return self._rebase(ctx, request.branch_id, request.arguments)
         if request.spec.tool_id == "ontology.branch.propose":
             return self._propose(ctx, request.branch_id, request.arguments)
         raise FdeOntologyToolError("unknown_fde_tool", f"unsupported AI FDE tool {request.spec.tool_id}")
@@ -179,6 +181,24 @@ class FdeOntologyToolService(CoreService):
             "validation": dict(validation),
             "diff": self._diff(ctx, branch_id),
         }
+
+    def _rebase(self, ctx: RequestContext, branch_id: str, arguments: JsonObject) -> dict[str, object]:
+        """Re-anchor the branch on the active Ontology, resolving each conflict explicitly.
+
+        A stale branch is not a dead end: Foundry expects an author to rebase onto main and settle
+        conflicting resources one by one, which is why the resolutions list is required rather than
+        implied. Passing an empty list rebases a branch that has no conflicts.
+        """
+
+        resolutions = arguments.get("resolutions")
+        if not isinstance(resolutions, list):
+            raise FdeOntologyToolError("invalid_arguments", "ontology.branch.rebase requires a resolutions array")
+        return self.ontology_branch_service.rebase_branch(
+            branch_id,
+            resolutions=[dict(item) for item in resolutions if isinstance(item, Mapping)],
+            expected_fingerprint=_required_text(arguments, "expectedFingerprint"),
+            ctx=ctx,
+        )
 
     def _propose(self, ctx: RequestContext, branch_id: str, arguments: JsonObject) -> dict[str, object]:
         return self.ontology_branch_service.propose_branch(

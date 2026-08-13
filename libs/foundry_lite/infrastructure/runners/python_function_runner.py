@@ -20,6 +20,21 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from python_function_osdk import (  # type: ignore[import-not-found]
+        configure,
+        install_import_compatibility,
+        serialize_output,
+        wrap_inputs,
+    )
+except ModuleNotFoundError:  # local unit tests import through the foundry_lite package
+    from foundry_lite.infrastructure.runners.python_function_osdk import (
+        configure,
+        install_import_compatibility,
+        serialize_output,
+        wrap_inputs,
+    )
+
 _RESULT_SCHEMA_VERSION = 1
 
 # The value shapes a function may return, keyed by the declared ontology output type. `object`
@@ -37,6 +52,8 @@ _OUTPUT_VALIDATORS: Mapping[str, Callable[[object], bool]] = {
     "timestamp": lambda value: isinstance(value, str),
     "struct": lambda value: isinstance(value, dict),
     "array": lambda value: isinstance(value, list),
+    "object": lambda value: isinstance(value, dict) and isinstance(value.get("objectId"), str),
+    "objectSet": lambda value: isinstance(value, dict) and isinstance(value.get("$foundryObjectSet"), dict),
     "ontology_edit_batch": lambda value: _is_edit_batch(value),
 }
 
@@ -76,12 +93,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def execute_manifest(manifest: Mapping[str, object]) -> dict[str, object]:
+    configure(manifest)
+    install_import_compatibility()
     entrypoint = _text(manifest, "entrypoint")
     function = _loaded_entrypoint(Path(_text(manifest, "sourcePath")), entrypoint)
     inputs = manifest.get("inputs")
     if not isinstance(inputs, Mapping):
         raise _runner_failure("runner_contract_error", ValueError("manifest inputs must be an object"))
-    output = _invoked(function, inputs)
+    output = serialize_output(_invoked(function, wrap_inputs(inputs)))
     _require_output_type(output, _text(manifest, "outputType"))
     return {
         "schemaVersion": _RESULT_SCHEMA_VERSION,

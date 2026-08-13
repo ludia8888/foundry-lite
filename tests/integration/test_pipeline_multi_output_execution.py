@@ -541,6 +541,7 @@ def _execute_graph_version(
         expected_fingerprint=str(branch["graphFingerprint"]),
         ctx=ctx,
     )
+    foundry.pipelines.run_tests(str(branch["id"]), ctx=ctx)
     proposal = foundry.pipelines.propose(
         str(branch["id"]),
         title="Deploy Dataset outputs",

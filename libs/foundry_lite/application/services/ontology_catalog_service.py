@@ -13,7 +13,7 @@ from foundry_lite.domain.context import RequestContext
 class OntologyCatalogService(CoreService):
     """Build the active ontology catalog read model."""
 
-    required_dependencies = ("engine",)
+    required_dependencies = ("engine", "policy")
     required_collaborators = ("ontology_lookup_service", "runtime_service")
     ontology_lookup_service: OntologyLookupService
     runtime_service: OntologyRuntimeBoundary
@@ -21,6 +21,22 @@ class OntologyCatalogService(CoreService):
     def active_catalog(self, *, ctx: RequestContext | None = None) -> OntologyCatalogResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:read", "ontology", "active")
+        return self._active_catalog_read(ctx)
+
+    def release_active_version_summary(self, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        """Read only the active version facts required by the release plane."""
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "ontology:read")
+        with self.engine.begin() as conn:
+            active = self.ontology_lookup_service._active_ontology_version(conn, ctx)
+        return {
+            "ontologyVersionId": active["id"],
+            "versionNumber": active["version_number"],
+            "status": active["status"],
+            "activatedAt": active["activated_at"],
+        }
+
+    def _active_catalog_read(self, ctx: RequestContext) -> OntologyCatalogResult:
         with self.engine.begin() as conn:
             active = self.ontology_lookup_service._active_ontology_version(conn, ctx)
             object_rows = self.ontology_lookup_service._object_types_for_version(conn, ctx, active["id"])

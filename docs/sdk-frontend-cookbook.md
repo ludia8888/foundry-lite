@@ -14,7 +14,8 @@
 
 ## Ground Rules
 
-- 화면 코드는 `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes`를 우선 사용한다.
+- 고객용 `consumer_osdk_strict` 앱의 화면 코드는 그 앱의 generated package와 domain hook만 import한다. `@foundry-lite/sdk`와 `@foundry-lite/sdk/react`는 앱 OSDK package 내부 구현에서만 사용한다.
+- Foundry 관리 콘솔처럼 ontology를 런타임에 탐색하는 generic workspace만 `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes`를 직접 사용한다.
 - 제품 화면에서 raw request path를 직접 조립하지 않는다.
 - mutation은 사용자 의도마다 하나의 `idempotencyKey`를 만들고 retry 동안 재사용한다.
 - 오류 UI에는 최소한 request id, error code, retryable 여부를 보여줄 수 있게 상태를 보관한다.
@@ -23,6 +24,8 @@
   operator command/future backend surface를 화면에서 구분한다.
 
 ## One Client, One Recipe Set
+
+AI FDE Pilot이 만드는 고객 앱은 이 절의 generic client 조립 코드를 화면에 복사하지 않는다. Pilot은 생성 bundle 내부의 application OSDK workspace package에 앱 전용 object/action/function resource와 React domain hook을 만들고, 화면은 `@foundry-lite/<app>-osdk/react`만 import한다. 생성 plan의 `consumerOsdk`를 모델이 generic profile, 다른 package, exception 목록으로 바꿔 보내도 서버가 strict 좌표를 다시 계산한다. 함께 생성되는 TypeScript AST checker와 CI의 `consumer-osdk:check`가 base SDK import 및 generic object/function/action escape hatch를 차단한다.
 
 대부분의 화면은 먼저 session-aware client를 만들고, 그 client로 screen recipe 묶음을 만든다.
 

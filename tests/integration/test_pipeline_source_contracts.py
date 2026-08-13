@@ -220,6 +220,7 @@ def _approved_version(
     branch_id: str,
     ctx: RequestContext,
 ) -> dict[str, object]:
+    foundry.pipelines.run_tests(branch_id, ctx=ctx)
     proposal = foundry.pipelines.propose(
         branch_id,
         title="Pin committed source",

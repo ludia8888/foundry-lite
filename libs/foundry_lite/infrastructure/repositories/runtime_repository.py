@@ -83,6 +83,78 @@ class SqlAlchemyRuntimeRepository:
             )
             return [cast(LineageEdgeRow, dict(row)) for row in rows]
 
+    def catalog_lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[LineageEdgeRow]:
+        with self.engine.begin() as conn:
+            owned = self._resource_dataset_version_ids(conn, tenant_id, resource_id)
+            if not owned:
+                return []
+            rows = (
+                conn.execute(
+                    select(db.lineage_edges).where(
+                        and_(
+                            db.lineage_edges.c.tenant_id == tenant_id,
+                            (
+                                db.lineage_edges.c.from_resource_id.in_(owned)
+                                | db.lineage_edges.c.to_resource_id.in_(owned)
+                            ),
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            version_to_resource = self._version_resource_index(conn, tenant_id)
+            return _folded_catalog_edges([dict(row) for row in rows], version_to_resource)
+
+    def _resource_dataset_version_ids(self, conn: Any, tenant_id: str, resource_id: str) -> list[str]:
+        """Every dataset version the catalog resource owns, which is what edges are keyed by."""
+
+        dataset_ref = conn.execute(
+            select(db.resources.c.source_ref).where(
+                and_(
+                    db.resources.c.tenant_id == tenant_id,
+                    db.resources.c.id == resource_id,
+                    db.resources.c.source_surface == "dataset",
+                )
+            )
+        ).scalar_one_or_none()
+        if dataset_ref is None:
+            return []
+        rows = conn.execute(
+            select(db.dataset_versions.c.id)
+            .select_from(db.dataset_versions.join(db.datasets, db.datasets.c.id == db.dataset_versions.c.dataset_id))
+            .where(
+                and_(
+                    db.dataset_versions.c.tenant_id == tenant_id,
+                    (db.datasets.c.namespace + "." + db.datasets.c.name) == dataset_ref,
+                )
+            )
+        ).all()
+        return [str(row[0]) for row in rows]
+
+    def _version_resource_index(self, conn: Any, tenant_id: str) -> dict[str, tuple[str, str]]:
+        """Map every dataset version to the catalog resource that owns it."""
+
+        rows = conn.execute(
+            select(
+                db.dataset_versions.c.id,
+                db.resources.c.id,
+                db.resources.c.display_name,
+            )
+            .select_from(
+                db.dataset_versions.join(db.datasets, db.datasets.c.id == db.dataset_versions.c.dataset_id).join(
+                    db.resources,
+                    and_(
+                        db.resources.c.tenant_id == db.dataset_versions.c.tenant_id,
+                        db.resources.c.source_surface == "dataset",
+                        db.resources.c.source_ref == db.datasets.c.namespace + "." + db.datasets.c.name,
+                    ),
+                )
+            )
+            .where(db.dataset_versions.c.tenant_id == tenant_id)
+        ).all()
+        return {str(row[0]): (str(row[1]), str(row[2])) for row in rows}
+
     def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
         with self.engine.begin() as transaction:
 
@@ -103,6 +175,66 @@ class SqlAlchemyRuntimeRepository:
                 "auditEvents": window("audit_events"),
                 "objectEdits": window("object_edits"),
             }
+
+    def audit_event_for_resource(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        event_type: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> RuntimeRow | None:
+        row = (
+            transaction.execute(
+                select(db.audit_events)
+                .where(
+                    db.audit_events.c.tenant_id == tenant_id,
+                    db.audit_events.c.event_type == event_type,
+                    db.audit_events.c.resource_type == resource_type,
+                    db.audit_events.c.resource_id == resource_id,
+                )
+                .order_by(desc(db.audit_events.c.created_at), desc(db.audit_events.c.id))
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return cast(RuntimeRow, dict(row)) if row is not None else None
+
+    def audit_events_for_resources(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        resource_refs: Sequence[tuple[str, str]],
+        event_types: Sequence[str],
+        limit: int,
+    ) -> list[RuntimeRow]:
+        if not resource_refs or not event_types or limit < 1:
+            return []
+        resource_conditions = [
+            and_(
+                db.audit_events.c.resource_type == resource_type,
+                db.audit_events.c.resource_id == resource_id,
+            )
+            for resource_type, resource_id in resource_refs
+        ]
+        rows = (
+            transaction.execute(
+                select(db.audit_events)
+                .where(
+                    db.audit_events.c.tenant_id == tenant_id,
+                    db.audit_events.c.event_type.in_(tuple(event_types)),
+                    or_(*resource_conditions),
+                )
+                .order_by(desc(db.audit_events.c.created_at), desc(db.audit_events.c.id))
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(RuntimeRow, dict(row)) for row in rows]
 
     def _rows_window(
         self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str, limit: int | None
@@ -440,6 +572,27 @@ class SqlAlchemyRuntimeRepository:
             .all()
         )
         return [cast(RuntimeRow, dict(row)) for row in rows]
+
+    def outbox_event_by_idempotency_key(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> RuntimeRow | None:
+        row = (
+            transaction.execute(
+                select(db.outbox_events).where(
+                    and_(
+                        db.outbox_events.c.tenant_id == tenant_id,
+                        db.outbox_events.c.idempotency_key == idempotency_key,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(RuntimeRow, dict(row)) if row else None
 
     def mark_outbox_event_publishing(
         self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition, claimed_at: str
@@ -823,3 +976,33 @@ class SqlAlchemyRuntimeRepository:
 
 # Run tables that lineage edges attribute work to (``created_by_run_id``).
 _LINEAGE_RUN_TYPES: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization", "ai")
+
+
+def _folded_catalog_edges(
+    rows: Sequence[Mapping[str, object]],
+    version_to_resource: Mapping[str, tuple[str, str]],
+) -> list[LineageEdgeRow]:
+    """Collapse per-version edges onto the resources that own them, keeping one edge per pair.
+
+    Two datasets are usually joined by many version edges, one per build. A catalog graph wants
+    the single relationship, so the earliest edge for a resource pair wins and self-edges from
+    versions of the same dataset are dropped.
+    """
+
+    folded: dict[tuple[str, str, str], LineageEdgeRow] = {}
+    for row in sorted(rows, key=lambda item: str(item.get("created_at", ""))):
+        origin = version_to_resource.get(str(row.get("from_resource_id")))
+        target = version_to_resource.get(str(row.get("to_resource_id")))
+        if origin is None or target is None or origin[0] == target[0]:
+            continue
+        relation = str(row.get("relation"))
+        key = (origin[0], target[0], relation)
+        if key in folded:
+            continue
+        edge = dict(row)
+        edge["from_resource_type"] = "dataset"
+        edge["from_resource_id"] = origin[0]
+        edge["to_resource_type"] = "dataset"
+        edge["to_resource_id"] = target[0]
+        folded[key] = cast(LineageEdgeRow, edge)
+    return list(folded.values())

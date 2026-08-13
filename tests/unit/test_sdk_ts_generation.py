@@ -52,6 +52,12 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type FoundryLiteOsdkClient = {" in generated
     assert "readonly objects: typeof $Objects;" in generated
     assert "readonly actions: typeof $Actions;" in generated
+    assert "readonly functions: typeof $Functions;" in generated
+    assert "export type OsdkFunctionInvoker<TFunction extends OsdkFunctionType>" in generated
+    assert "executeFunction(" in generated
+    assert "export type orderRiskSummaryInputs = {" in generated
+    assert "objectId: string;" in _type_block(generated, "orderRiskSummaryInputs")
+    assert "export type orderRiskSummaryOutput = string;" in generated
     assert "export const Order = {" in generated
     assert "  readonly titleProperty: string | null;" in generated
     assert 'titleProperty: "orderId",' in generated
@@ -88,6 +94,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "validateAction(" in generated
     assert "onCacheRefresh?: (hint: ActionCacheRefreshHint) => void" in generated
     assert "applyAction(" in generated
+    assert "startAction(" in generated
     assert "uploadAndCommit(" in generated
     assert "export function createFoundryLiteOsdkClient" in generated
     assert "export type DeadLetterRecord = {" in generated
@@ -1452,7 +1459,10 @@ def test_sdk_generator_emits_function_constants() -> None:
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     generated = sdk.render_typescript(ontology)
 
-    assert "export type OsdkFunctionType = {" in generated
+    assert (
+        "export type OsdkFunctionType<TInputs extends object = Record<string, unknown>, "
+        "TOutput = unknown> = {" in generated
+    )
     assert "export const orderRiskSummary = {" in generated
     assert '  apiName: "orderRiskSummary",' in generated
     assert '  inputs: [{"apiName": "objectId", "type": "string", "required": true}],' in generated

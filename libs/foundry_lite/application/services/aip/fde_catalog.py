@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from foundry_lite.application.services.aip.fde_domain_os_tool_schema import DOMAIN_BRIEF_SCHEMA
 from foundry_lite.application.services.aip.fde_palantir_mcp_catalog import (
     PALANTIR_MCP_NATIVE_TOOLS,
     PALANTIR_MCP_TOOLS_BY_CAPABILITY,
@@ -280,6 +281,20 @@ _FDE_TOOLS = (
         "USER",
     ),
     _tool(
+        "ontology.branch.rebase",
+        "Re-anchor the selected Ontology branch on the active Ontology, settling each conflicting "
+        "resource explicitly. Use this when a branch reports baseStale: validating or proposing a "
+        "branch built on a superseded base reads deletions for everything added to main since.",
+        "ontology:validate",
+        {
+            "resolutions": {"type": "array"},
+            "expectedFingerprint": {"type": "string"},
+        },
+        ["resolutions", "expectedFingerprint"],
+        "WRITE",
+        "USER",
+    ),
+    _tool(
         "ontology.branch.propose",
         "Submit the selected Ontology branch for human review without merging it.",
         "ontology:validate",
@@ -366,10 +381,14 @@ _FDE_TOOLS = (
     ),
     _tool(
         "pilot.application.plan",
-        "Create a typed Pilot generation plan without mutation.",
+        "Turn a non-developer's detailed business description into a reviewable Domain OS blueprint without mutation.",
         "developer_console:read",
-        {"applicationName": {"type": "string"}, "domainDescription": {"type": "string"}},
-        ["applicationName", "domainDescription"],
+        {
+            "applicationName": {"type": "string", "minLength": 1, "maxLength": 255},
+            "domainDescription": {"type": "string", "minLength": 1, "maxLength": 10000},
+            "domainBrief": DOMAIN_BRIEF_SCHEMA,
+        },
+        ["applicationName", "domainDescription", "domainBrief"],
     ),
     _tool(
         "pilot.application.generate",
@@ -388,7 +407,7 @@ _TOOLS_BY_CAPABILITY = {
     "resource.inspect": ("resource.inspect",),
     "governance.project.inspect": ("governance.project.inspect",),
     "ontology.inspect": ("ontology.branch.inspect",),
-    "ontology.validate": ("ontology.branch.validate",),
+    "ontology.validate": ("ontology.branch.validate", "ontology.branch.rebase"),
     "ontology.edit": ("ontology.branch.apply_patch",),
     "ontology.propose": ("ontology.branch.propose",),
     "pipeline.inspect": ("pipeline.branch.inspect",),

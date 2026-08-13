@@ -18,9 +18,14 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.services.function_execution_service import FunctionExecutionResult
 from foundry_lite.application.services.mcp_json_rpc import JsonRpcRequestId
+from foundry_lite.application.services.mcp_session_namespace import require_mcp_session_namespace
 from foundry_lite.domain.context import RequestContext
 
 JsonObject = Mapping[str, object]
+
+
+def require_ontology_mcp_session_namespace(session_id: str) -> None:
+    require_mcp_session_namespace(session_id, "ontology")
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,10 +13,9 @@ from foundry_lite.application.services.pipeline_graph_model import (
     node_by_id,
     node_data,
     output_contract_columns,
-    output_dataset_ref,
     validate_pipeline_graph,
 )
-from foundry_lite.application.services.pipeline_payloads import test_result_record
+from foundry_lite.application.services.pipeline_payloads import test_result_payload, test_result_record
 from foundry_lite.application.services.pipeline_source_contract_resolver import (
     PipelineSourceContractResolutionFailed,
     PipelineSourceContractResolver,
@@ -156,6 +155,17 @@ class PipelineGraphValidationService(CoreService):
             )
         return {"id": stored["id"], **result}
 
+    def latest_test_result(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object] | None:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "pipeline:read")
+        with self.engine.begin() as conn:
+            row = self.pipeline_repository.latest_test_result(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                branch_id=branch_id,
+            )
+        return test_result_payload(row) if row is not None else None
+
     def _branch(self, branch_id: str, ctx: RequestContext) -> PipelineBranchRow:
         with self.engine.begin() as conn:
             return self._require_branch(conn, ctx, branch_id)
@@ -238,23 +248,40 @@ def _test_result(row: PipelineBranchRow) -> dict[str, object]:
     status = "passed" if not failures else "failed"
     return {
         "status": status,
+        "graphFingerprint": row["graph_fingerprint"],
         "testCount": len(tests) + 1,
         "declaredTestCount": len(tests),
         "proofKind": "static_graph_output_contract",
+        "proofVersion": "pipeline-static-review-v1",
         "isDataExecution": False,
-        "evaluatedChecks": ["graph_validation", "output_dataset_and_contract"],
+        "evaluatedChecks": ["graph_validation", "output_descriptor_contracts"],
         "failures": failures,
         "validation": validation,
     }
 
 
 def _output_contract_test_failures(graph: Mapping[str, object]) -> list[dict[str, object]]:
-    output_ref = output_dataset_ref(graph)
-    if output_ref is None:
-        return [{"test": "output_dataset", "message": "output dataset reference is missing"}]
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    dataset_outputs = [
+        node
+        for node in nodes
+        if isinstance(node, Mapping)
+        and (node.get("type") == "output_dataset" or node.get("descriptorId") == "output.dataset")
+    ]
+    failures: list[dict[str, object]] = [
+        {"test": "output_dataset", "message": "output dataset reference is missing"}
+        for node in dataset_outputs
+        if not _output_dataset_ref(node)
+    ]
     columns = output_contract_columns(graph)
-    if not columns:
-        return [{"test": "output_contract", "message": "output contract has no columns"}]
     if any(not column.get("type") for column in columns):
-        raise ValidationFailed("output contract column type is required", details={"outputDatasetRef": output_ref})
-    return []
+        raise ValidationFailed("output contract column type is required")
+    return failures
+
+
+def _output_dataset_ref(node: Mapping[str, object]) -> str | None:
+    config = node_data(node)
+    value = config.get("outputDatasetRef") or config.get("datasetRef")
+    return value if isinstance(value, str) and value.strip() else None

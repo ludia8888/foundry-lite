@@ -16,6 +16,7 @@ from foundry_lite.application.dependencies import (
     AipDependencies,
     CoreDependencies,
     DataDependencies,
+    GovernedReleaseMcpAuthority,
     MediaDependencies,
     MediaProcessorRegistry,
     ObjectDependencies,
@@ -137,9 +138,11 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_paths,
     _ffprobe_video_probe_runner,
 )
-from foundry_lite.infrastructure.auth import LocalOAuthTokenIssuer
-from foundry_lite.infrastructure.auth.oauth_token_issuer import OAUTH_AUDIENCE_ENV, OAUTH_ISSUER_ENV
+from foundry_lite.infrastructure.auth import OAUTH_AUDIENCE_ENV, OAUTH_ISSUER_ENV, LocalOAuthTokenIssuer
+from foundry_lite.infrastructure.local_database_url import local_database_url, local_storage_root
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
+from foundry_lite.infrastructure.protected_runtime_host import require_protected_runtime_host
+from foundry_lite.infrastructure.release_dependencies import build_governed_release_dependencies
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionBranchRepository,
     SqlAlchemyActionExecutionRepository,
@@ -317,6 +320,9 @@ def create_runtime_core_dependencies(
     db_url: str | None = None,
     storage_root: str | Path | None = None,
     adapter_profile: str = "local",
+    governed_release_mcp_authority: GovernedReleaseMcpAuthority | None = None,
+    oauth_issuer: str | None = None,
+    oauth_audience: str | None = None,
 ) -> CoreDependencies:
     """Dispatch runtime composition from a normalized runtime profile."""
 
@@ -327,12 +333,18 @@ def create_runtime_core_dependencies(
             db_url=db_url,
             storage_root=storage_root,
             adapter_profile=adapter_profile,
+            governed_release_mcp_authority=governed_release_mcp_authority,
+            oauth_issuer=oauth_issuer,
+            oauth_audience=oauth_audience,
         )
     return _create_core_dependencies(
         runtime_profile=runtime_profile,
         db_url=db_url,
         storage_root=storage_root,
         profiles=RuntimeAdapterProfiles.from_env(adapter_profile),
+        governed_release_mcp_authority=governed_release_mcp_authority,
+        oauth_issuer=oauth_issuer,
+        oauth_audience=oauth_audience,
     )
 
 
@@ -342,6 +354,9 @@ def create_production_core_dependencies(
     db_url: str | None = None,
     storage_root: str | Path | None = None,
     adapter_profile: str = "local",
+    governed_release_mcp_authority: GovernedReleaseMcpAuthority | None = None,
+    oauth_issuer: str | None = None,
+    oauth_audience: str | None = None,
 ) -> CoreDependencies:
     """Build protected runtime dependencies and reject local-only adapter choices before startup."""
 
@@ -350,11 +365,20 @@ def create_production_core_dependencies(
         raise ValueError("create_production_core_dependencies requires a production or staging runtime profile")
     profiles = RuntimeAdapterProfiles.from_env(adapter_profile)
     _reject_protected_local_profiles(profiles)
+    host = require_protected_runtime_host(
+        profile=runtime_profile,
+        database_url=db_url,
+        runtime_home=storage_root,
+        environ=os.environ,
+    )
     return _create_core_dependencies(
         runtime_profile=runtime_profile,
         db_url=db_url,
-        storage_root=storage_root,
+        storage_root=host.runtime_home,
         profiles=profiles,
+        governed_release_mcp_authority=governed_release_mcp_authority,
+        oauth_issuer=oauth_issuer,
+        oauth_audience=oauth_audience,
     )
 
 
@@ -364,10 +388,13 @@ def _create_core_dependencies(
     db_url: str | None,
     storage_root: str | Path | None,
     profiles: RuntimeAdapterProfiles,
+    governed_release_mcp_authority: GovernedReleaseMcpAuthority | None = None,
+    oauth_issuer: str | None = None,
+    oauth_audience: str | None = None,
 ) -> CoreDependencies:
     require_object_query_cursor_signing_key_for_runtime()
     require_operations_cursor_signing_key_for_runtime()
-    root = Path(storage_root or ".foundry-lite").resolve()
+    root = local_storage_root(storage_root)
     root.mkdir(parents=True, exist_ok=True)
     object_storage_root = root / "object-storage"
     object_storage_root.mkdir(parents=True, exist_ok=True)
@@ -416,7 +443,7 @@ def _create_core_dependencies(
     action_run_orchestrator = _action_run_orchestrator(profiles.workflow)
     action_function_executor = InProcessActionFunctionExecutor()
     action_file_scanner = action_file_scanner_adapter(profiles.action_file_scanner)
-    database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
+    database_url = db_url or local_database_url(root)
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
@@ -468,8 +495,8 @@ def _create_core_dependencies(
             oauth_session_repository=SqlAlchemyOAuthSessionRepository(engine),
             oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(
                 root / "oauth-private-key.pem",
-                issuer=os.getenv(OAUTH_ISSUER_ENV),
-                audience=os.getenv(OAUTH_AUDIENCE_ENV),
+                issuer=oauth_issuer or os.getenv(OAUTH_ISSUER_ENV),
+                audience=oauth_audience or os.getenv(OAUTH_AUDIENCE_ENV),
             ),
             secret_provider=secret_provider,
             secret_vault=secret_vault,
@@ -541,6 +568,12 @@ def _create_core_dependencies(
             tool_executor=FakeToolExecutor(),
             model_catalog_seed=_language_model_catalog_seed(profiles.language_model),
             trained_model_inference_port=_trained_model_inference_adapter(runtime_profile),
+            governed_release=build_governed_release_dependencies(
+                engine,
+                secret_provider,
+                runtime_profile=runtime_profile,
+                mcp_authority=governed_release_mcp_authority,
+            ),
         ),
         media=MediaDependencies(
             media_repository=media_repository,

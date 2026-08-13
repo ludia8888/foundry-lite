@@ -1,0 +1,2700 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:"
+    />
+    <title>Foundry-lite Governed Release</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --ink: #171a18;
+        --ink-soft: #555b56;
+        --paper: #f2f0e8;
+        --paper-raised: #fbfaf5;
+        --line: #c8c5b9;
+        --signal: #166149;
+        --signal-wash: #dbe8df;
+        --warn: #8a4f13;
+        --warn-wash: #f0dfc7;
+        --danger: #9c332c;
+        --danger-wash: #f0d7d3;
+        --muted: #e3e0d6;
+        --focus: #1267a8;
+        --shadow: rgba(20, 24, 21, 0.12);
+        font-family: "Avenir Next", Avenir, "SF Pro Text", -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-width: 280px;
+        background: transparent;
+        color: var(--ink);
+      }
+
+      body {
+        padding: 10px;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .shell {
+        position: relative;
+        width: min(100%, 760px);
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--paper);
+        box-shadow: 0 12px 34px var(--shadow);
+      }
+
+      .shell::before {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 6px;
+        background: var(--signal);
+        content: "";
+      }
+
+      .masthead {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 20px 22px 18px 26px;
+        border-bottom: 1px solid var(--line);
+        background: var(--paper-raised);
+      }
+
+      .eyebrow,
+      .mono,
+      .meta-label,
+      .step-index,
+      .receipt-key {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      .eyebrow {
+        margin: 0 0 6px;
+        color: var(--signal);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(20px, 4vw, 29px);
+        font-weight: 720;
+        letter-spacing: -0.035em;
+        line-height: 1.12;
+      }
+
+      .kind-mark {
+        flex: 0 0 auto;
+        padding: 7px 9px 6px;
+        border: 1px solid var(--ink);
+        border-radius: 999px;
+        background: var(--ink);
+        color: var(--paper-raised);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .manifest {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(220px, 0.8fr);
+      }
+
+      .primary,
+      .control {
+        min-width: 0;
+      }
+
+      .primary {
+        padding: 22px 22px 22px 26px;
+      }
+
+      .control {
+        padding: 22px;
+        border-left: 1px solid var(--line);
+        background: var(--paper-raised);
+      }
+
+      .status-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 8px 12px;
+        margin-bottom: 18px;
+      }
+
+      .status-word {
+        color: var(--signal);
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+
+      .release-id {
+        max-width: 100%;
+        overflow: hidden;
+        color: var(--ink-soft);
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .rail {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        margin: 0 0 24px;
+        padding: 0;
+        list-style: none;
+      }
+
+      .rail-step {
+        position: relative;
+        min-width: 0;
+        padding-top: 20px;
+        color: var(--ink-soft);
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .rail-step::before,
+      .rail-step::after {
+        position: absolute;
+        top: 6px;
+        content: "";
+      }
+
+      .rail-step::before {
+        left: 0;
+        z-index: 1;
+        width: 8px;
+        height: 8px;
+        border: 2px solid var(--line);
+        border-radius: 50%;
+        background: var(--paper);
+      }
+
+      .rail-step::after {
+        right: 0;
+        left: 10px;
+        height: 2px;
+        background: var(--line);
+      }
+
+      .rail-step:last-child::after {
+        display: none;
+      }
+
+      .rail-step.is-done::before,
+      .rail-step.is-current::before {
+        border-color: var(--signal);
+        background: var(--signal);
+      }
+
+      .rail-step.is-done::after {
+        background: var(--signal);
+      }
+
+      .rail-step.is-current {
+        color: var(--ink);
+      }
+
+      .section-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 10px;
+        font-size: 11px;
+        font-weight: 820;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .section-label::after {
+        flex: 1;
+        height: 1px;
+        background: var(--line);
+        content: "";
+      }
+
+      .summary {
+        margin: 0 0 20px;
+        color: var(--ink-soft);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .evidence-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .evidence-item {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: start;
+        padding-bottom: 8px;
+        border-bottom: 1px dotted var(--line);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .evidence-dot {
+        display: grid;
+        width: 16px;
+        height: 16px;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--signal-wash);
+        color: var(--signal);
+        font-size: 10px;
+        font-weight: 900;
+      }
+
+      .evidence-dot.is-failed {
+        background: var(--danger-wash);
+        color: var(--danger);
+      }
+
+      .evidence-state {
+        color: var(--ink-soft);
+        font-size: 10px;
+        font-weight: 750;
+        text-transform: uppercase;
+      }
+
+      .empty-copy {
+        margin: 0;
+        padding: 12px;
+        border: 1px dashed var(--line);
+        color: var(--ink-soft);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .evidence-block {
+        margin-bottom: 20px;
+      }
+
+      .reference-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+        margin: 0 0 10px;
+      }
+
+      .reference-item {
+        min-width: 0;
+        padding: 8px 9px;
+        border: 1px solid var(--line);
+        background: var(--paper-raised);
+      }
+
+      .reference-item dt {
+        margin-bottom: 3px;
+        color: var(--ink-soft);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 9px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .reference-item dd {
+        margin: 0;
+        overflow: hidden;
+        font-size: 11px;
+        font-weight: 720;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .ledger-summary {
+        margin: 0 0 9px;
+        color: var(--ink-soft);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .ledger-list,
+      .timeline-list,
+      .detail-list,
+      .risk-reason-list {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .ledger-item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        padding: 8px 0;
+        border-bottom: 1px dotted var(--line);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .ledger-badge {
+        min-width: 48px;
+        padding: 2px 5px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--ink-soft);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 8px;
+        font-weight: 800;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .ledger-title {
+        display: block;
+        color: var(--ink);
+        font-weight: 750;
+      }
+
+      .ledger-meta {
+        display: block;
+        margin-top: 2px;
+        color: var(--ink-soft);
+        font-size: 10px;
+      }
+
+      .evidence-copy {
+        min-width: 0;
+      }
+
+      .detail-list {
+        gap: 2px;
+        margin-top: 4px;
+        color: var(--ink-soft);
+        font-size: 10px;
+      }
+
+      .timeline-list {
+        position: relative;
+        gap: 0;
+      }
+
+      .timeline-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 12px minmax(0, 1fr);
+        gap: 9px;
+        padding: 0 0 12px;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .timeline-item::after {
+        position: absolute;
+        top: 11px;
+        bottom: 0;
+        left: 5px;
+        width: 1px;
+        background: var(--line);
+        content: "";
+      }
+
+      .timeline-item:last-child::after {
+        display: none;
+      }
+
+      .timeline-dot {
+        z-index: 1;
+        width: 11px;
+        height: 11px;
+        margin-top: 2px;
+        border: 2px solid var(--signal);
+        border-radius: 50%;
+        background: var(--paper);
+      }
+
+      .timeline-dot.is-failed {
+        border-color: var(--danger);
+      }
+
+      .timeline-dot.is-warning,
+      .evidence-dot.is-warning {
+        border-color: var(--warn);
+        background: var(--warn-wash);
+        color: var(--warn);
+      }
+
+      .failure-panel {
+        margin: 0 0 18px;
+        padding: 11px 12px;
+        border: 1px solid var(--danger);
+        border-left-width: 4px;
+        background: var(--danger-wash);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .failure-panel strong {
+        display: block;
+        margin-bottom: 3px;
+      }
+
+      .audit-details {
+        border: 1px solid var(--line);
+        background: var(--paper-raised);
+      }
+
+      .audit-details summary {
+        padding: 9px 10px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 760;
+      }
+
+      .audit-details summary:focus-visible {
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
+      }
+
+      .audit-details .ledger-list {
+        padding: 0 10px 5px;
+      }
+
+      .risk-reason-list {
+        gap: 4px;
+        margin: -8px 0 18px;
+        color: var(--ink-soft);
+        font-size: 10px;
+        line-height: 1.4;
+      }
+
+      .risk-reason-list li {
+        position: relative;
+        padding-left: 10px;
+      }
+
+      .risk-reason-list li::before {
+        position: absolute;
+        left: 0;
+        color: var(--warn);
+        content: "\2022";
+      }
+
+      .safety-grid {
+        display: grid;
+        gap: 8px;
+        margin: 0 0 18px;
+      }
+
+      .safety-row {
+        display: grid;
+        grid-template-columns: 78px minmax(0, 1fr);
+        gap: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      .meta-label {
+        color: var(--ink-soft);
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .value-strong {
+        font-weight: 780;
+      }
+
+      .is-warning {
+        color: var(--warn);
+      }
+
+      .is-danger {
+        color: var(--danger);
+      }
+
+      .notice {
+        margin: 0 0 14px;
+        padding: 10px 11px;
+        border-left: 3px solid var(--signal);
+        background: var(--signal-wash);
+        color: var(--ink);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .notice[data-tone="warning"] {
+        border-color: var(--warn);
+        background: var(--warn-wash);
+      }
+
+      .notice[data-tone="error"] {
+        border-color: var(--danger);
+        background: var(--danger-wash);
+      }
+
+      .actions {
+        display: grid;
+        gap: 8px;
+      }
+
+      .action-pair {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .action-button {
+        min-height: 40px;
+        padding: 9px 11px;
+        border: 1px solid var(--ink);
+        border-radius: 9px;
+        background: var(--ink);
+        color: var(--paper-raised);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 760;
+        line-height: 1.25;
+        text-align: left;
+        transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+      }
+
+      .action-button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 0 var(--line);
+      }
+
+      .action-button:active:not(:disabled) {
+        transform: translateY(1px);
+        box-shadow: none;
+      }
+
+      .action-button.secondary {
+        background: transparent;
+        color: var(--ink);
+      }
+
+      .action-button.danger {
+        border-color: var(--danger);
+        background: transparent;
+        color: var(--danger);
+      }
+
+      .action-button:disabled {
+        border-color: var(--line);
+        background: var(--muted);
+        color: #777b77;
+        cursor: not-allowed;
+      }
+
+      .action-button:focus-visible {
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
+      }
+
+      .button-hint {
+        display: block;
+        margin-top: 3px;
+        font-size: 9px;
+        font-weight: 550;
+        opacity: 0.78;
+      }
+
+      .receipt {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px 14px;
+        padding: 12px 22px 13px 26px;
+        border-top: 1px dashed var(--line);
+        background: var(--paper-raised);
+        color: var(--ink-soft);
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .receipt-key {
+        color: var(--ink);
+        font-size: 9px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .skeleton {
+        display: grid;
+        min-height: 280px;
+        place-items: center;
+        padding: 28px;
+        color: var(--ink-soft);
+        text-align: center;
+      }
+
+      .skeleton strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--ink);
+      }
+
+      @media (max-width: 620px) {
+        body {
+          padding: 6px;
+        }
+
+        .shell {
+          border-radius: 14px;
+        }
+
+        .masthead {
+          padding: 17px 16px 15px 20px;
+        }
+
+        .manifest {
+          grid-template-columns: 1fr;
+        }
+
+        .primary,
+        .control {
+          padding: 18px 16px 18px 20px;
+        }
+
+        .control {
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+
+        .rail-step {
+          font-size: 9px;
+        }
+
+        .receipt {
+          padding-right: 16px;
+          padding-left: 20px;
+        }
+      }
+
+      @media (max-width: 390px) {
+        .kind-mark {
+          display: none;
+        }
+
+        .rail-step span {
+          display: none;
+        }
+
+        .action-pair {
+          grid-template-columns: 1fr;
+        }
+
+        .reference-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+        }
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #ecece5;
+          --ink-soft: #b5bab4;
+          --paper: #202421;
+          --paper-raised: #272c28;
+          --line: #505650;
+          --signal: #66c39f;
+          --signal-wash: #26453a;
+          --warn: #e8ad69;
+          --warn-wash: #533b25;
+          --danger: #f08c83;
+          --danger-wash: #532f2c;
+          --muted: #383d39;
+          --focus: #74b8e8;
+          --shadow: rgba(0, 0, 0, 0.28);
+        }
+
+        .action-button {
+          border-color: var(--ink);
+          background: var(--ink);
+          color: #1a1d1b;
+        }
+
+        .action-button.secondary,
+        .action-button.danger {
+          background: transparent;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app" aria-live="polite">
+      <section class="shell skeleton" aria-busy="true">
+        <div>
+          <strong>운영 릴리스 정보를 기다리는 중입니다.</strong>
+          GPT가 전달한 후보와 검증 증거가 도착하면 이곳에서 안전하게 이어서 처리합니다.
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const TOOL_BY_ACTION = Object.freeze({
+          create: "create_release_branch",
+          publish: "publish_release_candidate",
+          claim: "assign_release_reviewer",
+          approve: "submit_release_decision",
+          reject: "submit_release_decision",
+          execute: "execute_approved_release",
+          deploy: "deploy_release",
+          refresh: "get_release_status",
+          rollback: "rollback_release",
+          verify: "verify_release_completion",
+        });
+
+        const RISKY_ACTIONS = new Set(["create", "publish", "claim", "approve", "reject", "execute", "deploy", "rollback", "verify"]);
+        const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
+        // Web hosts can take several seconds to finish sandbox-proxy setup before
+        // answering ui/initialize. Falling back after 750 ms can prevent the
+        // required initialized notification from ever being sent, leaving the
+        // iframe permanently hidden even though the tool call succeeded.
+        const MCP_APPS_INITIALIZE_TIMEOUT_MS = 15000;
+        const INITIAL_SNAPSHOT_POLL_INTERVAL_MS = 250;
+        const INITIAL_SNAPSHOT_POLL_ATTEMPTS = 60;
+        const WIDGET_RECOVERY_STATE_SCHEMA = "foundry-lite-governed-release-recovery/v1";
+        const DEPLOYMENT_POLL_DELAYS_MS = Object.freeze([1000, 2000, 4000]);
+        const DEPLOYMENT_POLL_STATUSES = new Set(["deploying", "deployment_unverified"]);
+        const state = {
+          snapshot: null,
+          busyAction: "",
+          message: "",
+          tone: "info",
+          lastRequestId: "",
+          staleBlocked: false,
+          permissionBlocked: false,
+          recoveryPersistenceStatus: "not_attempted",
+        };
+        const pendingHostRequests = new Map();
+        const deploymentPollWaiters = new Map();
+        let nextHostRequestId = 1;
+        let hostBridgeMode = "pending";
+        let hostBridgeReadyPromise = null;
+        let standardHostTarget = null;
+        let isHostBridgeTornDown = false;
+        let initialSnapshotPollGeneration = 0;
+        let initialSnapshotPollTimerId;
+        let hasAttemptedInitialSnapshotRecovery = false;
+        let lastPersistedRecoveryCoordinate = "";
+        let pollingGeneration = 0;
+        let activePollingPromise = null;
+
+        const app = document.getElementById("app");
+
+        function isObject(value) {
+          return value !== null && typeof value === "object" && !Array.isArray(value);
+        }
+
+        function firstValue(...values) {
+          return values.find((value) => value !== undefined && value !== null && value !== "");
+        }
+
+        function asArray(value) {
+          if (Array.isArray(value)) return value;
+          if (value === undefined || value === null || value === "") return [];
+          return [value];
+        }
+
+        function asBoolean(value) {
+          if (typeof value === "boolean") return value;
+          if (typeof value === "string") return ["true", "yes", "required", "stale"].includes(value.toLowerCase());
+          return Boolean(value);
+        }
+
+        function escapeHtml(value) {
+          return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+        }
+
+        function compactObject(value) {
+          return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== null && item !== ""));
+        }
+
+        function safeText(value) {
+          return ["string", "number", "boolean"].includes(typeof value) ? String(value) : "";
+        }
+
+        function safeTextItems(value) {
+          return asArray(value).map(safeText).filter(Boolean);
+        }
+
+        function structuredContentFrom(value) {
+          if (!isObject(value)) return null;
+          if (isObject(value.structuredContent)) return value.structuredContent;
+          if (isObject(value.toolOutput)) return structuredContentFrom(value.toolOutput) || value.toolOutput;
+          return value;
+        }
+
+        function normalizeKind(value) {
+          const kind = String(value || "unknown").toLowerCase();
+          if (kind.includes("ontology")) return "ontology";
+          if (kind.includes("pipeline")) return "pipeline";
+          return kind;
+        }
+
+        function normalizeEvidenceItem(item, index, fallbackLabel = "검증 증거") {
+          if (typeof item === "string") {
+            return { id: `evidence-${index}`, label: item, status: "passed", proofKind: "", details: [] };
+          }
+          if (typeof item === "boolean") {
+            return {
+              id: `evidence-${index}`,
+              label: fallbackLabel,
+              status: item ? "passed" : "failed",
+              proofKind: "",
+              details: [],
+            };
+          }
+          const entry = isObject(item) ? item : {};
+          const label = safeText(firstValue(entry.label, entry.name, entry.summary, entry.description));
+          const status = safeText(
+            firstValue(entry.status, entry.result, entry.state, entry.passed === false ? "failed" : "passed"),
+          );
+          return {
+            id: safeText(firstValue(entry.id, entry.evidenceId)) || `evidence-${index}`,
+            label: label || fallbackLabel,
+            status: (status || "passed").toLowerCase(),
+            proofKind: safeText(entry.proofKind),
+            details: validationDetailItems(entry.details),
+          };
+        }
+
+        function validationDetailItems(value) {
+          const details = isObject(value) ? value : {};
+          const checks = safeTextItems(details.evaluatedChecks);
+          const entries = [
+            ["검증 수", details.testCount],
+            ["선언 테스트", details.declaredTestCount],
+            ["실패 수", details.failureCount],
+            ["객체 타입", details.objectTypeCount],
+            ["링크 타입", details.linkTypeCount],
+            ["액션 타입", details.actionTypeCount],
+            ["차단 변경", details.blockedCount],
+            ["경고", details.warningCount],
+            ["재색인", details.reindexCount],
+            ["현재 그래프", details.isCurrentGraph],
+            ["데이터 실행", details.isDataExecution],
+            ["마이그레이션", details.status],
+            ["소비자 호환성", details.consumerCompatibility],
+            ["SDK 호환성", details.sdkCompatibility],
+            ["증거 버전", details.proofVersion],
+            ["사유", details.reason],
+            ["검사 항목", checks.length ? checks.join(", ") : undefined],
+          ];
+          return entries
+            .filter(([, item]) => ["string", "number", "boolean"].includes(typeof item))
+            .map(([label, item]) => `${label}: ${String(item)}`);
+        }
+
+        function validationEvidence(validation) {
+          if (Array.isArray(validation)) return validation.map((item, index) => normalizeEvidenceItem(item, index));
+          if (!isObject(validation)) return asArray(validation).map((item, index) => normalizeEvidenceItem(item, index));
+          const nested = firstValue(validation.evidence, validation.checks, validation.results);
+          if (nested) return asArray(nested).map((item, index) => normalizeEvidenceItem(item, index));
+          if (firstValue(validation.status, validation.result, validation.state)) {
+            return [normalizeEvidenceItem(validation, 0, "후보 검증")];
+          }
+          return Object.entries(validation).map(([key, item], index) => normalizeEvidenceItem(item, index, key.replaceAll("_", " ")));
+        }
+
+        function versionId(value) {
+          if (!isObject(value)) return String(value ?? "");
+          return String(firstValue(value.versionId, value.id, value.versionNumber, value.version, value.name) ?? "");
+        }
+
+        function releaseEvidenceItems(releaseEvidence, startIndex) {
+          const items = [];
+          const mergedVersion = versionId(releaseEvidence.mergedVersion);
+          if (mergedVersion) {
+            items.push({
+              id: `evidence-${startIndex + items.length}`,
+              label: `내부 브랜치 병합 버전 ${mergedVersion}`,
+              status: "passed",
+              proofKind: "durable_release_version",
+              details: [],
+            });
+          }
+          const deployment = firstValue(
+            releaseEvidence.deployment,
+            releaseEvidence.currentDeployment,
+            releaseEvidence.candidateDeployment,
+          );
+          if (deployment) {
+            const deploymentStatus = isObject(deployment)
+              ? String(firstValue(deployment.status, deployment.state, "recorded")).toLowerCase()
+              : String(deployment).toLowerCase();
+            items.push({
+              id: `evidence-${startIndex + items.length}`,
+              label: `Pipeline PROMOTED ${statusLabel(deploymentStatus)}`,
+              status: ["failed", "blocked", "error"].includes(deploymentStatus) ? "failed" : deploymentStatus,
+              proofKind: "durable_pipeline_deployment",
+              details: [],
+            });
+          }
+          return items;
+        }
+
+        function normalizeEvidence(content, release, candidate, releaseEvidence) {
+          const raw = firstValue(
+            releaseEvidence.validationEvidence,
+            candidate.validation,
+            content.evidence,
+            content.validationEvidence,
+            release.evidence,
+            [],
+          );
+          const validation = validationEvidence(raw);
+          return validation.concat(releaseEvidenceItems(releaseEvidence, validation.length));
+        }
+
+        function normalizeChangeDiff(value) {
+          const entry = isObject(value) ? value : {};
+          const summary = isObject(entry.summary) ? entry.summary : {};
+          const items = asArray(entry.items)
+            .filter(isObject)
+            .map((item, index) => ({
+              id: `diff-${index}`,
+              changeType: safeText(firstValue(item.changeType, "modified")).toLowerCase(),
+              resourceType: safeText(item.resourceType),
+              resourceId: safeText(item.resourceId),
+              summary: safeText(item.summary),
+            }));
+          return {
+            isProvided: isObject(value),
+            changed: entry.changed === undefined ? items.length > 0 : asBoolean(entry.changed),
+            baseRef: safeText(firstValue(entry.baseRef, entry.baseFingerprint)),
+            candidateRef: safeText(firstValue(entry.candidateRef, entry.graphFingerprint)),
+            counts: {
+              total: safeCount(firstValue(summary.totalChangeCount, items.length)),
+              added: safeCount(summary.addedCount),
+              modified: safeCount(summary.modifiedCount),
+              removed: safeCount(summary.removedCount),
+              blocked: safeCount(summary.blockedCount),
+              warnings: safeCount(summary.warningCount),
+            },
+            items,
+          };
+        }
+
+        function safeCount(value) {
+          return typeof value === "number" && Number.isFinite(value) ? value : null;
+        }
+
+        function normalizeImpactScope(value) {
+          const entry = isObject(value) ? value : {};
+          return {
+            isProvided: isObject(value),
+            summary: safeText(entry.summary),
+            resources: asArray(entry.resources)
+              .filter(isObject)
+              .map((resource, index) => ({
+                id: `impact-${index}`,
+                type: safeText(resource.type),
+                resourceId: safeText(resource.id),
+                label: safeText(resource.label),
+                impact: safeText(resource.impact),
+              })),
+          };
+        }
+
+        function normalizeRiskClassification(value, fallbackLevel) {
+          const entry = isObject(value) ? value : {};
+          return {
+            level: safeText(firstValue(entry.level, fallbackLevel, "unclassified")).toLowerCase(),
+            reasons: safeTextItems(entry.reasons),
+            policyVersion: safeText(entry.policyVersion),
+            isComplete: typeof entry.isComplete === "boolean" ? entry.isComplete : null,
+            missingEvidence: safeTextItems(entry.missingEvidence),
+          };
+        }
+
+        function normalizeExecutionTimeline(value) {
+          return asArray(value)
+            .filter(isObject)
+            .map((item, index) => ({
+              id: `timeline-${index}`,
+              event: safeText(item.event),
+              label: safeText(firstValue(item.label, item.event, "운영 이벤트")),
+              status: safeText(firstValue(item.status, "recorded")).toLowerCase(),
+              at: safeText(item.at),
+              actorDisplayName: safeText(item.actorDisplayName),
+              requestId: safeText(item.requestId),
+            }));
+        }
+
+        function normalizeFailureDetails(value) {
+          if (!isObject(value)) return null;
+          return {
+            code: safeText(value.code),
+            message: safeText(value.message),
+            stage: safeText(value.stage),
+            at: safeText(value.at),
+            requestId: safeText(value.requestId),
+            isRetryable: value.isRetryable === true,
+            knownNotCommitted: value.knownNotCommitted === true,
+          };
+        }
+
+        function normalizeAuditEvidence(value) {
+          return asArray(value)
+            .filter(isObject)
+            .map((item, index) => ({
+              id: safeText(firstValue(item.auditEventId, `audit-${index}`)),
+              eventType: safeText(item.eventType),
+              label: safeText(firstValue(item.label, item.eventType, "감사 이벤트")),
+              status: safeText(firstValue(item.status, "recorded")).toLowerCase(),
+              resourceType: safeText(item.resourceType),
+              resourceId: safeText(item.resourceId),
+              actorUserId: safeText(item.actorUserId),
+              action: safeText(item.action),
+              requestId: safeText(item.requestId),
+              correlationId: safeText(item.correlationId),
+              at: safeText(item.at),
+            }));
+        }
+
+        function normalizedActionName(item) {
+          const value = isObject(item)
+            ? firstValue(item.decision, item.action, item.name, item.toolName, item.tool, item.id)
+            : item;
+          const name = String(value ?? "").toLowerCase();
+          const aliases = {
+            create_release_branch: "create",
+            publish_release_candidate: "publish",
+            assign_release_reviewer: "claim",
+            submit_release_decision: "decision",
+            execute_approved_release: "execute",
+            deploy_release: "deploy",
+            get_release_status: "refresh",
+            rollback_release: "rollback",
+            verify_release_completion: "verify",
+          };
+          return aliases[name] || name;
+        }
+
+        function normalizeAllowedActions(content, release) {
+          const raw = firstValue(release.nextActions, content.nextActions, content.allowedActions, content.availableActions);
+          if (raw === undefined || raw === null) return null;
+          let entries = asArray(raw);
+          if (isObject(raw) && !firstValue(raw.action, raw.name, raw.toolName, raw.tool, raw.id, raw.decision)) {
+            entries = Object.entries(raw)
+              .filter(([, value]) => value !== false && (!isObject(value) || value.enabled !== false))
+              .map(([name, value]) => (isObject(value) ? { name, ...value } : name));
+          }
+          const actions = new Set();
+          entries
+            .filter((item) => !isObject(item) || item.enabled !== false)
+            .map(normalizedActionName)
+            .filter(Boolean)
+            .forEach((name) => {
+              if (name === "decision") {
+                actions.add("approve");
+                actions.add("reject");
+              } else {
+                actions.add(name);
+              }
+            });
+          if (!["workspace_ready", "branch_created", "empty_inbox"].includes(String(release.stage || ""))) {
+            actions.add("refresh");
+          }
+          return actions;
+        }
+
+        function safeRollbackTarget(value) {
+          if (!isObject(value)) return null;
+          const blocked = new Set(["widgetConfirmationToken", "confirmationToken", "token", "_meta", "idempotencyKey", "releaseKind"]);
+          const entries = Object.entries(value).filter(([key, item]) => !blocked.has(key) && item !== undefined && item !== null && item !== "");
+          return entries.length ? Object.fromEntries(entries) : null;
+        }
+
+        function safeApplicationRollbackTarget(value) {
+          if (!isObject(value)) return null;
+          const targetDeployId = safeText(value.targetDeployId);
+          const targetCommitId = safeText(value.targetCommitId);
+          const rolledBackFromDeployId = safeText(value.rolledBackFromDeployId);
+          if (!targetDeployId || !targetCommitId || !rolledBackFromDeployId) return null;
+          return { targetDeployId, targetCommitId, rolledBackFromDeployId };
+        }
+
+        function normalizeCompletionCoordinates(...values) {
+          for (const value of values) {
+            if (!isObject(value)) continue;
+            const ontologyWorkflowRunId = typeof value.ontologyWorkflowRunId === "string"
+              ? value.ontologyWorkflowRunId.trim()
+              : "";
+            const pipelineWorkflowRunId = typeof value.pipelineWorkflowRunId === "string"
+              ? value.pipelineWorkflowRunId.trim()
+              : "";
+            const hasExactAuthority = value.isEligible === true
+              && value.nextAction === "verify_release_completion"
+              && value.attestationPurpose === "rollback_rehearsal";
+            if (!hasExactAuthority || !ontologyWorkflowRunId || !pipelineWorkflowRunId) continue;
+            return {
+              ontologyWorkflowRunId,
+              pipelineWorkflowRunId,
+              attestationPurpose: "rollback_rehearsal",
+            };
+          }
+          return null;
+        }
+
+        function normalizeAttestation(value) {
+          if (!isObject(value)) return null;
+          const attestation = compactObject({
+            attestationPurpose: safeText(value.attestationPurpose),
+            attestationId: safeText(value.attestationId),
+            collectorRunId: safeText(value.collectorRunId),
+            collectorVersion: safeText(value.collectorVersion),
+            sourceRevision: safeText(value.sourceRevision),
+            collectedAt: safeText(value.collectedAt),
+            validUntil: safeText(value.validUntil),
+            ontologyWorkflowRunId: safeText(value.ontologyWorkflowRunId),
+            pipelineWorkflowRunId: safeText(value.pipelineWorkflowRunId),
+          });
+          return Object.keys(attestation).length ? attestation : null;
+        }
+
+        function normalizeOperationalCompletion(value, status) {
+          const completion = isObject(value) ? value : {};
+          const purpose = safeText(completion.completionPurpose);
+          const isNormalRelease = purpose === "normal_operational_release"
+            && completion.isRollbackRehearsal === false;
+          return {
+            completionPurpose: isNormalRelease ? purpose : "normal_operational_release",
+            isComplete: isNormalRelease && completion.isComplete === true,
+            stage: safeText(firstValue(completion.stage, status)),
+            isRollbackRehearsal: false,
+            isServerProvided: isNormalRelease,
+          };
+        }
+
+        function normalizeLiveReadiness(value) {
+          const readiness = isObject(value) ? value : {};
+          const rawStatus = safeText(readiness.status);
+          const isLiveVerified = rawStatus === "live_verified"
+            && asBoolean(firstValue(readiness.is_live_verified, readiness.isLiveVerified));
+          const isReadyForLiveRun = isLiveVerified || (
+            rawStatus === "ready_for_live_run"
+            && asBoolean(firstValue(readiness.is_ready_for_live_run, readiness.isReadyForLiveRun))
+          );
+          const status = isLiveVerified ? "live_verified" : isReadyForLiveRun ? "ready_for_live_run" : "blocked";
+          const blockers = asArray(readiness.blockers)
+            .filter((item) => typeof item === "string" && item.trim())
+            .slice(0, 8)
+            .map((item) => item.trim());
+          if (!isObject(value) && !blockers.length) blockers.push("live_readiness_not_provided");
+          return {
+            status,
+            isReadyForLiveRun,
+            isLiveVerified,
+            blockers,
+            attestation: normalizeAttestation(readiness.attestation),
+          };
+        }
+
+        function normalizeSnapshot(value) {
+          const content = structuredContentFrom(value);
+          if (!content) return null;
+          const release = firstValue(
+            content.release,
+            content.releaseSnapshot,
+            content.releaseCandidate,
+            content.candidate,
+            content.snapshot,
+            content,
+          );
+          if (!isObject(release)) return null;
+          const candidate = isObject(release.candidate) ? release.candidate : release;
+          const releaseEvidence = isObject(release.releaseEvidence) ? release.releaseEvidence : {};
+          const branchPlan = isObject(releaseEvidence.branchPlan) ? releaseEvidence.branchPlan : {};
+          const hasServerOwnedIdentity = [
+            release.proposalId,
+            content.proposalId,
+            release.releaseId,
+            candidate.id,
+            candidate.candidateId,
+            candidate.branchName,
+            branchPlan.branchName,
+          ].some((item) => safeText(item).trim());
+          if (!hasServerOwnedIdentity) return null;
+          const liveReadiness = normalizeLiveReadiness(firstValue(release.liveReadiness, content.liveReadiness));
+          const externalSourceControl = isObject(releaseEvidence.externalSourceControl)
+            ? releaseEvidence.externalSourceControl
+            : {};
+          const externalDelivery = isObject(releaseEvidence.externalDelivery)
+            ? releaseEvidence.externalDelivery
+            : {};
+          const sourceCandidate = isObject(externalSourceControl.candidate)
+            ? externalSourceControl.candidate
+            : {};
+          const legacyRisk = firstValue(content.risk, release.risk, candidate.risk, {});
+          const review = firstValue(content.review, content.approval, release.review, release.approval, {});
+          const status = String(firstValue(release.stage, content.status, release.status, content.releaseStatus, "proposed")).toLowerCase();
+          const operationalCompletion = normalizeOperationalCompletion(
+            firstValue(release.operationalCompletion, content.operationalCompletion),
+            status,
+          );
+          const completionCoordinates = normalizeCompletionCoordinates(
+            release.completionCoordinates,
+            release.verificationCoordinates,
+            releaseEvidence.completionCoordinates,
+            releaseEvidence.verificationCoordinates,
+            content.completionCoordinates,
+            content.verificationCoordinates,
+          );
+          const kind = normalizeKind(firstValue(release.releaseKind, content.releaseKind, candidate.releaseKind, release.kind));
+          const permission = firstValue(content.permissions, release.permissions, {});
+          const fingerprint = kind === "pipeline"
+            ? firstValue(candidate.graphFingerprint, candidate.fingerprint)
+            : firstValue(candidate.fingerprint, candidate.graphFingerprint);
+          const reviewer = kind === "pipeline"
+            ? firstValue(candidate.assignedTo, candidate.assigneeUserId)
+            : firstValue(candidate.assigneeUserId, candidate.assignedTo);
+          const reviewPolicy = isObject(candidate.reviewPolicy) ? candidate.reviewPolicy : {};
+          const requiresAssignment = asBoolean(firstValue(reviewPolicy.requiresAssignment, true));
+          const requiresSeparateReviewer = asBoolean(firstValue(reviewPolicy.requiresSeparateReviewer, false));
+          const canCurrentUserReview = candidate.canCurrentUserReview;
+          const rollbackTarget = safeRollbackTarget(firstValue(release.rollbackTarget, releaseEvidence.rollbackTarget));
+          const applicationRollbackTarget = safeApplicationRollbackTarget(
+            externalDelivery.applicationRollbackTarget,
+          );
+          const mergedVersionId = versionId(releaseEvidence.mergedVersion);
+          const pipelineId = String(firstValue(releaseEvidence.pipelineId, candidate.pipelineId) ?? "");
+          const explicitStale = firstValue(content.isStale, release.isStale, candidate.isStale);
+          const deployment = firstValue(
+            releaseEvidence.deployment,
+            releaseEvidence.currentDeployment,
+            releaseEvidence.candidateDeployment,
+          );
+          const riskClassification = normalizeRiskClassification(
+            firstValue(
+              releaseEvidence.riskClassification,
+              release.riskClassification,
+              content.riskClassification,
+              isObject(legacyRisk) ? legacyRisk : undefined,
+            ),
+            firstValue(
+              content.riskLevel,
+              release.riskLevel,
+              candidate.riskLevel,
+              isObject(legacyRisk) ? undefined : legacyRisk,
+            ),
+          );
+          const executionTimeline = normalizeExecutionTimeline(
+            firstValue(releaseEvidence.executionTimeline, release.executionTimeline, content.executionTimeline, []),
+          );
+          const auditEvidence = normalizeAuditEvidence(
+            firstValue(releaseEvidence.auditEvidence, release.auditEvidence, content.auditEvidence, []),
+          );
+          const hasStatusEvidence = [releaseEvidence, release, content].some(
+            (source) => ["executionTimeline", "failureDetails", "auditEvidence"].some(
+              (key) => Object.prototype.hasOwnProperty.call(source, key),
+            ),
+          );
+          return {
+            releaseId: String(firstValue(release.proposalId, content.proposalId, release.releaseId, "unknown-proposal")),
+            proposalId: String(firstValue(release.proposalId, content.proposalId, release.releaseId, "unknown-proposal")),
+            candidateId: String(firstValue(candidate.id, candidate.candidateId) ?? ""),
+            name: String(firstValue(candidate.title, candidate.displayName, candidate.name, "운영 릴리스 후보")),
+            summary: String(firstValue(candidate.description, candidate.summary, "검증된 후보를 승인하고 내부 브랜치 반영부터 운영 상태 확인까지 이어서 처리합니다.")),
+            kind,
+            status,
+            version: kind === "ontology" ? versionId(candidate.appliedOntologyVersion) : mergedVersionId,
+            mergedVersionId,
+            pipelineId,
+            branchName: String(firstValue(candidate.branchName, branchPlan.branchName) ?? ""),
+            builderWorkspaceRef: String(firstValue(releaseEvidence.builderWorkspaceRef, candidate.builderWorkspaceRef) ?? ""),
+            canCurrentUserClaim: asBoolean(candidate.canCurrentUserClaim),
+            fingerprint: String(fingerprint ?? ""),
+            externalSourceCandidate: compactObject({
+              baseSha: typeof sourceCandidate.baseSha === "string" ? sourceCandidate.baseSha : "",
+              headSha: typeof sourceCandidate.headSha === "string" ? sourceCandidate.headSha : "",
+              checksFingerprint: typeof sourceCandidate.checksFingerprint === "string" ? sourceCandidate.checksFingerprint : "",
+              rulesFingerprint: typeof sourceCandidate.rulesFingerprint === "string" ? sourceCandidate.rulesFingerprint : "",
+            }),
+            rollbackTarget,
+            applicationRollbackTarget,
+            targetEnvironment: String(firstValue(isObject(deployment) ? deployment.environment : undefined, content.targetEnvironment, release.targetEnvironment, "internal PROMOTED serving")),
+            riskLevel: riskClassification.level,
+            riskClassification,
+            isStale: explicitStale === undefined
+              ? status === "stale" || candidate.status === "stale"
+              : asBoolean(explicitStale),
+            hasFreshnessSignal: explicitStale !== undefined || status === "stale" || candidate.status === "stale",
+            separateReviewerRequired: asBoolean(
+              firstValue(
+                review.independentReviewRequired,
+                content.independentReviewRequired,
+                release.independentReviewRequired,
+                requiresSeparateReviewer,
+              ),
+            ),
+            requiresAssignment,
+            reviewerAssigned: Boolean(reviewer),
+            canCurrentUserReview: canCurrentUserReview === undefined ? null : asBoolean(canCurrentUserReview),
+            reviewer: String(firstValue(review.reviewerDisplayName, review.reviewer, reviewer, "미지정")),
+            permissions: isObject(permission) ? permission : {},
+            allowedActions: normalizeAllowedActions(content, release),
+            evidence: normalizeEvidence(content, release, candidate, releaseEvidence),
+            changeDiff: normalizeChangeDiff(
+              firstValue(releaseEvidence.changeDiff, release.changeDiff, content.changeDiff),
+            ),
+            impactScope: normalizeImpactScope(
+              firstValue(releaseEvidence.impactScope, release.impactScope, content.impactScope),
+            ),
+            executionTimeline,
+            failureDetails: normalizeFailureDetails(
+              firstValue(releaseEvidence.failureDetails, release.failureDetails, content.failureDetails),
+            ),
+            auditEvidence,
+            hasStatusEvidence,
+            liveReadiness,
+            operationalCompletion,
+            completionCoordinates,
+            requestId: String(firstValue(content.requestId, release.requestId) ?? ""),
+          };
+        }
+
+        function uuid(prefix) {
+          const source = globalThis.crypto;
+          if (source && typeof source.randomUUID === "function") return source.randomUUID();
+          return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
+        }
+
+        function statusArgs(snapshot) {
+          if (!hasStatusTarget(snapshot)) {
+            throw new Error("서버 상태를 조회할 실제 릴리스 제안이 아직 없습니다.");
+          }
+          return { releaseKind: snapshot.kind, proposalId: snapshot.proposalId };
+        }
+
+        function canonicalJson(value) {
+          if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+          if (isObject(value)) {
+            return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+          }
+          return JSON.stringify(value);
+        }
+
+        function stableTargetHash(value) {
+          const text = canonicalJson(value);
+          let h1 = 1779033703;
+          let h2 = 3144134277;
+          let h3 = 1013904242;
+          let h4 = 2773480762;
+          for (let index = 0; index < text.length; index += 1) {
+            const code = text.charCodeAt(index);
+            h1 = h2 ^ Math.imul(h1 ^ code, 597399067);
+            h2 = h3 ^ Math.imul(h2 ^ code, 2869860233);
+            h3 = h4 ^ Math.imul(h3 ^ code, 951274213);
+            h4 = h1 ^ Math.imul(h4 ^ code, 2716044179);
+          }
+          h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+          h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+          h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+          h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+          return [h1, h2, h3, h4].map((part) => (part >>> 0).toString(16).padStart(8, "0")).join("");
+        }
+
+        function idempotentActionArgs(action, value) {
+          const target = compactObject(value);
+          const fingerprint = stableTargetHash({ contract: "governed-release-widget-v1", action, target });
+          return { ...target, idempotencyKey: `release-widget-${action}-${fingerprint}` };
+        }
+
+        function actionArgs(action) {
+          const snapshot = state.snapshot;
+          if (!snapshot) throw new Error("릴리스 후보가 아직 준비되지 않았습니다.");
+          state.lastRequestId = uuid("widget-request");
+          if (action === "refresh") return statusArgs(snapshot);
+          if (action === "create") {
+            return idempotentActionArgs(action, {
+              releaseKind: snapshot.kind,
+              branchName: snapshot.branchName,
+              pipelineId: snapshot.pipelineId,
+            });
+          }
+          if (action === "publish") {
+            return idempotentActionArgs(action, {
+              releaseKind: snapshot.kind,
+              proposalId: snapshot.proposalId,
+            });
+          }
+          if (action === "claim") {
+            return idempotentActionArgs(action, {
+              releaseKind: snapshot.kind,
+              proposalId: snapshot.proposalId,
+            });
+          }
+          if (action === "approve" || action === "reject") {
+            return idempotentActionArgs(action, {
+              releaseKind: snapshot.kind,
+              proposalId: snapshot.proposalId,
+              decision: action,
+              expectedFingerprint: snapshot.fingerprint,
+            });
+          }
+          if (action === "execute") {
+            return idempotentActionArgs(action, {
+              releaseKind: snapshot.kind,
+              proposalId: snapshot.proposalId,
+              expectedFingerprint: snapshot.fingerprint,
+              expectedSourceBaseSha: snapshot.externalSourceCandidate.baseSha,
+              expectedSourceHeadSha: snapshot.externalSourceCandidate.headSha,
+              expectedSourceChecksFingerprint: snapshot.externalSourceCandidate.checksFingerprint,
+              expectedSourceRulesFingerprint: snapshot.externalSourceCandidate.rulesFingerprint,
+            });
+          }
+          if (action === "deploy") {
+            return idempotentActionArgs(action, {
+              releaseKind: "pipeline",
+              proposalId: snapshot.proposalId,
+              pipelineId: snapshot.pipelineId,
+              versionId: snapshot.mergedVersionId,
+            });
+          }
+          if (action === "rollback" && snapshot.rollbackTarget) {
+            return idempotentActionArgs(action, {
+              ...snapshot.rollbackTarget,
+              ...(snapshot.applicationRollbackTarget || {}),
+              releaseKind: snapshot.kind,
+              proposalId: snapshot.proposalId,
+            });
+          }
+          if (action === "verify" && snapshot.completionCoordinates) {
+            return idempotentActionArgs(action, {
+              ontologyWorkflowRunId: snapshot.completionCoordinates.ontologyWorkflowRunId,
+              pipelineWorkflowRunId: snapshot.completionCoordinates.pipelineWorkflowRunId,
+            });
+          }
+          throw new Error("이 릴리스에는 요청한 작업의 서버 기준 인자가 없습니다.");
+        }
+
+        function statusStep(snapshot) {
+          const status = snapshot.status;
+          if (["promoted", "deployed", "deploying", "deployment_unverified", "deployment_failed", "active", "running", "succeeded", "failed", "rollback_pending", "rolled_back", "superseded"].includes(status)) return 4;
+          if (status === "activated") return snapshot.kind === "ontology" ? 4 : 3;
+          if (["executed", "merged", "ready_to_deploy"].includes(status)) return 3;
+          if (["approved"].includes(status)) return 2;
+          if (["validated", "awaiting_review", "awaiting_approval", "pending_approval", "rejected"].includes(status)) return 1;
+          return 0;
+        }
+
+        function statusLabel(status) {
+          const labels = {
+            proposed: "제안됨",
+            workspace_ready: "브랜치 생성 준비",
+            branch_created: "격리 브랜치 준비 완료",
+            awaiting_assignment: "검토 담당 수락 대기",
+            empty_inbox: "검토함 비어 있음",
+            validated: "검증 완료",
+            awaiting_review: "사람 검토 대기",
+            awaiting_approval: "승인 대기",
+            pending_approval: "승인 대기",
+            approved: "승인 완료",
+            rejected: "반려됨",
+            executed: "내부 브랜치 반영 완료",
+            merged: "내부 브랜치 병합 완료",
+            activated: "활성화 완료",
+            ready_to_deploy: "배포 준비 완료",
+            ready: "배포 준비",
+            promoted: "Pipeline PROMOTED",
+            deployed: "Pipeline PROMOTED",
+            deploying: "외부 운영 배포 진행 중",
+            deployment_unverified: "외부 운영 배포 확인 필요",
+            deployment_failed: "외부 운영 배포 실패",
+            active: "운영 활성",
+            running: "운영 실행 중",
+            succeeded: "운영 정상",
+            failed: "운영 실패",
+            rollback_pending: "롤백 진행 중",
+            rolled_back: "롤백 완료",
+            superseded: "현재 운영판에서 교체됨",
+            stale: "후보 변경 감지",
+          };
+          return labels[status] || status.replaceAll("_", " ");
+        }
+
+        function riskLabel(level) {
+          return { low: "낮음", medium: "중간", high: "높음", critical: "매우 높음", unclassified: "미분류" }[level] || level;
+        }
+
+        function hasStatusTarget(snapshot) {
+          if (!snapshot) return false;
+          if (!realProposalId(snapshot.proposalId)) return false;
+          return !["workspace_ready", "branch_created", "empty_inbox"].includes(snapshot.status);
+        }
+
+        function inferredActionAllowed(action, snapshot) {
+          const status = snapshot.status;
+          if (action === "refresh") return hasStatusTarget(snapshot);
+          if (action === "create") return status === "workspace_ready";
+          if (action === "claim") return status === "awaiting_assignment" && snapshot.canCurrentUserClaim;
+          if (action === "approve" || action === "reject") return ["validated", "awaiting_review", "awaiting_approval", "pending_approval", "proposed"].includes(status);
+          if (action === "execute") return status === "approved";
+          if (action === "deploy") return snapshot.kind === "pipeline" && ["executed", "merged", "activated", "ready_to_deploy"].includes(status);
+          if (action === "rollback") return ["activated", "active", "promoted", "deployed", "running", "succeeded", "failed"].includes(status);
+          if (action === "verify") return Boolean(snapshot.completionCoordinates);
+          return false;
+        }
+
+        function permissionAllows(action, snapshot) {
+          const key = `can${action[0].toUpperCase()}${action.slice(1)}`;
+          const value = snapshot.permissions[key];
+          return value === undefined ? true : Boolean(value);
+        }
+
+        function actionAllowed(action, snapshot) {
+          if (action === "refresh") return !state.busyAction && hasStatusTarget(snapshot);
+          if (state.busyAction || state.staleBlocked || state.permissionBlocked || snapshot.isStale) return false;
+          if (action === "create" && !snapshot.branchName) return false;
+          if (action === "claim" && !snapshot.canCurrentUserClaim) return false;
+          if (["approve", "reject"].includes(action) && snapshot.requiresAssignment && !snapshot.reviewerAssigned) return false;
+          if (["approve", "reject"].includes(action) && snapshot.canCurrentUserReview === false) return false;
+          if (snapshot.kind === "ontology" && ["approve", "reject", "execute"].includes(action) && !snapshot.fingerprint) return false;
+          if (action === "deploy" && (snapshot.kind !== "pipeline" || !snapshot.pipelineId || !snapshot.mergedVersionId)) return false;
+          if (action === "rollback" && !snapshot.rollbackTarget) return false;
+          if (action === "verify" && !snapshot.completionCoordinates) return false;
+          if (!permissionAllows(action, snapshot)) return false;
+          if (action === "verify") return true;
+          if (snapshot.allowedActions) return snapshot.allowedActions.has(action);
+          return inferredActionAllowed(action, snapshot);
+        }
+
+        function actionDisabledReason(action, snapshot) {
+          if (state.busyAction) return `${state.busyAction} 요청 처리 중`;
+          if (action === "refresh" && !hasStatusTarget(snapshot)) return "서버 조회 가능한 릴리스 제안이 아직 없음";
+          if (state.permissionBlocked) return "현재 사용자 권한으로 실행할 수 없음";
+          if (state.staleBlocked || snapshot.isStale) return "후보가 변경됨 — 상태 새로고침 필요";
+          if (!permissionAllows(action, snapshot)) return "현재 역할에 필요한 권한이 없음";
+          if (action === "create" && !snapshot.branchName) return "생성할 브랜치 이름이 없음";
+          if (action === "claim" && !snapshot.canCurrentUserClaim) return "이 제안은 현재 사용자가 담당할 수 없음";
+          if (["approve", "reject"].includes(action) && snapshot.requiresAssignment && !snapshot.reviewerAssigned) return "사람 검토자가 아직 배정되지 않음";
+          if (["approve", "reject"].includes(action) && snapshot.canCurrentUserReview === false) return "배정된 사람 검토자만 결정할 수 있음";
+          if (snapshot.kind === "ontology" && ["approve", "reject", "execute"].includes(action) && !snapshot.fingerprint) return "Ontology fingerprint 증거가 아직 없음";
+          if (action === "deploy" && snapshot.kind !== "pipeline") return "Pipeline 후보에서만 PROMOTED 배포 가능";
+          if (action === "deploy" && (!snapshot.pipelineId || !snapshot.mergedVersionId)) return "병합된 Pipeline 버전 증거가 아직 없음";
+          if (action === "rollback" && !snapshot.rollbackTarget) return "서버가 검증한 롤백 대상이 아직 없음";
+          if (action === "verify" && !snapshot.completionCoordinates) return "서버가 제공한 배포·롤백 리허설 좌표가 아직 없음";
+          return "현재 릴리스 단계에서는 실행할 수 없음";
+        }
+
+        function evidenceTone(status) {
+          if (["failed", "blocked", "error", "missing", "not_available", "outcome_unknown"].includes(status)) {
+            return { className: "is-failed", symbol: "!" };
+          }
+          if (["warning", "pending", "running"].includes(status)) {
+            return { className: "is-warning", symbol: "\u2022" };
+          }
+          return { className: "", symbol: "\u2713" };
+        }
+
+        function countSummary(diff) {
+          const labels = [
+            ["총", diff.counts.total],
+            ["추가", diff.counts.added],
+            ["변경", diff.counts.modified],
+            ["제거", diff.counts.removed],
+            ["차단", diff.counts.blocked],
+            ["경고", diff.counts.warnings],
+          ];
+          const parts = labels.filter(([, value]) => value !== null).map(([label, value]) => `${label} ${value}건`);
+          return parts.join(" \u00b7 ") || (diff.changed ? "변경 항목이 있습니다." : "변경 건수 정보가 없습니다.");
+        }
+
+        function referenceGridMarkup(diff) {
+          const refs = [
+            ["기준", diff.baseRef],
+            ["후보", diff.candidateRef],
+          ].filter(([, value]) => value);
+          if (!refs.length) return "";
+          return `<dl class="reference-grid">${refs.map(([label, value]) => `<div class="reference-item">
+            <dt>${escapeHtml(label)}</dt><dd class="mono" title="${escapeHtml(value)}">${escapeHtml(value)}</dd>
+          </div>`).join("")}</dl>`;
+        }
+
+        function changeDiffMarkup(snapshot) {
+          const diff = snapshot.changeDiff;
+          if (!diff.isProvided) {
+            return '<p class="empty-copy">서버가 변경 Diff를 제공하지 않았습니다. 승인 전에 후보를 다시 확인하세요.</p>';
+          }
+          const items = diff.items.length
+            ? `<ul class="ledger-list" aria-label="변경 Diff 항목">${diff.items.map((item) => {
+              const title = item.summary || [item.resourceType, item.resourceId].filter(Boolean).join(" ") || "변경 항목";
+              const meta = [item.resourceType, item.resourceId].filter(Boolean).join(" \u00b7 ");
+              return `<li class="ledger-item"><span class="ledger-badge">${escapeHtml(changeTypeLabel(item.changeType))}</span>
+                <span><span class="ledger-title">${escapeHtml(title)}</span>${meta ? `<span class="ledger-meta">${escapeHtml(meta)}</span>` : ""}</span>
+              </li>`;
+            }).join("")}</ul>`
+            : '<p class="empty-copy">서버 Diff 기준으로 변경 항목이 없습니다.</p>';
+          return `${referenceGridMarkup(diff)}<p class="ledger-summary">${escapeHtml(countSummary(diff))}</p>${items}`;
+        }
+
+        function changeTypeLabel(value) {
+          return { added: "추가", modified: "변경", removed: "제거" }[value] || value || "변경";
+        }
+
+        function impactMarkup(snapshot) {
+          const scope = snapshot.impactScope;
+          if (!scope.isProvided) {
+            return '<p class="empty-copy">서버가 영향 범위를 제공하지 않았습니다. 승인 전에 범위를 다시 확인하세요.</p>';
+          }
+          const summary = scope.summary ? `<p class="ledger-summary">${escapeHtml(scope.summary)}</p>` : "";
+          if (!scope.resources.length) return `${summary}<p class="empty-copy">영향을 받는 운영 리소스가 없습니다.</p>`;
+          return `${summary}<ul class="ledger-list" aria-label="영향받는 운영 리소스">${scope.resources.map((item) => {
+            const title = item.label || item.resourceId || "운영 리소스";
+            const meta = [item.type, item.resourceId].filter(Boolean).join(" \u00b7 ");
+            return `<li class="ledger-item"><span class="ledger-badge">${escapeHtml(item.impact || "영향")}</span>
+              <span><span class="ledger-title">${escapeHtml(title)}</span>${meta ? `<span class="ledger-meta">${escapeHtml(meta)}</span>` : ""}</span>
+            </li>`;
+          }).join("")}</ul>`;
+        }
+
+        function riskReasonsMarkup(snapshot) {
+          const risk = snapshot.riskClassification;
+          const reasons = [...risk.reasons];
+          if (risk.missingEvidence.length) reasons.push(`미확보 증거: ${risk.missingEvidence.join(", ")}`);
+          if (!reasons.length) reasons.push("위험 분류 사유가 제공되지 않았습니다.");
+          return `<ul class="risk-reason-list" aria-label="위험 분류 사유">${reasons
+            .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+            .join("")}</ul>`;
+        }
+
+        function timelineMarkup(snapshot) {
+          if (!snapshot.executionTimeline.length) {
+            return '<p class="empty-copy">기록된 실행 이벤트가 없습니다.</p>';
+          }
+          return `<ol class="timeline-list" aria-label="릴리스 실행 타임라인">${snapshot.executionTimeline.map((item) => {
+            const tone = evidenceTone(item.status);
+            const meta = [item.actorDisplayName, item.requestId ? `Request ${item.requestId}` : ""].filter(Boolean).join(" \u00b7 ");
+            const time = item.at ? `<time datetime="${escapeHtml(item.at)}">${escapeHtml(item.at)}</time>` : "시간 미제공";
+            return `<li class="timeline-item"><span class="timeline-dot ${tone.className}" aria-hidden="true"></span>
+              <span><span class="ledger-title">${escapeHtml(item.label)}</span>
+                <span class="ledger-meta">${time}${meta ? ` \u00b7 ${escapeHtml(meta)}` : ""} \u00b7 ${escapeHtml(item.status)}</span>
+              </span>
+            </li>`;
+          }).join("")}</ol>`;
+        }
+
+        function failureMarkup(snapshot) {
+          const failure = snapshot.failureDetails;
+          if (!failure) return '<p class="empty-copy">현재 미해결 실패 증거가 없습니다.</p>';
+          const title = failure.code || "release_action_failed";
+          const meta = [
+            failure.stage,
+            failure.at,
+            failure.requestId ? `Request ${failure.requestId}` : "",
+            failure.isRetryable ? "안전 재시도 가능" : "자동 재시도 금지",
+            failure.knownNotCommitted ? "미커밋 확인됨" : "커밋 여부 확인 필요",
+          ].filter(Boolean).join(" \u00b7 ");
+          return `<div class="failure-panel" role="alert" aria-label="릴리스 실패 상세">
+            <strong>${escapeHtml(title)}</strong>
+            <span>${escapeHtml(failure.message || "운영 릴리스 작업이 성공으로 확인되지 않았습니다.")}</span>
+            ${meta ? `<span class="ledger-meta">${escapeHtml(meta)}</span>` : ""}
+          </div>`;
+        }
+
+        function auditMarkup(snapshot) {
+          if (!snapshot.auditEvidence.length) {
+            return '<p class="empty-copy">조회된 감사 이벤트가 없습니다.</p>';
+          }
+          return `<details class="audit-details"><summary>감사 증거 ${snapshot.auditEvidence.length}건 보기</summary>
+            <ul class="ledger-list" aria-label="릴리스 감사 증거">${snapshot.auditEvidence.map((item) => {
+              const resource = [item.resourceType, item.resourceId].filter(Boolean).join(":");
+              const meta = [item.at, item.actorUserId, resource, item.requestId ? `Request ${item.requestId}` : ""].filter(Boolean).join(" \u00b7 ");
+              return `<li class="ledger-item"><span class="ledger-badge">${escapeHtml(item.status)}</span>
+                <span><span class="ledger-title">${escapeHtml(item.label)}</span>${meta ? `<span class="ledger-meta">${escapeHtml(meta)}</span>` : ""}</span>
+              </li>`;
+            }).join("")}</ul>
+          </details>`;
+        }
+
+        function evidenceMarkup(snapshot) {
+          if (!snapshot.evidence.length) {
+            return '<p class="empty-copy">서버가 검증 증거를 제공하지 않았습니다. 위험 작업을 진행하기 전에 상태를 새로고침하세요.</p>';
+          }
+          return `<ul class="evidence-list">${snapshot.evidence
+            .map((item) => {
+              const tone = evidenceTone(item.status);
+              return `<li class="evidence-item">
+                <span class="evidence-dot ${tone.className}" aria-hidden="true">${tone.symbol}</span>
+                <span class="evidence-copy"><span class="ledger-title">${escapeHtml(item.label)}</span>
+                  ${item.proofKind ? `<span class="ledger-meta">Proof: ${escapeHtml(item.proofKind)}</span>` : ""}
+                  ${item.details.length ? `<ul class="detail-list">${item.details.map((detail) => `<li>${escapeHtml(detail)}</li>`).join("")}</ul>` : ""}
+                </span>
+                <span class="evidence-state">${escapeHtml(item.status)}</span>
+              </li>`;
+            })
+            .join("")}</ul>`;
+        }
+
+        function liveReadinessMarkup(snapshot) {
+          const readiness = snapshot.liveReadiness;
+          const labels = {
+            blocked: "호스티드 배포·복구 리허설 증거 차단",
+            ready_for_live_run: "호스티드 배포·복구 리허설 준비 · 아직 미검증",
+            live_verified: "호스티드 배포·복구 리허설 검증됨",
+          };
+          const tone = readiness.status === "live_verified"
+            ? ""
+            : readiness.status === "ready_for_live_run" ? "is-warning" : "is-danger";
+          const blockers = readiness.blockers.length
+            ? `<ul class="detail-list" aria-label="호스티드 배포·복구 리허설 차단 사유">${readiness.blockers
+              .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+              .join("")}</ul>`
+            : "";
+          const attestation = readiness.attestation;
+          const attestationMeta = attestation
+            ? [
+              attestation.attestationId ? `영수증 ${attestation.attestationId}` : "",
+              attestation.collectorVersion ? `Collector ${attestation.collectorVersion}` : "",
+              attestation.collectedAt ? `수집 ${attestation.collectedAt}` : "",
+              attestation.validUntil ? `유효 ${attestation.validUntil}` : "",
+            ].filter(Boolean).join(" · ")
+            : "";
+          const attestationReceipt = attestationMeta
+            ? `<p class="ledger-meta" aria-label="배포·복구 리허설 검증 영수증">${escapeHtml(attestationMeta)}</p>`
+            : readiness.status === "live_verified"
+              ? '<p class="ledger-meta is-warning">검증 상태는 있으나 리허설 영수증 요약이 제공되지 않았습니다.</p>'
+              : "";
+          return `<div class="safety-row"><span class="meta-label">배포·복구 리허설</span>
+            <span class="value-strong ${tone}">${escapeHtml(labels[readiness.status])}</span></div>${attestationReceipt}${blockers}`;
+        }
+
+        function operationalCompletionMarkup(snapshot) {
+          const completion = snapshot.operationalCompletion;
+          const label = completion.isServerProvided
+            ? completion.isComplete
+              ? "현재 릴리스 정상 운영 완료"
+              : `현재 릴리스 운영 미완료 · ${statusLabel(completion.stage || snapshot.status)}`
+            : "현재 릴리스 운영 완료 판정 미제공";
+          const tone = completion.isComplete ? "" : "is-warning";
+          return `<div class="safety-row"><span class="meta-label">현재 릴리스</span>
+            <span class="value-strong ${tone}">${escapeHtml(label)}</span></div>`;
+        }
+
+        function railMarkup(snapshot) {
+          const current = statusStep(snapshot);
+          const stepLabels = snapshot.kind === "pipeline"
+            ? ["제안", "검증", "승인", "내부 병합", "PROMOTED · 외부 배포"]
+            : ["제안", "검증", "승인", "병합·활성화", "운영 적용"];
+          if (snapshot.status === "superseded") {
+            stepLabels[4] = "운영판 교체 완료 · 롤백/후속 배포";
+          }
+          return `<ol class="rail" aria-label="릴리스 진행 단계">${stepLabels.map((label, index) => {
+            const className = index < current ? "is-done" : index === current ? "is-current" : "";
+            const currentAttribute = index === current ? ' aria-current="step"' : "";
+            return `<li class="rail-step ${className}"${currentAttribute}><span>${escapeHtml(label)}</span></li>`;
+          }).join("")}</ol>`;
+        }
+
+        function buttonMarkup(action, label, hint, className = "") {
+          const snapshot = state.snapshot;
+          const isAllowed = actionAllowed(action, snapshot);
+          const isBusy = state.busyAction === action;
+          const disabledReason = isAllowed ? "" : actionDisabledReason(action, snapshot);
+          return `<button
+            type="button"
+            class="action-button ${className}"
+            data-action="${escapeHtml(action)}"
+            ${isAllowed ? "" : "disabled"}
+            aria-label="${escapeHtml(isBusy ? `${label} 처리 중` : label)}"
+            title="${escapeHtml(disabledReason)}"
+          >${escapeHtml(isBusy ? "처리 중…" : label)}<span class="button-hint">${escapeHtml(hint)}</span></button>`;
+        }
+
+        function renderEmpty() {
+          const hasMessage = Boolean(state.message);
+          app.innerHTML = `<section class="shell skeleton" aria-busy="${hasMessage ? "false" : "true"}"><div>
+            <strong>${hasMessage ? "릴리스 상태 복구 안내" : "운영 릴리스 정보를 기다리는 중입니다."}</strong>
+            ${escapeHtml(state.message || "GPT가 전달한 후보와 검증 증거가 도착하면 이곳에서 안전하게 이어서 처리합니다.")}
+          </div></section>`;
+        }
+
+        function render() {
+          const snapshot = state.snapshot;
+          if (!snapshot) return renderEmpty();
+          const executeLabel = snapshot.kind === "ontology" ? "병합 · 활성화 실행" : "내부 브랜치 병합 실행";
+          const executeHint = snapshot.kind === "ontology" ? "승인된 Ontology 후보만 활성화" : "승인된 Pipeline 후보만 반영";
+          const riskClass = ["high", "critical"].includes(snapshot.riskLevel) ? "is-danger" : snapshot.riskLevel === "medium" ? "is-warning" : "";
+          const staleCopy = state.staleBlocked || snapshot.isStale
+            ? "변경 감지 — 새로고침 필요"
+            : snapshot.hasFreshnessSignal
+              ? "최신 후보와 일치"
+              : "서버 스냅샷 기준 · freshness 미제공";
+          const notice = state.message
+            ? `<div class="notice" data-tone="${escapeHtml(state.tone)}" role="status">${escapeHtml(state.message)}</div>`
+            : "";
+          const kindLabel = snapshot.kind === "ontology" ? "Ontology" : snapshot.kind === "pipeline" ? "Pipeline" : snapshot.kind;
+          const reviewCopy = snapshot.requiresAssignment
+            ? snapshot.separateReviewerRequired
+              ? `필수 · ${snapshot.reviewer === "미지정" ? "별도 검토자 배정 필요" : `${snapshot.reviewer} 별도 검토`}`
+              : `필수 · ${snapshot.reviewer === "미지정" ? "사람 검토자 배정 필요" : `${snapshot.reviewer} 검토 (작성자 허용)`}`
+            : "검토 담당 배정 불필요";
+          const statusEvidence = snapshot.hasStatusEvidence
+            ? `<div class="evidence-block"><h2 class="section-label">실행 타임라인</h2>${timelineMarkup(snapshot)}</div>
+              <div class="evidence-block"><h2 class="section-label">실패 상세</h2>${failureMarkup(snapshot)}</div>
+              <div class="evidence-block"><h2 class="section-label">감사 증거</h2>${auditMarkup(snapshot)}</div>`
+            : "";
+          const riskCompleteness = snapshot.riskClassification.isComplete === null
+            ? "미제공"
+            : snapshot.riskClassification.isComplete ? "완결" : "미완결";
+          app.innerHTML = `<section class="shell" aria-busy="${state.busyAction ? "true" : "false"}">
+            <header class="masthead">
+              <div>
+                <p class="eyebrow">GPT governed release</p>
+                <h1>${escapeHtml(snapshot.name)}</h1>
+              </div>
+              <span class="kind-mark">${escapeHtml(kindLabel)}</span>
+            </header>
+            <div class="manifest">
+              <section class="primary" aria-label="릴리스 후보와 검증 증거">
+                <div class="status-line">
+                  <span class="status-word">${escapeHtml(statusLabel(snapshot.status))}</span>
+                  <span class="release-id mono">${escapeHtml(snapshot.releaseId)}</span>
+                </div>
+                ${railMarkup(snapshot)}
+                <div class="evidence-block">
+                  <h2 class="section-label">운영 변경 요약</h2>
+                  <p class="summary">${escapeHtml(snapshot.summary)}</p>
+                </div>
+                <div class="evidence-block">
+                  <h2 class="section-label">변경 Diff</h2>
+                  ${changeDiffMarkup(snapshot)}
+                </div>
+                <div class="evidence-block">
+                  <h2 class="section-label">검증 및 테스트 증거</h2>
+                  ${evidenceMarkup(snapshot)}
+                </div>
+                <div class="evidence-block">
+                  <h2 class="section-label">영향 범위</h2>
+                  ${impactMarkup(snapshot)}
+                </div>
+                ${statusEvidence}
+              </section>
+              <aside class="control" aria-label="승인과 운영 실행 제어">
+                <h2 class="section-label">안전 조건</h2>
+                <div class="safety-grid">
+                  <div class="safety-row"><span class="meta-label">Risk</span><span class="value-strong ${riskClass}">${escapeHtml(riskLabel(snapshot.riskLevel))}</span></div>
+                  <div class="safety-row"><span class="meta-label">Policy</span><span class="value-strong">${escapeHtml(snapshot.riskClassification.policyVersion || "미제공")}</span></div>
+                  <div class="safety-row"><span class="meta-label">Evidence</span><span class="value-strong ${snapshot.riskClassification.isComplete === false ? "is-warning" : ""}">${escapeHtml(riskCompleteness)}</span></div>
+                  <div class="safety-row"><span class="meta-label">Freshness</span><span class="value-strong ${state.staleBlocked || snapshot.isStale ? "is-danger" : snapshot.hasFreshnessSignal ? "" : "is-warning"}">${escapeHtml(staleCopy)}</span></div>
+                  <div class="safety-row"><span class="meta-label">Reviewer</span><span class="value-strong">${escapeHtml(reviewCopy)}</span></div>
+                  <div class="safety-row"><span class="meta-label">Target</span><span class="value-strong">${escapeHtml(snapshot.targetEnvironment)}</span></div>
+                  ${operationalCompletionMarkup(snapshot)}
+                  ${liveReadinessMarkup(snapshot)}
+                </div>
+                ${riskReasonsMarkup(snapshot)}
+                ${notice}
+                <div class="actions" aria-label="릴리스 작업">
+                  <div class="action-pair">
+                    ${buttonMarkup("create", "격리 브랜치 생성", "GPT에서 Builder 작업 시작점 준비", "")}
+                    ${buttonMarkup("claim", "검토 담당 수락", "현재 사용자에게 검토 담당 배정 · 작성자도 가능", "secondary")}
+                  </div>
+                  ${snapshot.allowedActions?.has("publish")
+                    ? buttonMarkup("publish", "GitHub 후보 PR 게시", "검증된 격리 브랜치 후보만 외부 PR로 게시", "")
+                    : ""}
+                  <div class="action-pair">
+                    ${buttonMarkup("approve", "승인", "배정된 사람의 명시적 확인 필요", "")}
+                    ${buttonMarkup("reject", "반려", "후보는 운영에 반영되지 않음", "secondary")}
+                  </div>
+                  ${buttonMarkup("execute", executeLabel, executeHint, "")}
+                  ${buttonMarkup("deploy", "Pipeline PROMOTED 배포", "운영 승격 후 상태를 다시 확인", "")}
+                  ${snapshot.completionCoordinates
+                    ? buttonMarkup(
+                      "verify",
+                      "배포·복구 리허설 검증",
+                      "서버가 제공한 두 워크플로 좌표만 사용 · 롤백 리허설",
+                      "secondary",
+                    )
+                    : ""}
+                  <div class="action-pair">
+                    ${buttonMarkup("refresh", "상태 새로고침", "서버 기준 스냅샷 갱신", "secondary")}
+                    ${buttonMarkup("rollback", "롤백", "마지막 확인된 운영 버전으로 복귀", "danger")}
+                  </div>
+                </div>
+              </aside>
+            </div>
+            <footer class="receipt">
+              ${snapshot.builderWorkspaceRef ? `<span><span class="receipt-key">Workspace</span> ${escapeHtml(snapshot.builderWorkspaceRef)}</span>` : ""}
+              <span><span class="receipt-key">Fingerprint</span> ${escapeHtml(snapshot.fingerprint || "미제공")}</span>
+              <span><span class="receipt-key">Version</span> ${escapeHtml(snapshot.version || "미제공")}</span>
+              <span><span class="receipt-key">Request</span> ${escapeHtml(state.lastRequestId || snapshot.requestId || "대기")}</span>
+            </footer>
+          </section>`;
+          document.querySelectorAll("[data-action]").forEach((button) => {
+            button.addEventListener("click", () => invokeAction(button.dataset.action));
+          });
+        }
+
+        function standardHostTargets() {
+          const targets = [];
+          if (typeof globalThis.postMessage === "function") targets.push(globalThis);
+          const parent = globalThis.parent;
+          if (parent && parent !== globalThis && typeof parent.postMessage === "function") targets.push(parent);
+          return targets;
+        }
+
+        function rejectHostRequest(message) {
+          const error = new Error(safeText(message?.error?.message) || "GPT 호스트 요청이 거부되었습니다.");
+          error.code = message?.error?.code;
+          error.data = isObject(message?.error?.data) ? message.error.data : {};
+          return error;
+        }
+
+        function tearDownHostBridge() {
+          isHostBridgeTornDown = true;
+          hostBridgeMode = "unavailable";
+          cancelInitialSnapshotPolling();
+          cancelDeploymentPolling();
+          for (const pending of pendingHostRequests.values()) {
+            if (pending.timeoutId !== undefined && typeof globalThis.clearTimeout === "function") {
+              globalThis.clearTimeout(pending.timeoutId);
+            }
+            pending.reject(new Error("GPT 호스트가 이 위젯 리소스를 종료했습니다."));
+          }
+          pendingHostRequests.clear();
+        }
+
+        function handleStandardHostMessage(event) {
+          const candidateTargets = standardHostTargets();
+          if (!candidateTargets.includes(event.source) || !isObject(event.data) || event.data.jsonrpc !== "2.0") return;
+          const message = event.data;
+          if (message.method === "ui/resource-teardown" && message.id !== undefined) {
+            tearDownHostBridge();
+            event.source.postMessage({ jsonrpc: "2.0", id: message.id, result: {} }, "*");
+            return;
+          }
+          const isResponse = Object.prototype.hasOwnProperty.call(message, "result")
+            || Object.prototype.hasOwnProperty.call(message, "error");
+          if (message.id !== undefined && isResponse && pendingHostRequests.has(message.id)) {
+            if (standardHostTarget && event.source !== standardHostTarget) return;
+            standardHostTarget = event.source;
+            const pending = pendingHostRequests.get(message.id);
+            pendingHostRequests.delete(message.id);
+            if (pending.timeoutId !== undefined && typeof globalThis.clearTimeout === "function") {
+              globalThis.clearTimeout(pending.timeoutId);
+            }
+            if (message.error) pending.reject(rejectHostRequest(message));
+            else pending.resolve(message.result);
+            return;
+          }
+          if (message.method === "ui/notifications/tool-result") {
+            if (standardHostTarget && event.source !== standardHostTarget) return;
+            standardHostTarget = event.source;
+            const result = isObject(message.params?.result) ? message.params.result : message.params;
+            receiveToolOutput(result);
+          }
+        }
+
+        function standardHostRequest(method, params, timeoutMs = 15000) {
+          if (isHostBridgeTornDown) {
+            return Promise.reject(new Error("GPT 호스트가 이 위젯 리소스를 종료했습니다."));
+          }
+          const targets = standardHostTarget ? [standardHostTarget] : standardHostTargets();
+          if (!targets.length) return Promise.reject(new Error("MCP Apps 표준 호스트 창을 찾을 수 없습니다."));
+          const id = `foundry-release-widget-${nextHostRequestId++}`;
+          return new Promise((resolve, reject) => {
+            const pending = { resolve, reject, timeoutId: undefined };
+            pendingHostRequests.set(id, pending);
+            try {
+              for (const target of targets) {
+                target.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+              }
+            } catch (error) {
+              pendingHostRequests.delete(id);
+              reject(error);
+              return;
+            }
+            if (!pendingHostRequests.has(id)) return;
+            pending.timeoutId = globalThis.setTimeout(() => {
+              if (!pendingHostRequests.has(id)) return;
+              pendingHostRequests.delete(id);
+              reject(new Error(`${method} 호스트 응답 시간이 초과되었습니다.`));
+            }, timeoutMs);
+          });
+        }
+
+        function standardHostNotification(method, params) {
+          const host = standardHostTarget;
+          if (!host) throw new Error("MCP Apps 표준 호스트 창을 찾을 수 없습니다.");
+          host.postMessage({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) }, "*");
+        }
+
+        function aliasBridgeAvailable() {
+          return Boolean(globalThis.openai && typeof globalThis.openai.callTool === "function");
+        }
+
+        async function initializeHostBridge() {
+          if (isHostBridgeTornDown) return "unavailable";
+          if (!standardHostTargets().length) {
+            hostBridgeMode = aliasBridgeAvailable() ? "alias" : "unavailable";
+            return hostBridgeMode;
+          }
+          try {
+            const initialized = await standardHostRequest(
+              "ui/initialize",
+              {
+                protocolVersion: MCP_APPS_PROTOCOL_VERSION,
+                appInfo: { name: "foundry-lite-governed-release", version: "1.0.0" },
+                appCapabilities: { availableDisplayModes: ["inline"] },
+              },
+              MCP_APPS_INITIALIZE_TIMEOUT_MS,
+            );
+            if (!isObject(initialized) || initialized.protocolVersion !== MCP_APPS_PROTOCOL_VERSION) {
+              throw new Error("MCP Apps 호스트가 요청한 프로토콜 버전을 확인하지 않았습니다.");
+            }
+            hostBridgeMode = "standard";
+            standardHostNotification("ui/notifications/initialized");
+          } catch (_error) {
+            hostBridgeMode = !isHostBridgeTornDown && aliasBridgeAvailable() ? "alias" : "unavailable";
+          }
+          return hostBridgeMode;
+        }
+
+        function hostBridgeReady() {
+          if (isHostBridgeTornDown) return Promise.resolve("unavailable");
+          if (!hostBridgeReadyPromise) hostBridgeReadyPromise = initializeHostBridge();
+          return hostBridgeReadyPromise;
+        }
+
+        function cancelInitialSnapshotPolling() {
+          initialSnapshotPollGeneration += 1;
+          if (initialSnapshotPollTimerId !== undefined && typeof globalThis.clearTimeout === "function") {
+            globalThis.clearTimeout(initialSnapshotPollTimerId);
+          }
+          initialSnapshotPollTimerId = undefined;
+        }
+
+        function aliasToolOutput() {
+          if (!isObject(globalThis.openai)) return undefined;
+          return globalThis.openai.toolOutput;
+        }
+
+        function startInitialSnapshotPolling() {
+          if (
+            isHostBridgeTornDown
+              || state.snapshot
+              || initialSnapshotPollTimerId !== undefined
+              || typeof globalThis.setTimeout !== "function"
+          ) return;
+          const generation = ++initialSnapshotPollGeneration;
+          const poll = (attempt) => {
+            initialSnapshotPollTimerId = undefined;
+            if (isHostBridgeTornDown || state.snapshot || generation !== initialSnapshotPollGeneration) return;
+            if (receiveToolOutput(aliasToolOutput())) return;
+            if (attempt >= INITIAL_SNAPSHOT_POLL_ATTEMPTS) {
+              void recoverInitialSnapshotFromReadTool();
+              return;
+            }
+            initialSnapshotPollTimerId = globalThis.setTimeout(
+              () => poll(attempt + 1),
+              INITIAL_SNAPSHOT_POLL_INTERVAL_MS,
+            );
+          };
+          initialSnapshotPollTimerId = globalThis.setTimeout(
+            () => poll(1),
+            INITIAL_SNAPSHOT_POLL_INTERVAL_MS,
+          );
+        }
+
+        function aliasToolInput() {
+          if (!isObject(globalThis.openai)) return null;
+          const value = globalThis.openai.toolInput;
+          if (!isObject(value)) return null;
+          return isObject(value.arguments) ? value.arguments : value;
+        }
+
+        function aliasWidgetState() {
+          if (!isObject(globalThis.openai)) return null;
+          return isObject(globalThis.openai.widgetState) ? globalThis.openai.widgetState : null;
+        }
+
+        function realProposalId(value) {
+          const proposalId = safeText(value).trim();
+          if (!proposalId) return "";
+          if (["pending-branch", "empty-inbox"].includes(proposalId)) return "";
+          if (proposalId.startsWith("branch:")) return "";
+          return proposalId;
+        }
+
+        function recoveryCoordinateFromWidgetState(value) {
+          if (!isObject(value)) return null;
+          const coordinate = isObject(value.structuredContent) ? value.structuredContent : value;
+          if (coordinate.schemaVersion !== WIDGET_RECOVERY_STATE_SCHEMA) return null;
+          const releaseKind = normalizeKind(coordinate.releaseKind);
+          if (!["ontology", "pipeline"].includes(releaseKind)) return null;
+          if (coordinate.view === "proposal") {
+            const proposalId = realProposalId(coordinate.proposalId);
+            if (!proposalId) return null;
+            return {
+              name: "get_release_status",
+              arguments: { releaseKind, proposalId },
+            };
+          }
+          if (coordinate.view === "workspace") {
+            const branchName = safeText(coordinate.branchName).trim();
+            if (!branchName) return null;
+            const pipelineId = safeText(coordinate.pipelineId).trim();
+            return {
+              name: "open_release_workspace",
+              arguments: {
+                releaseKind,
+                branchName,
+                ...(pipelineId ? { pipelineId } : {}),
+              },
+            };
+          }
+          if (coordinate.view !== "inbox") return null;
+          return {
+            name: "list_release_inbox",
+            arguments: { releaseKind, limit: 10 },
+          };
+        }
+
+        function recoveryCoordinateForSnapshot(snapshot) {
+          const releaseKind = normalizeKind(snapshot?.kind);
+          if (!["ontology", "pipeline"].includes(releaseKind)) return null;
+          const proposalId = realProposalId(snapshot?.proposalId);
+          if (proposalId) {
+            return {
+              schemaVersion: WIDGET_RECOVERY_STATE_SCHEMA,
+              view: "proposal",
+              releaseKind,
+              proposalId,
+            };
+          }
+          if (snapshot?.status === "workspace_ready" && safeText(snapshot?.branchName).trim()) {
+            const pipelineId = safeText(snapshot?.pipelineId).trim();
+            return {
+              schemaVersion: WIDGET_RECOVERY_STATE_SCHEMA,
+              view: "workspace",
+              releaseKind,
+              branchName: safeText(snapshot.branchName).trim(),
+              ...(pipelineId ? { pipelineId } : {}),
+            };
+          }
+          if (snapshot?.status !== "empty_inbox") return null;
+          return {
+            schemaVersion: WIDGET_RECOVERY_STATE_SCHEMA,
+            view: "inbox",
+            releaseKind,
+          };
+        }
+
+        async function persistRecoveryCoordinate(snapshot) {
+          const coordinate = recoveryCoordinateForSnapshot(snapshot);
+          if (!coordinate) {
+            state.recoveryPersistenceStatus = "not_applicable";
+            return false;
+          }
+          const serialized = JSON.stringify(coordinate);
+          if (serialized === lastPersistedRecoveryCoordinate) return true;
+          state.recoveryPersistenceStatus = "pending";
+          try {
+            const mode = await hostBridgeReady();
+            if (mode === "standard") {
+              await standardHostRequest("ui/update-model-context", { structuredContent: coordinate });
+            } else if (mode === "alias" && typeof globalThis.openai?.setWidgetState === "function") {
+              await globalThis.openai.setWidgetState(coordinate, { waitForPersistence: true });
+            } else {
+              state.recoveryPersistenceStatus = "unavailable";
+              return false;
+            }
+            lastPersistedRecoveryCoordinate = serialized;
+            state.recoveryPersistenceStatus = "succeeded";
+            return true;
+          } catch (_error) {
+            state.recoveryPersistenceStatus = "failed";
+            return false;
+          }
+        }
+
+        function initialSnapshotRecoveryTarget() {
+          const persisted = recoveryCoordinateFromWidgetState(aliasWidgetState());
+          if (persisted) return persisted;
+          const input = aliasToolInput();
+          if (!input) return null;
+          const releaseKind = normalizeKind(input.releaseKind);
+          if (!["ontology", "pipeline"].includes(releaseKind)) return null;
+          const proposalId = realProposalId(input.proposalId);
+          if (proposalId) {
+            return {
+              name: "get_release_status",
+              arguments: { releaseKind, proposalId },
+            };
+          }
+          const branchName = safeText(input.branchName).trim();
+          if (branchName) {
+            const pipelineId = safeText(input.pipelineId).trim();
+            return {
+              name: "open_release_workspace",
+              arguments: {
+                releaseKind,
+                branchName,
+                ...(pipelineId ? { pipelineId } : {}),
+              },
+            };
+          }
+          return {
+            name: "list_release_inbox",
+            arguments: { releaseKind, limit: 10 },
+          };
+        }
+
+        async function recoverInitialSnapshotFromReadTool() {
+          if (isHostBridgeTornDown || state.snapshot || hasAttemptedInitialSnapshotRecovery) return false;
+          hasAttemptedInitialSnapshotRecovery = true;
+          const target = initialSnapshotRecoveryTarget();
+          if (!target) {
+            state.message = "대화 재로드 후 이전 결과를 복구할 읽기 전용 좌표가 없습니다. GPT에게 릴리스 inbox 조회를 요청하세요.";
+            state.tone = "warning";
+            render();
+            return false;
+          }
+          state.message = "대화 재로드 후 최신 릴리스 상태를 읽기 전용으로 다시 확인하고 있습니다.";
+          state.tone = "info";
+          render();
+          try {
+            const result = await callTool(target.name, target.arguments);
+            if (!receiveToolOutput(result)) throw new Error("전체 운영 스냅샷이 반환되지 않았습니다.");
+            return true;
+          } catch (_error) {
+            state.message = "대화 재로드 후 상태를 자동 복구하지 못했습니다. GPT에게 릴리스 inbox 또는 상태 조회를 요청하세요.";
+            state.tone = "warning";
+            render();
+            return false;
+          }
+        }
+
+        function resultError(result) {
+          if (!result || !result.isError) return null;
+          const structured = isObject(result.structuredContent) ? result.structuredContent : {};
+          const nested = isObject(structured.error) ? structured.error : {};
+          const content = asArray(result.content)
+            .map((item) => (isObject(item) ? firstValue(item.text, item.message) : item))
+            .filter(Boolean)
+            .join(" ");
+          const error = new Error(firstValue(nested.message, content, "도구 실행이 거부되었습니다."));
+          error.code = firstValue(result.errorCode, result.code, structured.code, nested.type);
+          error.status = firstValue(result.status, result.statusCode, structured.status, nested.status);
+          error.details = isObject(nested.details) ? nested.details : {};
+          return error;
+        }
+
+        async function callTool(name, args) {
+          const mode = await hostBridgeReady();
+          let result;
+          if (mode === "standard") {
+            result = await standardHostRequest("tools/call", { name, arguments: args });
+          } else if (mode === "alias") {
+            result = await globalThis.openai.callTool(name, args);
+          } else {
+            throw new Error("GPT 도구 연결을 사용할 수 없습니다. 이 위젯을 GPT 안에서 다시 열어주세요.");
+          }
+          const error = resultError(result);
+          if (error) throw error;
+          return result;
+        }
+
+        function widgetConfirmationToken(result) {
+          const meta = isObject(result) ? result._meta : null;
+          const token = isObject(meta) ? meta.widgetConfirmationToken : "";
+          return typeof token === "string" ? token : "";
+        }
+
+        function isFullReleaseView(result) {
+          const structured = isObject(result) ? result.structuredContent : null;
+          const release = isObject(structured) ? structured.release : null;
+          if (!isObject(release) || !isObject(release.candidate)) return false;
+          return Boolean(
+            release.releaseKind
+              && release.proposalId
+              && release.stage
+              && Object.prototype.hasOwnProperty.call(release, "releaseEvidence")
+              && Object.prototype.hasOwnProperty.call(release, "nextActions"),
+          );
+        }
+
+        function replaceAuthoritativeSnapshot(result) {
+          if (!isFullReleaseView(result)) return false;
+          const normalized = normalizeSnapshot(result.structuredContent);
+          if (!normalized) return false;
+          state.snapshot = normalized;
+          void persistRecoveryCoordinate(normalized);
+          return true;
+        }
+
+        function classifyFailure(error) {
+          const code = String(firstValue(error && error.code, error && error.status, "")).toUpperCase();
+          const message = String(firstValue(error && error.message, error, "요청을 완료하지 못했습니다."));
+          if (["409", "412", "CONFLICT"].includes(code) || /STALE|FINGERPRINT|VERSION_CONFLICT|후보.*변경/i.test(`${code} ${message}`)) {
+            state.staleBlocked = true;
+            return `후보가 변경되어 작업을 멈췄습니다. 상태를 새로고침한 뒤 다시 검토하세요. (${message})`;
+          }
+          if (["401", "403"].includes(code) || /PERMISSION|FORBIDDEN|UNAUTHORIZED|권한/i.test(`${code} ${message}`)) {
+            state.permissionBlocked = true;
+            return `현재 사용자 권한으로 이 작업을 실행할 수 없습니다. (${message})`;
+          }
+          return message;
+        }
+
+        function errorDetails(error) {
+          if (isObject(error?.details)) return error.details;
+          if (isObject(error?.data)) return error.data;
+          return {};
+        }
+
+        function recoveryDelayMs(error) {
+          const details = errorDetails(error);
+          const reason = String(firstValue(details.reason, error?.reason, ""));
+          const message = String(firstValue(error?.message, error, ""));
+          if (reason !== "release_run_in_progress" && !/release_run_in_progress/i.test(message)) return null;
+          const seconds = Number(firstValue(details.retryAfterSeconds, error?.retryAfterSeconds, 1));
+          const boundedSeconds = Number.isFinite(seconds) ? Math.min(31, Math.max(0, seconds)) : 1;
+          return Math.ceil(boundedSeconds * 1000);
+        }
+
+        function hasServerErrorEvidence(error) {
+          if (!error) return false;
+          const details = errorDetails(error);
+          return Boolean(
+            firstValue(error.code, error.status)
+              || Object.keys(details).length > 0,
+          );
+        }
+
+        function waitForRecovery(milliseconds) {
+          return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
+        }
+
+        function deploymentPollingIdentity(snapshot) {
+          return snapshot ? `${snapshot.kind}:${snapshot.proposalId}` : "";
+        }
+
+        function cancelDeploymentPolling() {
+          pollingGeneration += 1;
+          activePollingPromise = null;
+          for (const [timerId, resolve] of deploymentPollWaiters.entries()) {
+            if (typeof globalThis.clearTimeout === "function") globalThis.clearTimeout(timerId);
+            resolve();
+          }
+          deploymentPollWaiters.clear();
+        }
+
+        function waitForDeploymentPoll(milliseconds) {
+          return new Promise((resolve) => {
+            let timerId;
+            let didFire = false;
+            const finish = () => {
+              didFire = true;
+              if (timerId !== undefined) deploymentPollWaiters.delete(timerId);
+              resolve();
+            };
+            timerId = globalThis.setTimeout(finish, milliseconds);
+            if (!didFire) deploymentPollWaiters.set(timerId, resolve);
+          });
+        }
+
+        async function pollDeploymentStatus() {
+          if (!state.snapshot || !DEPLOYMENT_POLL_STATUSES.has(state.snapshot.status)) return false;
+          if (activePollingPromise) return activePollingPromise;
+          const generation = ++pollingGeneration;
+          const identity = deploymentPollingIdentity(state.snapshot);
+          const polling = (async () => {
+            for (let index = 0; index < DEPLOYMENT_POLL_DELAYS_MS.length; index += 1) {
+              await waitForDeploymentPoll(DEPLOYMENT_POLL_DELAYS_MS[index]);
+              if (
+                generation !== pollingGeneration
+                || identity !== deploymentPollingIdentity(state.snapshot)
+                || !DEPLOYMENT_POLL_STATUSES.has(state.snapshot.status)
+              ) return false;
+              try {
+                const refreshed = await callTool("get_release_status", statusArgs(state.snapshot));
+                if (!replaceAuthoritativeSnapshot(refreshed)) {
+                  throw new Error("전체 운영 스냅샷이 반환되지 않았습니다.");
+                }
+                state.lastRequestId = state.snapshot.requestId || state.lastRequestId;
+                if (!DEPLOYMENT_POLL_STATUSES.has(state.snapshot.status)) {
+                  state.message = "외부 운영 배포 상태를 서버 기준으로 자동 확인했습니다.";
+                  state.tone = "info";
+                  render();
+                  return true;
+                }
+                render();
+              } catch (error) {
+                state.message = `외부 운영 배포 자동 확인을 멈췄습니다. 상태 새로고침으로 다시 확인하세요. (${String(error.message || error)})`;
+                state.tone = "warning";
+                render();
+                return false;
+              }
+            }
+            if (generation === pollingGeneration && DEPLOYMENT_POLL_STATUSES.has(state.snapshot.status)) {
+              state.message = "외부 운영 배포를 3회 자동 확인했지만 아직 완료되지 않았습니다. 잠시 후 상태를 새로고침하세요.";
+              state.tone = "warning";
+              render();
+            }
+            return false;
+          })();
+          activePollingPromise = polling;
+          try {
+            return await polling;
+          } finally {
+            if (activePollingPromise === polling) activePollingPromise = null;
+          }
+        }
+
+        async function resumeRiskyAction(toolName, args, confirmedArgs, initialError) {
+          let lastError = initialError;
+          let retryArgs = confirmedArgs;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+              return await callTool(toolName, retryArgs);
+            } catch (error) {
+              lastError = error;
+              if (retryArgs !== args) {
+                retryArgs.widgetConfirmationToken = "";
+                retryArgs = args;
+              }
+              const delay = recoveryDelayMs(error);
+              if (delay === null) throw initialError;
+              state.message = "서버에서 진행 중인 동일 작업을 중복 실행 없이 자동 확인하고 있습니다.";
+              state.tone = "warning";
+              render();
+              await waitForRecovery(delay);
+            }
+          }
+          throw lastError;
+        }
+
+        async function prepareRiskyAction(toolName, args) {
+          const prepareInput = { targetTool: toolName, arguments: args };
+          try {
+            return await callTool("prepare_release_action", prepareInput);
+          } catch (_firstError) {
+            state.message = "확인 카드 응답을 받지 못해 같은 준비 요청을 안전하게 한 번 복구하고 있습니다.";
+            state.tone = "warning";
+            render();
+            return callTool("prepare_release_action", prepareInput);
+          }
+        }
+
+        async function invokeRiskyAction(toolName, args) {
+          let confirmationToken = "";
+          let confirmedArgs;
+          try {
+            const prepared = await prepareRiskyAction(toolName, args);
+            confirmationToken = widgetConfirmationToken(prepared);
+            if (!confirmationToken) throw new Error("서버 확인 토큰이 없어 위험 작업을 실행하지 않았습니다.");
+            confirmedArgs = { ...args, widgetConfirmationToken: confirmationToken };
+            try {
+              return await callTool(toolName, confirmedArgs);
+            } catch (error) {
+              if (hasServerErrorEvidence(error) && recoveryDelayMs(error) === null) throw error;
+              state.message = "응답이 끊긴 작업의 완료 여부를 같은 작업 키로 확인하고 있습니다.";
+              state.tone = "warning";
+              render();
+              return await resumeRiskyAction(toolName, args, confirmedArgs, error);
+            }
+          } finally {
+            confirmationToken = "";
+            if (confirmedArgs) confirmedArgs.widgetConfirmationToken = "";
+            confirmedArgs = undefined;
+          }
+        }
+
+        async function sendBuilderHandoff(snapshot) {
+          if (!snapshot.builderWorkspaceRef) return "unavailable";
+          const mode = snapshot.kind === "ontology" ? "ontology_editing" : "data_integration";
+          const prompt = [
+            "격리 브랜치가 준비되었습니다. Builder MCP로 편집, 검증, 테스트, 제안 제출을 계속해 주세요.",
+            `mode: ${mode}`,
+            `workspaceRef: ${snapshot.builderWorkspaceRef}`,
+            "쓰기 작업은 이 대화의 Builder 확인 카드에서 제가 직접 승인할 때만 실행하세요.",
+          ].join("\n");
+          try {
+            const bridgeMode = await hostBridgeReady();
+            if (bridgeMode === "standard") {
+              await standardHostRequest("ui/message", {
+                role: "user",
+                content: [{ type: "text", text: prompt }],
+              });
+            } else if (bridgeMode === "alias" && typeof globalThis.openai.sendFollowUpMessage === "function") {
+              await globalThis.openai.sendFollowUpMessage({ prompt, scrollToBottom: true });
+            } else {
+              return "unavailable";
+            }
+            return "sent";
+          } catch (_error) {
+            return "failed";
+          }
+        }
+
+        async function invokeAction(action) {
+          if (!TOOL_BY_ACTION[action] || state.busyAction || !state.snapshot) return;
+          if (!actionAllowed(action, state.snapshot)) return;
+          cancelDeploymentPolling();
+          const snapshotBeforeAction = state.snapshot;
+          state.busyAction = action;
+          state.message = `${action === "refresh" ? "운영 상태" : "보호된 작업"}을 확인하고 있습니다.`;
+          state.tone = "info";
+          render();
+          try {
+            const args = actionArgs(action);
+            const toolName = TOOL_BY_ACTION[action];
+            const result = RISKY_ACTIONS.has(action)
+              ? await invokeRiskyAction(toolName, args)
+              : await callTool(toolName, args);
+            let hasSnapshot = replaceAuthoritativeSnapshot(result);
+            let refreshError = null;
+            if (!hasSnapshot && action !== "refresh") {
+              try {
+                const refreshed = await callTool("get_release_status", statusArgs(snapshotBeforeAction));
+                hasSnapshot = replaceAuthoritativeSnapshot(refreshed);
+              } catch (error) {
+                refreshError = error;
+              }
+            }
+            if (action === "refresh" && hasSnapshot) {
+              state.staleBlocked = false;
+              state.permissionBlocked = false;
+            }
+            const handoff = action === "create" && hasSnapshot
+              ? await sendBuilderHandoff(state.snapshot)
+              : "not-needed";
+            state.message = handoff === "sent"
+              ? "격리 브랜치를 만들고 Builder 작업 지시를 이 대화에 전달했습니다."
+              : handoff === "failed" || handoff === "unavailable"
+                ? `격리 브랜치는 만들어졌습니다. Builder 연결 인계가 자동으로 전달되지 않았으므로 Workspace ${state.snapshot.builderWorkspaceRef}에서 계속하세요.`
+                : hasSnapshot
+                  ? "서버가 반환한 최신 운영 스냅샷으로 갱신했습니다."
+              : refreshError
+                ? `작업 호출은 완료됐지만 운영 상태 확인에 실패해 기존 상태를 유지합니다. (${String(refreshError.message || refreshError)})`
+                : "요청은 끝났지만 전체 운영 스냅샷이 없어 기존 상태를 유지합니다. 상태를 새로고침하세요.";
+            state.tone = hasSnapshot && !["failed", "unavailable"].includes(handoff) ? "info" : "warning";
+            if (hasSnapshot && DEPLOYMENT_POLL_STATUSES.has(state.snapshot.status)) {
+              await pollDeploymentStatus();
+            }
+          } catch (error) {
+            state.message = classifyFailure(error);
+            state.tone = "error";
+          } finally {
+            state.busyAction = "";
+            render();
+          }
+        }
+
+        function receiveToolOutput(value) {
+          if (isHostBridgeTornDown) return false;
+          const normalized = normalizeSnapshot(value);
+          if (!normalized) return false;
+          cancelInitialSnapshotPolling();
+          cancelDeploymentPolling();
+          state.snapshot = normalized;
+          void persistRecoveryCoordinate(normalized);
+          state.lastRequestId = normalized.requestId || state.lastRequestId;
+          state.staleBlocked = normalized.isStale;
+          state.permissionBlocked = false;
+          state.message = "";
+          state.tone = "info";
+          render();
+          if (DEPLOYMENT_POLL_STATUSES.has(normalized.status)) void pollDeploymentStatus();
+          return true;
+        }
+
+        globalThis.addEventListener("message", handleStandardHostMessage);
+
+        globalThis.addEventListener("openai:set_globals", (event) => {
+          const detail = event && event.detail;
+          const globals = isObject(detail && detail.globals) ? detail.globals : detail;
+          if (isObject(globals) && Object.prototype.hasOwnProperty.call(globals, "toolOutput")) {
+            if (!receiveToolOutput(globals.toolOutput)) startInitialSnapshotPolling();
+          } else if (isObject(globalThis.openai) && !state.snapshot) {
+            if (
+              isObject(globals)
+                && (
+                  Object.prototype.hasOwnProperty.call(globals, "widgetState")
+                    || Object.prototype.hasOwnProperty.call(globals, "toolInput")
+                )
+            ) hasAttemptedInitialSnapshotRecovery = false;
+            startInitialSnapshotPolling();
+          }
+        });
+
+        if (globalThis.openai && Object.prototype.hasOwnProperty.call(globalThis.openai, "toolOutput")) {
+          if (!receiveToolOutput(globalThis.openai.toolOutput)) {
+            render();
+            startInitialSnapshotPolling();
+          }
+        } else {
+          render();
+          startInitialSnapshotPolling();
+        }
+        void hostBridgeReady();
+
+        globalThis.__foundryReleaseWidgetTest = Object.freeze({
+          invokeAction,
+          normalizeSnapshot,
+          receiveToolOutput,
+          recoverInitialSnapshotFromReadTool,
+          getBridgeMode: () => hostBridgeMode,
+          waitForPolling: () => activePollingPromise || Promise.resolve(false),
+          getState: () => ({
+            snapshot: state.snapshot ? { ...state.snapshot } : null,
+            busyAction: state.busyAction,
+            staleBlocked: state.staleBlocked,
+            permissionBlocked: state.permissionBlocked,
+            lastRequestId: state.lastRequestId,
+            message: state.message,
+            tone: state.tone,
+            recoveryPersistenceStatus: state.recoveryPersistenceStatus,
+          }),
+        });
+      })();
+    </script>
+  </body>
+</html>

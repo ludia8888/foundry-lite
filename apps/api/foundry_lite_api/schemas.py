@@ -643,11 +643,76 @@ class AipFdeRunRequest(BaseModel):
     max_output_tokens: int = Field(default=512, ge=64, le=16000, alias="maxOutputTokens")
 
 
+class AipPilotFieldRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    api_name: str | None = Field(default=None, alias="apiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
+    type: str = Field(default="string", pattern="^(string|integer|float|boolean|date|timestamp)$")
+    required: bool = False
+    description: str = Field(default="", max_length=300)
+
+
+class AipPilotRecordRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    api_name: str | None = Field(default=None, alias="apiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
+    description: str = Field(default="", max_length=500)
+    fields: list[AipPilotFieldRequest] = Field(default_factory=list, max_length=20)
+
+
+class AipPilotActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    api_name: str | None = Field(default=None, alias="apiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
+    description: str = Field(default="", max_length=500)
+    from_states: list[str] = Field(default_factory=list, alias="fromStates", max_length=8)
+    to_state: str = Field(alias="toState", min_length=1, max_length=120)
+    required_information: list[str] = Field(default_factory=list, alias="requiredInformation", max_length=12)
+    allowed_actors: list[str] = Field(default_factory=list, alias="allowedActors", max_length=12)
+    requires_approval: bool = Field(default=False, alias="requiresApproval")
+
+
+class AipPilotPolicyConditionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    property_api_name: str = Field(alias="propertyApiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
+    operator: Literal["eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte"]
+    value: object
+
+
+class AipPilotPolicyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=160)
+    statement: str = Field(min_length=1, max_length=1000)
+    enforcement: str = Field(default="blocking", pattern="^(blocking|warning|manual_review)$")
+    evidence: str = Field(default="", max_length=500)
+    applies_to_actions: list[str] = Field(default_factory=list, alias="appliesToActions", max_length=20)
+    conditions: list[AipPilotPolicyConditionRequest] = Field(default_factory=list, max_length=12)
+
+
+class AipPilotDomainBriefRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    actors: list[str] = Field(default_factory=list, max_length=12)
+    records: list[AipPilotRecordRequest] = Field(default_factory=list, max_length=8)
+    lifecycle_states: list[str] = Field(default_factory=list, alias="lifecycleStates", max_length=16)
+    actions: list[AipPilotActionRequest] = Field(default_factory=list, max_length=20)
+    policies: list[AipPilotPolicyRequest] = Field(default_factory=list, max_length=20)
+    evidence: list[str] = Field(default_factory=list, max_length=20)
+    integrations: list[str] = Field(default_factory=list, max_length=20)
+    success_measures: list[str] = Field(default_factory=list, alias="successMeasures", max_length=20)
+
+
 class AipPilotPlanRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     application_name: str = Field(alias="applicationName", min_length=1, max_length=255)
     domain_description: str = Field(alias="domainDescription", min_length=1, max_length=10000)
+    domain_brief: AipPilotDomainBriefRequest = Field(alias="domainBrief")
 
 
 class AipPilotGenerateRequest(BaseModel):

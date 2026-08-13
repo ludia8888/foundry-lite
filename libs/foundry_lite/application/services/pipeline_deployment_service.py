@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Protocol
 
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.pipeline_execution_repository import (
@@ -13,13 +14,37 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
 from foundry_lite.application.ports.pipeline_repository import PipelineRepository, PipelineVersionRow
 from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.pipeline_compiler_service import PipelineCompilerService
+from foundry_lite.application.services.pipeline_deployment_admission import (
+    LEGACY_DEPLOYMENT_CAPABILITIES,
+    deployment_receipt,
+    project_committed_deployment,
+    require_stored_version,
+)
+from foundry_lite.application.services.pipeline_deployment_admission import (
+    has_dataset_source as _has_dataset_source,
+)
 from foundry_lite.application.services.pipeline_execution_contracts import (
     ModelRef,
     PipelineExecutionPlan,
     pipeline_execution_plan_payload,
 )
-from foundry_lite.application.services.pipeline_payloads import bounded_pipeline_limit, required_text, version_payload
+from foundry_lite.application.services.pipeline_payloads import (
+    bounded_pipeline_limit,
+    required_text,
+    version_payload,
+)
+from foundry_lite.application.services.pipeline_payloads import (
+    locked_deployment_replay as _locked_deployment_replay,
+)
+from foundry_lite.application.services.pipeline_payloads import (
+    optional_text as _optional_text,
+)
+from foundry_lite.application.services.pipeline_payloads import (
+    require_expected_current_deployment as _require_expected_current_deployment,
+)
+from foundry_lite.application.services.pipeline_payloads import (
+    require_matching_deployment as _require_matching_deployment,
+)
 from foundry_lite.application.services.pipeline_plan_compiler import PipelinePlanCompiler
 from foundry_lite.application.services.pipeline_source_contract_resolver import (
     PipelineSourceContractResolver,
@@ -33,15 +58,22 @@ from foundry_lite.application.services.pipeline_trained_model_contracts import (
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+from foundry_lite.domain.errors import NotFound, ValidationFailed
 
-_LEGACY_DEPLOYMENT_CAPABILITIES = frozenset(
-    {
-        "tabular_v1_compiler",
-        "semantic_index_candidate_runtime",
-        "ontology_mapping_candidate_runtime",
-    }
-)
+
+class PipelineDeploymentCompiler(Protocol):
+    """Compile the legacy deployment projection used by the promotion service."""
+
+    def compile_graph(
+        self,
+        *,
+        pipeline_id: str,
+        version_id: str,
+        graph: Mapping[str, object],
+        ctx: RequestContext,
+    ) -> dict[str, object]:
+        """Compile one pinned pipeline graph without exposing its concrete service."""
+        ...
 
 
 class PipelineDeploymentService(CoreService):
@@ -60,7 +92,7 @@ class PipelineDeploymentService(CoreService):
         "trained_model_inference_port",
     )
     required_collaborators = ("pipeline_compiler_service", "runtime_service")
-    pipeline_compiler_service: PipelineCompilerService
+    pipeline_compiler_service: PipelineDeploymentCompiler
     pipeline_execution_repository: PipelineExecutionRepository
     pipeline_repository: PipelineRepository
     runtime_service: RuntimeEvidenceBoundary
@@ -181,6 +213,29 @@ class PipelineDeploymentService(CoreService):
             )
         return {"items": [_deployment_payload(row) for row in rows], "nextCursor": None}
 
+    def replay_deployment(
+        self,
+        idempotency_key: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object] | None:
+        """Return a durable deployment receipt without starting a new promotion."""
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "pipeline:read")
+        key = required_text(idempotency_key, "Idempotency-Key")
+        with self.engine.begin() as conn:
+            receipt = deployment_receipt(
+                self.pipeline_execution_repository,
+                self.pipeline_repository,
+                conn,
+                ctx,
+                key,
+            )
+            if receipt is None:
+                return None
+            row, version = receipt
+        return project_committed_deployment(lambda: _deployment_result(row, version, {"replayed": True}, None))
+
     def _commit_deployment(
         self,
         ctx: RequestContext,
@@ -194,14 +249,33 @@ class PipelineDeploymentService(CoreService):
         now = _now()
         record = _deployment_record(ctx, version, idempotency_key, request_fingerprint, plan, options, now)
         with self.engine.begin() as conn:
+            self.pipeline_repository.lock_pipeline_for_deployment(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                pipeline_id=str(version["pipeline_id"]),
+            )
+            replay = _locked_deployment_replay(
+                self.pipeline_execution_repository,
+                self.pipeline_repository,
+                conn,
+                ctx,
+                idempotency_key,
+                request_fingerprint,
+            )
+            if replay is not None:
+                replayed_deployment, replayed_version = replay
+                return project_committed_deployment(
+                    lambda: _deployment_result(replayed_deployment, replayed_version, {"replayed": True}, options)
+                )
+            _require_expected_current_deployment(self.pipeline_execution_repository, conn, ctx, version, options)
             deployment = self.pipeline_execution_repository.insert_deployment(transaction=conn, record=record)
             _require_matching_deployment(deployment, request_fingerprint)
             if deployment["id"] == record.deployment_id:
                 deployed = self._mark_version(conn, ctx, version, plan, now)
                 self._audit(conn, ctx, deployment)
             else:
-                deployed = self._require_stored_version(conn, ctx, str(deployment["version_id"]))
-        return _deployment_result(deployment, deployed, compiled, options)
+                deployed = require_stored_version(self.pipeline_repository, conn, ctx, str(deployment["version_id"]))
+        return project_committed_deployment(lambda: _deployment_result(deployment, deployed, compiled, options))
 
     def _deployment_replay(
         self,
@@ -211,22 +285,18 @@ class PipelineDeploymentService(CoreService):
         options: Mapping[str, object] | None,
     ) -> dict[str, object] | None:
         with self.engine.begin() as conn:
-            row = self.pipeline_execution_repository.deployment_by_idempotency_key(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                idempotency_key=idempotency_key,
+            receipt = deployment_receipt(
+                self.pipeline_execution_repository,
+                self.pipeline_repository,
+                conn,
+                ctx,
+                idempotency_key,
             )
-            if row is None:
+            if receipt is None:
                 return None
+            row, version = receipt
             _require_matching_deployment(row, request_fingerprint)
-            version = self.pipeline_repository.version_by_id(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                version_id=str(row["version_id"]),
-            )
-        if version is None:
-            raise NotFound("pipeline deployment version not found", details={"deployment_id": row["id"]})
-        return _deployment_result(row, version, {"replayed": True}, options)
+        return project_committed_deployment(lambda: _deployment_result(row, version, {"replayed": True}, options))
 
     def _version(self, ctx: RequestContext, pipeline_id: str, version_id: str) -> PipelineVersionRow:
         with self.engine.begin() as conn:
@@ -242,21 +312,6 @@ class PipelineDeploymentService(CoreService):
                 "pipeline version belongs to a different pipeline",
                 details={"version_id": version_id},
             )
-        return version
-
-    def _require_stored_version(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        version_id: str,
-    ) -> PipelineVersionRow:
-        version = self.pipeline_repository.version_by_id(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            version_id=version_id,
-        )
-        if version is None:
-            raise NotFound("pipeline deployment version not found", details={"version_id": version_id})
         return version
 
     def _mark_version(
@@ -344,29 +399,6 @@ def _deployment_request_fingerprint(
     return _json_hash({"pipelineId": pipeline_id, "versionId": version_id, "options": dict(options or {})})
 
 
-def _has_dataset_source(graph: Mapping[str, object]) -> bool:
-    nodes = graph.get("nodes")
-    if not isinstance(nodes, list):
-        return False
-    return any(
-        isinstance(node, Mapping)
-        and (
-            node.get("descriptorId") in {"source.dataset", "source.stream", "source.geospatial"}
-            or node.get("type") == "dataset"
-        )
-        for node in nodes
-    )
-
-
-def _require_matching_deployment(row: PipelineDeploymentRow, request_fingerprint: str) -> None:
-    if row["request_fingerprint"] == request_fingerprint:
-        return
-    raise ConflictDetected(
-        "pipeline deployment idempotency key was reused with a different request",
-        details={"deployment_id": row["id"], "request_fingerprint": request_fingerprint},
-    )
-
-
 def _deployment_result(
     deployment: PipelineDeploymentRow,
     version: PipelineVersionRow,
@@ -382,7 +414,7 @@ def _deployment_result(
 
 
 def _requires_graph_v2_runtime(plan: PipelineExecutionPlan) -> bool:
-    return any(node.runtime_capability not in _LEGACY_DEPLOYMENT_CAPABILITIES for node in plan.nodes)
+    return any(node.runtime_capability not in LEGACY_DEPLOYMENT_CAPABILITIES for node in plan.nodes)
 
 
 def _engine_neutral_plan_summary(
@@ -451,21 +483,12 @@ def _function_pins(plan: Mapping[str, object]) -> list[dict[str, object]]:
 
 
 def _json_rows(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
-    return [dict(item) for item in value if isinstance(item, Mapping)]
+    return [dict(item) for item in value if isinstance(item, Mapping)] if isinstance(value, list) else []
 
 
 def _json_texts(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str)]
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
 def _json_object(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _optional_text(options: Mapping[str, object] | None, key: str) -> str | None:
-    value = (options or {}).get(key)
-    return value.strip() if isinstance(value, str) and value.strip() else None

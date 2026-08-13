@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import RuntimeJsonObject
+from foundry_lite.application.services.osdk_application_service import OsdkApplicationService
+from foundry_lite.application.services.osdk_dynamic_client_registration import (
+    DynamicClientRegistration,
+    register_dynamic_client,
+)
 from foundry_lite.application.services.osdk_oauth_client_credentials_service import (
     OsdkOAuthClientCredentialsService,
 )
@@ -21,9 +26,24 @@ class AuthGateway:
         self,
         osdk_oauth_sessions: OsdkOAuthSessionService,
         osdk_oauth_client_credentials: OsdkOAuthClientCredentialsService,
+        osdk_applications: OsdkApplicationService,
     ) -> None:
         self._osdk_oauth_sessions = osdk_oauth_sessions
         self._osdk_oauth_client_credentials = osdk_oauth_client_credentials
+        self._osdk_applications = osdk_applications
+
+    def osdk_oauth_register_dynamic_client(
+        self,
+        *,
+        application_id: str,
+        registration: DynamicClientRegistration,
+    ) -> RuntimeJsonObject:
+        return register_dynamic_client(
+            applications=self._osdk_applications,
+            sessions=self._osdk_oauth_sessions,
+            application_id=application_id,
+            registration=registration,
+        )
 
     def osdk_oauth_authorize(
         self,

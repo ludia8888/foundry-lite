@@ -53,6 +53,9 @@ postgres = [
 ]
 
 [dependency-groups]
+deployment = [
+  "alembic>=1.13",
+]
 dev = [
   "alembic>=1.13",
   "bandit>=1.7",
@@ -95,6 +98,7 @@ pythonpath = [".", "libs", "apps/api", "apps/cli", "apps/worker", "packages/sdk-
 testpaths = ["tests"]
 markers = [
   "integration_scenario(name): marks one of the seven required MVP release integration scenarios",
+  "code_execution_image: requires the pinned isolated Python execution image",
 ]
 
 [tool.coverage.run]

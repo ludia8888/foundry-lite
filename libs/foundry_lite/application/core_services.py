@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
-from foundry_lite.application.core_service_groups import SharedCoreServices, aip_service_items, source_service_items
+from foundry_lite.application.core_service_dependencies import pipeline_dependencies as _pipeline_dependencies
+from foundry_lite.application.core_service_groups import (
+    ExternalReleaseDeliveryService,
+    GovernedReleaseLiveAttestationService,
+    McpRateLimitService,
+    SharedCoreServices,
+    aip_service_items,
+    source_service_items,
+)
 from foundry_lite.application.dependencies import CoreDependencies
-from foundry_lite.application.model_gateway_bridge import GovernedSemanticModelBridge
 from foundry_lite.application.services.action_effect_delivery_service import ActionEffectDeliveryService
 from foundry_lite.application.services.action_services import ActionServices
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
@@ -37,7 +44,6 @@ from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
 from foundry_lite.application.services.function_execution_service import FunctionExecutionService
 from foundry_lite.application.services.materialization_service import MaterializationService
-from foundry_lite.application.services.mcp_rate_limit_service import McpRateLimitService
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_search import OntologySearchService
@@ -90,6 +96,7 @@ __all__ = [
     "ErasureService",
     "EvalService",
     "FunctionExecutionService",
+    "GovernedReleaseLiveAttestationService",
     "FdeDataConnectionToolService",
     "InsightReviewService",
     "DatasetServices",
@@ -129,11 +136,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class CoreServices:
-    """Constructor-injected application service graph.
-
-    ``FoundryLite`` delegates to this graph. Each concrete service declares
-    only its infrastructure dependencies and explicit collaborators.
-    """
+    """Constructor-injected application service graph used by ``FoundryLite``."""
 
     action: ActionServices
     action_effects: ActionEffectDeliveryService
@@ -154,6 +157,8 @@ class CoreServices:
     demo: DemoService
     erasure: ErasureService
     evals: EvalService
+    external_release_delivery: ExternalReleaseDeliveryService
+    governed_release_live_attestation: GovernedReleaseLiveAttestationService
     fde_ontology_tools: FdeOntologyToolService
     fde_application_tools: FdeApplicationToolService
     fde_context: FdeContextService
@@ -246,7 +251,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: SharedCoreSer
         source_onboarding=build_service(SourceOnboardingService, dependencies),
         context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=shared["dataset"], demo=build_service(DemoService, dependencies),
-        erasure=build_service(ErasureService, dependencies), evals=build_service(EvalService, dependencies),
+        erasure=build_service(ErasureService, dependencies), evals=build_service(EvalService, dependencies), external_release_delivery=build_service(ExternalReleaseDeliveryService, dependencies), governed_release_live_attestation=build_service(GovernedReleaseLiveAttestationService, dependencies),  # noqa: E501
         fde_ontology_tools=shared["fde_ontology_tools"], fde_pilot=shared["fde_pilot"],
         fde_application_tools=shared["fde_application_tools"], fde_context=shared["fde_context"],
         fde_data_connection_tools=shared["fde_data_connection_tools"], fde_platform_tools=shared["fde_platform_tools"], fde_runtime=shared["fde_runtime"],  # noqa: E501
@@ -271,29 +276,6 @@ def _compose_core_services(dependencies: CoreDependencies, shared: SharedCoreSer
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies), )
 # fmt: on
-def _pipeline_dependencies(
-    dependencies: CoreDependencies,
-    model_gateway: ModelGatewayService,
-) -> CoreDependencies:
-    aip = replace(
-        dependencies.aip,
-        governed_semantic_model_port=GovernedSemanticModelBridge(model_gateway),
-    )
-    return CoreDependencies(
-        paths=dependencies.paths,
-        security=dependencies.security,
-        action=dependencies.action,
-        data=dependencies.data,
-        object_store=dependencies.object_store,
-        runtime=dependencies.runtime,
-        aip=aip,
-        media=dependencies.media,
-        source=dependencies.source,
-        pipeline_dag_orchestrator=dependencies.pipeline_dag_orchestrator,
-        profile=dependencies.profile,
-    )
-
-
 def _bind_core_service_collaborators(services: CoreServices) -> None:
     collaborators = _collaborator_map(services)
     for service in _core_service_items(services):

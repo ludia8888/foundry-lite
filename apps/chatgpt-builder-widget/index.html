@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --ink: #18241f;
+        --muted: #66736d;
+        --paper: #f8faf7;
+        --line: #d8dfda;
+        --accent: #146b4c;
+        --accent-ink: #ffffff;
+        --warn: #8a4b0f;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: var(--ink); background: transparent; }
+      main {
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--paper);
+      }
+      .eyebrow { margin: 0; color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+      h1 { margin: 2px 0 0; font-size: 21px; line-height: 1.25; }
+      .summary { margin: 0; color: var(--muted); line-height: 1.55; }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 0; font-size: 13px; }
+      dt { color: var(--muted); }
+      dd { margin: 0; overflow-wrap: anywhere; font-weight: 650; }
+      .preview {
+        max-height: 190px;
+        margin: 0;
+        overflow: auto;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        color: var(--ink);
+        background: color-mix(in srgb, var(--paper) 84%, var(--line));
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .notice { margin: 0; padding: 11px 12px; border-radius: 12px; background: #fff4e5; color: var(--warn); font-size: 13px; }
+      button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 12px;
+        padding: 0 17px;
+        background: var(--accent);
+        color: var(--accent-ink);
+        font: inherit;
+        font-weight: 760;
+        cursor: pointer;
+      }
+      button:disabled { cursor: not-allowed; opacity: .48; }
+      button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
+      #message { min-height: 20px; margin: 0; color: var(--muted); font-size: 13px; }
+      #message[data-tone="error"] { color: #a12d24; }
+      #message[data-tone="success"] { color: var(--accent); }
+      @media (prefers-color-scheme: dark) {
+        :root { --ink: #eef6f1; --muted: #aab8b0; --paper: #13201a; --line: #31433a; --accent: #62d6a8; --accent-ink: #0d251b; --warn: #f0b56f; }
+        .notice { background: #382717; }
+      }
+      @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+    </style>
+  </head>
+  <body>
+    <main aria-labelledby="title">
+      <div>
+        <p class="eyebrow">BUILDER · EXACT CHANGE REVIEW</p>
+        <h1 id="title">이 변경을 확인하고 실행할까요?</h1>
+      </div>
+      <p class="summary">표시된 도구와 입력값에만 한 번 승인됩니다. 일부 작업은 프로젝트·Source·앱 설정 등에 즉시 저장되며, 운영 활성화나 배포 승인은 별도입니다.</p>
+      <dl>
+        <dt>도구</dt><dd id="tool">확인 중</dd>
+        <dt>모드</dt><dd id="mode">확인 중</dd>
+        <dt>작업공간</dt><dd id="workspace">확인 중</dd>
+        <dt>작업 종류</dt><dd id="category">확인 중</dd>
+        <dt>저장 영향</dt><dd id="impact">확인 중</dd>
+        <dt>변경 요약</dt><dd id="change-summary">확인 중</dd>
+        <dt>요청 해시</dt><dd id="request-hash">확인 중</dd>
+        <dt>만료</dt><dd id="expiry">확인 중</dd>
+        <dt>호스트 전달</dt><dd id="host-globals">확인 중</dd>
+      </dl>
+      <div>
+        <p class="eyebrow">REDACTED INPUT PREVIEW</p>
+        <pre id="preview" class="preview">확인 중</pre>
+      </div>
+      <p class="notice">버튼을 누르면 앱 전용 확인 토큰으로 승인한 뒤, 처음 요청한 입력을 그대로 한 번 다시 호출합니다.</p>
+      <button id="approve" type="button" disabled>확인하고 변경 실행</button>
+      <p id="message" role="status" aria-live="polite"></p>
+    </main>
+    <script>
+      (() => {
+        "use strict";
+
+        const APPROVAL_TOOL = "approve_builder_mutation";
+        const state = {
+          challenge: null,
+          originalInput: null,
+          widgetToken: "",
+          recoveryReceipt: "",
+          busy: false,
+          completed: false,
+          message: "",
+          tone: "info",
+        };
+
+        const byId = (id) => document.getElementById(id);
+        const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+        const clone = (value) => JSON.parse(JSON.stringify(value));
+        const sensitiveKey = /token|receipt|secret|password|passwd|credential|authorization|bearer|api[-_]?key|private[-_]?key|database[-_]?url|connection[-_]?string|dsn|cookie|headers?/i;
+
+        function redacted(value, key = "") {
+          if (sensitiveKey.test(key)) return "[redacted]";
+          if (Array.isArray(value)) return value.map((item) => redacted(item, key));
+          if (typeof value === "string" && (/^(bearer|basic)\s/i.test(value) || /-----BEGIN [^-]*PRIVATE KEY-----/i.test(value) || /:\/\/[^/\s:@]+:[^@\s/]+@/.test(value) || /[?&](access_?token|api_?key|secret|password|signature)=/i.test(value))) {
+            return "[redacted]";
+          }
+          if (!isObject(value)) return value;
+          return Object.fromEntries(
+            Object.entries(value).map(([childKey, item]) => [
+              childKey,
+              redacted(item, childKey),
+            ]),
+          );
+        }
+
+        function operationImpact(toolId) {
+          if (toolId === "source.test_connection") {
+            return ["실제 네트워크 연결 진단", "승인된 경로로 외부 Source에 실제 probe를 보내고 진단 증거를 저장합니다."];
+          }
+          if (toolId === "create_foundry_project") {
+            return ["프로젝트 생성", "tenant에 새 프로젝트를 즉시 저장합니다. 브랜치 작업이 아닙니다."];
+          }
+          if (["create_foundry_rest_api_data_source", "create_foundry_rest_api_data_source_webhook", "get_or_create_network_egress_policy"].includes(toolId)) {
+            return ["Data Connection 설정", "Source 또는 egress 정책을 tenant 설정에 즉시 저장합니다. 브랜치 작업이 아닙니다."];
+          }
+          if (toolId === "osdk.application.update_resources") {
+            return ["OSDK 앱 설정 변경", "애플리케이션의 리소스 제한 설정을 즉시 교체합니다."];
+          }
+          if (toolId === "generate_new_ontology_sdk_version") {
+            return ["SDK 아티팩트 생성", "현재 승인된 리소스에서 새 SDK 아티팩트를 생성해 저장합니다."];
+          }
+          if (toolId === "pilot.application.generate") {
+            return ["Pilot 리소스 생성", "브랜치, seed 계약, 앱·CI 등 여러 durable 리소스를 생성합니다."];
+          }
+          if (toolId.endsWith(".propose")) {
+            return ["검토 제안 제출", "선택한 브랜치를 사람 검토 대기열에 제출합니다. 병합·활성화·배포는 하지 않습니다."];
+          }
+          if (toolId === "pipeline.branch.run_tests") {
+            return ["브랜치 테스트", "Pipeline을 배포하거나 데이터를 실행하지 않고 테스트 증거를 저장합니다."];
+          }
+          if (toolId.includes("branch") || /^(create_or_update|delete)_foundry_/.test(toolId)) {
+            return ["격리 브랜치 변경", "선택한 Ontology 또는 Pipeline 브랜치에 저장하며 운영 활성 상태는 바꾸지 않습니다."];
+          }
+          return ["Builder 저장 작업", "해당 리소스에 즉시 저장될 수 있습니다. 아래 입력과 대상 작업공간을 확인하세요."];
+        }
+
+        function changeSummary(input) {
+          const args = isObject(input?.arguments) ? input.arguments : {};
+          return String(args.changeSummary || args.description || args.title || args.displayName || "명시적 요약 없음 — 입력 미리보기를 확인하세요.");
+        }
+
+        function structuredContent(value) {
+          if (!isObject(value)) return null;
+          if (isObject(value.structuredContent)) return value.structuredContent;
+          if (isObject(value.toolOutput)) return structuredContent(value.toolOutput) || value.toolOutput;
+          return value;
+        }
+
+        function responseMeta(value) {
+          if (!isObject(value)) return null;
+          if (isObject(value.toolResponseMetadata)) return value.toolResponseMetadata;
+          return isObject(value._meta) ? value._meta : null;
+        }
+
+        function render() {
+          const challenge = state.challenge || {};
+          const hostGlobalsField = byId("host-globals");
+          if (hostGlobalsField) hostGlobalsField.textContent = String(state.hostGlobals || "확인 중");
+          byId("tool").textContent = String(challenge.toolId || "미제공");
+          byId("mode").textContent = String(challenge.mode || state.originalInput?.mode || "미제공");
+          byId("workspace").textContent = String(challenge.workspaceRef || state.originalInput?.workspaceRef || "미제공");
+          const [category, impact] = operationImpact(String(challenge.toolId || ""));
+          byId("category").textContent = category;
+          byId("impact").textContent = impact;
+          byId("change-summary").textContent = changeSummary(state.originalInput);
+          byId("request-hash").textContent = String(challenge.requestBindingHash || "미제공");
+          byId("preview").textContent = JSON.stringify(redacted(state.originalInput?.arguments || {}), null, 2);
+          byId("expiry").textContent = String(challenge.expiresAt || "미제공");
+          const button = byId("approve");
+          button.disabled = !isReady() || state.busy || state.completed;
+          button.textContent = state.busy ? "확인 후 실행 중…" : state.completed ? "변경 실행 완료" : "확인하고 변경 실행";
+          const message = byId("message");
+          message.textContent = state.message;
+          message.dataset.tone = state.tone;
+        }
+
+        function isReady() {
+          return Boolean(
+            state.challenge?.status === "approval_required"
+            && state.challenge.challengeId
+            && state.challenge.toolId
+            && state.originalInput?.mode
+            && state.originalInput?.workspaceRef
+            && isObject(state.originalInput?.arguments)
+            && (state.widgetToken || state.recoveryReceipt),
+          );
+        }
+
+        function receiveGlobals(value) {
+          if (!isObject(value)) return;
+          // The card renders "미제공" whenever the challenge never arrived, which looks the same
+          // whether the host withheld toolOutput or sent it in a shape we do not read. Record what
+          // actually landed so the difference is visible on the card itself.
+          state.hostGlobals = Object.keys(value)
+            .filter((key) => value[key] !== undefined && value[key] !== null)
+            .sort()
+            .join(", ") || "없음";
+          if (isObject(value.toolInput)) state.originalInput = clone(value.toolInput);
+          const output = structuredContent(value.toolOutput || value);
+          if (isObject(output) && output.status === "approval_required") state.challenge = clone(output);
+          const meta = responseMeta(value);
+          const token = isObject(meta) ? meta.widgetApprovalToken : "";
+          const receipt = isObject(meta) ? meta.confirmationReceipt : "";
+          if (typeof token === "string" && token) {
+            state.widgetToken = token;
+            state.recoveryReceipt = "";
+          }
+          if (typeof receipt === "string" && receipt) {
+            state.recoveryReceipt = receipt;
+            state.widgetToken = "";
+          }
+          render();
+        }
+
+        function resultError(result) {
+          if (!isObject(result) || result.isError !== true) return null;
+          const structured = isObject(result.structuredContent) ? result.structuredContent : {};
+          const nested = isObject(structured.error) ? structured.error : {};
+          const error = new Error(String(nested.message || "도구 실행이 거부되었습니다."));
+          error.isToolResultError = true;
+          return error;
+        }
+
+        async function callTool(name, argumentsValue) {
+          if (!globalThis.openai || typeof globalThis.openai.callTool !== "function") {
+            throw new Error("GPT 도구 연결을 사용할 수 없습니다.");
+          }
+          const result = await globalThis.openai.callTool(name, argumentsValue);
+          const error = resultError(result);
+          if (error) throw error;
+          return result;
+        }
+
+        async function approveWithOneRecovery(challengeId, token) {
+          const approvalInput = { challengeId, widgetApprovalToken: token };
+          try {
+            return await callTool(APPROVAL_TOOL, approvalInput);
+          } catch (firstError) {
+            if (firstError?.isToolResultError) throw firstError;
+            state.message = "승인 응답을 확인하지 못해 같은 요청을 안전하게 한 번 복구하고 있습니다.";
+            render();
+            return callTool(APPROVAL_TOOL, approvalInput);
+          }
+        }
+
+        async function callOriginalWithOneRecovery(toolId, retryInput) {
+          try {
+            return await callTool(toolId, retryInput);
+          } catch (firstError) {
+            if (firstError?.isToolResultError) throw firstError;
+            state.message = "변경 결과 응답을 확인하지 못해 같은 승인과 입력으로 한 번 복구하고 있습니다.";
+            render();
+            return callTool(toolId, retryInput);
+          }
+        }
+
+        async function approveAndRetry() {
+          if (!isReady() || state.busy) return;
+          state.busy = true;
+          state.message = "사용자 확인을 검증하고 있습니다.";
+          state.tone = "info";
+          render();
+          let token = state.widgetToken;
+          let receipt = state.recoveryReceipt;
+          let retryInput;
+          try {
+            if (!receipt) {
+              const approval = await approveWithOneRecovery(state.challenge.challengeId, token);
+              receipt = String(responseMeta(approval)?.confirmationReceipt || "");
+            }
+            if (!receipt) throw new Error("서버 확인 영수증이 없어 변경을 실행하지 않았습니다.");
+            retryInput = clone(state.originalInput);
+            retryInput.confirmationReceipt = receipt;
+            const completed = await callOriginalWithOneRecovery(state.challenge.toolId, retryInput);
+            const completedError = resultError(completed);
+            if (completedError) throw completedError;
+            state.completed = true;
+            state.message = "처음 표시된 Builder 변경을 완료했습니다.";
+            state.tone = "success";
+          } catch (error) {
+            state.message = String(error && error.message ? error.message : error);
+            state.tone = "error";
+          } finally {
+            state.widgetToken = "";
+            state.recoveryReceipt = "";
+            token = "";
+            receipt = "";
+            if (retryInput) {
+              retryInput.confirmationReceipt = "";
+              delete retryInput.confirmationReceipt;
+            }
+            retryInput = undefined;
+            state.originalInput = null;
+            state.busy = false;
+            render();
+          }
+        }
+
+        byId("approve").addEventListener("click", approveAndRetry);
+        globalThis.addEventListener("openai:set_globals", (event) => {
+          const detail = event && event.detail;
+          receiveGlobals(isObject(detail?.globals) ? detail.globals : detail);
+        });
+
+        // The host publishes the tool call through `globalThis.openai`, but the later
+        // `openai:set_globals` events it emits carry UI state (displayMode, view) and no tool data,
+        // so a snapshot missed at startup is never replayed and the card stays stuck on "미제공".
+        // Re-read until the challenge lands instead of reading exactly once.
+        function pullHostSnapshot() {
+          if (!globalThis.openai) return false;
+          receiveGlobals({
+            toolInput: globalThis.openai.toolInput,
+            toolOutput: globalThis.openai.toolOutput,
+            toolResponseMetadata: globalThis.openai.toolResponseMetadata,
+          });
+          return Boolean(state.challenge);
+        }
+
+        if (!pullHostSnapshot()) {
+          render();
+          if (typeof setInterval === "function") {
+            let attempts = 0;
+            const poll = setInterval(() => {
+              attempts += 1;
+              if (pullHostSnapshot() || attempts >= 40) clearInterval(poll);
+            }, 250);
+          }
+        }
+
+        globalThis.__foundryBuilderWidgetTest = Object.freeze({
+          approveAndRetry,
+          receiveGlobals,
+          getState: () => ({
+            busy: state.busy,
+            completed: state.completed,
+            message: state.message,
+            tone: state.tone,
+            isReady: isReady(),
+          }),
+        });
+      })();
+    </script>
+  </body>
+</html>

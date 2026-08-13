@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, desc, or_, select, update
@@ -37,6 +37,31 @@ class SqlAlchemyPipelineRepository:
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+
+    def lock_pipeline_for_deployment(self, *, transaction: Any, tenant_id: str, pipeline_id: str) -> None:
+        stable_id = transaction.execute(
+            select(db.pipeline_versions.c.id)
+            .where(
+                and_(
+                    db.pipeline_versions.c.tenant_id == tenant_id,
+                    db.pipeline_versions.c.pipeline_id == pipeline_id,
+                )
+            )
+            .order_by(db.pipeline_versions.c.version_number, db.pipeline_versions.c.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if stable_id is None:
+            return
+        transaction.execute(
+            update(db.pipeline_versions)
+            .where(
+                and_(
+                    db.pipeline_versions.c.tenant_id == tenant_id,
+                    db.pipeline_versions.c.id == stable_id,
+                )
+            )
+            .values(id=stable_id)
+        )
 
     def insert_branch_if_name_free(self, *, transaction: Any, record: PipelineBranchRecord) -> PipelineBranchRow | None:
         existing = self._open_branch_by_name(
@@ -278,14 +303,23 @@ class SqlAlchemyPipelineRepository:
         return [_cast_row(row, PipelineProposalRow) for row in rows]
 
     def update_proposal_assignment(
-        self, *, transaction: Any, tenant_id: str, proposal_id: str, assigned_to: str, updated_at: str
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        proposal_id: str,
+        assigned_to: str,
+        updated_at: str,
+        is_unassigned_only: bool = False,
     ) -> PipelineProposalRow | None:
+        conditions = (db.pipeline_proposals.c.assigned_to.is_(None),) if is_unassigned_only else ()
         return self._proposal_update(
             transaction,
             tenant_id,
             proposal_id,
             {"assigned_to": assigned_to, "status": "in_review", "updated_at": updated_at},
             allowed_statuses=("submitted", "in_review"),
+            conditions=conditions,
         )
 
     def update_proposal_decision(
@@ -1095,6 +1129,30 @@ class SqlAlchemyPipelineRepository:
             raise RuntimeError("pipeline test result row missing after insert")
         return _cast_row(row, PipelineTestResultRow)
 
+    def latest_test_result(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        branch_id: str,
+    ) -> PipelineTestResultRow | None:
+        row = (
+            transaction.execute(
+                select(db.pipeline_test_results)
+                .where(
+                    and_(
+                        db.pipeline_test_results.c.tenant_id == tenant_id,
+                        db.pipeline_test_results.c.branch_id == branch_id,
+                    )
+                )
+                .order_by(desc(db.pipeline_test_results.c.created_at), desc(db.pipeline_test_results.c.id))
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return _cast_row(row, PipelineTestResultRow) if row is not None else None
+
     def _open_branch_by_name(
         self, *, transaction: Any, tenant_id: str, pipeline_id: str, name: str
     ) -> PipelineBranchRow | None:
@@ -1122,12 +1180,15 @@ class SqlAlchemyPipelineRepository:
         values: Mapping[str, object],
         *,
         allowed_statuses: tuple[str, ...] | None = None,
+        conditions: Sequence[Any] = (),
     ) -> PipelineProposalRow | None:
         statement = update(db.pipeline_proposals).where(
             and_(db.pipeline_proposals.c.tenant_id == tenant_id, db.pipeline_proposals.c.id == proposal_id)
         )
         if allowed_statuses is not None:
             statement = statement.where(db.pipeline_proposals.c.status.in_(allowed_statuses))
+        if conditions:
+            statement = statement.where(*conditions)
         result = transaction.execute(statement.values(**values))
         if not result.rowcount:
             return None

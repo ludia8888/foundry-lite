@@ -53,6 +53,40 @@ def test_initialize_api_runtime_builds_once(monkeypatch) -> None:  # type: ignor
     assert len(calls) == 1
 
 
+def test_initialize_api_runtime_passes_its_oauth_environment_to_the_token_issuer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    captured: dict[str, object] = {}
+    issuer = SimpleNamespace(
+        issuer="https://foundry.example.test",
+        audience="foundry-lite-osdk",
+        public_jwks=lambda: {"keys": []},
+    )
+
+    class _Foundry:
+        engine = object()
+
+        def __init__(self, *, dependencies: object) -> None:
+            del dependencies
+
+    def _dependencies(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return SimpleNamespace(oauth_token_issuer=issuer)
+
+    monkeypatch.setattr(runtime, "FoundryLite", _Foundry)
+    monkeypatch.setattr(runtime, "create_runtime_core_dependencies", _dependencies)
+
+    runtime.initialize_api_runtime(
+        {
+            "FOUNDRY_LITE_AUTH_PROFILE": "header-trust",
+            "FOUNDRY_LITE_MCP_PUBLIC_BASE_URL": "https://foundry.example.test",
+            "FOUNDRY_LITE_OAUTH_ISSUER": "https://foundry.example.test",
+            "FOUNDRY_LITE_OAUTH_AUDIENCE": "foundry-test-audience",
+        }
+    )
+
+    assert captured["oauth_issuer"] == "https://foundry.example.test"
+    assert captured["oauth_audience"] == "foundry-test-audience"
+
+
 def test_reset_disposes_the_engine_before_clearing_the_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Dropping the runtime without disposing the engine leaks its connection pool.
 

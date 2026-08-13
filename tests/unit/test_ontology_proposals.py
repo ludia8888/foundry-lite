@@ -7,6 +7,12 @@ from typing import Any, cast
 import yaml
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services.aip.governed_release_outcomes import (
+    GovernedReleaseMutationOutcomeUnknown,
+)
+from foundry_lite.application.services.ontology_proposal_recovery import (
+    OntologyProposalExecutionOutcomeUnknown,
+)
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -14,14 +20,17 @@ from foundry_lite.domain.errors import (
     PermissionDenied,
     ValidationFailed,
 )
+from foundry_lite.infrastructure import schema as db
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
+from sqlalchemy import update
 
 ORDERS_CSV = "order_id,status\nO-1,PENDING\n"
 
 SUBMITTER = RequestContext(actor_user_id="user-submitter", roles=("data_engineer",))
 REVIEWER = RequestContext(actor_user_id="user-reviewer", roles=("data_engineer",))
+OTHER_REVIEWER = RequestContext(actor_user_id="user-other-reviewer", roles=("data_engineer",))
 VIEWER = RequestContext(actor_user_id="user-viewer", roles=("viewer",))
 
 SUBMITTER_HEADERS = {"X-Tenant-ID": "tenant-demo", "X-User-ID": "user-submitter", "X-Roles": "data_engineer"}
@@ -76,6 +85,14 @@ def _submit(foundry: FoundryLite, *, key: str = "submit-key-1", title: str = "Ad
 
 def _fingerprint(proposal: dict[str, object]) -> str:
     return str(proposal["fingerprint"])
+
+
+def _assign(foundry: FoundryLite, proposal: dict[str, object]) -> dict[str, object]:
+    return foundry.ontology.assign_proposal(
+        str(proposal["id"]),
+        reviewer_user_id=REVIEWER.actor_user_id,
+        ctx=REVIEWER,
+    )
 
 
 def test_full_lifecycle_submit_assign_approve_execute_updates_catalog_and_audits(foundry, tmp_path) -> None:
@@ -136,26 +153,31 @@ def test_full_lifecycle_submit_assign_approve_execute_updates_catalog_and_audits
     } <= proposal_events
 
 
-def test_submitter_may_not_approve_own_proposal(foundry, tmp_path) -> None:
+def test_submitter_may_be_assigned_and_approve_own_proposal(foundry, tmp_path) -> None:
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
 
-    with raises(PermissionDenied, match="may not approve their own proposal"):
-        foundry.ontology.decide_proposal(
-            str(proposal["id"]),
-            decision="approve",
-            expected_fingerprint=_fingerprint(proposal),
-            ctx=SUBMITTER,
-        )
-
-    # A different reviewer can approve the same proposal.
+    assigned = foundry.ontology.assign_proposal(
+        str(proposal["id"]),
+        reviewer_user_id=SUBMITTER.actor_user_id,
+        ctx=SUBMITTER,
+    )
+    assert assigned["assigneeUserId"] == SUBMITTER.actor_user_id
     approved = foundry.ontology.decide_proposal(
         str(proposal["id"]),
         decision="approve",
         expected_fingerprint=_fingerprint(proposal),
-        ctx=REVIEWER,
+        ctx=SUBMITTER,
     )
     assert approved["status"] == "approved"
+    assert approved["decision"]["decidedByUserId"] == SUBMITTER.actor_user_id
+    with raises(PermissionDenied, match="assigned human reviewer"):
+        foundry.ontology.decide_proposal(
+            str(proposal["id"]),
+            decision="approve",
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
 
 
 def test_submit_replay_is_idempotent_and_conflicting_reuse_is_rejected(foundry, tmp_path) -> None:
@@ -184,6 +206,7 @@ def test_decision_recomputes_drifted_plan_and_refuses_blocked_approval(foundry, 
         ctx=SUBMITTER,
     )
     assert proposal["hasBlockedChangesAtSubmit"] is False
+    _assign(foundry, proposal)
 
     # Drift: a direct apply adds a property the proposal does not carry, so the
     # proposal would now REMOVE that property (a blocked change).
@@ -227,6 +250,7 @@ def test_stale_fingerprint_conflicts_on_decide_and_execute(foundry, tmp_path) ->
             expected_fingerprint="sha256:stale",
             ctx=REVIEWER,
         )
+    _assign(foundry, proposal)
     foundry.ontology.decide_proposal(
         proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
     )
@@ -238,6 +262,7 @@ def test_duplicate_execute_replays_without_reapplying(foundry, tmp_path) -> None
     admin = _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
     proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
     foundry.ontology.decide_proposal(
         proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
     )
@@ -250,6 +275,266 @@ def test_duplicate_execute_replays_without_reapplying(foundry, tmp_path) -> None
     assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
 
 
+def test_process_death_after_ontology_apply_reconciles_the_committed_version(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="submit-crash-recovery")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    def crash_before_execution_receipt(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise SystemExit("simulated process death after ontology activation")
+
+    finish_execution = foundry.ontology._proposals._finish_execution
+    monkeypatch.setattr(foundry.ontology._proposals, "_finish_execution", crash_before_execution_receipt)
+    with raises(SystemExit, match="simulated process death"):
+        foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+
+    interrupted = foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)
+    assert interrupted["executionStatus"] == "executing"
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
+    monkeypatch.setattr(foundry.ontology._proposals, "_finish_execution", finish_execution)
+
+    recovered = foundry.ontology.execute_proposal(
+        proposal_id,
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    assert recovered["status"] == "applied"
+    assert cast(dict[str, Any], recovered["appliedOntologyVersion"])["versionNumber"] == 2
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
+    detail = foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)
+    assert [event["event"] for event in detail["timeline"]].count("applied") == 1
+
+
+def test_executing_proposal_does_not_claim_an_unrelated_same_yaml_activation(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="same-yaml-attribution")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+    apply_once = foundry.ontology._proposals.ontology_service.apply_ontology_text_once
+
+    def stop_before_proposal_apply(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise SystemExit("stop after execution claim")
+
+    monkeypatch.setattr(
+        foundry.ontology._proposals.ontology_service,
+        "apply_ontology_text_once",
+        stop_before_proposal_apply,
+    )
+    with raises(SystemExit, match="execution claim"):
+        foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+
+    foundry.ontology.apply_text(
+        _yaml_text(_order_definition(extra_properties=[_note_property()])),
+        ctx=admin,
+    )
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
+
+    monkeypatch.setattr(foundry.ontology._proposals.ontology_service, "apply_ontology_text_once", apply_once)
+    recovered = foundry.ontology.execute_proposal(
+        proposal_id,
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    assert cast(dict[str, Any], recovered["appliedOntologyVersion"])["versionNumber"] == 3
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 3
+    receipts = [
+        event
+        for event in foundry.operations.list_runs(ctx=admin)["outboxEvents"]
+        if event["idempotency_key"] == f"ontology.activation:{proposal_id}:execute"
+    ]
+    assert len(receipts) == 1
+    assert cast(dict[str, Any], receipts[0]["payload"])["result"]["version_number"] == 3
+
+
+def test_governed_release_recovers_finish_fault_after_durable_ontology_activation(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="submit-finish-fault")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+    proposal_service = foundry.ontology._proposals
+    finish_execution = proposal_service._finish_execution
+
+    def fail_finish(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("proposal completion projection failed")
+
+    monkeypatch.setattr(proposal_service, "_finish_execution", fail_finish)
+    arguments = {
+        "releaseKind": "ontology",
+        "proposalId": proposal_id,
+        "expectedFingerprint": _fingerprint(proposal),
+        "idempotencyKey": "ontology-finish-fault",
+    }
+    with raises(GovernedReleaseMutationOutcomeUnknown):
+        foundry.release._gateway.release_service.execute_approved(REVIEWER, arguments)
+
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
+    assert foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)["executionStatus"] == "executing"
+
+    monkeypatch.setattr(proposal_service, "_finish_execution", finish_execution)
+    recovered = foundry.release._gateway.release_service.execute_approved(REVIEWER, arguments)
+
+    assert recovered["stage"] == "active"
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
+    detail = foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)
+    assert [event["event"] for event in detail["timeline"]].count("applied") == 1
+    evidence = foundry.operations.list_runs(ctx=admin)
+    receipts = [
+        event
+        for event in evidence["outboxEvents"]
+        if event["event_type"] == "ontology.activation.completed"
+        and event["idempotency_key"] == f"ontology.activation:{proposal_id}:execute"
+    ]
+    assert len(receipts) == 1
+
+
+def test_ontology_apply_commit_ack_loss_reconciles_exact_receipt_instead_of_marking_failed(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="apply-commit-ack-loss")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+    ontology_service = foundry.ontology._proposals.ontology_service
+    apply_once = ontology_service.apply_ontology_text_once
+
+    def commit_then_lose_ack(*args: object, **kwargs: object) -> dict[str, object]:
+        apply_once(*args, **kwargs)  # type: ignore[arg-type]
+        raise RuntimeError("database commit acknowledgement was lost")
+
+    monkeypatch.setattr(ontology_service, "apply_ontology_text_once", commit_then_lose_ack)
+    recovered = foundry.ontology.execute_proposal(
+        proposal_id,
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    assert recovered["status"] == "applied"
+    assert recovered["executionStatus"] == "executed"
+    assert foundry.ontology.catalog(ctx=admin)["versionNumber"] == 2
+    detail = foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)
+    assert [event["event"] for event in detail["timeline"]].count("applied") == 1
+    receipts = [
+        event
+        for event in foundry.operations.list_runs(ctx=admin)["outboxEvents"]
+        if event["idempotency_key"] == f"ontology.activation:{proposal_id}:execute"
+    ]
+    assert len(receipts) == 1
+
+
+def test_ontology_apply_failure_without_receipt_is_recorded_as_failed(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="apply-no-receipt")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    def fail_before_commit(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise ValidationFailed("activation validation failed before commit")
+
+    monkeypatch.setattr(foundry.ontology._proposals.ontology_service, "apply_ontology_text_once", fail_before_commit)
+    with raises(ValidationFailed, match="before commit"):
+        foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+
+    assert foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)["executionStatus"] == "failed"
+
+
+def test_ontology_receipt_lookup_failure_preserves_executing_for_safe_recovery(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="receipt-lookup-failure")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    def lose_apply_ack(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("activation outcome unknown")
+
+    def fail_receipt_lookup(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("receipt store unavailable")
+
+    proposals = foundry.ontology._proposals
+    monkeypatch.setattr(proposals.ontology_service, "apply_ontology_text_once", lose_apply_ack)
+    monkeypatch.setattr(proposals.runtime_service, "_outbox_event_by_idempotency_key", fail_receipt_lookup)
+    with raises(OntologyProposalExecutionOutcomeUnknown, match="activation committed"):
+        foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+
+    assert foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)["executionStatus"] == "executing"
+
+
 def test_execute_requires_an_approved_proposal(foundry, tmp_path) -> None:
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
@@ -260,10 +545,45 @@ def test_execute_requires_an_approved_proposal(foundry, tmp_path) -> None:
         )
 
 
+@mark.parametrize(
+    "decision_patch",
+    [
+        {"decision": "rejected"},
+        {"decidedByUserId": "user-other-reviewer"},
+        {"hasBlockedChanges": True},
+        {"migrationPlan": {"status": "blocked", "blockedChanges": [{"kind": "property_removed"}]}},
+    ],
+)
+def test_execute_rejects_corrupt_independent_approval_evidence(foundry, tmp_path, decision_patch) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    approved = foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+    corrupted = {**cast(dict[str, object], approved["decision"]), **decision_patch}
+    with foundry.engine.begin() as conn:
+        conn.execute(
+            update(db.insight_reviews).where(db.insight_reviews.c.id == proposal_id).values(decision=corrupted)
+        )
+
+    with raises(PermissionDenied, match="approval evidence"):
+        foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+
+
 def test_decision_replay_and_conflicting_second_decision(foundry, tmp_path) -> None:
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
     proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
     rejected = foundry.ontology.decide_proposal(
         proposal_id,
         decision="reject",
@@ -324,6 +644,7 @@ def test_submitter_update_recomputes_plan_and_new_fingerprint_gates_decide(found
         foundry.ontology.decide_proposal(
             proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
         )
+    _assign(foundry, updated)
     approved = foundry.ontology.decide_proposal(
         proposal_id, decision="approve", expected_fingerprint=_fingerprint(updated), ctx=REVIEWER
     )
@@ -353,12 +674,14 @@ def test_update_is_submitter_only(foundry, tmp_path) -> None:
 def test_update_conflicts_after_decide_withdraw_and_execute(foundry, tmp_path) -> None:
     _prepare_active_ontology(foundry, tmp_path)
     rejected = _submit(foundry, key="upd-rejected", title="Rejected")
+    _assign(foundry, rejected)
     foundry.ontology.decide_proposal(
         str(rejected["id"]), decision="reject", expected_fingerprint=_fingerprint(rejected), ctx=REVIEWER
     )
     withdrawn = _submit(foundry, key="upd-withdrawn", title="Withdrawn")
     foundry.ontology.withdraw_proposal(str(withdrawn["id"]), ctx=SUBMITTER)
     executed = _submit(foundry, key="upd-executed", title="Executed")
+    _assign(foundry, executed)
     foundry.ontology.decide_proposal(
         str(executed["id"]), decision="approve", expected_fingerprint=_fingerprint(executed), ctx=REVIEWER
     )
@@ -378,6 +701,7 @@ def test_update_with_stale_expected_fingerprint_conflicts(foundry, tmp_path) -> 
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
     proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
     foundry.ontology.update_proposal(
         proposal_id, yaml_text=_update_yaml(), expected_fingerprint=_fingerprint(proposal), ctx=SUBMITTER
     )
@@ -487,6 +811,7 @@ def test_withdraw_is_submitter_only_and_blocks_later_review(foundry, tmp_path) -
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
     proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
 
     with raises(PermissionDenied, match="only the submitter"):
         foundry.ontology.withdraw_proposal(proposal_id, reason="not yours", ctx=REVIEWER)
@@ -499,7 +824,11 @@ def test_withdraw_is_submitter_only_and_blocks_later_review(foundry, tmp_path) -
     assert replay["status"] == "withdrawn"
 
     with raises(ConflictDetected):
-        foundry.ontology.assign_proposal(proposal_id, reviewer_user_id="user-reviewer", ctx=REVIEWER)
+        foundry.ontology.assign_proposal(
+            proposal_id,
+            reviewer_user_id=OTHER_REVIEWER.actor_user_id,
+            ctx=OTHER_REVIEWER,
+        )
     with raises(ConflictDetected):
         foundry.ontology.decide_proposal(
             proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
@@ -510,6 +839,7 @@ def test_withdraw_covers_approved_but_not_applied_proposals(foundry, tmp_path) -
     admin = _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
     proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
     foundry.ontology.decide_proposal(
         proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
     )
@@ -527,6 +857,7 @@ def test_applied_proposal_cannot_be_withdrawn(foundry, tmp_path) -> None:
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
     proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
     foundry.ontology.decide_proposal(
         proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
     )
@@ -710,11 +1041,18 @@ def test_api_proposal_update_happy_path_and_error_mapping(foundry, tmp_path, mon
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "CONFLICT"
 
-    client.post(
+    assigned = client.post(
+        f"/api/ontology/proposals/{proposal_id}/assign",
+        headers=REVIEWER_HEADERS,
+        json={"reviewerUserId": "user-reviewer"},
+    )
+    assert assigned.status_code == 200
+    decided = client.post(
         f"/api/ontology/proposals/{proposal_id}/decide",
         headers=REVIEWER_HEADERS,
         json={"decision": "reject", "expectedFingerprint": updated.json()["fingerprint"]},
     )
+    assert decided.status_code == 200
     after_decision = client.post(
         f"/api/ontology/proposals/{proposal_id}/update",
         headers=SUBMITTER_HEADERS,
@@ -765,6 +1103,13 @@ def test_api_proposal_error_mapping(foundry, tmp_path, monkeypatch: MonkeyPatch)
     )
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "CONFLICT"
+
+    assigned = client.post(
+        f"/api/ontology/proposals/{submitted['id']}/assign",
+        headers=REVIEWER_HEADERS,
+        json={"reviewerUserId": "user-reviewer"},
+    )
+    assert assigned.status_code == 200
 
     own_approval = client.post(
         f"/api/ontology/proposals/{submitted['id']}/decide",

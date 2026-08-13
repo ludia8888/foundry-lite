@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from foundry_lite.application.ports.action_run_orchestrator import ActionRunRetryableFailure
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureKind
@@ -7,6 +9,8 @@ from foundry_lite.application.services.action_distributed_run_evidence import (
     action_error_kind,
     is_action_error_retryable,
 )
+from foundry_lite.application.services.action_distributed_run_support import require_stored_plan_hash
+from foundry_lite.domain.action_runtime.action_execution_plan import seal_action_execution_plan
 from foundry_lite.domain.errors import (
     ConflictDetected,
     ExternalCompensationRequired,
@@ -67,6 +71,30 @@ def test_action_failure_taxonomy_covers_terminal_and_retryable_classes(
 ) -> None:
     assert action_error_kind(error) == kind
     assert is_action_error_retryable(error) is is_retryable
+
+
+def test_external_mcp_approval_authority_does_not_change_stored_plan_hash() -> None:
+    sealed = seal_action_execution_plan(
+        {
+            "actionApiName": "BookReservation",
+            "target": {"objectType": "Restaurant", "objectId": "restaurant-1"},
+            "parameters": {"partySize": 2},
+            "editManifest": {"objectCreates": [], "readSetVersions": {}},
+        }
+    )
+    snapshot = {
+        **sealed,
+        "contract": {"contractVersion": 3},
+        "principal": {"actorUserId": "reviewer-1"},
+        "externalMcpApproval": {
+            "source": "ontology_mcp",
+            "reviewId": "review-1",
+            "servicePrincipalId": "service-principal:client-1",
+        },
+    }
+    row = cast(Any, {"execution_plan": snapshot, "plan_hash": sealed["planHash"]})
+
+    require_stored_plan_hash(row)
 
 
 def _adapter_error(kind: AdapterFailureKind, is_retryable: bool) -> AdapterError:

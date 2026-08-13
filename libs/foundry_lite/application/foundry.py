@@ -32,6 +32,7 @@ from foundry_lite.application.facades import (
     SupplyChainDemo,
     TransformPipeline,
     VirtualTableGateway,
+    build_governed_release_workspace,
 )
 from foundry_lite.application.osdk import (
     OsdkActionInvoker,
@@ -163,7 +164,11 @@ class FoundryLite:
             services.action.effect_operations,
         )
         self.functions = FunctionGateway(services.function_execution)
-        self.auth = AuthGateway(services.osdk_oauth_sessions, services.osdk_oauth_client_credentials)
+        self.auth = AuthGateway(
+            services.osdk_oauth_sessions,
+            services.osdk_oauth_client_credentials,
+            services.osdk_applications.entrypoint,
+        )
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
@@ -195,6 +200,7 @@ class FoundryLite:
             access_session_validator=services.osdk_access_sessions,
             rate_limits=services.mcp_rate_limits,
         )
+        self.release = build_governed_release_workspace(services, fde_mcp)
         self.aip = AipWorkspace(
             services.agent_runtime,
             services.action_proposal,

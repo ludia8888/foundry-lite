@@ -51,9 +51,10 @@ def _object_search_tool(name: str) -> dict[str, object]:
             "semanticText": {
                 "type": "string",
                 "description": (
-                    "Meaning-based match over the object type's vector property. Combine with "
-                    "`search` for hybrid retrieval, or use alone when the caller phrased an intent "
-                    "rather than the words that appear in the data."
+                    "Meaning-based match over the object type's vector property. Use this INSTEAD "
+                    "of `search`, not alongside it: the object query planner runs one retrieval "
+                    "strategy per call and rejects a request that sets both. Prefer it when the "
+                    "caller phrased an intent rather than the words that appear in the data."
                 ),
             },
             "filter": {"type": "object"},

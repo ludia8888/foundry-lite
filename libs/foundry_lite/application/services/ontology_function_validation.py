@@ -20,6 +20,7 @@ therefore READ/compute-only by construction.
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Mapping
 from typing import cast
 
@@ -52,7 +53,11 @@ from foundry_lite.application.services.ontology_yaml import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.domain.ontology.function_types import normalized_function_definition
+from foundry_lite.domain.ontology.function_types import (
+    CODE_FUNCTION_RUNTIMES,
+    FUNCTION_RUNTIME_PYTHON,
+    normalized_function_definition,
+)
 
 #: Ontology sections whose apiNames share the generated-SDK constant namespace.
 _SDK_CONSTANT_SECTIONS = ("objectTypes", "interfaces", "linkTypes", "actionTypes")
@@ -122,6 +127,9 @@ def require_valid_function_logic(
     visual_builder: VisualBuilderService,
 ) -> None:
     """Fail closed unless the function's Logic DAG passes builder validation."""
+    if function["runtime"] in CODE_FUNCTION_RUNTIMES:
+        _require_valid_code_function(function)
+        return
     result = visual_builder.validate_draft(ctx, function_draft_request(ctx, function))
     if result.validation_status == "ready":
         return
@@ -132,6 +140,28 @@ def require_valid_function_logic(
             "issues": [issue.to_payload() for issue in result.blocking_issues],
         },
     )
+
+
+def _require_valid_code_function(function: FunctionTypeDefinition) -> None:
+    """Validate code-runtime authoring invariants before a version is activated."""
+    if function["runtime"] != FUNCTION_RUNTIME_PYTHON:
+        return
+    definition = required_mapping(function, "definition")
+    source = required_str(definition, "source")
+    entrypoint = required_str(definition, "entrypoint")
+    try:
+        module = ast.parse(source)
+    except SyntaxError as exc:
+        raise ValidationFailed(
+            "Python function source has invalid syntax",
+            details={"functionType": function["apiName"], "line": exc.lineno},
+        ) from exc
+    exported_functions = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
+    if entrypoint not in exported_functions:
+        raise ValidationFailed(
+            "Python function entrypoint was not found",
+            details={"functionType": function["apiName"], "entrypoint": entrypoint},
+        )
 
 
 def function_draft_request(ctx: RequestContext, function: FunctionTypeDefinition) -> VisualBuilderDraftRequest:

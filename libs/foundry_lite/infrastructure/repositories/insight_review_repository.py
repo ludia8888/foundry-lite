@@ -176,7 +176,9 @@ class SqlAlchemyInsightReviewRepository:
         assignee_user_id: str,
         assignment_idempotency_key: str,
         updated_at: str,
+        is_unassigned_only: bool = False,
     ) -> InsightReviewRow | None:
+        conditions = (db.insight_reviews.c.assignee_user_id.is_(None),) if is_unassigned_only else ()
         updated = cas_status_guarded_update(
             transaction,
             db.insight_reviews,
@@ -188,6 +190,7 @@ class SqlAlchemyInsightReviewRepository:
                 "assignment_idempotency_key": assignment_idempotency_key,
                 "updated_at": updated_at,
             },
+            conditions=conditions,
         )
         if not updated:
             return None
@@ -294,6 +297,34 @@ class SqlAlchemyInsightReviewRepository:
             .values(**values)
         )
         if updated.rowcount != 1:
+            return None
+        return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+
+    def reclaim_execution(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        review_id: str,
+        execution_idempotency_key: str,
+        expected_updated_at: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        changed = transaction.execute(
+            update(db.insight_reviews)
+            .where(
+                and_(
+                    db.insight_reviews.c.tenant_id == tenant_id,
+                    db.insight_reviews.c.id == review_id,
+                    db.insight_reviews.c.status == "approved",
+                    db.insight_reviews.c.execution_status == "executing",
+                    db.insight_reviews.c.execution_idempotency_key == execution_idempotency_key,
+                    db.insight_reviews.c.updated_at == expected_updated_at,
+                )
+            )
+            .values(updated_at=updated_at)
+        )
+        if changed.rowcount != 1:
             return None
         return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
 

@@ -1,0 +1,16 @@
+.git
+.github
+.foundry-lite*
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+artifacts
+apps/chatgpt-builder-widget/node_modules
+apps/chatgpt-release-widget/node_modules
+apps/foundry/node_modules
+node_modules
+tests
+**/__pycache__
+**/*.pyc
+**/.DS_Store

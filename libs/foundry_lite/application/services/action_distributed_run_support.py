@@ -237,6 +237,7 @@ def require_stored_plan_hash(row: ActionAsyncRunRow) -> None:
     snapshot = dict(_mapping(row["execution_plan"], "executionPlan"))
     snapshot.pop("contract", None)
     snapshot.pop("principal", None)
+    snapshot.pop("externalMcpApproval", None)
     sealed = seal_action_execution_plan(snapshot)
     if sealed["planHash"] != row["plan_hash"]:
         raise InvariantViolation("stored Action execution plan hash does not match")

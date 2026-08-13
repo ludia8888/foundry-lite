@@ -5,6 +5,15 @@
 - **Scope:** Pipeline Builder, Media/Content Plane integration, execution evidence, preview, output commit, and rollout compatibility
 - **Related:** [ADR-0001](0001-media-plane-parallel-to-dataset-plane.md), [Pipeline Builder parity matrix](../pipeline-builder-parity-matrix.json)
 
+## Official Palantir design sources
+
+- [Multimodal Data Plane](https://www.palantir.com/docs/foundry/architecture-center/multimodal-data-plane)
+- [Pipeline Builder overview](https://www.palantir.com/docs/foundry/pipeline-builder/overview)
+
+The full operation-by-operation official source inventory remains machine-readable in the related
+parity matrix. These sources govern public product purpose and behavior; they do not provide or
+authorize claims about Palantir's private implementation.
+
 ## Context
 
 Foundry-lite already has two strong but only partly connected foundations:

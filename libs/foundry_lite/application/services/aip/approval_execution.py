@@ -67,6 +67,9 @@ from foundry_lite.application.services.object_store.serving_contract import reco
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
+_APPROVAL_ACTION_WAIT_SECONDS = 30
+_FAILED_ACTION_RUN_STATUSES = frozenset({"failed", "cancelled", "conflict", "outcome_unknown", "compensation_required"})
+
 
 class ApprovalExecutionService(CoreService):
     """Execute approved ontology action proposals exactly once."""
@@ -97,19 +100,56 @@ class ApprovalExecutionService(CoreService):
         prepared = self._prepare_execution(ctx, request)
         execution_ctx = external_mcp_execution_context(ctx, prepared)
         try:
-            response = self.action_service.apply_action(
+            response = self._start_action_run(execution_ctx, prepared)
+            self._require_action_run_accepted(response)
+        except Exception as exc:
+            self._mark_failed(execution_ctx, prepared.review_id, exc)
+            raise
+        return self._finish_execution(execution_ctx, prepared, response)
+
+    def _require_action_run_accepted(self, response: Mapping[str, object]) -> None:
+        status = response.get("status")
+        if status in _FAILED_ACTION_RUN_STATUSES:
+            raise ApprovalExecutionError(
+                "action_run_failed",
+                f"approved Action run ended with status {status}",
+            )
+
+    def _start_action_run(
+        self,
+        ctx: RequestContext,
+        prepared: PreparedExecution,
+    ) -> Mapping[str, object]:
+        if not self._requires_durable_action_run(ctx, prepared):
+            return self.action_service.apply_action(
                 prepared.action_type,
                 object_type=prepared.target_object_type,
                 object_id=prepared.target_object_id,
                 expected_object_version=prepared.expected_object_version,
                 params=prepared.parameters,
                 idempotency_key=prepared.proposal_fingerprint,
-                ctx=execution_ctx,
+                ctx=ctx,
             )
-        except Exception as exc:
-            self._mark_failed(execution_ctx, prepared.review_id, exc)
-            raise
-        return self._finish_execution(execution_ctx, prepared, response)
+        return self.action_service.start_action_run(
+            prepared.action_type,
+            object_type=prepared.target_object_type,
+            object_id=prepared.target_object_id,
+            expected_object_version=prepared.expected_object_version,
+            params=prepared.parameters,
+            idempotency_key=prepared.proposal_fingerprint,
+            wait_seconds=_APPROVAL_ACTION_WAIT_SECONDS,
+            ctx=ctx,
+        )
+
+    def _requires_durable_action_run(
+        self,
+        ctx: RequestContext,
+        prepared: PreparedExecution,
+    ) -> bool:
+        with self.engine.begin() as transaction:
+            action = self._action_type(transaction, ctx, prepared)
+        definition = action.get("definition")
+        return isinstance(definition, Mapping) and isinstance(definition.get("function"), Mapping)
 
     def _existing_executed_result(
         self, ctx: RequestContext, request: ApprovalExecutionRequest

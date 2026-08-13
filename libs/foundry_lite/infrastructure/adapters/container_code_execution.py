@@ -28,6 +28,7 @@ from foundry_lite.application.ports.code_execution import (
     CodeExecutionFailureType,
     FunctionExecutionPlan,
     FunctionExecutionResult,
+    FunctionQueryExecutor,
 )
 from foundry_lite.application.ports.compute_adapter import (
     InputFilePaths,
@@ -40,6 +41,7 @@ from foundry_lite.infrastructure.adapters.container_cleanup import (
     force_remove_container,
 )
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
+    FUNCTION_IPC_DIR,
     INPUT_DIR,
     JOB_DIR,
     OUTPUT_DIR,
@@ -54,6 +56,7 @@ from foundry_lite.infrastructure.adapters.container_code_execution_runtime impor
     run_command,
     validate_config,
 )
+from foundry_lite.infrastructure.adapters.function_query_bridge import FunctionQueryBridge
 
 # subprocess is limited to typed timeout handling for the fixed-argv runtime boundary.
 
@@ -114,7 +117,12 @@ class ContainerCodeExecutionAdapter:
             ),
         )
 
-    def execute_function(self, plan: FunctionExecutionPlan) -> FunctionExecutionResult:
+    def execute_function(
+        self,
+        plan: FunctionExecutionPlan,
+        *,
+        query_executor: FunctionQueryExecutor | None = None,
+    ) -> FunctionExecutionResult:
         """Run one ontology function under the same sandbox policy as a transform.
 
         The policy is shared deliberately. A function is user code from the same authors under
@@ -139,7 +147,10 @@ class ContainerCodeExecutionAdapter:
                 interpreter=runner.interpreter,
                 image_reference=runner.image(self.config),
             )
-            result = self._execute_container(command, container_name, plan.timeout_seconds)
+            bridge = FunctionQueryBridge(workspace.writable_mounts[0][0], workspace.query_nonce, query_executor)
+            with bridge:
+                result = self._execute_container(command, container_name, plan.timeout_seconds)
+            bridge.raise_if_failed()
             payload = _read_runner_result(workspace.result_path, result, self)
             output = _require_function_success(payload, result, self)
             return FunctionExecutionResult(
@@ -333,8 +344,10 @@ def _prepare_function_workspace(
     """
     job_dir = root / "job"
     output_dir = root / "output"
+    ipc_dir = root / "ipc"
     job_dir.mkdir(mode=0o700)
     output_dir.mkdir(mode=0o700)
+    query_nonce = uuid4().hex
     result_path = output_dir / RESULT_NAME
     result_path.touch()
     result_path.chmod(0o666)
@@ -353,6 +366,11 @@ def _prepare_function_workspace(
             "inputs": dict(plan.inputs_json),
             "argumentOrder": list(plan.argument_order),
             "outputType": plan.output_type,
+            "queryBridge": {
+                "directory": FUNCTION_IPC_DIR,
+                "nonce": query_nonce,
+                "timeoutSeconds": min(plan.timeout_seconds, 30),
+            },
         },
         sort_keys=True,
     )
@@ -368,6 +386,8 @@ def _prepare_function_workspace(
         result_path=result_path,
         output_path=result_path,
         input_mounts=(),
+        writable_mounts=((ipc_dir, FUNCTION_IPC_DIR),),
+        query_nonce=query_nonce,
     )
 
 

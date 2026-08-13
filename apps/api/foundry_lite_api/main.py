@@ -52,6 +52,7 @@ from foundry_lite_api.routers import (
     ontology_mcp,
     operations,
     pipelines,
+    release_mcp,
     resources,
     sources,
     transforms,
@@ -345,6 +346,24 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/readyz")
+def readyz() -> JSONResponse:
+    """Report process composition + metadata DB readiness without exposing config."""
+
+    try:
+        report = runtime.probe_api_readiness()
+    except Exception:  # noqa: BLE001 - provider details must not cross this unauthenticated endpoint
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "ready",
+            "runtimeProfile": report.runtime_profile,
+            "databaseBackend": report.database_backend,
+        },
+    )
+
+
 @app.get("/metrics")
 def metrics() -> Response:
     payload, media_type = prometheus_payload()
@@ -374,6 +393,7 @@ for resource_router in (
     functions.router,
     builder_mcp.router,
     ontology_mcp.router,
+    release_mcp.router,
 ):
     app.include_router(resource_router)
 

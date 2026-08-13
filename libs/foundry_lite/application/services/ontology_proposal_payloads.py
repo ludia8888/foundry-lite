@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+import yaml
+
 from foundry_lite.application.ports import OntologyValidationResult
 from foundry_lite.application.ports.insight_review_repository import (
     InsightReviewRecord,
@@ -64,6 +66,13 @@ _LIST_FILTERS: Mapping[str, ProposalListFilters] = {
 def yaml_fingerprint(yaml_text: str) -> str:
     """Content fingerprint used for replay detection and drift protection."""
     return f"sha256:{hashlib.sha256(yaml_text.encode('utf-8')).hexdigest()}"
+
+
+def semantic_yaml_fingerprint(yaml_text: str) -> str:
+    """Hash parsed content so formatting-only differences do not block recovery."""
+    payload = yaml.safe_load(yaml_text)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def proposal_record(

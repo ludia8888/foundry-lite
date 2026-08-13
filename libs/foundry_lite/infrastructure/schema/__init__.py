@@ -62,6 +62,10 @@ from foundry_lite.infrastructure.schema.datasets import (
     sync_runs,
     webhook_event_keys,
 )
+from foundry_lite.infrastructure.schema.governed_release_delivery_tables import governed_release_deliveries
+from foundry_lite.infrastructure.schema.governed_release_live_attestation_tables import (
+    governed_release_live_attestations,
+)
 from foundry_lite.infrastructure.schema.media import (
     content_units,
     media_access_caches,
@@ -201,6 +205,8 @@ __all__ = [
     "datasets",
     "sync_runs",
     "webhook_event_keys",
+    "governed_release_deliveries",
+    "governed_release_live_attestations",
     "materialization_runs",
     "materializations",
     "transform_runs",

@@ -12,6 +12,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import OAuthAccessTokenClaims, OsdkApplicationBundle
 from foundry_lite.application.services.osdk_oauth_session_service import _access_ttl, _require_redirect_uri
+from foundry_lite.application.services.osdk_oauth_session_support import (
+    _RATE_LIMIT_CAPACITY,
+    _RATE_LIMIT_WINDOW_SECONDS,
+)
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, RateLimited, ValidationFailed
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider, LocalOAuthTokenIssuer
@@ -74,13 +78,25 @@ def test_osdk_oauth_authorize_token_refresh_revoke_and_claims(tmp_path: Path) ->
     _assert_oauth_audit_is_raw_token_free(foundry, ctx, authorized, token, refreshed)
 
 
+def test_oauth_rate_limit_budget_fits_a_tool_calling_mcp_host() -> None:
+    """Regression: a 5-per-minute budget broke ChatGPT mid-session with a connector error.
+
+    A remote MCP host re-exchanges its token around each tool-call cycle, so a budget sized
+    for interactive sign-ins runs out after a handful of tool calls and the host surfaces
+    "couldn't connect your account" instead of anything actionable.
+    """
+
+    assert _RATE_LIMIT_CAPACITY >= 30
+    assert _RATE_LIMIT_WINDOW_SECONDS <= 60.0
+
+
 def test_osdk_oauth_security_runtime_rate_limit_is_retryable_and_redacted(tmp_path: Path) -> None:
     foundry, _verifier = _oauth_foundry(tmp_path)
     ctx = demo_admin_context()
     _create_app_and_client(foundry, ctx)
     challenge = _s256_challenge("rate-limit-verifier")
 
-    for index in range(5):
+    for index in range(_RATE_LIMIT_CAPACITY):
         foundry.auth.osdk_oauth_authorize(
             client_id="orders-web",
             redirect_uri=_REDIRECT_URI,

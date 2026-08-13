@@ -27,6 +27,7 @@ class FdeMcpToolCall:
     arguments: JsonObject
     confirmation_receipt: str | None = None
     raw_input: JsonObject | None = None
+    origin: str | None = None
 
 
 class FdeMcpContextValidator(Protocol):

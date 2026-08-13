@@ -2,7 +2,7 @@
 
 **작성일:** 2026-06-09  
 **개정 상태:** 2026-06-09 심층리뷰 반영본  
-**목표:** Palantir Foundry 전체를 복제하는 것이 아니라, 핵심 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체 조회 → 액션 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.  
+**목표:** Palantir의 비공개 내부 구현을 복제하지 않되, 공식 공개 문서가 설명하는 핵심 제품 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체·ObjectSet 조회 → Function 계산 → Action 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.
 **개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/Elasticsearch/Spark/복잡한 보안 모델은 MVP core 완료 조건에서 제외하되, 나중에 쉽게 갈아끼울 수 있는 port/interface, adapter contract, trace key, composition root 경계는 Sprint 02A Scale Foundation에서 먼저 고정한다.
 
 > 현재 구현 상태 주의: 2026-06-19 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
@@ -17,7 +17,7 @@
 
 - 이 문서는 제품 목표, v1 범위, 아키텍처, 데이터/객체/액션/운영 설계를 정의한다.
 - 실행 순서와 스프린트별 완료 조건은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 원본으로 본다.
-- Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
+- Foundry 공개 동작과 제품 목적의 외부 근거는 [Palantir public-behavior 설계 권위 ADR](./docs/adr/0003-palantir-public-behavior-is-design-authority.md)과 각 기능 parity matrix가 인용하는 Palantir 공식 문서를 원본으로 본다. [Palantir Foundry 심층 분석](./deep-research-report.md)은 배경 reference이며 공식 문서나 실행 증거를 덮어쓸 수 없다.
 - Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
 - 네 문서는 모두 같은 v1 폐루프와 Python 백엔드 품질 기준을 기준으로 연결된다: `CSV/local snapshot 또는 PostgreSQL-backed repository proof → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`.
 
@@ -323,7 +323,7 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 - 대규모 모델/LLM agent platform
 - 복잡한 geospatial/time-series/media ontology
 - 완전한 Iceberg catalog UI
-- Functions on Objects runtime
+- Functions on Objects의 전체 공개 기능 폭과 production 운영 패키징
 
 단, 설계는 이 기능들이 나중에 추가될 수 있게 adapter/interface와 metadata boundary를 남긴다.
 
@@ -342,7 +342,7 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 | Iceberg storage/catalog ratchet | Iceberg snapshot/version pinning proof와 MinIO/S3-backed composition proof 존재 | maintenance, retention, managed catalog operations |
 | Generated TS SDK | package/browser generated SDK surface 존재 | richer generated hooks/client ergonomics |
 | React hooks | future | SDK package boundary |
-| Functions on Objects | future | derived property expression only |
+| Functions on Objects | 부분 current. Python/TypeScript v2 networkless code sandbox, lazy ObjectSet page/aggregation bridge, generated Domain OS aggregation Function과 app OSDK 호출 경로가 live/contract proof를 갖는다. | Search Around, KNN, set algebra, full filter/aggregation vocabulary, repository/package/version 관리와 Palantir 규모 한도는 future. 정확한 경계는 `docs/functions-object-set-parity-matrix.json`을 따른다. |
 | Complex ABAC/CBAC | future | policy DSL extension point |
 
 ### 2.4 v1 성공 기준
@@ -3086,7 +3086,7 @@ Playwright:
 - visual editor는 나중
 - property type을 제한
 - link cardinality를 명확히 제한
-- Functions on Objects arbitrary execution 제외
+- v1 core acceptance에서는 Functions arbitrary execution을 제외한다. Post-MVP 현재 slice는 별도 networkless sandbox와 permission-scoped ObjectSet bridge로만 허용하고 API 프로세스 안 arbitrary 실행은 계속 금지한다.
 - activation validation을 강제
 
 ### 25.3 Object Store generic JSON/JSONB 성능 리스크

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from foundry_lite.application.services.mcp_session_namespace import require_mcp_session_namespace
 from foundry_lite.application.services.ontology_mcp_gateway import OntologyMcpToolCall
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, RateLimited, ValidationFailed
@@ -177,7 +178,10 @@ def ontology_mcp_delete(application_id: str, request: Request) -> Response:
 
 @router.get("/.well-known/oauth-protected-resource/mcp/ontology/{application_id}")
 def ontology_mcp_protected_resource(application_id: str, request: Request) -> dict[str, object]:
-    return protected_resource_metadata(request, "ontology", application_id)
+    try:
+        return protected_resource_metadata(request, "ontology", application_id)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 def _dispatch(
@@ -242,7 +246,9 @@ def _call_tool(
 def _initialize_result(protocol_version: str) -> dict[str, object]:
     return {
         "protocolVersion": protocol_version,
-        "capabilities": {"tools": {"listChanged": False}},
+        # The catalog is a projection of the application's granted resources, so a Developer
+        # Console edit changes it mid-session; the server emits notifications/tools/list_changed.
+        "capabilities": {"tools": {"listChanged": True}},
         "serverInfo": {"name": "foundry-lite-ontology-mcp", "version": "1.0.0"},
         "instructions": (
             "Only application-restricted Ontology resources are exposed. "
@@ -316,7 +322,9 @@ def _request_session_id(request: Request, payload: JsonRpcEnvelope) -> str:
 
 
 def _required_existing_session_id(request: Request) -> str:
-    return require_mcp_session_id(request, "Ontology")
+    session_id = require_mcp_session_id(request, "Ontology")
+    require_mcp_session_namespace(session_id, "ontology")
+    return session_id
 
 
 def _last_event_sequence(request: Request, session_id: str) -> int:

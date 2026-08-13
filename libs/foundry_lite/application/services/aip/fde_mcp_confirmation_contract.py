@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from foundry_lite.application.ports import AiExecutionRunRecord
@@ -24,12 +24,14 @@ class FdeMcpRequestBinding:
     actor_user_id: str
     application_id: str
     client_id: str
+    oauth_session_id: str
     session_id: str
     tool_id: str
     mode: str
     workspace_ref: str
     arguments_hash: str
     required_permission: str
+    origin: str
 
     @property
     def payload(self) -> dict[str, object]:
@@ -38,17 +40,35 @@ class FdeMcpRequestBinding:
             "actorUserId": self.actor_user_id,
             "applicationId": self.application_id,
             "clientId": self.client_id,
+            "oauthSessionId": self.oauth_session_id,
             "sessionId": self.session_id,
             "toolId": self.tool_id,
             "mode": self.mode,
             "workspaceRef": self.workspace_ref,
             "argumentsHash": self.arguments_hash,
             "requiredPermission": self.required_permission,
+            "origin": self.origin,
         }
 
     @property
     def fingerprint(self) -> str:
         return hash_json(self.payload)
+
+    def as_recorded_session(self, budget: Mapping[str, object]) -> FdeMcpRequestBinding:
+        """Re-key this binding onto the MCP session the challenge was recorded under.
+
+        Approval leaves the originating session by design: an MCP Apps host renders the card in
+        its own frame and follows up from a second session, exactly as Foundry surfaces an agent
+        proposal on a separate review surface. Identity still has to match, so only the transport
+        session is normalised here -- actor, application, client, OAuth session, arguments and
+        origin are all still compared through the fingerprint.
+        """
+
+        recorded = budget.get("requestBinding")
+        session_id = recorded.get("sessionId") if isinstance(recorded, Mapping) else None
+        if not isinstance(session_id, str) or session_id == self.session_id:
+            return self
+        return replace(self, session_id=session_id)
 
 
 @dataclass(frozen=True)
@@ -68,18 +88,21 @@ def request_binding(
     workspace_ref: str,
     arguments: JsonObject,
     required_permission: str,
+    origin: str | None,
 ) -> FdeMcpRequestBinding:
     return FdeMcpRequestBinding(
         tenant_id=ctx.tenant_id,
         actor_user_id=ctx.actor_user_id,
         application_id=application_id,
         client_id=ctx.client_id or "",
+        oauth_session_id=ctx.oauth_session_id or "",
         session_id=session_id,
         tool_id=tool_id,
         mode=mode,
         workspace_ref=workspace_ref,
         arguments_hash=hash_json(arguments),
         required_permission=required_permission,
+        origin=origin or "no-origin",
     )
 
 
@@ -194,7 +217,7 @@ def challenge_replay_conflict_reason(
     budget = run.get("budget_json")
     if not isinstance(budget, Mapping) or budget.get("kind") != _CHALLENGE_KIND:
         return "challenge_invalid"
-    if budget.get("requestBindingHash") != binding.fingerprint:
+    if budget.get("requestBindingHash") != binding.as_recorded_session(budget).fingerprint:
         return "challenge_binding_mismatch"
     if run.get("status") not in {"started", "succeeded"}:
         return "challenge_invalid"
@@ -233,7 +256,8 @@ def receipt_conflict_reason(
         return "receipt_already_consumed"
     if is_expired(budget.get("expiresAt"), now):
         return "receipt_expired"
-    return None if budget.get("requestBindingHash") == binding.fingerprint else "receipt_binding_mismatch"
+    comparable = binding.as_recorded_session(budget)
+    return None if budget.get("requestBindingHash") == comparable.fingerprint else "receipt_binding_mismatch"
 
 
 def _binding_from_budget(budget: Mapping[str, object]) -> FdeMcpRequestBinding:
@@ -246,12 +270,14 @@ def _binding_from_budget(budget: Mapping[str, object]) -> FdeMcpRequestBinding:
             actor_user_id=str(payload["actorUserId"]),
             application_id=str(payload["applicationId"]),
             client_id=str(payload["clientId"]),
+            oauth_session_id=str(payload.get("oauthSessionId", "")),
             session_id=str(payload["sessionId"]),
             tool_id=str(payload["toolId"]),
             mode=str(payload["mode"]),
             workspace_ref=str(payload["workspaceRef"]),
             arguments_hash=str(payload["argumentsHash"]),
             required_permission=str(payload["requiredPermission"]),
+            origin=str(payload.get("origin", "no-origin")),
         )
     except KeyError as exc:
         raise confirmation_conflict("challenge_binding_invalid") from exc
@@ -298,6 +324,9 @@ def challenge_payload(
         "status": "approval_required",
         "challengeId": challenge_id,
         "toolId": binding.tool_id,
+        "mode": binding.mode,
+        "workspaceRef": binding.workspace_ref,
+        "requestBindingHash": binding.fingerprint,
         "expiresAt": expires_at,
     }
     return {
@@ -346,7 +375,9 @@ def replay_conflict(run_id: str, reason: str) -> ConflictDetected:
 
 
 def confirmation_conflict(reason: str) -> ConflictDetected:
+    """Name the reason in the message; hosts show only that and drop `data.reason`."""
+
     return ConflictDetected(
-        "Builder MCP confirmation challenge or receipt cannot be used",
+        f"Builder MCP confirmation challenge or receipt cannot be used: {reason}",
         details={"reason": reason},
     )

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from foundry_lite.infrastructure.local_database_url import database_url_from_environment, local_database_url
 
 from scripts.operations import run_migrations
 
@@ -138,6 +139,30 @@ def test_migration_is_singleton_for_concurrent_sqlite_jobs(tmp_path: Path) -> No
     assert second.is_lock_busy is True
     assert second.has_run_migration is False
     assert executed_revisions == ["head"]
+
+
+def test_migration_target_matches_the_database_the_api_runtime_opens(tmp_path: Path) -> None:
+    """Regression: the runner defaulted to ./foundry-lite.db while the API opened FOUNDRY_LITE_HOME's.
+
+    Migrations then reported success against a file nobody serves, and the served database
+    silently stayed behind on an older revision.
+    """
+
+    home = tmp_path / "state"
+    environ = {"FOUNDRY_LITE_HOME": str(home)}
+
+    runtime_target = local_database_url(environ["FOUNDRY_LITE_HOME"])
+    migration_target = database_url_from_environment(environ)
+
+    assert migration_target == runtime_target
+    assert migration_target == f"sqlite:///{(home / 'foundry-lite.db').resolve()}"
+
+
+def test_explicit_database_url_wins_over_the_local_default() -> None:
+    explicit = "postgresql+psycopg://user@example.test/foundry"
+
+    assert run_migrations.database_url_from_env(explicit) == explicit
+    assert database_url_from_environment({"FOUNDRY_LITE_DB_URL": explicit}) == explicit
 
 
 def test_migration_job_singleton_no_app_start_race() -> None:

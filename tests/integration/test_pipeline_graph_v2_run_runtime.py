@@ -477,7 +477,11 @@ def test_graph_v2_dataset_llm_run_pins_source_and_model_evidence_without_duplica
     assert cast(Mapping[str, object], internal["_pipelineModelEvidence"])["promptVersionId"] == "order-risk@1"
     transaction_metadata = _dataset_transaction_metadata(foundry, ctx, output_version_ids[0])
     assert transaction_metadata["outputContract"] == {
-        "columns": [{"name": "order_id"}, {"name": "memo"}, {"name": "analysis"}],
+        "columns": [
+            {"name": "order_id", "type": "string"},
+            {"name": "memo", "type": "string"},
+            {"name": "analysis", "type": "object"},
+        ],
         "mode": "declared",
     }
     assert transaction_metadata["rowEvidence"] == row_evidence
@@ -1016,6 +1020,7 @@ def _execute_graph_version(
         expected_fingerprint=str(branch["graphFingerprint"]),
         ctx=ctx,
     )
+    foundry.pipelines.run_tests(str(branch["id"]), ctx=ctx)
     proposal = foundry.pipelines.propose(
         str(branch["id"]),
         title="Deploy Graph v2 runtime",
@@ -1047,7 +1052,7 @@ def _dataset_semantic_graph(source_ref: str, output_ref: str) -> dict[str, objec
             _edge("source-semantic", "source", "dataset", "semantic", "input"),
             _edge("semantic-output", "semantic", "dataset", "output", "input"),
         ],
-        output_columns=("order_id", "memo", "analysis"),
+        output_columns=(("order_id", "string"), ("memo", "string"), ("analysis", "object")),
     )
 
 
@@ -1058,7 +1063,7 @@ def _dataset_copy_graph(source_ref: str, output_ref: str) -> dict[str, object]:
             _node("output", "output", "output.dataset", {"outputDatasetRef": output_ref}),
         ],
         [_edge("source-output", "source", "dataset", "output", "input")],
-        output_columns=("order_id", "memo"),
+        output_columns=(("order_id", "string"), ("memo", "string")),
     )
 
 
@@ -1073,7 +1078,7 @@ def _stream_copy_graph(source_ref: str, output_ref: str) -> dict[str, object]:
             _edge("source-bridge", "source", "stream", "bridge", "stream"),
             _edge("bridge-output", "bridge", "dataset", "output", "input"),
         ],
-        output_columns=("memo", "order_id"),
+        output_columns=(("memo", "string"), ("order_id", "string")),
     )
 
 
@@ -1128,6 +1133,7 @@ def _pdf_graph(
             _edge("chunk-rows", "chunk", "content", "rows", "content"),
             _edge("rows-output", "rows", "dataset", "output", "input"),
         ],
+        output_columns=(("contentUnitId", "string"), ("text", "string"), ("mediaReference", "object")),
     )
 
 
@@ -1177,7 +1183,12 @@ def _pdf_vision_graph(
             _edge("rows-semantic", "rows", "dataset", "semantic", "input"),
             _edge("semantic-output", "semantic", "dataset", "output", "input"),
         ],
-        output_columns=("contentUnitId", "text", "mediaReference", "analysis"),
+        output_columns=(
+            ("contentUnitId", "string"),
+            ("text", "string"),
+            ("mediaReference", "object"),
+            ("analysis", "object"),
+        ),
     )
 
 
@@ -1210,14 +1221,14 @@ def _graph(
     nodes: list[dict[str, object]],
     edges: list[dict[str, object]],
     *,
-    output_columns: tuple[str, ...] = (),
+    output_columns: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, object]:
     return {
         "schemaVersion": 2,
         "nodes": nodes,
         "edges": edges,
         "layout": {},
-        "outputContract": {"columns": [{"name": name} for name in output_columns]},
+        "outputContract": {"columns": [{"name": name, "type": data_type} for name, data_type in output_columns]},
         "tests": [],
         "schedule": None,
     }

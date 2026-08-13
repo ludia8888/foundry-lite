@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 
-from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, required_text
+from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
+    application_resources,
+    build_domain_os_blueprint,
+    ontology_resources,
+    require_ready_blueprint,
+    seed_plan,
+)
+from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import (
+    ci_workflow,
+    consumer_osdk_plan,
+    react_files,
+)
+from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json, required_text
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.dataset.registry import DatasetRegistryService
@@ -41,24 +53,32 @@ class FdePilotService(CoreService):
         description = required_text(arguments, "domainDescription")
         slug = _slug(app_name)
         identifier = _identifier(slug)
-        object_name = _pascal(slug)
+        blueprint = build_domain_os_blueprint(arguments)
+        dataset_ref = f"seed.{identifier}"
+        records = _mapping_items(blueprint.get("records"))
+        workflow = _mapping(blueprint.get("workflow"), "domainOsBlueprint.workflow")
+        actions = _mapping_items(workflow.get("actions"))
+        functions = _mapping_items(blueprint.get("functions") or [])
         return {
             "operationType": "pilot_generation_plan",
             "applicationName": app_name,
             "domainDescription": description,
+            "domainBrief": dict(_mapping(arguments.get("domainBrief"), "domainBrief")),
+            "domainOsBlueprint": blueprint,
             "slug": slug,
             "projectDisplayName": f"{app_name} Pilot",
-            "seed": _seed_plan(identifier),
-            "ontologyResources": [_object_type(object_name, identifier)],
-            "applicationResources": [
-                {
-                    "resourceType": "object",
-                    "resourceApiName": object_name,
-                    "scopes": [f"osdk:object:{object_name}:read"],
-                }
-            ],
-            "react": {"routes": ["/"], "objectTypes": [object_name], "framework": "react"},
-            "ci": {"commands": ["pnpm typecheck", "pnpm test", "pnpm build"]},
+            "seed": seed_plan(identifier, blueprint),
+            "ontologyResources": ontology_resources(blueprint, dataset_ref),
+            "applicationResources": application_resources(blueprint),
+            "consumerOsdk": consumer_osdk_plan(app_name, slug),
+            "react": {
+                "routes": ["/", "/work", "/policies", "/evidence"],
+                "objectTypes": [row["apiName"] for row in records],
+                "actionTypes": [row["apiName"] for row in actions],
+                "functionTypes": [row["apiName"] for row in functions],
+                "framework": "react",
+            },
+            "ci": {"commands": ["pnpm consumer-osdk:check", "pnpm typecheck", "pnpm test", "pnpm build"]},
             "requiredApprovals": ["pilot.application.generate"],
         }
 
@@ -122,13 +142,20 @@ class FdePilotService(CoreService):
 
     def _seed(self, ctx: RequestContext, plan: JsonObject, key: str) -> dict[str, object]:
         seed = _mapping(plan.get("seed"), "seed")
+        datasets = _mapping_items(seed.get("datasets"))
+        results = [self._seed_dataset(ctx, item, key) for item in datasets]
+        primary = results[0]
+        row_count = sum(_integer(item.get("rowCount"), "seed.rowCount") for item in results)
+        return {**primary, "datasets": results, "rowCount": row_count}
+
+    def _seed_dataset(self, ctx: RequestContext, seed: JsonObject, key: str) -> dict[str, object]:
         dataset_ref = required_text(seed, "datasetRef")
         primary_key = _text_list(seed.get("primaryKey"), "seed.primaryKey")
         rows = _mapping_items(seed.get("rows"))
         self.dataset_registry_service.ensure_dataset(dataset_ref, primary_key=primary_key, ctx=ctx)
         replay = self._seed_replay(ctx, dataset_ref, key, len(rows))
         if replay is not None:
-            return replay
+            return {**replay, "recordApiName": seed.get("recordApiName")}
         commit = self.dataset_ingest_service.sync_rows_batch(
             dataset_ref,
             rows,
@@ -140,6 +167,7 @@ class FdePilotService(CoreService):
             transaction_metadata={"pilotIdempotencyKey": key},
         )
         return {
+            "recordApiName": seed.get("recordApiName"),
             "datasetRef": dataset_ref,
             "rowCount": len(rows),
             "versionId": getattr(commit, "version_id", None),
@@ -201,11 +229,16 @@ def _normalized_plan(plan: JsonObject) -> dict[str, object]:
     normalized = {str(name): value for name, value in plan.items()}
     app_name = required_text(normalized, "applicationName")
     normalized["domainDescription"] = required_text(normalized, "domainDescription")
-    normalized["slug"] = _slug(str(normalized.get("slug") or app_name))
-    normalized["projectDisplayName"] = str(normalized.get("projectDisplayName") or f"{app_name} Pilot")
-    _mapping(normalized.get("seed"), "seed")
-    _mapping_items(normalized.get("ontologyResources"))
-    _mapping_items(normalized.get("applicationResources"))
+    slug = _slug(app_name)
+    blueprint = build_domain_os_blueprint(normalized)
+    require_ready_blueprint(blueprint)
+    normalized["slug"] = slug
+    normalized["projectDisplayName"] = f"{app_name} Pilot"
+    normalized["domainOsBlueprint"] = blueprint
+    normalized["seed"] = seed_plan(_identifier(slug), blueprint)
+    normalized["ontologyResources"] = ontology_resources(blueprint, f"seed.{_identifier(slug)}")
+    normalized["applicationResources"] = application_resources(blueprint)
+    normalized["consumerOsdk"] = consumer_osdk_plan(app_name, slug)
     return normalized
 
 
@@ -218,92 +251,45 @@ def _bundle(
     key: str,
 ) -> dict[str, object]:
     slug = str(plan["slug"])
+    files = react_files(plan)
     return {
         "operationType": "pilot_application_bundle",
         "pilotIdempotencyKey": key,
         "applicationName": plan["applicationName"],
+        "domainOsBlueprint": dict(_mapping(plan.get("domainOsBlueprint"), "domainOsBlueprint")),
         "project": dict(project),
         "seed": dict(seed),
         "ontologyBranch": dict(branch),
         "osdkApplication": dict(application),
-        "reactFiles": _react_files(plan),
-        "ciWorkflow": _ci_workflow(),
+        "consumerOsdk": dict(_mapping(plan.get("consumerOsdk"), "consumerOsdk")),
+        "reactFiles": files,
+        "ciWorkflow": ci_workflow(),
+        "deploymentPlan": _deployment_plan(application, files),
         "applicationPath": f"/projects/{project['id']}/pilot/{slug}",
         "status": "generated_on_branch",
-        "nextStep": "Review and activate the Ontology proposal before using production data.",
+        "nextStep": "예시 데이터로 확인한 뒤 Ontology를 검토·활성화하고 호스팅 배포를 승인하세요.",
     }
 
 
-def _react_files(plan: JsonObject) -> dict[str, str]:
-    descriptor = _osdk_object_descriptor(plan)
-    title = json.dumps(str(plan["applicationName"]), ensure_ascii=True)
+def _deployment_plan(application: JsonObject, files: Mapping[str, str]) -> dict[str, object]:
+    app = _mapping(application.get("application"), "application")
     return {
-        "package.json": (
-            '{"dependencies":{"@foundry-lite/sdk":"workspace:*","react":"^19.0.0"},'
-            '"scripts":{"build":"vite build","test":"vitest run","typecheck":"tsc --noEmit"}}'
-        ),
-        "src/App.tsx": (
-            "import { useEffect, useState } from 'react';\n"
-            "import { useFoundryLiteOsdkClient } from '@foundry-lite/sdk/react';\n"
-            f"const ObjectType = {descriptor} as const;\n"
-            f"const title = {title};\n"
-            "export default function App() { const osdk = useFoundryLiteOsdkClient(); "
-            "const [items, setItems] = useState<unknown[]>([]); "
-            "useEffect(() => { void osdk(ObjectType).fetchPage({ pageSize: 50 })"
-            ".then((page) => setItems(page.data)); }, [osdk]); "
-            "return <main><h1>{title}</h1><pre>{JSON.stringify(items, null, 2)}</pre></main>; }\n"
-        ),
-        "src/main.tsx": "import App from './App';\nexport { App };\n",
-        "src/generated/ontology.ts": f"export const PilotObjectType = {descriptor} as const;\n",
-    }
-
-
-def _osdk_object_descriptor(plan: JsonObject) -> str:
-    resources = _mapping_items(plan.get("ontologyResources"))
-    entry = resources[0] if resources else {}
-    definition = _mapping(entry.get("definition"), "ontology resource definition")
-    properties = [required_text(item, "apiName") for item in _mapping_items(definition.get("properties"))]
-    descriptor: dict[str, object] = {
-        "kind": "object",
-        "apiName": required_text(definition, "apiName"),
-        "primaryKey": required_text(definition, "primaryKey"),
-        "titleProperty": "name" if "name" in properties else None,
-        "properties": properties,
-        "propertyDatasources": {},
-    }
-    return json.dumps(descriptor, sort_keys=True)
-
-
-def _ci_workflow() -> str:
-    return (
-        "steps:\n"
-        "  - run: pnpm install --frozen-lockfile\n"
-        "  - run: pnpm typecheck\n"
-        "  - run: pnpm test\n"
-        "  - run: pnpm build\n"
-    )
-
-
-def _seed_plan(slug: str) -> dict[str, object]:
-    return {
-        "datasetRef": f"seed.{slug}",
-        "primaryKey": ["id"],
-        "rows": [{"id": "sample-1", "name": "Sample"}],
-    }
-
-
-def _object_type(api_name: str, slug: str) -> dict[str, object]:
-    return {
-        "kind": "objectType",
-        "definition": {
-            "apiName": api_name,
-            "primaryKey": "id",
-            "backing": {"dataset": f"seed.{slug}"},
-            "properties": [
-                {"apiName": "id", "column": "id", "type": "string", "nullable": False, "indexed": True},
-                {"apiName": "name", "column": "name", "type": "string"},
-            ],
-        },
+        "schemaVersion": "foundry-lite-domain-os-deployment/v1",
+        "artifactKind": "vite_static_web_app",
+        "applicationId": app.get("id"),
+        "sourceFingerprint": hash_json(files),
+        "buildCommand": "pnpm install --no-frozen-lockfile && pnpm consumer-osdk:check && pnpm typecheck && pnpm build",
+        "outputDirectory": "dist",
+        "status": "awaiting_ontology_review",
+        "requiredBeforeHosting": [
+            "consumer_osdk_strict_passed",
+            "ontology_proposal_activated",
+            "production_data_access_reviewed",
+            "actor_role_mapping_configured",
+            "authenticated_session_bootstrap_configured",
+            "host_target_configured",
+        ],
+        "releaseBoundary": "governed_release_required",
     }
 
 
@@ -330,6 +316,12 @@ def _text_list(value: object, field: str) -> list[str]:
     return result
 
 
+def _integer(value: object, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise FdePlatformToolError("schema_invalid", f"{field} must be an integer")
+    return value
+
+
 def _fieldnames(rows: list[dict[str, object]]) -> list[str]:
     names = sorted({name for row in rows for name in row})
     if not names:
@@ -338,6 +330,9 @@ def _fieldnames(rows: list[dict[str, object]]) -> list[str]:
 
 
 def _slug(value: str) -> str:
+    if not value.isascii():
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:10]
+        return f"domain-os-{digest}"
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     if not slug:
         raise FdePlatformToolError("schema_invalid", "applicationName must contain letters or numbers")
@@ -349,7 +344,3 @@ def _identifier(slug: str) -> str:
     if not value or not value[0].isalpha():
         value = f"pilot_{value}"
     return value[:64]
-
-
-def _pascal(slug: str) -> str:
-    return "".join(part.capitalize() for part in slug.split("-")) or "PilotObject"

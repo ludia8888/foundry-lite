@@ -39,7 +39,8 @@
 4. `docs/data-platform-expansion-sprint-plan-ko.md`, `foundry_lite_sprint_breakdown_ko.md`의
    스프린트 상태를 맞춘다.
 5. 필요하면 `docs/frontend-backend-surface-contract.md`, `docs/infra-ratchet.md`,
-   `docs/quality-gate-roadmap.md`, `docs/pipeline-builder-parity-matrix.json` 같은 계약·패리티
+   `docs/quality-gate-roadmap.md`, `docs/pipeline-builder-parity-matrix.json`,
+   `docs/functions-object-set-parity-matrix.json` 같은 계약·패리티
    문서를 업데이트한다.
 6. 마지막에 `README.md`를 GitHub 첫 화면용 요약으로 맞춘다.
 
@@ -83,6 +84,7 @@ ledger에 남아야 한다.
 | `docs/documentation-map.md`                               | `source-of-truth`  | Documentation operating map                    | 문서 역할, MECE taxonomy, source-of-truth, update order, cross-check command를 관리한다.                                                                                       |
 | `docs/implementation-status.md`                           | `source-of-truth`  | Current implementation boundary                | S61 frontend surface lock, S62 Dataset Explorer backend/API/SDK start, S63 Insight Review queue를 current partial로 구분한다.                                                  |
 | `docs/sprint-evidence-ledger.md`                          | `source-of-truth`  | Evidence ledger                                | 각 sprint claim은 command, test, and remaining future scope를 함께 남긴다.                                                                                                     |
+| `docs/governed-release-hosted-staging-runbook.md`         | `reference`        | Hosted staging bootstrap operations runbook    | 보호형 staging bootstrap의 Render 설정, 외부 의존성, 비용 승인, migration/readiness 확인 순서를 설명하며 current/future 경계 원본은 implementation status와 evidence ledger로 연결한다. |
 | `docs/infra-ratchet.md`                                   | `source-of-truth`  | Infra ratchet methodology                      | 새 인프라는 self test plus active-infra composition test를 요구한다.                                                                                                           |
 | `docs/infra-tricky-matrix.json`                           | `machine-registry` | Machine-readable infra proof matrix            | source-of-truth and operator-evidence gates가 읽는 registry다.                                                                                                                 |
 | `docs/foundry_lite_tricky_failure_modes_checklist.md`     | `risk-registry`    | Failure-mode backlog and partial shield        | `[ ]`는 대부분 future hardening backlog이고, 완료 증거는 ledger와 gate로 확인한다.                                                                                             |
@@ -97,6 +99,7 @@ ledger에 남아야 한다.
 | `docs/data-platform-expansion-sprint-plan-ko.md`          | `source-of-truth`  | S46+ expansion roadmap and sprint checklist    | roadmap summary, detailed sprint checklist, and current/partial/future status live in one document.                                                                            |
 | `docs/frontend-api-sdk-surface-matrix.json`               | `machine-registry` | API/SDK proof registry                         | frontend route나 SDK helper가 request/helper contract 없이 생기는 것을 막는다.                                                                                                 |
 | `docs/pipeline-builder-parity-matrix.json`                | `machine-registry` | Pipeline Builder public-behavior parity matrix | 공식 Palantir 공개 동작과 현재 Graph v2, Media registry, execution evidence, UI foundation 및 planned gap을 `current/foundation/planned`로 잠근다.                             |
+| `docs/functions-object-set-parity-matrix.json`            | `machine-registry` | Functions/ObjectSet public-behavior parity matrix | 공식 Palantir 공개 동작과 lazy ObjectSet, Python/TypeScript OSDK, Domain OS Function 생성 및 남은 gap을 `current/partial/planned`로 잠근다. |
 | `docs/action-types-parity-matrix.json`                    | `machine-registry` | Action Types v3 public-behavior parity matrix  | 공식 Palantir Action Type의 rule, parameter/form/upload, function/batch, permission/effect, log/revert, branch/interface, monitoring/scale/MCP 동작과 현재 증거를 `missing/foundation/partial/current`로 잠근다. |
 | `docs/frontend-backend-surface-contract.md`               | `source-of-truth`  | Frontend/backend contract                      | 프론트는 named generated SDK를 통해서만 current API를 사용한다.                                                                                                                |
 | `docs/osdk-security-threat-model.md`                      | `risk-registry`    | OSDK browser/OAuth/subscription threat model   | local OAuth, WebSocket/SSE subscription, CORS/CSRF/XSS/token leakage, and future external IdP/package lifecycle boundary를 current/future로 분리한다.                          |
@@ -107,6 +110,7 @@ ledger에 남아야 한다.
 | `docs/adr/README.md`                                      | `source-of-truth`  | Architecture Decision Record index             | ADR 색인. 새 ADR이 추가/supersede될 때 갱신한다.                                                                                                                               |
 | `docs/adr/0001-media-plane-parallel-to-dataset-plane.md`  | `source-of-truth`  | Media Plane architecture decision              | Media/Content Plane을 Dataset Plane과 동급 bounded context로 두는 결정과 7개 제품 불변식을 기록한다.                                                                           |
 | `docs/adr/0002-public-behavior-mmdp-pipeline-graph-v2.md` | `source-of-truth`  | Pipeline Graph v2 architecture decision        | 공개 동작 패리티 범위, Graph v2, named artifact ports, plane별 commit, no-commit preview, exact processor resolution, 단계적 rollout 결정을 기록한다.                          |
+| `docs/adr/0003-palantir-public-behavior-is-design-authority.md` | `source-of-truth` | Palantir public-behavior design authority | 주요 설계 결정이 공식 Palantir 문서, 공개 동작, 구현 증거, 명시적 gap을 함께 가져야 한다는 공통 규칙을 기록한다. |
 | `docs/backend-findings-crosscheck-2026-06-22.md`          | `risk-registry`    | Backend review finding cross-check             | 외부 backend review finding을 현재 코드, tests, gates와 대조해 fixed/partial/still-valid 위험으로 분류한다.                                                                    |
 | `foundry_lite_development_plan_ko_sprintified.md`         | `source-of-truth`  | Product and architecture plan                  | 장기 목표와 설계 방향의 가장 큰 원본이다.                                                                                                                                      |
 | `foundry_lite_sprint_breakdown_ko.md`                     | `source-of-truth`  | Sprint breakdown                               | 스프린트별 scope and status table을 관리한다.                                                                                                                                  |

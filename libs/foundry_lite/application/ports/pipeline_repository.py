@@ -188,6 +188,12 @@ class PipelineTestResultRecord:
 class PipelineRepository(PipelineScheduleRepository, Protocol):
     """DB boundary for tenant-scoped Pipeline Builder resources."""
 
+    def lock_pipeline_for_deployment(
+        self, *, transaction: TransactionContext, tenant_id: str, pipeline_id: str
+    ) -> None:
+        """Serialize deployment-head changes for one pipeline."""
+        ...
+
     def insert_branch_if_name_free(
         self, *, transaction: TransactionContext, record: PipelineBranchRecord
     ) -> PipelineBranchRow | None: ...
@@ -267,7 +273,14 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
     ) -> list[PipelineProposalRow]: ...
 
     def update_proposal_assignment(
-        self, *, transaction: TransactionContext, tenant_id: str, proposal_id: str, assigned_to: str, updated_at: str
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        proposal_id: str,
+        assigned_to: str,
+        updated_at: str,
+        is_unassigned_only: bool = False,
     ) -> PipelineProposalRow | None: ...
 
     def update_proposal_decision(
@@ -468,3 +481,11 @@ class PipelineRepository(PipelineScheduleRepository, Protocol):
     def insert_test_result(
         self, *, transaction: TransactionContext, record: PipelineTestResultRecord
     ) -> PipelineTestResultRow: ...
+
+    def latest_test_result(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        branch_id: str,
+    ) -> PipelineTestResultRow | None: ...

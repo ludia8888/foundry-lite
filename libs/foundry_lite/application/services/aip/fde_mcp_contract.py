@@ -57,6 +57,9 @@ class FdeMcpCallLike(Protocol):
     @property
     def raw_input(self) -> JsonObject | None: ...
 
+    @property
+    def origin(self) -> str | None: ...
+
 
 def validated_outer_input(
     request: FdeMcpCallLike,
@@ -103,6 +106,7 @@ def call_binding(ctx: RequestContext, request: FdeMcpCallLike, spec: ToolSpec) -
         workspace_ref=request.workspace_ref,
         arguments=request.arguments,
         required_permission=spec.required_permission,
+        origin=request.origin,
     )
 
 

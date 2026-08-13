@@ -783,6 +783,24 @@ def test_pipeline_parity_matrix_is_static_gate_step() -> None:
     assert "pnpm quality:pipeline-parity-matrix" in package_json
 
 
+def test_functions_object_set_parity_matrix_is_static_gate_step() -> None:
+    script = _static_lane_text()
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "scripts/quality/check_functions_object_set_parity_matrix.py" in script
+    assert '"quality:functions-object-set-parity"' in package_json
+    assert "pnpm quality:functions-object-set-parity" in package_json
+
+
+def test_palantir_design_authority_is_a_static_gate_step() -> None:
+    script = _static_lane_text()
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "scripts/quality/check_palantir_design_authority.py" in script
+    assert '"quality:palantir-design-authority"' in package_json
+    assert "pnpm quality:palantir-design-authority" in package_json
+
+
 def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> None:
     static_driver = (ROOT / "scripts" / "quality" / "run_static_checks.py").read_text(encoding="utf-8")
     e2e_driver = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")

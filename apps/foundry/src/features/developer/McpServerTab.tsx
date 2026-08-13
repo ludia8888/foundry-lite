@@ -103,7 +103,10 @@ export function McpServerTab({ appId }: { appId: string }) {
       <CopyField label="Streamable HTTP endpoint" value={endpoint} />
       <div className="grid gap-3 md:grid-cols-2">
         <CopyField label="Protected resource metadata" value={`${origin}/.well-known/oauth-protected-resource/mcp/ontology/${appId}`} />
-        <CopyField label="Authorization server metadata" value={`${origin}/.well-known/oauth-authorization-server`} />
+        <CopyField
+          label="Authorization server discovery"
+          value="Protected resource metadata의 authorization_servers 값을 사용"
+        />
       </div>
 
       <div className="space-y-3 rounded border bg-card p-3">

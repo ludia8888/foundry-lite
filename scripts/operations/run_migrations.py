@@ -17,13 +17,13 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from foundry_lite.infrastructure.local_database_url import database_url_from_environment
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import OperationalError
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATABASE_URL = "sqlite:///foundry-lite.db"
 DEFAULT_EVIDENCE_OUTPUT = ROOT / "artifacts" / "operations" / "migration_run.json"
 POSTGRES_LOCK_NAMESPACE = 5_735_501
 POSTGRES_LOCK_ID = 55
@@ -54,7 +54,9 @@ class MigrationRunEvidence:
 
 
 def database_url_from_env(explicit_url: str | None = None) -> str:
-    return explicit_url or os.getenv("FOUNDRY_LITE_DB_URL") or DEFAULT_DATABASE_URL
+    """Target the same database the API runtime opens, so a run cannot migrate the wrong file."""
+
+    return explicit_url or database_url_from_environment(os.environ)
 
 
 def run_migrations_with_singleton_lock(

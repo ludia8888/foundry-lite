@@ -482,6 +482,36 @@ def test_ontology_mcp_durable_session_reconnect_resumes_after_last_event_and_del
     assert denied_reuse.json()["detail"]["details"]["isSessionTerminated"] is True
 
 
+def test_ontology_mcp_rejects_foreign_session_namespaces_on_every_transport_method(
+    foundry: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    _prepare_v3_demo(foundry, tmp_path)
+    app_id = _mcp_application(foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    headers = _user_mcp_headers(foundry, monkeypatch, app_id)
+    client = TestClient(app)
+    path = f"/mcp/ontology/{app_id}"
+
+    for session_id in ("mcp-builder-foreign-0001", "mcp-release-foreign-0001"):
+        foreign_headers = {**headers, "Mcp-Session-Id": session_id}
+        responses = (
+            client.post(
+                path,
+                headers=foreign_headers,
+                json={"jsonrpc": "2.0", "id": session_id, "method": "tools/list", "params": {}},
+            ),
+            client.get(path, headers=foreign_headers),
+            client.delete(path, headers=foreign_headers),
+        )
+
+        assert {response.status_code for response in responses} == {400}
+        assert {response.json()["detail"]["details"]["reason"] for response in responses} == {
+            "ontology_session_namespace_required"
+        }
+
+
 def test_ontology_mcp_session_transport_statuses_fail_closed(
     foundry: Any,
     tmp_path: Any,
@@ -694,7 +724,10 @@ def test_ontology_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(
     assert invalid_cursor.json()["error"]["code"] == -32602
     assert "nextCursor" not in complete_list.json()["result"]
     assert len(complete_list.json()["result"]["tools"]) > 0
-    assert missing_protocol.status_code == 400
+    # A missing header resolves to the version this session negotiated; only a header that is
+    # present and unsupported is a 400 (proved by the protocol-version test above).
+    assert missing_protocol.status_code == 200
+    assert missing_protocol.json()["result"] == {}
     assert overlong_session.status_code == 400
     assert overlong_session.json()["detail"]["details"] == {"resource": "mcp_session"}
 
@@ -1554,6 +1587,77 @@ def test_validate_only_service_principal_plan_is_online_and_fail_closed(
         "object.Order.unifiedSearch",
     }
     assert revoked_call.json()["error"]["data"]["type"] == "VALIDATION_FAILED"
+
+
+def test_resource_grant_change_notifies_live_sessions_that_the_tool_list_changed(
+    foundry: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    """Regression: editing grants silently invalidated every connected client's catalog.
+
+    Consumer MCP projects granted resources into `tools/list`, so a Developer Console edit
+    changes the catalog mid-session. The server declared `listChanged: false`, so clients
+    never refetched and kept calling names that dispatch now rejects as "not available".
+    """
+
+    _prepare_v3_demo(foundry, tmp_path)
+    app_id = _mcp_application(foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    headers = _user_mcp_headers(foundry, monkeypatch, app_id)
+    client = TestClient(app)
+
+    initialized = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    session_id = initialized.headers["Mcp-Session-Id"]
+    session_headers = {**headers, "Mcp-Session-Id": session_id, "MCP-Protocol-Version": "2025-06-18"}
+
+    foundry.developer_console.update_osdk_application_resources(
+        app_id,
+        resources=[_resource("object", "Order", "read")],
+        idempotency_key="ontology-mcp-grant-change",
+        ctx=MCP_USER,
+    )
+    after_change = client.get(f"/mcp/ontology/{app_id}", headers=session_headers)
+
+    # The same edit applied twice is not a catalog change, so it must not re-notify.
+    foundry.developer_console.update_osdk_application_resources(
+        app_id,
+        resources=[_resource("object", "Order", "read")],
+        idempotency_key="ontology-mcp-grant-change-repeat",
+        ctx=MCP_USER,
+    )
+    after_noop = client.get(f"/mcp/ontology/{app_id}", headers=session_headers)
+
+    assert initialized.json()["result"]["capabilities"]["tools"]["listChanged"] is True
+    assert after_change.text.count('"method": "notifications/tools/list_changed"') == 1
+    assert after_noop.text.count('"method": "notifications/tools/list_changed"') == 1
+
+
+def test_protected_resource_metadata_is_not_found_when_the_plane_has_no_scope(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    """A connector-only application has no Ontology scope, so its metadata must 404, not 500."""
+
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    app_id = _service_mcp_application(
+        foundry,
+        "ConnectorOnlyMcp",
+        (_resource("connector", "fde_exploration", "execute"),),
+    )
+    client = TestClient(app)
+
+    ontology_metadata = client.get(f"/.well-known/oauth-protected-resource/mcp/ontology/{app_id}")
+    builder_metadata = client.get(f"/.well-known/oauth-protected-resource/mcp/builder/{app_id}")
+
+    assert ontology_metadata.status_code == 404
+    assert ontology_metadata.json()["detail"]["code"] == "NOT_FOUND"
+    assert builder_metadata.status_code == 200
+    assert builder_metadata.json()["scopes_supported"] == ["osdk:connector:fde_exploration:execute"]
 
 
 def _mcp_initialize_params(protocol_version: str = "2025-06-18") -> dict[str, object]:

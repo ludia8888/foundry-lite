@@ -888,7 +888,7 @@
     },
     {
       "id": "collaboration-production-parity",
-      "publicBehavior": "Protected branches require proposals and an eligible separate reviewer, and users can inspect history, configuration, and schema differences before promotion or rollback.",
+      "publicBehavior": "Protected branches require proposals and an explicitly assigned human reviewer; the creator may be that reviewer, and users can inspect history, configuration, and schema differences before promotion or rollback.",
       "sourceIds": [
         "palantir-pipeline-branches",
         "palantir-pipeline-management"
@@ -913,14 +913,14 @@
         "apps/foundry/src/features/pipelines/components/ProposalDiffPanel.tsx"
       ],
       "proofTests": [
-        "test_pipeline_proposal_requires_independent_reviewer_and_blocks_stale_execution",
+        "test_pipeline_proposal_allows_author_review_but_blocks_unassigned_and_stale_execution",
         "test_pipeline_rebase_three_way_merges_independent_changes_and_reports_conflicts",
         "test_three_way_merge_preserves_independent_node_changes",
         "test_three_way_merge_reports_same_field_conflict_without_silent_overwrite",
         "test_three_way_merge_reports_delete_vs_modify_conflict"
       ],
       "operatorEvidence": [
-        "The browser proposal flow assigns a named reviewer and prevents the creator session from approving; an independent reviewer decision is required before version creation.",
+        "The browser proposal flow assigns a named human reviewer before version creation; the creator may self-assign and explicitly approve.",
         "The Builder toolbar displays Protected state and exposes Rebase only for a clean branch whose base is stale.",
         "API evidence proves independent node changes survive three-way rebase while same-field changes return a typed path-level 409 conflict without mutating the branch."
       ],

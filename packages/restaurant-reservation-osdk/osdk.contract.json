@@ -1,0 +1,182 @@
+{
+  "schemaVersion": "foundry-lite-consumer-osdk-contract/v1",
+  "applicationId": "restaurant-reservation-customer",
+  "packageName": "@foundry-lite/restaurant-reservation-osdk",
+  "domainTypes": [
+    {
+      "name": "ReservationPolicyQuote",
+      "fields": [
+        {"name": "decision", "type": "string"},
+        {"name": "isBookable", "type": "boolean"},
+        {"name": "reasonCodes", "type": "string[]"},
+        {"name": "depositAmountKrw", "type": "number"},
+        {"name": "cancellationDeadlineAt", "type": "string"},
+        {"name": "lateArrivalGraceMinutes", "type": "number"},
+        {"name": "quoteExpiresAt", "type": "string"},
+        {"name": "inventoryHoldStatus", "type": "string"},
+        {"name": "holdDurationMinutes", "type": "number"},
+        {"name": "serviceEndsAt", "type": "string"},
+        {"name": "turnTimeMinutes", "type": "number"},
+        {"name": "policyVersion", "type": "string"},
+        {"name": "policyMessage", "type": "string"}
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "apiName": "Restaurant",
+      "primaryKey": "id",
+      "titleProperty": "name",
+      "properties": [
+        {"name": "id", "type": "string"},
+        {"name": "restaurantId", "type": "string"},
+        {"name": "name", "type": "string"},
+        {"name": "location", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "timeZone", "type": "string"},
+        {"name": "serviceStartLocal", "type": "string"},
+        {"name": "lastSeatingLocal", "type": "string"},
+        {"name": "slotIntervalMinutes", "type": "number"},
+        {"name": "bookingWindowDays", "type": "number"},
+        {"name": "minAdvanceMinutes", "type": "number"},
+        {"name": "closedWeekdaysCsv", "type": "string"},
+        {"name": "maxOnlinePartySize", "type": "number"},
+        {"name": "largePartyThreshold", "type": "number"},
+        {"name": "depositPerPersonKrw", "type": "number"},
+        {"name": "cancellationCutoffHours", "type": "number"},
+        {"name": "lateArrivalGraceMinutes", "type": "number"},
+        {"name": "quoteValidityMinutes", "type": "number"},
+        {"name": "depositHoldMinutes", "type": "number"},
+        {"name": "autoConfirmPartySizeMax", "type": "number"},
+        {"name": "policyVersion", "type": "string"},
+        {"name": "policyMessage", "type": "string"}
+      ]
+    },
+    {
+      "apiName": "DiningTable",
+      "primaryKey": "id",
+      "titleProperty": "label",
+      "properties": [
+        {"name": "id", "type": "string"},
+        {"name": "restaurantId", "type": "string"},
+        {"name": "tableId", "type": "string"},
+        {"name": "label", "type": "string"},
+        {"name": "capacity", "type": "number"},
+        {"name": "status", "type": "string"},
+        {"name": "area", "type": "string"},
+        {"name": "minPartySize", "type": "number"},
+        {"name": "turnTimeMinutes", "type": "number"},
+        {"name": "isAccessible", "type": "boolean"},
+        {"name": "isHighChairCompatible", "type": "boolean"},
+        {"name": "isCombinable", "type": "boolean"},
+        {"name": "tableType", "type": "string"},
+        {"name": "reservationLedgerJson", "type": "string"},
+        {"name": "inventoryUpdatedAt", "type": "string", "optional": true},
+        {"name": "lastReservationId", "type": "string", "optional": true}
+      ]
+    },
+    {
+      "apiName": "Reservation",
+      "primaryKey": "id",
+      "titleProperty": "reservationId",
+      "properties": [
+        {"name": "id", "type": "string"},
+        {"name": "reservationId", "type": "string"},
+        {"name": "restaurantId", "type": "string"},
+        {"name": "tableId", "type": "string"},
+        {"name": "guestName", "type": "string"},
+        {"name": "guestPhone", "type": "string"},
+        {"name": "guestEmail", "type": "string"},
+        {"name": "partySize", "type": "number"},
+        {"name": "reservationAt", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "requestedAt", "type": "string"},
+        {"name": "createdAt", "type": "string"},
+        {"name": "seatingPreference", "type": "string"},
+        {"name": "specialRequest", "type": "string"},
+        {"name": "policyVersion", "type": "string"},
+        {"name": "policyDecision", "type": "string"},
+        {"name": "quotedDepositKrw", "type": "number"},
+        {"name": "cancellationDeadlineAt", "type": "string"},
+        {"name": "lateArrivalGraceMinutes", "type": "number"},
+        {"name": "quoteExpiresAt", "type": "string"},
+        {"name": "inventoryHoldStatus", "type": "string"},
+        {"name": "turnTimeMinutes", "type": "number"},
+        {"name": "customerAcceptedPolicy", "type": "boolean"},
+        {"name": "sourceChannel", "type": "string"},
+        {"name": "holdExpiresAt", "type": "string"},
+        {"name": "inventoryVersion", "type": "number"},
+        {"name": "paymentStatus", "type": "string"},
+        {"name": "paymentProvider", "type": "string"},
+        {"name": "paymentAttemptId", "type": "string"},
+        {"name": "paymentReference", "type": "string"},
+        {"name": "paymentAuthorizedAt", "type": "string"},
+        {"name": "paidDepositKrw", "type": "number"},
+        {"name": "refundStatus", "type": "string"},
+        {"name": "refundReference", "type": "string"},
+        {"name": "refundedAmountKrw", "type": "number"},
+        {"name": "refundedAt", "type": "string"},
+        {"name": "cancellationId", "type": "string"},
+        {"name": "cancellationReason", "type": "string"},
+        {"name": "cancelledAt", "type": "string"}
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "apiName": "QuoteAtomicReservationPolicy",
+      "outputType": "ReservationPolicyQuote",
+      "inputs": [
+        {"name": "restaurant", "type": "string"},
+        {"name": "table", "type": "string"},
+        {"name": "desiredAt", "type": "string"},
+        {"name": "requestedAt", "type": "string"},
+        {"name": "partySize", "type": "number"},
+        {"name": "guestPhone", "type": "string"},
+        {"name": "seatingPreference", "type": "string"}
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "apiName": "ReserveTableWithAtomicInventory",
+      "targetObjectType": "Restaurant",
+      "parameters": [
+        {"name": "restaurant", "type": "string"},
+        {"name": "table", "type": "string"},
+        {"name": "reservationId", "type": "string"},
+        {"name": "guestName", "type": "string"},
+        {"name": "guestPhone", "type": "string"},
+        {"name": "guestEmail", "type": "string"},
+        {"name": "partySize", "type": "number"},
+        {"name": "desiredAt", "type": "string"},
+        {"name": "requestedAt", "type": "string"},
+        {"name": "seatingPreference", "type": "string"},
+        {"name": "specialRequest", "type": "string"},
+        {"name": "customerAcceptedPolicy", "type": "boolean"}
+      ]
+    },
+    {
+      "apiName": "PayReservationDeposit",
+      "targetObjectType": "Reservation",
+      "parameters": [
+        {"name": "reservation", "type": "string"},
+        {"name": "table", "type": "string"},
+        {"name": "paymentAttemptId", "type": "string"},
+        {"name": "paymentMethodRef", "type": "string"},
+        {"name": "requestedAt", "type": "string"}
+      ]
+    },
+    {
+      "apiName": "CancelCustomerReservation",
+      "targetObjectType": "Reservation",
+      "parameters": [
+        {"name": "reservation", "type": "string"},
+        {"name": "table", "type": "string"},
+        {"name": "cancellationId", "type": "string"},
+        {"name": "cancellationReason", "type": "string"},
+        {"name": "requestedAt", "type": "string"}
+      ]
+    }
+  ]
+}

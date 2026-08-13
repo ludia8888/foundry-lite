@@ -96,9 +96,18 @@ def _parameter_payload(parameter: ActionParameterV3) -> dict[str, object]:
         "type": parameter.data_type,
         "required": parameter.required,
     }
-    payload.update(parameter.metadata)
+    payload.update({key: _canonical_contract_value(value) for key, value in parameter.metadata.items()})
     if parameter.description is not None:
         payload["description"] = parameter.description
     if parameter.constraints:
         payload["constraints"] = dict(parameter.constraints)
     return payload
+
+
+def _canonical_contract_value(value: object) -> object:
+    """Normalize compiled parameter metadata to the JSON shape used by Function YAML."""
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_contract_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_canonical_contract_value(item) for item in value]
+    return value

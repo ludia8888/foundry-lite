@@ -10,6 +10,7 @@ from foundry_lite.application.facades.dataset_workspace import DatasetWorkspace
 from foundry_lite.application.facades.developer_console import DeveloperConsole
 from foundry_lite.application.facades.erasure_gateway import ErasureGateway
 from foundry_lite.application.facades.function_gateway import FunctionGateway
+from foundry_lite.application.facades.governed_release_workspace import GovernedReleaseWorkspace
 from foundry_lite.application.facades.insight_review_workspace import InsightReviewWorkspace
 from foundry_lite.application.facades.materialization_runner import MaterializationRunner
 from foundry_lite.application.facades.media_workspace import MediaWorkspace
@@ -23,6 +24,7 @@ from foundry_lite.application.facades.source_workspace import SourceWorkspace
 from foundry_lite.application.facades.supply_chain_demo import SupplyChainDemo
 from foundry_lite.application.facades.transform_pipeline import TransformPipeline
 from foundry_lite.application.facades.virtual_tables import VirtualTableGateway
+from foundry_lite.application.governed_release_composition import build_governed_release_workspace
 from foundry_lite.application.services.aip.fde_mcp_service import FdeMcpGateway
 from foundry_lite.application.services.ontology_mcp_gateway import OntologyMcpGateway
 
@@ -36,6 +38,8 @@ __all__ = [
     "ErasureGateway",
     "FdeMcpGateway",
     "FunctionGateway",
+    "GovernedReleaseWorkspace",
+    "build_governed_release_workspace",
     "InsightReviewWorkspace",
     "MaterializationRunner",
     "MediaWorkspace",

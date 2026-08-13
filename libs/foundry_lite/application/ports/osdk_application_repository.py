@@ -347,6 +347,10 @@ class OsdkApplicationRepository(OsdkSecurityRepository, Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, session_id: str
     ) -> OsdkMcpSessionRow | None: ...
 
+    def active_mcp_sessions_for_application(
+        self, *, transaction: TransactionContext, tenant_id: str, app_id: str
+    ) -> list[OsdkMcpSessionRow]: ...
+
     def claim_mcp_session_stream_lease(
         self,
         *,

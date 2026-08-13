@@ -1,0 +1,9 @@
+{
+  "name": "@foundry-lite/chatgpt-builder-widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test widget.test.mjs"
+  }
+}

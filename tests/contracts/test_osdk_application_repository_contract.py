@@ -59,6 +59,12 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
         session_events = repository.mcp_session_events_after(
             transaction=conn, tenant_id="tenant-a", session_id="ontology-mcp-session-1", after_sequence=1
         )
+        live_sessions = repository.active_mcp_sessions_for_application(
+            transaction=conn, tenant_id="tenant-a", app_id="app-1"
+        )
+        other_tenant_sessions = repository.active_mcp_sessions_for_application(
+            transaction=conn, tenant_id="tenant-b", app_id="app-1"
+        )
         terminated_session = repository.terminate_mcp_session(
             transaction=conn,
             tenant_id="tenant-a",
@@ -212,6 +218,8 @@ def test_osdk_application_repository_contract_round_trips_application_scope_and_
     assert first_event is not None and first_event["sequence"] == 1
     assert second_event is not None and second_event["sequence"] == 2
     assert [event["event_type"] for event in session_events] == ["tool.completed"]
+    assert [row["id"] for row in live_sessions] == ["ontology-mcp-session-1"]
+    assert other_tenant_sessions == []
     assert terminated_session is not None and terminated_session["status"] == "terminated"
     assert [row["tool_id"] for row in mcp_tool_activations] == ["platform.docs.search"]
     assert other_actor_activations == []

@@ -77,7 +77,7 @@
         "tests/integration/test_ai_fde_platform.py",
         "tests/integration/test_builder_mcp_full_surface.py"
       ],
-      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits. There are 68 server-owned tools: 43 exact-name tools from Palantir's public 72-tool catalog are wired to real Compass, Dataset, lineage, Ontology branch, Object Query, OSDK/Platform SDK, Developer Console, governed Data Connection, and documentation services; 25 are Foundry-lite-specific branch/test/proposal/Pilot tools. A catalog-derived integration ratchet executes all 68 through real Builder MCP JSON-RPC and checks one succeeded durable tool row per call. The remaining official 29 are not advertised until their underlying Code Repository, Global Branching, Compute Module, Dataset build/SQL, Developer Console conversion, or versioned webhook-update product foundation exists."
+      "boundary": "The server owns schemas, effects, confirmation policy, permissions, scope prefixes, and output limits. There are 69 server-owned tools: 43 exact-name tools from Palantir's public 72-tool catalog are wired to real Compass, Dataset, lineage, Ontology branch, Object Query, OSDK/Platform SDK, Developer Console, governed Data Connection, and documentation services; 26 are Foundry-lite-specific branch/test/proposal/Pilot tools. A catalog-derived integration ratchet executes all 69 through real Builder MCP JSON-RPC and checks one succeeded durable tool row per call. The remaining official 29 are not advertised until their underlying Code Repository, Global Branching, Compute Module, Dataset build/SQL, Developer Console conversion, or versioned webhook-update product foundation exists."
     },
     {
       "id": "explicit-mutation-confirmation",
@@ -199,7 +199,7 @@
         "tests/integration/test_mcp_rate_limits.py",
         "tests/contracts/test_mcp_rate_limiter_postgres_contract.py"
       ],
-      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, an exact Builder resource audience, app/client/resource-scope intersection, Origin checks, strict lifecycle and typed JSON-RPC IDs, canonical structured/text results, durable session-scoped lazy discovery, a single SSE lease with resume/termination, durable endpoint/tool admission, and fingerprint-bound one-time human confirmation receipts, with no approval/merge/deploy tools exposed on the Builder plane. The catalog-derived integration ratchet executes 49 reads and 19 separately confirmed mutations through JSON-RPC tools/call; the official Python ClientSession live gate keeps one session across branch reads and five confirmed writes against a separate strict-OIDC Uvicorn process and PostgreSQL. The current native breadth is 43 exact-name tools out of the official 72; the other 25 catalog entries are product-specific rather than false parity claims. Hosted ChatGPT SaaS and external IdP/DCR interoperability remain outside current live evidence."
+      "boundary": "MCP Streamable HTTP uses Authorization Code with PKCE, an exact Builder resource audience, app/client/resource-scope intersection, Origin checks, strict lifecycle and typed JSON-RPC IDs, canonical structured/text results, durable session-scoped lazy discovery, a single SSE lease with resume/termination, durable endpoint/tool admission, and fingerprint-bound one-time human confirmation receipts, with no approval/merge/deploy tools exposed on the Builder plane. The catalog-derived integration ratchet executes 49 reads and 20 separately confirmed mutations through JSON-RPC tools/call; the official Python ClientSession live gate keeps one session across branch reads and five confirmed writes against a separate strict-OIDC Uvicorn process and PostgreSQL. The current native breadth is 43 exact-name tools out of the official 72; the other 26 catalog entries are product-specific rather than false parity claims. Hosted ChatGPT SaaS and external IdP/DCR interoperability remain outside current live evidence."
     },
     {
       "id": "pilot-application-generation",
@@ -210,7 +210,7 @@
         "apps/foundry/src/features/aip/PilotApplicationPage.tsx",
         "test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle"
       ],
-      "boundary": "Generation creates replay-safe seed data, an isolated Ontology branch, restricted OSDK app, OSDK-backed React source, CI contract, durable resource, and a stable preview path; production use still requires human Ontology activation."
+      "boundary": "Generation creates replay-safe seed data, an isolated Ontology branch, restricted OSDK app, application-specific consumer_osdk_strict package and domain hook, TypeScript-AST boundary checker, CI contract, durable resource, and a stable preview path. The customer App source cannot import the base SDK or construct inline generic resources, and server normalization overwrites model-supplied package, profile, and exception bypasses. Production use still requires human Ontology activation."
     }
   ]
 }

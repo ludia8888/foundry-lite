@@ -1,11 +1,30 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from foundry_lite.application.services.ontology_mcp_schema import validate_tool_arguments
-from foundry_lite.application.services.ontology_mcp_tools import approval_status_tool, function_tools
+from foundry_lite.application.services.ontology_mcp_tools import approval_status_tool, function_tools, object_tools
 from foundry_lite.domain.errors import ValidationFailed
+
+
+def test_object_search_tool_does_not_advertise_a_retrieval_mode_the_planner_rejects() -> None:
+    """Regression: the tool told agents to combine keyword and semantic search, and it 400s.
+
+    `_search_route` has rejected that pair since the object semantic-search work landed; the
+    MCP description added later advertised it as hybrid retrieval, so an agent that believed
+    the schema got VALIDATION_FAILED. The advertised contract must describe the planner.
+    """
+
+    search_tool = next(
+        tool for tool in object_tools("Order", ("osdk:object:Order:read",)) if tool["name"] == "object.Order.search"
+    )
+    properties = cast(dict[str, Any], cast(dict[str, Any], search_tool["inputSchema"])["properties"])
+    description = cast(str, properties["semanticText"]["description"])
+
+    assert "hybrid" not in description.lower()
+    assert "instead of" in description.lower()
+    assert "rejects" in description.lower()
 
 
 def test_ontology_mcp_function_tool_uses_version_pinned_typed_input_contract() -> None:

@@ -6,13 +6,15 @@ import base64
 import binascii
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import cast
 from urllib.parse import parse_qs, unquote
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
+from foundry_lite.application.services.osdk_dynamic_client_registration import parse_dynamic_client_registration
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, ValidationFailed
+from foundry_lite.domain.errors import FoundryLiteError, NotFound, PermissionDenied, ValidationFailed
 from pydantic import ValidationError
 
 from foundry_lite_api import runtime
@@ -33,8 +35,8 @@ def _scope_query(scope: str | None) -> tuple[str, ...]:
 
 @router.get("/.well-known/oauth-authorization-server")
 def osdk_oauth_authorization_server(request: Request) -> dict[str, object]:
-    base = str(request.base_url).rstrip("/")
-    return {
+    base = runtime.get_mcp_authorization_config().canonical_base_url(str(request.base_url))
+    metadata: dict[str, object] = {
         "issuer": runtime.foundry.auth.osdk_oauth_issuer(),
         "authorization_endpoint": f"{base}/api/auth/osdk/oauth/authorize",
         "token_endpoint": f"{base}/api/auth/osdk/oauth/token",
@@ -44,6 +46,51 @@ def osdk_oauth_authorization_server(request: Request) -> dict[str, object]:
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "none"],
     }
+    if runtime.get_mcp_authorization_config().dynamic_registration_application_id() is not None:
+        metadata["registration_endpoint"] = f"{base}/api/auth/osdk/oauth/register"
+    return metadata
+
+
+@router.post("/api/auth/osdk/oauth/register", status_code=201)
+async def register_osdk_oauth_dynamic_client(request: Request) -> JsonObject:
+    """RFC 7591 registration so a remote MCP host can mint its own PKCE client."""
+
+    config = runtime.get_mcp_authorization_config()
+    application_id = config.dynamic_registration_application_id()
+    if application_id is None:
+        raise _handle_error(NotFound("dynamic client registration is not enabled"), request)
+    try:
+        registration = parse_dynamic_client_registration(await _registration_body(request))
+        return cast(
+            JsonObject,
+            runtime.foundry.auth.osdk_oauth_register_dynamic_client(
+                application_id=application_id,
+                registration=registration,
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+def _consent_ctx(request: Request) -> RequestContext:
+    """Apply the opt-in local consent roles to an interactive browser authorization."""
+
+    ctx = _ctx(request)
+    roles = runtime.get_mcp_authorization_config().consent_roles()
+    return replace(ctx, roles=roles) if roles else ctx
+
+
+async def _registration_body(request: Request) -> Mapping[str, object]:
+    raw = await request.body()
+    if len(raw) > _MAX_TOKEN_REQUEST_BYTES:
+        raise ValidationFailed("dynamic client registration body is too large")
+    try:
+        payload = json.loads(raw or b"{}")
+    except json.JSONDecodeError as exc:
+        raise ValidationFailed("dynamic client registration body must be JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValidationFailed("dynamic client registration body must be a JSON object")
+    return cast(Mapping[str, object], payload)
 
 
 @router.get("/api/auth/osdk/oauth/authorize", response_model=None)
@@ -82,7 +129,7 @@ def authorize_osdk_oauth(
                 state=state,
                 resource=target.resource_uri if target is not None else None,
                 resource_application_id=target.application_id if target is not None else None,
-                ctx=_ctx(request),
+                ctx=_consent_ctx(request),
             ),
         )
         if response_type is not None:
