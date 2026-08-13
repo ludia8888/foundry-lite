@@ -56,6 +56,59 @@ def test_a_function_receives_its_inputs_by_name_and_returns_a_value() -> None:
     assert result == {"schemaVersion": 1, "status": "succeeded", "output": 6}
 
 
+def test_an_object_set_can_be_filtered_and_returned_without_loading_any_objects() -> None:
+    result = runner.execute_manifest(
+        _manifest(
+            "def compute(tables):\n    return tables.where(status={'$eq': 'FREE'})\n",
+            inputs={
+                "tables": {
+                    "$foundryObjectSet": {
+                        "objectType": "DiningTable",
+                        "filter": None,
+                        "orderBy": [],
+                    }
+                }
+            },
+            output_type="objectSet",
+        )
+    )
+
+    assert result["output"] == {
+        "$foundryObjectSet": {
+            "objectType": "DiningTable",
+            "filter": {"property": "status", "op": "eq", "value": "FREE"},
+            "orderBy": [],
+        }
+    }
+
+
+def test_the_official_python_osdk_import_shape_is_available() -> None:
+    source = (
+        "from functions.api import function\n"
+        "from ontology_sdk.ontology.objects import DiningTable\n"
+        "@function\n"
+        "def compute(tables):\n"
+        "    return tables.where(DiningTable.object_type.capacity > 100)\n"
+    )
+    result = runner.execute_manifest(
+        _manifest(
+            source,
+            inputs={"tables": {"$foundryObjectSet": {"objectType": "DiningTable", "filter": None, "orderBy": []}}},
+            output_type="objectSet",
+        )
+    )
+
+    output = result["output"]
+    assert isinstance(output, dict)
+    descriptor = output["$foundryObjectSet"]
+    assert isinstance(descriptor, dict)
+    assert descriptor["filter"] == {
+        "property": "capacity",
+        "op": "gt",
+        "value": 100,
+    }
+
+
 # --- the declared type is enforced, not assumed --------------------------------------
 
 
@@ -84,8 +137,7 @@ def test_the_declared_output_type_is_enforced(output_type: str, body: str, shoul
     assert _failure(manifest).failure_type == "output_validation_error"
 
 
-def test_an_output_type_the_runner_does_not_know_is_refused() -> None:
-    """`object` and `objectSet` are absent on purpose: returning objects is an Ontology edit."""
+def test_an_invalid_object_output_is_refused() -> None:
     assert _failure(_manifest("def compute():\n    return {}\n", output_type="object")).failure_type == (
         "output_validation_error"
     )

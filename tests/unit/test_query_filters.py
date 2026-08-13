@@ -11,7 +11,9 @@ def test_matches_filter_supports_property_evaluators() -> None:
     assert matches_filter(properties, {"property": "status", "op": "eq", "value": "PENDING"}) is True
     assert matches_filter(properties, {"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]}) is True
     assert matches_filter(properties, {"property": "amount", "op": "gte", "value": 500}) is True
+    assert matches_filter(properties, {"property": "amount", "op": "gt", "value": 699}) is True
     assert matches_filter(properties, {"property": "amount", "op": "lte", "value": 800}) is True
+    assert matches_filter(properties, {"property": "amount", "op": "lt", "value": 701}) is True
     assert matches_filter(properties, {"property": "customer", "op": "contains", "value": "retail"}) is True
 
 

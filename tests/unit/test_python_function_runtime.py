@@ -1,11 +1,4 @@
-"""Python ontology functions: what the sandbox is handed, and what it is refused.
-
-Palantir runs Functions on Objects with an OSDK client that reads the Ontology while the
-function executes. Our sandbox has no network, so the reads happen first and the function
-receives a JSON document. These tests pin the two consequences of that choice: the resolution
-goes through the governed query service under the caller's own context, and an object set too
-large to hand over fails by name instead of arriving silently truncated.
-"""
+"""Code Functions keep ObjectSet inputs lazy and permission-scoped."""
 
 from __future__ import annotations
 
@@ -13,9 +6,12 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from foundry_lite.application.ports.code_execution import FunctionExecutionPlan, FunctionExecutionResult
+from foundry_lite.application.ports.code_execution import (
+    FunctionExecutionPlan,
+    FunctionExecutionResult,
+    FunctionQueryExecutor,
+)
 from foundry_lite.application.services.python_function_runtime import (
-    MAX_MATERIALIZED_OBJECTS,
     PythonFunctionRuntimeService,
 )
 from foundry_lite.domain.context import RequestContext
@@ -30,9 +26,16 @@ class _RecordingAdapter:
     def __init__(self, output: object = 6) -> None:
         self.plans: list[FunctionExecutionPlan] = []
         self._output = output
+        self.query_executor: FunctionQueryExecutor | None = None
 
-    def execute_function(self, plan: FunctionExecutionPlan) -> FunctionExecutionResult:
+    def execute_function(
+        self,
+        plan: FunctionExecutionPlan,
+        *,
+        query_executor: FunctionQueryExecutor | None = None,
+    ) -> FunctionExecutionResult:
         self.plans.append(plan)
+        self.query_executor = query_executor
         return FunctionExecutionResult(output=self._output, stderr_byte_count=0, duration_ms=1)
 
 
@@ -53,12 +56,43 @@ class _RecordingObjectQuery:
         *,
         ctx: RequestContext | None = None,
         filter_ast: Mapping[str, object] | None = None,
+        order_by: Any = None,
         limit: int = 50,
+        cursor: str | None = None,
     ) -> Mapping[str, object]:
         self.calls.append(
-            {"kind": "query", "objectType": object_type_api_name, "filter": filter_ast, "limit": limit, "ctx": ctx}
+            {
+                "kind": "query",
+                "objectType": object_type_api_name,
+                "filter": filter_ast,
+                "orderBy": order_by,
+                "limit": limit,
+                "cursor": cursor,
+                "ctx": ctx,
+            }
         )
-        return {"objects": self.rows}
+        return {"items": self.rows, "nextCursor": None}
+
+    def aggregate_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        group_by: object = None,
+        select: object = None,
+    ) -> Mapping[str, object]:
+        self.calls.append(
+            {
+                "kind": "aggregate",
+                "objectType": object_type_api_name,
+                "filter": filter_ast,
+                "groupBy": group_by,
+                "select": select,
+                "ctx": ctx,
+            }
+        )
+        return {"groups": [{"key": {}, "metrics": {"count": 1}}], "totalGroups": 1}
 
 
 def _service(
@@ -87,12 +121,7 @@ def _definition(input_def: dict[str, Any], output_type: str = "integer", runtime
 # --- what reaches the sandbox --------------------------------------------------------
 
 
-def test_an_object_set_argument_is_a_filter_resolved_host_side_not_rows_from_the_caller() -> None:
-    """The caller names a filter; the platform decides which rows exist and may be seen.
-
-    Accepting rows from the caller would let a function be handed objects the caller cannot
-    read, which is the whole reason resolution happens on this side of the boundary.
-    """
+def test_an_object_set_argument_stays_a_deferred_descriptor_until_the_function_reads_it() -> None:
     service, adapter, query = _service()
 
     service.run(
@@ -101,10 +130,16 @@ def test_an_object_set_argument_is_a_filter_resolved_host_side_not_rows_from_the
         inputs={"tables": {"filter": {"eq": {"status": "FREE"}}}},
     )
 
-    assert query.calls[0]["objectType"] == "DiningTable"
-    assert query.calls[0]["filter"] == {"eq": {"status": "FREE"}}
-    assert query.calls[0]["ctx"] is _CTX
-    assert adapter.plans[0].inputs_json == {"tables": [{"objectId": "T-1", "seats": 4}]}
+    assert query.calls == []
+    assert adapter.plans[0].inputs_json == {
+        "tables": {
+            "$foundryObjectSet": {
+                "objectType": "DiningTable",
+                "filter": {"eq": {"status": "FREE"}},
+                "orderBy": [],
+            }
+        }
+    }
 
 
 def test_the_plan_carries_the_pinned_version_and_the_declared_output_type() -> None:
@@ -143,41 +178,60 @@ def test_an_absent_optional_input_is_omitted_rather_than_sent_as_null() -> None:
     assert adapter.plans[0].inputs_json == {}
 
 
-# --- what is refused -----------------------------------------------------------------
-
-
-def test_an_object_set_over_the_ceiling_fails_instead_of_arriving_truncated() -> None:
-    """A function that computes over a silently shortened set returns a confidently wrong answer.
-
-    This is the visible cost of materializing inputs rather than handing the function a lazy
-    handle, so it surfaces as a validation failure naming the input and the limit.
-    """
-    oversized = [{"objectId": f"T-{index}"} for index in range(MAX_MATERIALIZED_OBJECTS + 1)]
-    service, _, _ = _service(query=_RecordingObjectQuery(rows=oversized))
-
-    with pytest.raises(ValidationFailed, match="exceeds what a Python function can be handed") as caught:
-        service.run(
-            _CTX,
-            definition=_definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"}),
-            inputs={"tables": None},
-        )
-
-    assert caught.value.details["input"] == "tables"
-    assert caught.value.details["limit"] == MAX_MATERIALIZED_OBJECTS
-
-
-def test_an_object_set_exactly_at_the_ceiling_is_served() -> None:
-    """Off-by-one here would reject a legitimate set, so the boundary is pinned from both sides."""
-    exact = [{"objectId": f"T-{index}"} for index in range(MAX_MATERIALIZED_OBJECTS)]
-    service, adapter, _ = _service(query=_RecordingObjectQuery(rows=exact))
-
+def test_the_lazy_query_callback_preserves_context_filter_order_and_page_bounds() -> None:
+    service, adapter, query = _service()
     service.run(
         _CTX,
         definition=_definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"}),
         inputs={"tables": None},
     )
 
-    assert len(adapter.plans[0].inputs_json["tables"]) == MAX_MATERIALIZED_OBJECTS  # type: ignore[arg-type]
+    assert callable(adapter.query_executor)
+    adapter.query_executor(
+        {
+            "operation": "fetchPage",
+            "objectType": "DiningTable",
+            "filter": {"property": "status", "op": "eq", "value": "FREE"},
+            "orderBy": [{"property": "seats", "direction": "desc"}],
+            "pageSize": 900,
+            "pageToken": "next-1",
+        }
+    )
+
+    assert query.calls == [
+        {
+            "kind": "query",
+            "objectType": "DiningTable",
+            "filter": {"property": "status", "op": "eq", "value": "FREE"},
+            "orderBy": [{"property": "seats", "direction": "desc"}],
+            "limit": 500,
+            "cursor": "next-1",
+            "ctx": _CTX,
+        }
+    ]
+
+
+def test_the_lazy_aggregate_callback_uses_the_same_governed_service() -> None:
+    service, adapter, query = _service()
+    service.run(
+        _CTX,
+        definition=_definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"}),
+        inputs={"tables": None},
+    )
+    assert callable(adapter.query_executor)
+    result = adapter.query_executor(
+        {
+            "operation": "aggregate",
+            "objectType": "DiningTable",
+            "filter": None,
+            "groupBy": ["status"],
+            "select": [{"name": "count", "function": "count", "property": None}],
+        }
+    )
+
+    assert result["totalGroups"] == 1
+    assert query.calls[0]["kind"] == "aggregate"
+    assert query.calls[0]["ctx"] is _CTX
 
 
 def test_an_object_input_without_an_object_type_is_refused() -> None:
@@ -282,21 +336,24 @@ def test_an_object_input_that_is_neither_an_id_nor_a_reference_is_refused() -> N
         )
 
 
-def test_a_query_that_returns_something_other_than_a_collection_is_refused() -> None:
-    """Failing here names the input; letting it through hands user code a non-iterable."""
+def test_a_malformed_lazy_page_is_returned_to_the_runner_for_contract_validation() -> None:
+    """The host does not load or reinterpret rows; the runner owns page-shape validation."""
 
     class _Broken(_RecordingObjectQuery):
         def query_objects(self, object_type_api_name: str, **_kwargs: Any) -> Mapping[str, object]:
-            return {"objects": "not-a-list"}
+            return {"items": "not-a-list"}
 
-    service, _, _ = _service(query=_Broken())
+    service, adapter, _ = _service(query=_Broken())
+    service.run(
+        _CTX,
+        definition=_definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"}),
+        inputs={"tables": None},
+    )
+    assert callable(adapter.query_executor)
 
-    with pytest.raises(ValidationFailed, match="did not return a collection"):
-        service.run(
-            _CTX,
-            definition=_definition({"apiName": "tables", "type": "objectSet", "objectType": "DiningTable"}),
-            inputs={"tables": None},
-        )
+    assert adapter.query_executor({"operation": "fetchPage", "objectType": "DiningTable", "pageSize": 10}) == {
+        "items": "not-a-list"
+    }
 
 
 def test_a_definition_with_no_declared_inputs_sends_nothing() -> None:

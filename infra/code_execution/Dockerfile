@@ -16,6 +16,9 @@ COPY --chown=65532:65532 \
     libs/foundry_lite/infrastructure/runners/python_function_runner.py \
     /opt/foundry-lite/runner/python_function_runner.py
 COPY --chown=65532:65532 \
+    libs/foundry_lite/infrastructure/runners/python_function_osdk.py \
+    /opt/foundry-lite/runner/python_function_osdk.py
+COPY --chown=65532:65532 \
     libs/foundry_lite/transforms_sdk \
     /opt/foundry-lite/foundry_lite/transforms_sdk
 

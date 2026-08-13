@@ -1131,7 +1131,7 @@ export type ObjectLinkPayload = {
   warning?: { type: string; message: string };
 };
 export type ObjectFilter =
-  | { property: string; op: "eq" | "in" | "gte" | "lte" | "contains" | string; value: unknown }
+  | { property: string; op: "eq" | "in" | "gt" | "gte" | "lt" | "lte" | "contains" | string; value: unknown }
   | { and: ObjectFilter[] }
   | { or: ObjectFilter[] };
 export type ObjectQueryRequest = { filter?: ObjectFilter; orderBy?: Array<Record<string, string>>; limit?: number; cursor?: string | null; search?: string | null };
@@ -6036,7 +6036,7 @@ function normalizeOsdkPropertyOperator(
     objectType: objectType.apiName,
     property,
     operator,
-    supportedOperators: ['$eq', '$in', '$gte', '$lte', '$contains', '$isNull'],
+    supportedOperators: ['$eq', '$in', '$gt', '$gte', '$lt', '$lte', '$contains', '$isNull'],
   });
 }
 

@@ -1011,7 +1011,7 @@ def _ts_osdk_runtime_lines() -> list[str]:
         "    objectType: objectType.apiName,",
         "    property,",
         "    operator,",
-        "    supportedOperators: ['$eq', '$in', '$gte', '$lte', '$contains', '$isNull'],",
+        "    supportedOperators: ['$eq', '$in', '$gt', '$gte', '$lt', '$lte', '$contains', '$isNull'],",
         "  });",
         "}",
         "",

@@ -164,6 +164,10 @@ def _property_condition(name: str, operation: str, value: object) -> Any:
         return expression == sql_value
     if operation == "gte":
         return expression >= sql_value
+    if operation == "gt":
+        return expression > sql_value
+    if operation == "lt":
+        return expression < sql_value
     return expression <= sql_value
 
 

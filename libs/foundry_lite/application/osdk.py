@@ -236,7 +236,15 @@ def _property_filter_ast(object_type_resource: OsdkObjectType, prop: str, value:
 
 def _filter_operator(operator: str) -> str:
     normalized = operator.removeprefix("$")
-    aliases = {"eq": "eq", "in": "in", "gte": "gte", "lte": "lte", "contains": "contains"}
+    aliases = {
+        "eq": "eq",
+        "in": "in",
+        "gt": "gt",
+        "gte": "gte",
+        "lt": "lt",
+        "lte": "lte",
+        "contains": "contains",
+    }
     if normalized in aliases:
         return aliases[normalized]
     raise ValidationFailed("unsupported Python OSDK filter operator", details={"operator": operator})

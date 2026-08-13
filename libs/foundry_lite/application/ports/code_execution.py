@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -17,6 +17,8 @@ CodeExecutionFailureType = Literal[
     "user_code_error",
     "output_validation_error",
 ]
+
+FunctionQueryExecutor = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 
 @dataclass(frozen=True)
@@ -89,17 +91,13 @@ class CodeExecutionFailureEvidence:
 
 @dataclass(frozen=True)
 class FunctionExecutionPlan:
-    """One ontology function to run in the sandbox, with its inputs already resolved.
+    """One ontology function plus deferred, permission-scoped ObjectSet inputs.
 
-    Inputs arrive materialized rather than as a query the sandbox could issue. The sandbox has
-    no network, so every object and object set the function reads has already been resolved
-    host-side through the governed object services under the caller's policy. That keeps the
-    security boundary in one place: user code never holds a database handle or a credential,
-    only a JSON document the platform decided it was allowed to see.
-
-    The cost is that an object set is a list here, not the lazy handle Palantir gives a function,
-    so a function cannot stream a collection larger than the host is willing to materialize.
-    ``input_byte_limit`` is where that ceiling is enforced and reported.
+    Individual object inputs are resolved before execution. ObjectSet inputs remain query-plan
+    descriptors and load only when user code asks for a page or aggregation. The sandbox still
+    receives no credential, database handle, or network access: every query crosses the
+    ``FunctionQueryExecutor`` callback and therefore the same governed object service used by
+    the rest of the OSDK.
     """
 
     function_api_name: str
@@ -139,6 +137,11 @@ class CodeExecutionAdapter(Protocol):
         """Execute a pinned Python transform inside the configured sandbox."""
         ...
 
-    def execute_function(self, plan: FunctionExecutionPlan) -> FunctionExecutionResult:
+    def execute_function(
+        self,
+        plan: FunctionExecutionPlan,
+        *,
+        query_executor: FunctionQueryExecutor | None = None,
+    ) -> FunctionExecutionResult:
         """Execute one ontology function inside the same sandbox as a transform."""
         ...

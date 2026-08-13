@@ -17,6 +17,7 @@ from foundry_lite.application.ports.code_execution import CodeExecutionSandboxPo
 JOB_DIR = "/sandbox-job"
 INPUT_DIR = "/sandbox-inputs"
 OUTPUT_DIR = "/sandbox-output"
+FUNCTION_IPC_DIR = "/sandbox-function-ipc"
 RUNTIME_DIR = "/opt/foundry-lite/runner"
 SDK_DIR = "/opt/foundry-lite/foundry_lite/transforms_sdk"
 TMP_DIR = "/sandbox-tmp"
@@ -114,6 +115,8 @@ class SandboxWorkspace:
     result_path: Path
     output_path: Path
     input_mounts: tuple[tuple[Path, str], ...]
+    writable_mounts: tuple[tuple[Path, str], ...] = ()
+    query_nonce: str = ""
 
 
 def validate_config(config: ContainerCodeExecutionConfig) -> None:
@@ -253,6 +256,7 @@ def _workspace_mount_arguments(workspace: SandboxWorkspace) -> list[str]:
         ),
     ]
     mounts.extend(_bind_mount(path, target, is_read_only=True) for path, target in workspace.input_mounts)
+    mounts.extend(_bind_mount(path, target, is_read_only=False) for path, target in workspace.writable_mounts)
     return [item for mount in mounts for item in ("--mount", mount)]
 
 

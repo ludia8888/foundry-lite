@@ -1156,7 +1156,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  warning?: { type: string; message: string };",
         "};",
         "export type ObjectFilter =",
-        '  | { property: string; op: "eq" | "in" | "gte" | "lte" | "contains" | string; value: unknown }',
+        '  | { property: string; op: "eq" | "in" | "gt" | "gte" | "lt" | "lte" | "contains" | string; value: unknown }',
         "  | { and: ObjectFilter[] }",
         "  | { or: ObjectFilter[] };",
         (

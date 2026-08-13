@@ -41,7 +41,7 @@ from foundry_lite.application.services.osdk_service_principal_authorization impo
 from foundry_lite.application.services.python_function_runtime import PythonFunctionRuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
-from foundry_lite.domain.ontology.function_types import FUNCTION_RUNTIME_PYTHON
+from foundry_lite.domain.ontology.function_types import CODE_FUNCTION_RUNTIMES
 from foundry_lite.domain.ontology.function_versions import is_range, satisfies
 
 
@@ -179,8 +179,8 @@ class FunctionExecutionService(CoreService):
         execution_id: str | None = None,
     ) -> FunctionExecutionResult:
         validate_function_inputs(row["definition"], inputs)
-        if row["definition"].get("runtime") == FUNCTION_RUNTIME_PYTHON:
-            return self._execute_python(ctx, row, inputs, execution_id)
+        if row["definition"].get("runtime") in CODE_FUNCTION_RUNTIMES:
+            return self._execute_code(ctx, row, inputs, execution_id)
         request = _builder_request(ctx, row, inputs, logic_run_id=execution_id)
         return _execution_result(row, request, self.builder_runtime_service.run(ctx, request))
 
@@ -194,7 +194,7 @@ class FunctionExecutionService(CoreService):
             operation="execute",
         )
 
-    def _execute_python(
+    def _execute_code(
         self,
         ctx: RequestContext,
         row: FunctionTypeRow,

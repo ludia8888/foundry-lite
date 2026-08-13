@@ -350,8 +350,12 @@ def _property_filter_condition(
         return _property_in_condition(property_name, data_type, value)
     if op == "gte":
         return _property_range_condition(property_name, data_type, value, is_lower_bound=True)
+    if op == "gt":
+        return _property_strict_range_condition(property_name, data_type, value, is_lower_bound=True)
     if op == "lte":
         return _property_range_condition(property_name, data_type, value, is_lower_bound=False)
+    if op == "lt":
+        return _property_strict_range_condition(property_name, data_type, value, is_lower_bound=False)
     return _property_contains_condition(property_name, value)
 
 
@@ -378,6 +382,20 @@ def _property_range_condition(property_name: str, data_type: str, value: object,
         return literal(False)
     expr = _property_value_expression(property_name, data_type)
     return expr >= sql_value if is_lower_bound else expr <= sql_value
+
+
+def _property_strict_range_condition(
+    property_name: str,
+    data_type: str,
+    value: object,
+    *,
+    is_lower_bound: bool,
+) -> Any:
+    sql_value = _filter_sql_value(value, data_type)
+    if sql_value is INVALID_SQL_VALUE or data_type == "boolean":
+        return literal(False)
+    expr = _property_value_expression(property_name, data_type)
+    return expr > sql_value if is_lower_bound else expr < sql_value
 
 
 def _property_contains_condition(property_name: str, value: object) -> Any:

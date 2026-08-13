@@ -30,6 +30,16 @@ def _filter_gte(current: object, value: object) -> bool:
     return False
 
 
+def _filter_gt(current: object, value: object) -> bool:
+    if isinstance(current, bool) or isinstance(value, bool):
+        return False
+    if isinstance(current, (int, float)) and isinstance(value, (int, float)):
+        return current > value
+    if isinstance(current, str) and isinstance(value, str):
+        return current > value
+    return False
+
+
 def _filter_lte(current: object, value: object) -> bool:
     if isinstance(current, bool) or isinstance(value, bool):
         return False
@@ -37,6 +47,16 @@ def _filter_lte(current: object, value: object) -> bool:
         return current <= value
     if isinstance(current, str) and isinstance(value, str):
         return current <= value
+    return False
+
+
+def _filter_lt(current: object, value: object) -> bool:
+    if isinstance(current, bool) or isinstance(value, bool):
+        return False
+    if isinstance(current, (int, float)) and isinstance(value, (int, float)):
+        return current < value
+    if isinstance(current, str) and isinstance(value, str):
+        return current < value
     return False
 
 
@@ -74,7 +94,9 @@ FILTER_OPERATIONS: dict[str, FilterEvaluator] = {
     "eq": _filter_eq,
     "in": _filter_in,
     "gte": _filter_gte,
+    "gt": _filter_gt,
     "lte": _filter_lte,
+    "lt": _filter_lt,
     "contains": _filter_contains,
 }
 
