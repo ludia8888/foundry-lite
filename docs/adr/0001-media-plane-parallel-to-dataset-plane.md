@@ -5,6 +5,16 @@
 - **Source design:** the unstructured-data / media-processing application design (external review doc "foundry_lite_unstructured_application_plan_ko", baseline commit `9c1104`)
 - **Related:** `docs/infra-ratchet.md` (Media M0–M9), `docs/infra-tricky-matrix.json` (media `sourceOfTruthRules`)
 
+## Official Palantir design sources
+
+- [Multimodal Data Plane](https://www.palantir.com/docs/foundry/architecture-center/multimodal-data-plane)
+- [Media Set transforms API](https://www.palantir.com/docs/foundry/transforms-python/media-set-transforms-api)
+
+These official pages are the public product-behavior cross-check for keeping table and media
+modalities governable without pretending they share one storage contract. The external review
+document named above supplied the initial proposal; it is not allowed to override the official
+public behavior or the executable Foundry-lite evidence.
+
 ## Context
 
 Foundry-lite needs to handle unstructured data — documents, PDF, email, images, audio, video, DICOM, future multimodal. The existing **Dataset Plane** has strong tabular invariants: `row_count`, schema, Parquet, single file/manifest, SQL/Spark transform, Iceberg snapshot. Forcing PDFs and video into a dataset row (or adding `datasets.storage_kind = media`) collapses those invariants and pollutes every service with `if format == media` branches (source doc §0, §2.2).

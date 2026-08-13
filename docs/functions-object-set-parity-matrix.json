@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "title": "Palantir Functions and ObjectSet public-behavior parity matrix",
+  "scope": "Publicly documented behavior only. This does not claim access to Palantir private implementation, infrastructure, source code, or trademarks.",
+  "lastVerified": "2026-08-13",
+  "statusValues": ["current", "partial", "planned"],
+  "officialSources": [
+    {
+      "id": "palantir-object-sets",
+      "url": "https://www.palantir.com/docs/foundry/functions/api-object-sets",
+      "contract": "ObjectSets are lazy, unordered single-type collections supporting searchable-property filters, search around, set operations, ordering, loading, and aggregation."
+    },
+    {
+      "id": "palantir-function-types",
+      "url": "https://www.palantir.com/docs/foundry/functions/types-reference",
+      "contract": "Function registry types and language mappings include Object, ObjectSet, Ontology edits, collections, structs, and language-specific scalar types."
+    },
+    {
+      "id": "palantir-language-support",
+      "url": "https://www.palantir.com/docs/foundry/functions/language-feature-support",
+      "contract": "Python and TypeScript v2 have first-class OSDK support; their supported platform capabilities are explicit and not identical."
+    },
+    {
+      "id": "palantir-python-objects",
+      "url": "https://www.palantir.com/docs/foundry/functions/python-functions-on-objects",
+      "contract": "Python functions generate and install a typed Ontology SDK, query through FoundryClient, accept and return typed ObjectSets, and can materialize a DataFrame explicitly."
+    },
+    {
+      "id": "palantir-typescript-v2",
+      "url": "https://www.palantir.com/docs/foundry/functions/typescript-v2-getting-started",
+      "contract": "TypeScript v2 functions are default exports in a repository with first-class OSDK support and explicit supported types."
+    },
+    {
+      "id": "palantir-object-set-limits",
+      "url": "https://www.palantir.com/docs/foundry/ontologies/oss-limitations",
+      "contract": "Object Set Service limits are explicit platform behavior and depend on API generation and operation shape."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "lazy-object-set-function-input",
+      "publicBehavior": "ObjectSet inputs defer object loading until a terminal page or aggregation operation.",
+      "sourceIds": ["palantir-object-sets", "palantir-function-types", "palantir-python-objects"],
+      "status": "current",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/python_function_runtime.py",
+        "libs/foundry_lite/infrastructure/adapters/function_query_bridge.py",
+        "libs/foundry_lite/infrastructure/runners/python_function_osdk.py",
+        "libs/foundry_lite/infrastructure/runners/typescript_function_runner.mjs"
+      ],
+      "proofTests": [
+        "test_an_object_set_argument_stays_a_deferred_descriptor_until_the_function_reads_it",
+        "test_networkless_query_bridge_round_trips_one_governed_page",
+        "test_an_object_set_can_be_filtered_and_returned_without_loading_any_objects",
+        "test_typescript_v2_default_export_can_filter_and_return_a_lazy_object_set"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "typed-python-typescript-osdk",
+      "publicBehavior": "Python and TypeScript v2 functions use language-specific typed OSDK packages over one permission-scoped Ontology.",
+      "sourceIds": ["palantir-language-support", "palantir-python-objects", "palantir-typescript-v2"],
+      "status": "partial",
+      "implementationEvidence": [
+        "libs/foundry_lite/infrastructure/runners/python_function_osdk.py",
+        "libs/foundry_lite/infrastructure/runners/typescript_function_runner.mjs",
+        "libs/foundry_lite/application/services/function_execution_service.py"
+      ],
+      "proofTests": [
+        "test_the_official_python_osdk_import_shape_is_available",
+        "test_a_typescript_v2_function_uses_the_code_sandbox_not_the_logic_dag"
+      ],
+      "gaps": [
+        "Generated repository package installation/versioning is not yet identical to Palantir Code Repositories.",
+        "Interfaces, full media types, external API clients, and every language-specific function registry type are not implemented."
+      ]
+    },
+    {
+      "id": "filters-order-pages-aggregations",
+      "publicBehavior": "ObjectSets compose searchable-property filters, ordering, bounded loading, and server-side aggregations.",
+      "sourceIds": ["palantir-object-sets", "palantir-object-set-limits"],
+      "status": "partial",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/query_filters.py",
+        "libs/foundry_lite/application/services/object_store/query.py",
+        "libs/foundry_lite/application/services/object_store/aggregation.py"
+      ],
+      "proofTests": [
+        "test_matches_filter_supports_property_evaluators",
+        "test_the_lazy_query_callback_preserves_context_filter_order_and_page_bounds",
+        "test_the_lazy_aggregate_callback_uses_the_same_governed_service"
+      ],
+      "gaps": [
+        "Phrase, fuzzy, geo, link-presence, Search Around, KNN, union, intersect, subtract, advanced buckets, and relevance ordering remain planned.",
+        "Searchable render-hint enforcement and Palantir's complete bucket/load limits are not yet identical."
+      ]
+    },
+    {
+      "id": "domain-agent-function-generation",
+      "publicBehavior": "A generated domain application imports typed Ontology resources and invokes governed Functions through its generated OSDK.",
+      "sourceIds": ["palantir-function-types", "palantir-language-support", "palantir-python-objects"],
+      "status": "current",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/aip/fde_domain_os_functions.py",
+        "libs/foundry_lite/application/services/aip/fde_pilot_osdk_source.py",
+        "libs/foundry_lite/application/services/aip/fde_pilot_osdk_runtime.py"
+      ],
+      "proofTests": [
+        "test_a_natural_language_aggregation_compiles_to_python_osdk_and_least_privilege_scope",
+        "test_a_domain_function_cannot_sum_a_text_field_or_use_an_unknown_actor",
+        "test_live_generated_domain_function_executes_its_governed_object_set"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "full-object-set-vocabulary",
+      "publicBehavior": "Every publicly documented filter, traversal, set algebra, vector search, loading, ordering, and aggregation operation has matching semantics and limits.",
+      "sourceIds": ["palantir-object-sets", "palantir-object-set-limits"],
+      "status": "planned",
+      "implementationEvidence": [],
+      "proofTests": [],
+      "gaps": [
+        "This is the remaining public-behavior conformance program; no complete parity claim is allowed before every operation has executable proof."
+      ]
+    }
+  ]
+}

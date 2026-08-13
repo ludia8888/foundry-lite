@@ -10,9 +10,10 @@
 
 - 이 문서는 스프린트 순서, Must-Win Goal, Acceptance Gate의 원본이다.
 - 제품 목표와 시스템 설계는 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 원본으로 본다.
-- Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
+- Foundry 공개 동작과 제품 목적의 외부 근거는 [Palantir public-behavior 설계 권위 ADR](./docs/adr/0003-palantir-public-behavior-is-design-authority.md)과 각 parity matrix가 인용하는 Palantir 공식 문서를 원본으로 본다. [Palantir Foundry 심층 분석](./deep-research-report.md)은 배경 reference이며 공식 문서나 실행 증거를 덮어쓸 수 없다.
 - Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
 - v1 필수 범위는 네 문서 모두 `CSV/local snapshot 또는 PostgreSQL-backed repository proof → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`으로 통일한다.
+- Post-MVP Functions/ObjectSet slice는 Python/TypeScript v2 networkless sandbox, caller permission이 적용된 lazy page/aggregation bridge, Domain OS의 bounded aggregation Function 생성과 app-owned OSDK 호출까지 current proof가 있으며, Search Around/KNN/set algebra/full vocabulary는 `docs/functions-object-set-parity-matrix.json`의 partial/planned 상태로 남긴다.
 - commit point가 하나의 진실로 유지되는지에 대한 위험 판정은 [Commit-Point Risk Register](./docs/commit-point-risk-register.md)를 따른다.
 
 ### 함께 읽을 문서

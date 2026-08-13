@@ -634,6 +634,42 @@ query를 반복 측정해 p95 1초 미만을 강제한다. 따라서 report는
 due scan의 DB query 성능 증거이며, 항상 실행되는 production worker 배포·장애 복구까지
 증명하는 것으로 과장하지 않는다.
 
+### Tier G14H — Palantir public-behavior design authority (✅ current 2026-08-13)
+
+`scripts/quality/check_palantir_design_authority.py`와
+`quality:palantir-design-authority`는 주요 번호 ADR과 모든 `*parity-matrix.json`이 정확한
+Palantir 공식 Foundry 문서를 설계 근거로 갖는지 확인한다. 비개발자식으로 말하면,
+“팔란티어와 같은 목적”이라는 말을 분위기나 화면 인상으로 정하지 않고, 공개 제품 동작과
+우리 코드·증거·한계를 함께 기록하게 만드는 게이트다.
+
+검사 기준:
+
+- 번호 ADR은 `Official Palantir design sources`, consequences, non-goals를 모두 가져야 한다.
+- parity registry의 `officialSources`는 `https://www.palantir.com/docs/foundry/` 공식 URL만 허용한다.
+- private implementation/source/brand/pixel identity는 동일성 범위에서 제외한다.
+- 기능별 current 판정은 이 공통 gate 외에도 각 전용 parity gate의 implementation/test/gap
+  계약을 통과해야 한다.
+
+`tests/unit/test_quality_palantir_design_authority.py`가 현재 repo 통과, 공식 source가 없는 ADR,
+비공식 parity source를 회귀 검증한다. 이 gate는 static lane에 포함된다.
+
+### Tier G14I — Functions/ObjectSet public-behavior parity (🟡 bounded current 2026-08-13)
+
+`scripts/quality/check_functions_object_set_parity_matrix.py`와
+`quality:functions-object-set-parity`는 공식 ObjectSet, Function types, Python/TypeScript v2,
+언어 지원, 서비스 한도 문서와 현재 구현을 항목별로 연결한다.
+
+현재 proof는 Python/TypeScript v2 networkless sandbox, lazy ObjectSet descriptor, 기존
+permission-scoped Object Query로 재진입하는 bounded page/aggregation bridge, strict range
+operator, 공식 Python import/expression shape, TypeScript default export, 그리고 Domain OS의
+bounded aggregation Function + app-owned OSDK 생성이다. 실제 Docker image를 다시 만든 뒤
+`quality:pipeline-python-isolation-live`가 두 언어의 ObjectSet 왕복을 실행한다.
+
+Phrase/fuzzy/geo/link 필터, Search Around, KNN, union/intersect/subtract, 전체 bucket/limit,
+Searchable render hint, repository package/version lifecycle, 전체 registry type은 partial/planned다.
+따라서 이 gate가 green이어도 “Functions 전체 parity”를 뜻하지 않는다. matrix의 bounded current
+row만 current이고, 전체 vocabulary row는 planned로 남는다.
+
 ### Tier G14E — Action Types v2 parity evidence (✅ bounded current slices 2026-08-03)
 
 `quality:action-types-v2`는 `docs/action-types-parity-matrix.json`에서 current로 표시한 세

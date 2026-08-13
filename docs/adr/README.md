@@ -6,3 +6,4 @@ Each ADR captures one significant, hard-to-reverse architectural decision: its c
 | ---------------------------------------------------------- | ----------------------------------------------------- | -------- |
 | [0001](0001-media-plane-parallel-to-dataset-plane.md)      | Media Plane is parallel to Dataset Plane              | Accepted |
 | [0002](0002-public-behavior-mmdp-pipeline-graph-v2.md)     | Public-behavior MMDP parity uses Pipeline Graph v2    | Accepted |
+| [0003](0003-palantir-public-behavior-is-design-authority.md) | Palantir public behavior is the product design authority | Accepted |

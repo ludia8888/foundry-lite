@@ -111,7 +111,7 @@ Governed Release 위젯 URI의 마지막 12자리는 실제 embedded HTML의 SHA
 
 Builder MCP의 `pilot.application.plan`과 `pilot.application.generate`는 `ui://foundry-lite/domain-os-studio-v1-354e3901f43f.html`을 ChatGPT 내부 출력 화면으로 사용한다. URI의 마지막 12자리는 고수준 MCP OSDK adapter를 주입한 최종 HTML의 SHA-256 prefix이며, 내용이 바뀌고 URI를 갱신하지 않으면 integration gate가 실패한다. ChatGPT는 비개발자의 자연어 설명에서 사람, 업무 기록, 상태, 규칙, 업무 버튼, 증거를 bounded `domainBrief`로 정리한다. API 이름을 사용자에게 묻지 않으며, 설계가 비어 있으면 서버가 반환한 쉬운 업무 질문만 다시 묻는다. 화면은 MCP Apps `2026-01-26` JSON-RPC `postMessage`를 기본 bridge로 사용하고 `window.openai`는 호환 fallback으로만 사용한다. 화면 코드가 `tools/call`이나 `pilot.application.generate`를 직접 조립하지 못하게 하고, Foundry-lite가 제공하는 `DomainOsStudio` 고수준 MCP OSDK만 사용한다.
 
-현재 범위는 자연어 설계 → ChatGPT 내부 검토 → app-only 사람 확인 → 격리 Project/Dataset/Ontology branch/OSDK application 생성 → 휴대형 React 앱 소스 저장이다. 큰 소스 본문은 MCP 출력 한도에 싣지 않고 governed resource에 보관하며, ChatGPT에는 완료 화면에 필요한 요약, resource RID, 파일 목록과 배포 상태만 반환한다. 생성 앱의 고객 화면은 앱 전용 고수준 OSDK hook만 import한다. 앱 전용 패키지 안에는 Object 조회, Action 실행, idempotency key, 브라우저 세션 연결에 필요한 작은 런타임이 포함되어 있어 Foundry-lite 모노레포 밖에서도 설치, strict OSDK 검사, TypeScript 검사, 런타임 계약 검사, Vite production build가 가능하다. `pnpm --silent quality:domain-os-deploy-bundle`이 이 독립 빌드를 검증한다.
+현재 범위는 자연어 설계 → ChatGPT 내부 검토 → app-only 사람 확인 → 격리 Project/Dataset/Ontology branch/OSDK application 생성 → 휴대형 React 앱 소스 저장이다. 큰 소스 본문은 MCP 출력 한도에 싣지 않고 governed resource에 보관하며, ChatGPT에는 완료 화면에 필요한 요약, resource RID, 파일 목록과 배포 상태만 반환한다. 생성 앱의 고객 화면은 앱 전용 고수준 OSDK hook만 import한다. 업무 설명에 `count/sum/avg/min/max` 계산을 넣으면 정확한 Object와 필드를 검증한 Python OSDK Function, 실행 scope, app-owned TypeScript Function client도 함께 생성한다. 앱 전용 패키지 안에는 Object 조회, Function 실행, Action 실행, idempotency key, 브라우저 세션 연결에 필요한 작은 런타임이 포함되어 있어 Foundry-lite 모노레포 밖에서도 설치, strict OSDK 검사, TypeScript 검사, 런타임 계약 검사, Vite production build가 가능하다. `pnpm --silent quality:domain-os-deploy-bundle`이 이 독립 빌드를 검증한다.
 
 식당, 부동산, 세무회계, 대출, 병원, 제조 여섯 업무 설명이 같은 컴파일러에서 서로 다른 Object, 상태 전이, Action, 자동 차단 조건, 사람 확인 규칙, 독립 seed Dataset, 최소 권한 scope로 생성되는지 `quality:ai-fde`가 검증한다. 각 업무 버튼에는 자연어 참여자 중 실제로 누를 수 있는 사람을 지정해야 하며, 비어 있거나 알려지지 않은 참여자를 쓰면 생성이 차단된다. 서버는 이 선택을 앱별 안정적인 role ID와 Action `allowedRoles`로 컴파일한다. 생성된 고객 화면은 여러 업무 건을 모두 보여주고 API 키 대신 사람이 읽는 정보 이름과 버튼별 실행 가능 참여자를 표시한다. 이는 업종별 법률·세무·의료 판단이 자동으로 옳다는 증거가 아니다. 명시적인 property/operator/value 조건만 Action precondition으로 자동화하고, 필드 형식과 맞지 않는 조건은 거절하며, 조건이 없는 자연어 규칙은 `검토용 규칙 · 아직 자동화 안 됨`으로 표시한다. 대출 승인, 신고 승인, 의료 확인 같은 책임 작업은 사람 확인으로 남긴다. 실제 운영 사용 전에는 실제 데이터, 앱 role ID와 IdP/조직 역할 연결, 인증 session bootstrap, Ontology proposal 활성화, host target과 업종 담당자의 정책 검토가 필요하다. 새 Domain OS Studio 자체의 hosted ChatGPT SaaS 실증과 실제 외부 host 배포는 아직 검증되지 않았으며, 현재 UI 증거는 표준 bridge contract, TestClient, Node widget, local Chromium QA다.
 
@@ -369,6 +369,8 @@ pnpm worker:pipeline-control
 | `pnpm --silent quality:operations-recovery` | Operations/Recovery backend/API/SDK slice를 확인합니다. |
 | `pnpm --silent quality:distributed-control-plane` | PostgreSQL/S3/Iceberg/Spark/Kafka/Temporal control-plane proof를 확인합니다. |
 | `pnpm --silent quality:pipeline-parity-matrix` | Pipeline Builder 공개 동작별 current, foundation, planned 경계와 코드·테스트 근거가 어긋나지 않는지 확인합니다. |
+| `pnpm --silent quality:palantir-design-authority` | 주요 ADR과 공개 동작 parity registry가 Palantir 공식 Foundry 문서, 결과와 비목표를 빠뜨리지 않는지 확인합니다. |
+| `pnpm --silent quality:functions-object-set-parity` | Functions/ObjectSet의 lazy 실행, Python/TypeScript OSDK, Domain OS Function 생성 증거와 남은 공개 기능 gap을 확인합니다. |
 | `pnpm --silent quality:pipeline-async-dag` | async API, Temporal 결정성, retry 분류, lease/fencing/event 원장 계약을 확인합니다. |
 | `pnpm --silent quality:pipeline-async-dag-live` | 실제 PostgreSQL·Temporal·worker 2개에서 kill/takeover/cancel/exactly-once output commit을 확인합니다. |
 
@@ -388,6 +390,8 @@ pnpm worker:pipeline-control
 | `check_infra_ratchet.py` / `quality:infra-ratchet` | Infra Ratchet 원칙처럼 새 인프라가 self proof와 active composition proof 없이 README나 운영 문서에서 current처럼 보이는 문제를 차단합니다. |
 | `check_infra_tricky_matrix.py` / `quality:infra-tricky-matrix` | tricky infra matrix가 active infra, source-of-truth rule, operator evidence, checked failure-mode evidence와 어긋나는 문제를 차단합니다. |
 | `check_pipeline_parity_matrix.py` / `quality:pipeline-parity-matrix` | Graph v2 타입이나 DB 테이블만 생긴 상태를 완성형 멀티모달 Builder처럼 과장하거나, 공식 공개 기능과 구현·테스트·rollout gap의 연결이 끊기는 문제를 차단합니다. |
+| `check_palantir_design_authority.py` / `quality:palantir-design-authority` | 주요 설계 결정이나 parity registry가 공식 Palantir Foundry 근거 없이 제품 사실로 올라가거나 private 구현 동일성을 과장하는 문제를 차단합니다. |
+| `check_functions_object_set_parity_matrix.py` / `quality:functions-object-set-parity` | eager 배열을 ObjectSet이라고 부르거나, 일부 필터·함수만으로 전체 Functions 공개 동작이 완성됐다고 과장하는 문제를 차단합니다. |
 
 ## 문서 지도
 
@@ -407,6 +411,8 @@ pnpm worker:pipeline-control
 | [docs/data-engineering-pattern-matrix.json](docs/data-engineering-pattern-matrix.json) | 데이터 엔지니어링 pattern별 current, partial, deferred 상태와 proof level을 잠그는 registry입니다. |
 | [docs/frontend-api-sdk-surface-matrix.json](docs/frontend-api-sdk-surface-matrix.json) | FastAPI route와 frontend SDK method/helper, proof test, operator evidence 매핑을 잠그는 registry입니다. |
 | [docs/pipeline-builder-parity-matrix.json](docs/pipeline-builder-parity-matrix.json) | Palantir MMDP/Pipeline Builder의 공식 공개 동작과 Foundry-lite의 current, foundation, planned 상태를 코드·테스트·완료 기준에 연결하는 registry입니다. |
+| [docs/functions-object-set-parity-matrix.json](docs/functions-object-set-parity-matrix.json) | Palantir Functions/ObjectSet 공식 공개 동작과 Foundry-lite의 current, partial, planned 상태를 코드·테스트·gap에 연결하는 registry입니다. |
+| [docs/adr/0003-palantir-public-behavior-is-design-authority.md](docs/adr/0003-palantir-public-behavior-is-design-authority.md) | Palantir 공식 공개 동작을 제품 설계 권위로 사용하면서 private 구현 복제를 주장하지 않는 공통 의사결정 규칙입니다. |
 | [docs/frontend-backend-surface-contract.md](docs/frontend-backend-surface-contract.md) | 프론트가 백엔드를 붙일 때 raw API 호출 대신 named SDK와 helper를 써야 하는 계약을 설명합니다. |
 | [docs/foundry_lite_tricky_failure_modes_checklist.md](docs/foundry_lite_tricky_failure_modes_checklist.md) | 아직 남은 failure-mode 후보와 hardening backlog를 추적하는 체크리스트입니다. |
 

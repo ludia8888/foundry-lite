@@ -218,6 +218,11 @@ PYTHON_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("data-pattern-matrix", ["scripts/quality/check_data_pattern_matrix.py"]),
     ("data-platform-sprint-status", ["scripts/quality/check_data_platform_sprint_status.py"]),
     ("pipeline-parity-matrix", ["scripts/quality/check_pipeline_parity_matrix.py"]),
+    ("palantir-design-authority", ["scripts/quality/check_palantir_design_authority.py"]),
+    (
+        "functions-object-set-parity",
+        ["scripts/quality/check_functions_object_set_parity_matrix.py"],
+    ),
     ("pipeline-quality-gate-inventory", ["scripts/quality/check_pipeline_quality_gate_inventory.py"]),
     ("frontend-backend-surface", ["scripts/quality/check_frontend_backend_surface.py"]),
     ("schema-revision-guard", ["scripts/quality/check_schema_revision_guard.py"]),
