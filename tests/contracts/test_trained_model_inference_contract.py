@@ -28,11 +28,18 @@ from foundry_lite.infrastructure.adapters.container_trained_model_runtime import
     ContainerTrainedModelConfig,
     ContainerTrainedModelSpec,
 )
+from foundry_lite.infrastructure.adapters.kubernetes_job_trained_model_inference import (
+    KubernetesJobTrainedModelInferenceAdapter,
+)
 from foundry_lite.infrastructure.adapters.local_trained_model_inference import (
     LocalTrainedModelInferenceAdapter,
 )
 from foundry_lite.infrastructure.adapters.trained_model_definitions import (
     TRANSACTION_RISK_DEFINITION,
+)
+from foundry_lite.infrastructure.kubernetes_execution_spec import (
+    kubernetes_execution_job_payload,
+    parse_kubernetes_execution_command,
 )
 
 
@@ -85,6 +92,50 @@ def test_container_sidecar_enforces_controls_and_returns_typed_rows(tmp_path: Pa
     assert _required_container_flags() <= set(captured[-1])
     assert not any("target=/model-output," in token for token in captured[-1])
     assert "UNSAFE_SECRET=must-not-pass" not in captured[-1]
+
+
+def test_kubernetes_job_trained_model_uses_same_restricted_broker_contract(tmp_path: Path) -> None:
+    job_payloads: list[dict[str, object]] = []
+    digest_image = f"registry.example/model@sha256:{'a' * 64}"
+
+    def runner(command: Sequence[str], timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
+        spec = parse_kubernetes_execution_command(
+            command,
+            timeout_seconds=timeout,
+            shared_workspace_root=tmp_path,
+            pvc_mount_root=tmp_path,
+        )
+        job_payloads.append(kubernetes_execution_job_payload(spec, namespace="foundry-qa", pvc_name="foundry-runtime"))
+        _write_result(_mount_source(command, "/model-output/result.json"), _success_payload())
+        return ContainerCommandResult(
+            0,
+            runtime_evidence={
+                "executionMode": "kubernetes-job",
+                "runtime": "isolated_kubernetes_job",
+                "imageDigest": digest_image.rsplit("@", 1)[-1],
+                "networkDisabled": True,
+            },
+        )
+
+    adapter = KubernetesJobTrainedModelInferenceAdapter(
+        environ={
+            "FOUNDRY_LITE_TRAINED_MODEL_IMAGE": digest_image,
+            "FOUNDRY_LITE_CODE_EXECUTION_BROKER_TOKEN": "x" * 32,
+            "FOUNDRY_LITE_CODE_EXECUTION_WORKSPACE_ROOT": str(tmp_path),
+        },
+        command_runner=runner,
+    )
+
+    result = adapter.infer(_container_invocation())
+    pod = job_payloads[0]["spec"]["template"]["spec"]
+
+    assert result.rows == ({"riskScore": 0.8, "decision": "review"},)
+    assert result.runtime_evidence["runtime"] == "isolated_kubernetes_job"
+    assert result.runtime_evidence["networkDisabled"] is True
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["containers"][0]["image"] == digest_image
 
 
 def test_container_sidecar_prefers_requested_branch_over_earlier_fallback_spec(tmp_path: Path) -> None:

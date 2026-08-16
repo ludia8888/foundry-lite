@@ -157,6 +157,7 @@ class ContainerCodeExecutionAdapter:
                 output=output,
                 stderr_byte_count=len(result.stderr),
                 duration_ms=int((time.monotonic() - started) * 1000),
+                runtime_evidence=result.runtime_evidence,
             )
 
     def execute_python_transform(self, plan: PythonTransformPlan) -> TransformExecutionResult:
@@ -180,7 +181,10 @@ class ContainerCodeExecutionAdapter:
                 plan.target_path,
                 self,
             )
-            return TransformExecutionResult(dead_letters=dead_letters)
+            return TransformExecutionResult(
+                dead_letters=dead_letters,
+                runtime_evidence=result.runtime_evidence,
+            )
 
     def _execute_container(
         self,

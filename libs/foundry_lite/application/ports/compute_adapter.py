@@ -41,6 +41,7 @@ class TransformExecutionResult:
     """Adapter result metadata that is durable only after application persistence."""
 
     dead_letters: tuple[TransformDeadLetterRecord, ...] = ()
+    runtime_evidence: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)

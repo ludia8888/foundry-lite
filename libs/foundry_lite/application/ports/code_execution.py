@@ -121,6 +121,7 @@ class FunctionExecutionResult:
     output: object
     stderr_byte_count: int
     duration_ms: int
+    runtime_evidence: Mapping[str, object] | None = None
 
 
 class CodeExecutionAdapter(Protocol):

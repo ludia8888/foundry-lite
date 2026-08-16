@@ -64,6 +64,7 @@ class ContainerCommandResult:
     return_code: int
     stderr: bytes = b""
     is_exit_event_recovered: bool = False
+    runtime_evidence: Mapping[str, object] | None = None
 
 
 ContainerCommandRunner = Callable[[Sequence[str], float, Mapping[str, str]], ContainerCommandResult]
@@ -154,8 +155,12 @@ def _validate_resource_limits(config: ContainerCodeExecutionConfig) -> None:
 
 
 def _validate_protected_image(config: ContainerCodeExecutionConfig) -> None:
-    if config.is_image_digest_required and not _is_digest_pinned_image(config.image_reference):
-        raise ValueError("protected code execution requires an image reference pinned by sha256 digest")
+    if not config.is_image_digest_required:
+        return
+    if not _is_digest_pinned_image(config.image_reference):
+        raise ValueError("protected code execution requires a Python image reference pinned by sha256 digest")
+    if not _is_digest_pinned_image(config.node_image_reference):
+        raise ValueError("protected code execution requires a Node image reference pinned by sha256 digest")
 
 
 def _validate_security_controls(policy: CodeExecutionSandboxPolicy) -> None:

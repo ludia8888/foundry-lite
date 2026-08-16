@@ -16,7 +16,7 @@ from foundry_lite.application.services.outbox_publisher_service import (
 from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
-from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 
 
 @dataclass(frozen=True)
@@ -137,7 +137,7 @@ class _OutboxAccumulator:
 
 
 def _build_foundry(config: OutboxPublisherWorkerConfig) -> FoundryLite:
-    dependencies = create_local_core_dependencies(
+    dependencies = create_runtime_core_dependencies(
         db_url=config.db_url,
         storage_root=config.storage_root,
         adapter_profile=config.adapter_profile,

@@ -37,7 +37,6 @@ from foundry_lite.application.ports.ontology_repository import PropertyClassific
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
-from foundry_lite.application.ports.trained_model_inference import TrainedModelInferencePort
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.services.media.content_unit_evidence import ContentUnitEvidenceService
@@ -60,7 +59,6 @@ from foundry_lite.infrastructure.adapters import (
     AnthropicLanguageModel,
     AsrProcessorAdapter,
     AuthoritativeCitationSourceVerifier,
-    ContainerCodeExecutionAdapter,
     DuckDBComputeAdapter,
     ElasticsearchAdapter,
     ElasticsearchAdapterConfig,
@@ -79,7 +77,6 @@ from foundry_lite.infrastructure.adapters import (
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
-    LocalBackupArtifactStore,
     LocalCompletionAdapter,
     LocalConnectorAdapter,
     LocalContentIndexAdapter,
@@ -124,7 +121,6 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
     _fastembed_embedding_engine,
 )
-from foundry_lite.infrastructure.adapters.local_prompt_artifact_store import LocalPromptArtifactStore
 from foundry_lite.infrastructure.adapters.local_vision_embedding import (
     CLIP_MODEL_VERSION,
     LocalVisionEmbeddingAdapter,
@@ -138,7 +134,16 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_paths,
     _ffprobe_video_probe_runner,
 )
-from foundry_lite.infrastructure.auth import OAUTH_AUDIENCE_ENV, OAUTH_ISSUER_ENV, LocalOAuthTokenIssuer
+from foundry_lite.infrastructure.artifact_store_composition import (
+    artifact_stores,
+    reject_protected_local_artifact_backends,
+)
+from foundry_lite.infrastructure.auth import (
+    OAUTH_AUDIENCE_ENV,
+    OAUTH_ISSUER_ENV,
+    OAUTH_PRIVATE_KEY_PATH_ENV,
+    LocalOAuthTokenIssuer,
+)
 from foundry_lite.infrastructure.local_database_url import local_database_url, local_storage_root
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.protected_runtime_host import require_protected_runtime_host
@@ -185,13 +190,17 @@ from foundry_lite.infrastructure.repositories import (
 )
 from foundry_lite.infrastructure.secrets import local_secret_vault_provider, secret_provider_from_env
 from foundry_lite.infrastructure.trained_model_runtime_adapters import (
-    ContainerTrainedModelInferenceAdapter,
-    LocalTrainedModelInferenceAdapter,
+    CodeExecutionAdapter,
+)
+from foundry_lite.infrastructure.trained_model_runtime_adapters import (
+    code_execution_adapter as _code_execution_adapter,
+)
+from foundry_lite.infrastructure.trained_model_runtime_adapters import (
+    trained_model_inference_adapter as _trained_model_inference_adapter,
 )
 from foundry_lite.security.policy import ActionRoleProvider, ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
-_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV = "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY"
 _KAFKA_SUBSCRIPTIONS_ENV = "FOUNDRY_LITE_KAFKA_SUBSCRIPTIONS_JSON"
 _ANTHROPIC_MODEL_ENV = "FOUNDRY_LITE_ANTHROPIC_MODEL"
 _ANTHROPIC_AUTH_REFERENCE_ENV = "FOUNDRY_LITE_ANTHROPIC_SECRET_REF"
@@ -203,7 +212,7 @@ _PROTECTED_REQUIRED_ADAPTER_PROFILES: Mapping[str, frozenset[str]] = {
     "dataset_storage": frozenset({"s3-storage", "iceberg"}),
     "media_storage": frozenset({"s3-media"}),
     "content_index": frozenset({"elasticsearch"}),
-    "compute": frozenset({"spark"}),
+    "compute": frozenset({"kubernetes-job", "spark"}),
     "connector": frozenset({"rest"}),
     "search": frozenset({"elasticsearch"}),
     "stream": frozenset({"kafka"}),
@@ -365,6 +374,7 @@ def create_production_core_dependencies(
         raise ValueError("create_production_core_dependencies requires a production or staging runtime profile")
     profiles = RuntimeAdapterProfiles.from_env(adapter_profile)
     _reject_protected_local_profiles(profiles)
+    reject_protected_local_artifact_backends(os.environ)
     host = require_protected_runtime_host(
         profile=runtime_profile,
         database_url=db_url,
@@ -380,6 +390,16 @@ def create_production_core_dependencies(
         oauth_issuer=oauth_issuer,
         oauth_audience=oauth_audience,
     )
+
+
+def _oauth_private_key_path(runtime_root: Path) -> Path:
+    configured = os.getenv(OAUTH_PRIVATE_KEY_PATH_ENV, "").strip()
+    if not configured:
+        return runtime_root / "oauth-private-key.pem"
+    path = Path(configured)
+    if not path.is_absolute():
+        raise ValueError(f"{OAUTH_PRIVATE_KEY_PATH_ENV} must be an absolute path")
+    return path
 
 
 def _create_core_dependencies(
@@ -425,9 +445,7 @@ def _create_core_dependencies(
     # One sandbox serves both callers. A Python transform reaches it through the compute
     # adapter and a Python ontology function through the application layer, and they are the
     # same threat model, so they must not drift onto separate policies.
-    code_execution_adapter = ContainerCodeExecutionAdapter(
-        is_image_digest_required=runtime_profile.is_protected,
-    )
+    code_execution_adapter = _code_execution_adapter(profiles.compute, runtime_profile)
     compute_adapter = _compute_adapter(
         profiles.compute,
         code_execution_adapter=code_execution_adapter,
@@ -435,6 +453,11 @@ def _create_core_dependencies(
     env_secret_provider = secret_provider_from_env()
     secret_vault = local_secret_vault_provider(root, fallback=env_secret_provider)
     secret_provider = secret_vault
+    prompt_artifact_store, backup_artifact_store = artifact_stores(
+        prompt_artifacts_root,
+        backup_artifacts_root,
+        secret_provider,
+    )
     connector_adapter = _connector_adapter(profiles.connector, secret_provider)
     search_adapter = _search_adapter(profiles.search)
     stream_adapter = _stream_adapter(profiles.stream)
@@ -494,7 +517,7 @@ def _create_core_dependencies(
             osdk_application_repository=SqlAlchemyOsdkApplicationRepository(engine),
             oauth_session_repository=SqlAlchemyOAuthSessionRepository(engine),
             oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(
-                root / "oauth-private-key.pem",
+                _oauth_private_key_path(root),
                 issuer=oauth_issuer or os.getenv(OAUTH_ISSUER_ENV),
                 audience=oauth_audience or os.getenv(OAUTH_AUDIENCE_ENV),
             ),
@@ -547,7 +570,7 @@ def _create_core_dependencies(
             insight_review_repository=SqlAlchemyInsightReviewRepository(engine),
             stream_adapter=stream_adapter,
             workflow_adapter=workflow_adapter,
-            backup_artifact_store=LocalBackupArtifactStore(backup_artifacts_root),
+            backup_artifact_store=backup_artifact_store,
         ),
         aip=AipDependencies(
             ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
@@ -559,11 +582,7 @@ def _create_core_dependencies(
             model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
             semantic_row_cache_repository=SqlAlchemySemanticRowCacheRepository(engine),
             context_provider=FakeContextProvider(),
-            prompt_artifact_store=LocalPromptArtifactStore(
-                prompt_artifacts_root,
-                secret_provider,
-                allow_local_dev_fallback=_allow_local_prompt_artifact_key_from_env(),
-            ),
+            prompt_artifact_store=prompt_artifact_store,
             citation_source_verifier=citation_source_verifier,
             tool_executor=FakeToolExecutor(),
             model_catalog_seed=_language_model_catalog_seed(profiles.language_model),
@@ -779,28 +798,16 @@ def _s3_media_storage_config() -> S3MediaStorageConfig:
 def _compute_adapter(
     compute_profile: str,
     *,
-    code_execution_adapter: ContainerCodeExecutionAdapter,
+    code_execution_adapter: CodeExecutionAdapter,
 ) -> ComputeAdapter:
     compute_profile = _env_profile(os.environ, "FOUNDRY_LITE_COMPUTE_PROFILE", compute_profile)
     if compute_profile == "fake-storage":
         return FakeComputeAdapter()
     if compute_profile == "spark":
         return SparkComputeAdapter(code_execution_adapter=code_execution_adapter)
-    if compute_profile in {"local", "s3-storage", "iceberg"}:
+    if compute_profile in {"local", "s3-storage", "iceberg", "kubernetes-job"}:
         return DuckDBComputeAdapter(code_execution_adapter=code_execution_adapter)
     raise ValueError(f"unknown compute profile: {compute_profile}")
-
-
-def _trained_model_inference_adapter(runtime_profile: RuntimeProfile) -> TrainedModelInferencePort:
-    default_profile = "local" if runtime_profile.is_local_like else "container"
-    profile = _env_profile(os.environ, "FOUNDRY_LITE_TRAINED_MODEL_PROFILE", default_profile)
-    if profile == "local" and runtime_profile.is_local_like:
-        return LocalTrainedModelInferenceAdapter()
-    if profile == "container":
-        return ContainerTrainedModelInferenceAdapter(
-            is_image_digest_required=runtime_profile.is_protected,
-        )
-    raise ValueError("protected runtimes require FOUNDRY_LITE_TRAINED_MODEL_PROFILE=container")
 
 
 def _connector_adapter(
@@ -885,10 +892,6 @@ def _action_run_orchestrator(
 def _schema_mutation_allowed_from_env() -> bool:
     runtime_profile = RuntimeProfile.from_value(os.getenv(_RUNTIME_PROFILE_ENV, "local"))
     return not runtime_profile.is_protected
-
-
-def _allow_local_prompt_artifact_key_from_env() -> bool:
-    return os.getenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, "").strip().casefold() in {"1", "true", "yes"}
 
 
 def _temporal_workflow_config() -> TemporalWorkflowAdapterConfig:

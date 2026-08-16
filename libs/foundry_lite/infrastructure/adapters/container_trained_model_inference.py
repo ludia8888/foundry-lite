@@ -117,7 +117,7 @@ class ContainerTrainedModelInferenceAdapter:
         return TrainedModelInferenceResult(
             definition=definition,
             rows=rows,
-            runtime_evidence=_runtime_evidence(runtime, spec, self.config),
+            runtime_evidence=_runtime_evidence(runtime, spec, self.config, result.runtime_evidence),
         )
 
     def failure_contract(self) -> AdapterFailureContract:
@@ -367,6 +367,7 @@ def _runtime_evidence(
     runtime: Mapping[str, object],
     spec: ContainerTrainedModelSpec,
     config: ContainerTrainedModelConfig,
+    execution_evidence: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         **dict(runtime),
@@ -375,6 +376,7 @@ def _runtime_evidence(
         "imageReference": spec.image_reference,
         "imageDigestPinned": "@sha256:" in spec.image_reference,
         "sandboxPolicy": config.policy.to_payload(),
+        **dict(execution_evidence or {}),
     }
 
 
