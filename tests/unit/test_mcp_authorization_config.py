@@ -15,6 +15,7 @@ from foundry_lite_api.mcp_authorization_config import (
     LOCAL_CONSENT_ROLES_ENV,
     MCP_AUTHORIZATION_SERVER_ENV,
     MCP_PUBLIC_BASE_URL_ENV,
+    RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV,
     governed_release_mcp_authority,
     mcp_authorization_config_from_env,
 )
@@ -72,10 +73,22 @@ def test_protected_mcp_authorization_requires_external_https_authorization_serve
 
 
 def test_external_mcp_authorization_configuration_binds_issuer_and_public_https_origin() -> None:
-    config = mcp_authorization_config_from_env(_external_env(), _external_provider())
+    config = mcp_authorization_config_from_env(
+        {**_external_env(), RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV: "mcp-audience"},
+        _external_provider(),
+    )
 
     assert config.authorization_servers("https://unused.local") == (_ISSUER,)
     assert config.canonical_base_url("http://internal:8000/") == _PUBLIC_BASE
+    assert config.resource_audience_scope(_RESOURCE) == f"mcp-audience:{_RESOURCE}"
+
+
+def test_resource_audience_scope_prefix_is_bounded() -> None:
+    with pytest.raises(AuthProfileConfigurationError, match=RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV):
+        mcp_authorization_config_from_env(
+            {**_external_env(), RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV: "bad prefix"},
+            _external_provider(),
+        )
 
 
 def test_external_mcp_authorization_projects_exact_live_release_authority() -> None:

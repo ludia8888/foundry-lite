@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -17,6 +18,7 @@ from jwt.algorithms import RSAAlgorithm
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.auth_provider import AuthProvider, Credentials, Principal
 from foundry_lite.domain.errors import PermissionDenied
+from foundry_lite.infrastructure.auth.oidc_discovery import HttpsOidcJwksLoader, OidcHttpsLoaderConfig
 
 __all__ = [
     "AUTHORIZATION_HEADER",
@@ -24,6 +26,7 @@ __all__ = [
     "OIDC_AUDIENCE_ENV",
     "OIDC_CLIENT_ID_CLAIM_ENV",
     "OIDC_DISCOVERY_JSON_ENV",
+    "OIDC_DISCOVERY_URL_ENV",
     "OIDC_GRANT_TYPE_CLAIM_ENV",
     "OIDC_GRANT_TYPE_VALUE_ENV",
     "OIDC_HUMAN_GRANT_CLAIM_ENV",
@@ -47,6 +50,8 @@ __all__ = [
 
 AUTHORIZATION_HEADER: Final = "authorization"
 OIDC_DISCOVERY_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_DISCOVERY_JSON"
+OIDC_DISCOVERY_URL_ENV: Final = "FOUNDRY_LITE_OIDC_DISCOVERY_URL"
+OIDC_HTTPS_TIMEOUT_SECONDS_ENV: Final = "FOUNDRY_LITE_OIDC_HTTPS_TIMEOUT_SECONDS"
 OIDC_GRANT_TYPE_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_GRANT_TYPE_CLAIM"
 OIDC_GRANT_TYPE_VALUE_ENV: Final = "FOUNDRY_LITE_OIDC_GRANT_TYPE_VALUE"
 OIDC_HUMAN_GRANT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_HUMAN_GRANT_CLAIM"
@@ -275,25 +280,50 @@ class JwtOidcAuthProvider:
 def jwt_oidc_auth_provider_from_env(environ: Mapping[str, str] | None = None) -> JwtOidcAuthProvider:
     """Build a JWT/OIDC provider from environment-backed local discovery data."""
     source = os.environ if environ is None else environ
-    config = _oidc_config_from_env(source)
-    return JwtOidcAuthProvider(config=config, jwks_loader=lambda: _json_object_from_env(source, OIDC_JWKS_JSON_ENV))
+    discovery_url = _env_value(source, OIDC_DISCOVERY_URL_ENV)
+    if discovery_url is None:
+        config = _oidc_config_from_env(source)
+        return JwtOidcAuthProvider(config=config, jwks_loader=_static_jwks_loader(source))
+    issuer = _required_oidc_value(_env_value(source, OIDC_ISSUER_ENV), OIDC_ISSUER_ENV)
+    remote_loader = HttpsOidcJwksLoader(
+        OidcHttpsLoaderConfig(
+            expected_issuer=issuer,
+            discovery_url=discovery_url,
+            timeout_seconds=_float_from_env(source, OIDC_HTTPS_TIMEOUT_SECONDS_ENV, 5.0),
+        )
+    )
+    authority = remote_loader.initialize()
+    config = _oidc_config_from_env(source, discovery=authority.discovery, jwks=authority.jwks)
+    return JwtOidcAuthProvider(config=config, jwks_loader=remote_loader)
 
 
-def _oidc_config_from_env(source: Mapping[str, str]) -> JwtOidcAuthConfig:
+def _static_jwks_loader(source: Mapping[str, str]) -> JwksLoader:
+    def load() -> Mapping[str, object]:
+        return _json_object_from_env(source, OIDC_JWKS_JSON_ENV)
+
+    return load
+
+
+def _oidc_config_from_env(
+    source: Mapping[str, str],
+    *,
+    discovery: Mapping[str, object] | None = None,
+    jwks: Mapping[str, object] | None = None,
+) -> JwtOidcAuthConfig:
     """Resolve one immutable OIDC adapter configuration from environment values."""
-    discovery = _json_object_from_env(source, OIDC_DISCOVERY_JSON_ENV, default={})
+    resolved_discovery = discovery or _json_object_from_env(source, OIDC_DISCOVERY_JSON_ENV, default={})
     issuer = _required_oidc_value(
-        _env_value(source, OIDC_ISSUER_ENV) or _object_string(discovery, "issuer"),
+        _env_value(source, OIDC_ISSUER_ENV) or _object_string(resolved_discovery, "issuer"),
         f"{OIDC_ISSUER_ENV} or discovery issuer",
     )
     audience = _required_oidc_value(_env_value(source, OIDC_AUDIENCE_ENV), OIDC_AUDIENCE_ENV)
-    jwks = _json_object_from_env(source, OIDC_JWKS_JSON_ENV)
+    resolved_jwks = jwks or _json_object_from_env(source, OIDC_JWKS_JSON_ENV)
     human_grant_claim, human_grant_value = _human_grant_pair(source)
     grant_type_claim, grant_type_value = _grant_type_pair(source)
     return JwtOidcAuthConfig(
         issuer=issuer,
         audience=audience,
-        jwks=jwks,
+        jwks=resolved_jwks,
         tenant_claim=_oidc_claim(source, OIDC_TENANT_CLAIM_ENV, _DEFAULT_TENANT_CLAIM),
         roles_claim=_oidc_claim(source, OIDC_ROLES_CLAIM_ENV, _DEFAULT_ROLES_CLAIM),
         client_id_claim=_oidc_claim(source, OIDC_CLIENT_ID_CLAIM_ENV, _DEFAULT_CLIENT_ID_CLAIM),
@@ -573,6 +603,16 @@ def _int_from_env(environ: Mapping[str, str], name: str, default: int) -> int:
     value = int(raw)
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
+    return value
+
+
+def _float_from_env(environ: Mapping[str, str], name: str, default: float) -> float:
+    raw = _env_value(environ, name)
+    if raw is None:
+        return default
+    value = float(raw)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be positive")
     return value
 
 

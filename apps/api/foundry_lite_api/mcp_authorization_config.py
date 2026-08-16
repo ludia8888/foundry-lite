@@ -23,8 +23,10 @@ MCP_PUBLIC_BASE_URL_ENV = "FOUNDRY_LITE_MCP_PUBLIC_BASE_URL"
 GOVERNED_RELEASE_APPLICATION_ID_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_APPLICATION_ID"
 DYNAMIC_CLIENT_APPLICATION_ID_ENV = "FOUNDRY_LITE_MCP_DYNAMIC_CLIENT_APPLICATION_ID"
 LOCAL_CONSENT_ROLES_ENV = "FOUNDRY_LITE_MCP_LOCAL_CONSENT_ROLES"
+RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV = "FOUNDRY_LITE_MCP_RESOURCE_AUDIENCE_SCOPE_PREFIX"
 _APPLICATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _ROLE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SCOPE_PREFIX = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class McpAuthorizationConfig:
     governed_release_application_id: str | None = None
     dynamic_client_application_id: str | None = None
     local_consent_roles: tuple[str, ...] = ()
+    resource_audience_scope_prefix: str | None = None
 
     def authorization_servers(self, local_authorization_server: str) -> tuple[str, ...]:
         return (self.external_authorization_server or local_authorization_server,)
@@ -68,6 +71,10 @@ class McpAuthorizationConfig:
             return ()
         return self.local_consent_roles
 
+    def resource_audience_scope(self, resource: str) -> str | None:
+        prefix = self.resource_audience_scope_prefix
+        return f"{prefix}:{resource}" if prefix else None
+
 
 def mcp_authorization_config_from_env(
     source: Mapping[str, str],
@@ -80,6 +87,7 @@ def mcp_authorization_config_from_env(
     application_id = _optional_application_id(source.get(GOVERNED_RELEASE_APPLICATION_ID_ENV))
     dynamic_client_application_id = _optional_dynamic_client_application_id(source)
     local_consent_roles = _local_consent_roles(source)
+    resource_audience_scope_prefix = _optional_resource_audience_scope_prefix(source)
     if authorization_server is None:
         if RuntimeProfile.from_value(source.get("FOUNDRY_LITE_RUNTIME_PROFILE")).is_protected:
             raise AuthProfileConfigurationError(
@@ -91,6 +99,7 @@ def mcp_authorization_config_from_env(
             governed_release_application_id=application_id,
             dynamic_client_application_id=dynamic_client_application_id,
             local_consent_roles=local_consent_roles,
+            resource_audience_scope_prefix=resource_audience_scope_prefix,
         )
     _require_external_oidc_provider(auth_provider, authorization_server)
     if public_base_url is None:
@@ -101,7 +110,18 @@ def mcp_authorization_config_from_env(
         external_authorization_server=authorization_server,
         public_base_url=public_base_url,
         governed_release_application_id=application_id,
+        resource_audience_scope_prefix=resource_audience_scope_prefix,
     )
+
+
+def _optional_resource_audience_scope_prefix(source: Mapping[str, str]) -> str | None:
+    value = source.get(RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV)
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip()
+    if _SCOPE_PREFIX.fullmatch(normalized) is None:
+        raise AuthProfileConfigurationError(f"{RESOURCE_AUDIENCE_SCOPE_PREFIX_ENV} must be a clean OAuth scope prefix")
+    return normalized
 
 
 def governed_release_mcp_authority(

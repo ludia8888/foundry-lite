@@ -197,7 +197,7 @@ def protected_resource_metadata(
     plane: McpPlane,
     application_id: str,
 ) -> dict[str, object]:
-    scopes = mcp_resource_scopes(application_id, plane)
+    scopes = _resource_scopes(request, application_id, plane)
     if not scopes:
         raise NotFound("OSDK OAuth protected resource was not found")
     return {
@@ -208,6 +208,14 @@ def protected_resource_metadata(
         "bearer_methods_supported": ["header"],
         "scopes_supported": list(scopes),
     }
+
+
+def _resource_scopes(request: Request, application_id: str, plane: McpPlane) -> tuple[str, ...]:
+    scopes = mcp_resource_scopes(application_id, plane)
+    audience_scope = runtime.get_mcp_authorization_config().resource_audience_scope(
+        canonical_mcp_resource(request, plane, application_id)
+    )
+    return (*scopes, audience_scope) if audience_scope else scopes
 
 
 def mcp_resource_scopes(application_id: str, plane: McpPlane) -> tuple[str, ...]:
