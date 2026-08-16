@@ -27,6 +27,9 @@
    provider-neutral policy DTO, composition-root factory registry, alternate-provider regression을
    `quality:infrastructure-swapability`가 정적으로 강제한다. 상태형 인프라의 실제 cutover/RPO/RTO
    증거는 각 Infra Ratchet의 후속 live gate에서 별도로 요구한다.
+9. **Kubernetes package와 live 증거 분리**: Helm/CRD/controller/운영 script가 있다는 사실은
+   repository packaging proof다. 실제 cluster install, fault recovery, restore, hosted OAuth,
+   24시간 soak가 각각 실행 증거를 만들기 전에는 production-ready 또는 24/7 SLA로 올리지 않는다.
 
 ---
 
@@ -99,6 +102,8 @@
 | 28.3 | active 인프라 조합 ratchet                                         | `quality:infra-composition`         | S3+Iceberg+Spark end-to-end + failure-abort tests                       | ✅       |
 | 28.4 | tricky checklist 완료 체크가 실제 테스트 증거와 일치               | `quality:checklist-evidence`        | checked `test_*` references missing from pytest collection 0            | ✅       |
 | 28.5 | active 인프라가 관련 tricky 항목을 자동으로 proof/test/CI에 끌어옴 | `quality:infra-tricky-matrix`       | matrix item/proof/test/CI violations 0                                  | ✅       |
+| 28.6 | Kubernetes package가 immutable image, 제한 권한, 격리 실행과 보호 profile을 유지 | `quality:kubernetes-packaging` | packaging finding 0과 Helm/schema validation | ✅ |
+| 28.7 | 전용 Mac mini QA 도구가 host/profile/namespace 경계와 실제 증거 계산을 유지 | `quality:macmini-enterprise-qa` | focused contract tests pass; remote 24h 결과는 별도 live evidence | ✅ (repository), live pending |
 
 ### §5 코드 컨벤션
 
