@@ -220,7 +220,7 @@ def test_ontology_release_completes_review_activation_branch_merge_and_rollback_
     ontology_validation = ontology_evidence["validationEvidence"]
     assert isinstance(ontology_validation, list)
     assert _mapping(ontology_validation[-1])["status"] == "passed"
-    assert _mapping(ontology_validation[-1])["proofKind"] == "github_merge_result_or_head_required_checks"
+    assert _mapping(ontology_validation[-1])["proofKind"] == "source_control_merge_result_or_head_required_checks"
     assert _mapping(ontology_evidence["riskClassification"])["isComplete"] is False
     source_merge_binding = _source_merge_binding(ontology_evidence)
 
@@ -456,7 +456,7 @@ def test_pipeline_release_completes_review_merge_promote_status_and_explicit_rol
     assert isinstance(pipeline_validation, list)
     assert _mapping(pipeline_validation[0])["status"] == "passed"
     assert _mapping(pipeline_validation[1])["status"] == "passed"
-    assert _mapping(pipeline_validation[1])["proofKind"] == "github_merge_result_or_head_required_checks"
+    assert _mapping(pipeline_validation[1])["proofKind"] == "source_control_merge_result_or_head_required_checks"
     assert _mapping(candidate_evidence["impactScope"])["isComplete"] is True
     assert _mapping(candidate_evidence["riskClassification"])["isComplete"] is True
     source_merge_binding = _source_merge_binding(candidate_evidence)
@@ -614,6 +614,8 @@ class _DeterministicSourceControlRelease:
     """Provider-neutral fake that preserves exact publication and merge bindings."""
 
     profile_name = "github-release-test-double"
+    provider_name = "github"
+    is_live_provider = False
 
     def __init__(self) -> None:
         self.repository = SourceRepositoryRef("github", 4242, "foundry-lite", "governed-release-e2e")

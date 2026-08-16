@@ -65,6 +65,7 @@ def _claim(
     collection_started_at: datetime,
     collection_completed_at: datetime,
 ) -> ServerLoadedCollectionClaim:
+    source_provider, deployment_provider = _delivery_providers(database)
     return ServerLoadedCollectionClaim(
         authority="server_postgresql_provider_readback",
         collection_id=collection_id,
@@ -73,6 +74,8 @@ def _claim(
         application_id=database.application_id,
         database_system="postgresql",
         provider_readback_mode="concrete_network",
+        source_provider_name=source_provider,
+        deployment_provider_name=deployment_provider,
         authorization_policy_fingerprint=database.authorization_policy_fingerprint,
         submitter_subject_hash=database.submitter_subject_hash,
         submitter_oauth_session_hash=database.submitter_oauth_session_hash,
@@ -86,6 +89,14 @@ def _claim(
         collection_started_at=collection_started_at,
         collection_completed_at=collection_completed_at,
     )
+
+
+def _delivery_providers(database: ServerLoadedDatabaseSnapshot) -> tuple[str, str]:
+    source = {item.provider for item in database.deliveries if item.operation.startswith("source_")}
+    deployment = {item.provider for item in database.deliveries if not item.operation.startswith("source_")}
+    if len(source) != 1 or len(deployment) != 1:
+        raise ConflictDetected("live collection delivery provider identities are inconsistent")
+    return source.pop(), deployment.pop()
 
 
 def _require_scope(

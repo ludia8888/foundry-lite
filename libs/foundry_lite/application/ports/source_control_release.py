@@ -1,8 +1,4 @@
-"""Provider-neutral boundary for exact pull-request release mutations.
-
-The immutable repository id, base ref, and full head SHA bind each target so a
-caller cannot redirect an approved release to another repository or commit.
-"""
+"""Provider-neutral boundary for immutable pull-request release mutations."""
 
 from __future__ import annotations
 
@@ -187,15 +183,11 @@ def _validate_snapshot_check_commit_identity(snapshot: PullRequestSnapshot) -> N
 
 
 def _validate_snapshot_fingerprints(snapshot: PullRequestSnapshot) -> None:
-    """Require full policy and check fingerprints."""
-
     if not _is_sha256(snapshot.rules_fingerprint) or not _is_sha256(snapshot.checks_fingerprint):
         raise ValueError("rules and checks fingerprints must be full sha256 values")
 
 
 def _validate_snapshot_readiness(snapshot: PullRequestSnapshot) -> None:
-    """Keep the ready flag derived from complete server evidence."""
-
     if snapshot.is_ready_to_merge != (not snapshot.blocking_reasons):
         raise ValueError("readiness must match blocking_reasons")
     if snapshot.is_ready_to_merge and not _has_ready_snapshot_evidence(snapshot):
@@ -370,9 +362,13 @@ class SourceControlReleasePort(Protocol):
     """Inspect, merge, and reconcile an immutable source-control release target."""
 
     @property
-    def profile_name(self) -> str:
-        """Return the configured adapter profile for durable evidence."""
-        ...
+    def profile_name(self) -> str: ...
+
+    @property
+    def provider_name(self) -> str: ...
+
+    @property
+    def is_live_provider(self) -> bool: ...
 
     def inspect_source_ref(self, repository: SourceRepositoryRef, ref: str) -> SourceRefSnapshot:
         """Inspect an exact repository ref before candidate publication."""
@@ -415,6 +411,8 @@ class UnavailableSourceControlReleasePort:
     """Fail-closed default until a source-control adapter is explicitly composed."""
 
     profile_name = "source-control-unavailable"
+    provider_name = "unavailable"
+    is_live_provider = False
 
     def inspect_source_ref(self, repository: SourceRepositoryRef, ref: str) -> SourceRefSnapshot:
         del repository, ref

@@ -76,6 +76,10 @@ class GovernedReleaseLiveAuthority:
     database_backend: str
     source_provider_profile: str
     deployment_provider_profile: str
+    source_provider_name: str
+    deployment_provider_name: str
+    is_source_provider_live: bool
+    is_deployment_provider_live: bool
     source_revision: str
     collector_version: str = "governed-release-live-collector/v1"
     mcp_authority: GovernedReleaseMcpAuthority = field(default_factory=GovernedReleaseMcpAuthority)
@@ -85,8 +89,12 @@ class GovernedReleaseLiveAuthority:
         return (
             self.runtime_profile == "protected"
             and self.database_backend == "postgresql"
-            and self.source_provider_profile == "github-release"
-            and self.deployment_provider_profile == "render-infrastructure-deployment"
+            and bool(self.source_provider_profile.strip())
+            and bool(self.deployment_provider_profile.strip())
+            and bool(self.source_provider_name.strip())
+            and bool(self.deployment_provider_name.strip())
+            and self.is_source_provider_live
+            and self.is_deployment_provider_live
             and _GIT_SHA.fullmatch(self.source_revision) is not None
             and self.mcp_authority.is_live_eligible
         )
@@ -181,8 +189,8 @@ def _require_record_authority(record: GovernedReleaseLiveAttestationRecord) -> N
     if (record.runtime_profile, record.database_backend) != ("protected", "postgresql"):
         raise ValueError("live attestation requires the protected PostgreSQL runtime")
     profiles = (record.source_provider_profile, record.deployment_provider_profile)
-    if profiles != ("github-release", "render-infrastructure-deployment"):
-        raise ValueError("live attestation requires the real GitHub and Render adapters")
+    if not all(profile.strip() for profile in profiles):
+        raise ValueError("live attestation requires concrete source and deployment adapter profiles")
 
 
 def _require_record_scenarios(record: GovernedReleaseLiveAttestationRecord) -> None:

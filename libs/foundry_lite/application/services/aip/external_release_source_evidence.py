@@ -13,19 +13,20 @@ from foundry_lite.domain.errors import ConflictDetected
 def source_snapshot_evidence_or_failure(
     snapshot_reader: Callable[[], PullRequestSnapshot],
     is_required: bool,
+    provider: str,
 ) -> dict[str, object]:
     """Project one fresh snapshot while containing provider read failures."""
 
     try:
         return source_snapshot_evidence(snapshot_reader(), is_required=is_required)
     except (AdapterError, ConflictDetected, ValueError) as exc:
-        return source_read_failure(exc, is_required)
+        return source_read_failure(exc, is_required, provider)
 
 
-def source_read_failure(exc: Exception, is_required: bool) -> dict[str, object]:
+def source_read_failure(exc: Exception, is_required: bool, provider: str) -> dict[str, object]:
     error = adapter_failure_payload(exc) if isinstance(exc, AdapterError) else {"type": type(exc).__name__}
     return {
-        "provider": "github",
+        "provider": provider,
         "isConfigured": True,
         "isRequired": is_required,
         "status": "unavailable",
@@ -56,11 +57,11 @@ def unconfigured_source_evidence(is_required: bool) -> dict[str, object]:
     }
 
 
-def unpublished_source_evidence(is_required: bool) -> dict[str, object]:
+def unpublished_source_evidence(is_required: bool, provider: str) -> dict[str, object]:
     """Describe the explicit author action required before PR review can begin."""
 
     return {
-        "provider": "github",
+        "provider": provider,
         "isConfigured": True,
         "isRequired": is_required,
         "status": "not_published",

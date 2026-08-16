@@ -182,6 +182,8 @@ def _claim() -> ServerLoadedCollectionClaim:
         application_id="release-app",
         database_system="postgresql",
         provider_readback_mode="concrete_network",
+        source_provider_name="github",
+        deployment_provider_name="render",
         authorization_policy_fingerprint=_digest("issuer-audience-client-origin-scope-grant"),
         submitter_subject_hash=_subject(_SUBMITTER),
         submitter_oauth_session_hash=_oauth_session(_SUBMITTER),
@@ -214,6 +216,37 @@ def test_server_loaded_postgresql_and_provider_claim_is_attestation_eligible() -
     assert result.is_authoritative is True
     assert result.is_chronologically_valid is True
     assert result.is_toctou_stable is True
+    assert result.is_attestation_eligible is True
+    assert result.blockers == ()
+
+
+def test_alternate_source_and_deployment_providers_use_the_same_live_contract() -> None:
+    claim = _claim()
+    deliveries = tuple(
+        replace(
+            item,
+            provider="gitlab" if item.operation.startswith("source_") else "kubernetes",
+        )
+        for item in claim.deliveries
+    )
+    readbacks = tuple(
+        replace(
+            item,
+            provider="gitlab" if item.operation.startswith("source_") else "kubernetes",
+        )
+        for item in claim.provider_readbacks
+    )
+
+    result = assess_server_loaded_collection(
+        replace(
+            claim,
+            source_provider_name="gitlab",
+            deployment_provider_name="kubernetes",
+            deliveries=deliveries,
+            provider_readbacks=readbacks,
+        )
+    )
+
     assert result.is_attestation_eligible is True
     assert result.blockers == ()
     assert not hasattr(result, "is_live_verified")

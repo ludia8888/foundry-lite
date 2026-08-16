@@ -161,6 +161,10 @@ def test_wrong_configured_application_or_audience_blocks_live_collector(
                 database_backend="postgresql",
                 source_provider_profile="github-release",
                 deployment_provider_profile="render-infrastructure-deployment",
+                source_provider_name="github",
+                deployment_provider_name="render",
+                is_source_provider_live=True,
+                is_deployment_provider_live=True,
                 source_revision="1" * 40,
                 mcp_authority=_MCP_AUTHORITY,
             ),
@@ -180,6 +184,10 @@ def test_local_or_fake_authority_is_blocked_before_attestation_lookup() -> None:
         database_backend="sqlite",
         source_provider_profile="fake-github",
         deployment_provider_profile="fake-render",
+        source_provider_name="github",
+        deployment_provider_name="render",
+        is_source_provider_live=False,
+        is_deployment_provider_live=False,
         source_revision="",
     )
     service, _repository, _engine = _service(authority=local)
@@ -197,6 +205,10 @@ def test_ineligible_completion_coordinates_stop_before_workflow_ledger_scan() ->
         database_backend="sqlite",
         source_provider_profile="fake-github",
         deployment_provider_profile="fake-render",
+        source_provider_name="github",
+        deployment_provider_name="render",
+        is_source_provider_live=False,
+        is_deployment_provider_live=False,
         source_revision="",
     )
     service, _repository, _engine = _service(authority=local)
@@ -267,6 +279,10 @@ def test_committed_collection_cannot_replay_through_another_oauth_client() -> No
             database_backend="postgresql",
             source_provider_profile="github-release",
             deployment_provider_profile="render-infrastructure-deployment",
+            source_provider_name="github",
+            deployment_provider_name="render",
+            is_source_provider_live=True,
+            is_deployment_provider_live=True,
             source_revision="1" * 40,
             mcp_authority=replace(
                 _mcp_authority(),
@@ -339,6 +355,10 @@ def _service(
         database_backend="postgresql",
         source_provider_profile="github-release",
         deployment_provider_profile="render-infrastructure-deployment",
+        source_provider_name="github",
+        deployment_provider_name="render",
+        is_source_provider_live=True,
+        is_deployment_provider_live=True,
         source_revision="1" * 40,
         mcp_authority=_mcp_authority(),
     )

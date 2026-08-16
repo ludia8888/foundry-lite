@@ -9,6 +9,21 @@ This is a release discipline, not a roadmap slogan. A new infrastructure
 dependency is not considered "added" when it connects once. It is considered
 added only when it becomes a regression shield for future infrastructure.
 
+## Swapability Invariant
+
+An adapter boundary is not sufficient by itself. A swappable infrastructure
+family must keep provider identity and live-readback capability explicit, keep
+provider policy fields neutral in the application layer, select implementations
+through composition-root registries, and pass the same source/deployment contracts
+with GitLab/Kubernetes-shaped alternate adapters. `quality:infrastructure-swapability` enforces
+those structural rules for Governed Release and produces
+`artifacts/quality/infrastructure_swapability.json`.
+
+For stateful infrastructure, this structural gate is only level one. Promotion
+to production-ready also requires data/checkpoint migration, checksum or
+watermark reconciliation, write fencing, rollback, RPO/RTO, and operator
+evidence in that infrastructure family's self and composition ratchets.
+
 ## One Infrastructure At A Time
 
 Foundry-lite must not introduce multiple new production infrastructure families

@@ -39,6 +39,7 @@
 4. `docs/data-platform-expansion-sprint-plan-ko.md`, `foundry_lite_sprint_breakdown_ko.md`의
    스프린트 상태를 맞춘다.
 5. 필요하면 `docs/frontend-backend-surface-contract.md`, `docs/infra-ratchet.md`,
+   `docs/infrastructure-swapability-matrix.json`,
    `docs/quality-gate-roadmap.md`, `docs/pipeline-builder-parity-matrix.json`,
    `docs/functions-object-set-parity-matrix.json` 같은 계약·패리티
    문서를 업데이트한다.
@@ -87,6 +88,7 @@ ledger에 남아야 한다.
 | `docs/governed-release-hosted-staging-runbook.md`         | `reference`        | Hosted staging bootstrap operations runbook    | 보호형 staging bootstrap의 Render 설정, 외부 의존성, 비용 승인, migration/readiness 확인 순서를 설명하며 current/future 경계 원본은 implementation status와 evidence ledger로 연결한다. |
 | `docs/infra-ratchet.md`                                   | `source-of-truth`  | Infra ratchet methodology                      | 새 인프라는 self test plus active-infra composition test를 요구한다.                                                                                                           |
 | `docs/infra-tricky-matrix.json`                           | `machine-registry` | Machine-readable infra proof matrix            | source-of-truth and operator-evidence gates가 읽는 registry다.                                                                                                                 |
+| `docs/infrastructure-swapability-matrix.json`              | `machine-registry` | Infrastructure swapability registry            | 11개 핵심 인프라군의 port, composition selector, 구현, contract test, stateful cutover 미증명 경계를 잠근다.                                                                   |
 | `docs/foundry_lite_tricky_failure_modes_checklist.md`     | `risk-registry`    | Failure-mode backlog and partial shield        | `[ ]`는 대부분 future hardening backlog이고, 완료 증거는 ledger와 gate로 확인한다.                                                                                             |
 | `docs/aip-lite-canonical-spec.md`                         | `reference`        | AIP-lite design spec and Palantir cross-check  | Model Gateway/registry/egress/run-event ledger/context compiler 등 AIP-lite 섹션의 설계 원본과 documented-Palantir vs our-extension 대조를 담는다.                             |
 | `docs/ai-fde-research.md`                                 | `reference`        | AI FDE official-behavior research              | Palantir AI FDE, Palantir MCP, Pilot 공개 문서에서 도출한 실행·권한·branch·proposal 계약과 Foundry-lite 이식 경계를 설명한다.                                                   |

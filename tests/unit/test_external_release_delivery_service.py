@@ -14,6 +14,7 @@ from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentRollbackRequest,
     InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
+    InfrastructureDeploymentSourceBinding,
     InfrastructureDeploymentStartRequest,
 )
 from foundry_lite.application.ports.release_delivery_repository import (
@@ -81,6 +82,8 @@ class _RuntimeEvidence:
 
 class _SourceControlAdapter:
     profile_name = "github-release"
+    provider_name = "github"
+    is_live_provider = True
 
     def __init__(
         self,
@@ -151,6 +154,8 @@ class _SourceControlAdapter:
 
 class _InfrastructureAdapter:
     profile_name = "render-deployment"
+    provider_name = "render"
+    is_live_provider = True
 
     def __init__(self, engine: Engine, repository: SqlAlchemyReleaseDeliveryRepository) -> None:
         self.engine = engine
@@ -196,11 +201,10 @@ class _InfrastructureAdapter:
         return InfrastructureDeploymentServicePolicyObservation(
             provider="render",
             service_id=request.service_id,
-            is_auto_deploy_enabled=self.is_auto_deploy_enabled,
-            source_repository_owner="acme",
-            source_repository_name="platform",
-            source_branch="main",
-            service_type="web_service",
+            release_mode="source_revision",
+            trigger_mode="automatic" if self.is_auto_deploy_enabled else "manual",
+            source_binding=InfrastructureDeploymentSourceBinding("github", "acme", "platform", "main"),
+            workload_kind="web_service",
             is_suspended=False,
             provider_request_id="render-policy-request-1",
         )

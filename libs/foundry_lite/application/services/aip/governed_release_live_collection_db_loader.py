@@ -101,6 +101,7 @@ class GovernedReleaseLiveCollectionDatabaseLoader:
         }
         _require_scope(tenant_id, application_id, run_ids)
         chains = self._load_chains(transaction, tenant_id, application_id, run_ids)
+        _require_provider_consistency(chains)
         proposals = _proposal_ids(chains)
         audits = self._load_audits(transaction, tenant_id, proposals)
         sources = _action_sources(chains, proposals, audits)
@@ -206,9 +207,18 @@ def _require_delivery_row(
 
 
 def _require_delivery_state(row: ReleaseDeliveryRecord, operation: DeliveryOperation) -> None:
-    expected_provider = "github" if operation.startswith("source_") else "render"
-    if row.operation != operation or row.provider != expected_provider or row.status != "landed":
+    if row.operation != operation or not is_text(row.provider) or row.status != "landed":
         invalid("workflow_delivery_not_landed")
+
+
+def _require_provider_consistency(
+    chains: Mapping[ReleaseKind, tuple[ReleaseDeliveryRecord, ...]],
+) -> None:
+    rows = tuple(row for chain in chains.values() for row in chain)
+    source = {row.provider for row in rows if row.operation.startswith("source_")}
+    deployment = {row.provider for row in rows if not row.operation.startswith("source_")}
+    if len(source) != 1 or len(deployment) != 1:
+        conflict("workflow_delivery_provider_mismatch")
 
 
 def _require_delivery_lineage(

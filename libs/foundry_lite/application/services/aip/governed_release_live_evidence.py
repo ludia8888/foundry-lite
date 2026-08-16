@@ -39,7 +39,7 @@ LIVE_PREFLIGHT_ORIGIN = "live_provider_readback"
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-_RENDER_SERVICE = re.compile(r"^srv-[a-z0-9-]{3,64}$")
+_DEPLOYMENT_SERVICE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{2,191}$")
 
 
 class LiveEvidenceInvalid(ValueError):
@@ -263,7 +263,7 @@ def _governance_contract(governance: JsonObject, submitter: JsonObject, reviewer
 
 
 def _source_target_contract(source: JsonObject) -> None:
-    _expect(source, "provider", "github", "source_provider_mismatch")
+    _text(source, "provider")
     _integer(source, "repositoryId")
     _text(source, "owner")
     _text(source, "repository")
@@ -284,8 +284,8 @@ def _source_receipt_contract(target: JsonObject, receipt: JsonObject) -> None:
 
 
 def _deployment_target_contract(deployment: JsonObject) -> None:
-    _expect(deployment, "provider", "render", "deployment_provider_mismatch")
-    _pattern(deployment, "serviceId", _RENDER_SERVICE, "deployment_service_id_invalid")
+    _text(deployment, "provider")
+    _pattern(deployment, "serviceId", _DEPLOYMENT_SERVICE, "deployment_service_id_invalid")
     if deployment.get("environment") not in {"staging", "production"}:
         raise LiveEvidenceInvalid("deployment_environment_mismatch")
 

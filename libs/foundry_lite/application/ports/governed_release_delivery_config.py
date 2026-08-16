@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from foundry_lite.application.ports.source_control_release import (
     SourceControlMergeMethod,
@@ -12,6 +13,7 @@ from foundry_lite.application.ports.source_control_release import (
 
 _SAFE_BRANCH_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _SAFE_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+DeploymentReleaseMode = Literal["source_revision", "immutable_artifact"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,11 +27,17 @@ class GovernedReleaseDeliveryConfig:
     is_source_control_required: bool = False
     deployment_service_id: str | None = None
     deployment_environment: str = "production"
+    deployment_release_mode: DeploymentReleaseMode = "source_revision"
+    deployment_workload_kind: str = "web_service"
     is_deployment_required: bool = False
 
     def __post_init__(self) -> None:
         _validate_required_targets(self)
-        _validate_target_names(self.source_base_ref, self.deployment_environment)
+        _validate_target_names(
+            self.source_base_ref,
+            self.deployment_environment,
+            self.deployment_workload_kind,
+        )
 
     @property
     def is_source_control_enabled(self) -> bool:
@@ -69,13 +77,19 @@ def _validate_required_targets(config: GovernedReleaseDeliveryConfig) -> None:
         raise ValueError("governed deployment requires a source-control merge receipt")
 
 
-def _validate_target_names(source_base_ref: str, deployment_environment: str) -> None:
-    if not source_base_ref or not deployment_environment:
-        raise ValueError("release base ref and deployment environment are required")
+def _validate_target_names(
+    source_base_ref: str,
+    deployment_environment: str,
+    deployment_workload_kind: str,
+) -> None:
+    if not source_base_ref or not deployment_environment or not deployment_workload_kind:
+        raise ValueError("release base ref, deployment environment, and workload kind are required")
     if _SAFE_BRANCH_NAME.fullmatch(source_base_ref) is None or _unsafe_ref_fragment(source_base_ref):
         raise ValueError("release base ref is invalid")
     if _SAFE_ENVIRONMENT_NAME.fullmatch(deployment_environment) is None:
         raise ValueError("release deployment environment is invalid")
+    if _SAFE_ENVIRONMENT_NAME.fullmatch(deployment_workload_kind) is None:
+        raise ValueError("release deployment workload kind is invalid")
 
 
 __all__ = ["GovernedReleaseDeliveryConfig"]

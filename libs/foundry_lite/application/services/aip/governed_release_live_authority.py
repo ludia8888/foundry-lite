@@ -126,6 +126,10 @@ def live_configuration_fingerprint(
         "databaseBackend": authority.database_backend,
         "sourceProviderProfile": authority.source_provider_profile,
         "deploymentProviderProfile": authority.deployment_provider_profile,
+        "sourceProviderName": authority.source_provider_name,
+        "deploymentProviderName": authority.deployment_provider_name,
+        "isSourceProviderLive": authority.is_source_provider_live,
+        "isDeploymentProviderLive": authority.is_deployment_provider_live,
         "sourceRevision": authority.source_revision,
         **live_mcp_configuration_payload(application_id, authority),
     }

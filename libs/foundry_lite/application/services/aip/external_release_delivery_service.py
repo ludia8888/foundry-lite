@@ -43,9 +43,6 @@ from foundry_lite.application.services.aip.external_release_delivery_support imp
     proposal_id as _proposal_id,
 )
 from foundry_lite.application.services.aip.external_release_delivery_support import (
-    provider_name as _provider_name,
-)
-from foundry_lite.application.services.aip.external_release_delivery_support import (
     require_snapshot_binding as _require_snapshot_binding,
 )
 from foundry_lite.application.services.aip.external_release_delivery_support import (
@@ -113,12 +110,16 @@ class ExternalReleaseDeliveryService(CoreService):
                 evidence["publication"] = delivery_projection(publication)
             return evidence
         if publication is None:
-            return _unpublished_source_evidence(config.is_source_control_required)
+            return _unpublished_source_evidence(
+                config.is_source_control_required,
+                self.source_control_release_adapter.provider_name,
+            )
         if publication.status != "landed":
             return source_delivery_evidence(publication, is_required=config.is_source_control_required)
         evidence = _source_snapshot_evidence_or_failure(
             lambda: self._source_publication().fresh_snapshot(ctx, proposal),
             config.is_source_control_required,
+            self.source_control_release_adapter.provider_name,
         )
         if evidence["status"] != "unavailable":
             evidence["publication"] = delivery_projection(publication)
@@ -190,7 +191,7 @@ class ExternalReleaseDeliveryService(CoreService):
             if config.is_deployment_required:
                 raise ConflictDetected("required infrastructure deployment is not configured")
             return {"status": "skipped", "reason": "deployment_not_configured"}
-        provider = _provider_name(self.infrastructure_deployment_adapter.profile_name)
+        provider = self.infrastructure_deployment_adapter.provider_name
         replay = self._ledger().find_by_idempotency(ctx, provider, "application_deploy", idempotency_key)
         lineage = self._lineage().for_application_deploy(ctx, proposal_id, commit_id, replay)
         row = self._prepare_application_delivery(
@@ -215,7 +216,7 @@ class ExternalReleaseDeliveryService(CoreService):
         target_deploy_id = _required_text(target, "targetDeployId")
         target_commit_id = _required_text(target, "targetCommitId")
         current_deploy_id = _required_text(target, "rolledBackFromDeployId")
-        provider = _provider_name(self.infrastructure_deployment_adapter.profile_name)
+        provider = self.infrastructure_deployment_adapter.provider_name
         replay = self._ledger().find_by_idempotency(ctx, provider, "application_rollback", idempotency_key)
         lineage = self._lineage().for_application_rollback(ctx, proposal_id, current_deploy_id, replay)
         row = self._prepare_application_delivery(
@@ -357,7 +358,7 @@ class ExternalReleaseDeliveryService(CoreService):
         return self._prepare_delivery(
             ctx,
             proposal_id=proposal_id,
-            provider=_provider_name(self.infrastructure_deployment_adapter.profile_name),
+            provider=self.infrastructure_deployment_adapter.provider_name,
             operation=operation,
             target_ref={"serviceId": service_id},
             candidate_ref=candidate_ref,
@@ -433,12 +434,9 @@ class ExternalReleaseDeliveryService(CoreService):
 
     def _infrastructure(self) -> ExternalReleaseInfrastructureCoordinator:
         config = self.governed_release_delivery_config
-        repository = config.source_repository
         return ExternalReleaseInfrastructureCoordinator(
             self.infrastructure_deployment_adapter,
-            repository.owner if repository is not None else None,
-            repository.name if repository is not None else None,
-            config.source_base_ref,
+            config,
             self._ledger(),
             self.runtime_service,
         )

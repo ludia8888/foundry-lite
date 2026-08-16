@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import NoReturn, cast
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
+from foundry_lite.application.ports.governed_release_delivery_config import GovernedReleaseDeliveryConfig
 from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentAdapter,
     InfrastructureDeploymentCandidateQuery,
@@ -31,20 +32,18 @@ from foundry_lite.application.services.aip.external_release_delivery_state impor
 from foundry_lite.application.services.aip.external_release_delivery_support import (
     ExternalReleaseDeliveryOutcomeUnknown,
     delivery_commit_id,
+    delivery_dispatch_started_at,
     is_settled_window,
     required_candidate_text,
     required_text,
+    strict_rollback_reconciliation_candidates,
     trace_identity,
 )
 from foundry_lite.application.services.aip.external_release_infrastructure_evidence import (
     ManualDeploymentPolicyFailure,
-    delivery_dispatch_started_at,
     infrastructure_receipt_matches_delivery,
     require_manual_deployment_policy_for_service,
     strict_deploy_reconciliation_candidates,
-)
-from foundry_lite.application.services.aip.external_release_rollback import (
-    strict_rollback_reconciliation_candidates,
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
@@ -61,16 +60,12 @@ class ExternalReleaseInfrastructureCoordinator:
     def __init__(
         self,
         adapter: InfrastructureDeploymentAdapter,
-        expected_source_owner: str | None,
-        expected_source_name: str | None,
-        expected_source_branch: str,
+        config: GovernedReleaseDeliveryConfig,
         ledger: ExternalReleaseDeliveryLedger,
         runtime_service: RuntimeEvidenceBoundary,
     ) -> None:
         self._adapter = adapter
-        self._expected_source_owner = expected_source_owner
-        self._expected_source_name = expected_source_name
-        self._expected_source_branch = expected_source_branch
+        self._config = config
         self._ledger = ledger
         self._runtime_service = runtime_service
 
@@ -90,7 +85,7 @@ class ExternalReleaseInfrastructureCoordinator:
 
     def _require_policy(self, ctx: RequestContext, row: ReleaseDeliveryRecord) -> None:
         service_id = required_text(row.target_ref, "serviceId")
-        if self._expected_source_owner is None or self._expected_source_name is None:
+        if self._config.source_repository is None:
             raise ConflictDetected("infrastructure delivery has no source repository binding")
         try:
             require_manual_deployment_policy_for_service(
@@ -98,9 +93,7 @@ class ExternalReleaseInfrastructureCoordinator:
                 row,
                 service_id,
                 self._adapter,
-                self._expected_source_owner,
-                self._expected_source_name,
-                self._expected_source_branch,
+                self._config,
             )
         except ManualDeploymentPolicyFailure as exc:
             raise ConflictDetected(

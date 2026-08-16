@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from sqlalchemy.engine import Engine
 
@@ -13,13 +13,18 @@ from foundry_lite.application.dependency_release import (
     GovernedReleaseLiveAuthority,
     GovernedReleaseMcpAuthority,
 )
-from foundry_lite.application.ports.governed_release_delivery_config import GovernedReleaseDeliveryConfig
+from foundry_lite.application.ports.governed_release_delivery_config import (
+    DeploymentReleaseMode,
+    GovernedReleaseDeliveryConfig,
+)
 from foundry_lite.application.ports.infrastructure_deployment_adapter import (
+    InfrastructureDeploymentAdapter,
     UnavailableInfrastructureDeploymentAdapter,
 )
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.source_control_release import (
     SourceControlMergeMethod,
+    SourceControlReleasePort,
     SourceRepositoryRef,
     UnavailableSourceControlReleasePort,
 )
@@ -34,7 +39,19 @@ from foundry_lite.infrastructure.repositories.release_delivery_repository import
 )
 
 _SOURCE_REQUIRED_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REQUIRED"
+_SOURCE_PROVIDER_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER"
+_SOURCE_REPOSITORY_ID_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REPOSITORY_ID"
+_SOURCE_OWNER_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_OWNER"
+_SOURCE_REPOSITORY_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REPOSITORY"
+_SOURCE_BASE_REF_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_BASE_REF"
+_SOURCE_HEAD_PREFIX_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_HEAD_PREFIX"
+_SOURCE_MERGE_METHOD_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_MERGE_METHOD"
 _DEPLOYMENT_REQUIRED_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_REQUIRED"
+_DEPLOYMENT_PROVIDER_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER"
+_DEPLOYMENT_SERVICE_ID_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID"
+_DEPLOYMENT_ENVIRONMENT_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_ENVIRONMENT"
+_DEPLOYMENT_RELEASE_MODE_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE"
+_DEPLOYMENT_WORKLOAD_KIND_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_WORKLOAD_KIND"
 _GITHUB_REPOSITORY_ID_ENV = "FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY_ID"
 _GITHUB_OWNER_ENV = "FOUNDRY_LITE_GITHUB_RELEASE_OWNER"
 _GITHUB_REPOSITORY_ENV = "FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY"
@@ -49,6 +66,14 @@ _RENDER_TOKEN_REF_ENV = "FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF"  # nosec 
 _RENDER_ENVIRONMENT_ENV = "FOUNDRY_LITE_RENDER_RELEASE_ENVIRONMENT"
 _COLLECTOR_SOURCE_REVISION_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_COLLECTOR_SOURCE_REVISION"
 _RENDER_SERVICE_ID_PATTERN = re.compile(r"^srv-[a-z0-9-]{3,64}$")
+DeploymentAdapterFactory = Callable[
+    [SecretProvider, Mapping[str, str]],
+    InfrastructureDeploymentAdapter,
+]
+SourceControlAdapterFactory = Callable[
+    [SecretProvider, Mapping[str, str], SourceRepositoryRef],
+    SourceControlReleasePort,
+]
 
 
 def build_governed_release_dependencies(
@@ -57,21 +82,30 @@ def build_governed_release_dependencies(
     environ: Mapping[str, str] | None = None,
     runtime_profile: RuntimeProfile | str | None = None,
     mcp_authority: GovernedReleaseMcpAuthority | None = None,
+    source_control_adapter_factories: Mapping[str, SourceControlAdapterFactory] | None = None,
+    deployment_adapter_factories: Mapping[str, DeploymentAdapterFactory] | None = None,
 ) -> GovernedReleaseDependencies:
-    """Compose unavailable defaults or one fully pinned GitHub + Render pair."""
+    """Compose provider adapters through an explicit, fail-closed registry."""
 
     source = os.environ if environ is None else environ
     profile = RuntimeProfile.from_value(runtime_profile or source.get("FOUNDRY_LITE_RUNTIME_PROFILE"))
-    source_adapter, repository_ref = _source_control_adapter(secret_provider, source)
-    deployment_adapter = _deployment_adapter(secret_provider, source)
+    source_adapter, repository_ref = _source_control_adapter(
+        secret_provider,
+        source,
+        source_control_adapter_factories,
+    )
+    deployment_adapter = _deployment_adapter(secret_provider, source, deployment_adapter_factories)
+    deployment_provider = _deployment_provider(source)
     config = GovernedReleaseDeliveryConfig(
         source_repository=repository_ref,
-        source_base_ref=source.get(_GITHUB_BASE_REF_ENV, "main"),
-        source_head_prefix=source.get(_GITHUB_HEAD_PREFIX_ENV, "codex/"),
-        source_merge_method=_merge_method(source),
+        source_base_ref=_source_base_ref(source),
+        source_head_prefix=_source_head_prefix(source),
+        source_merge_method=_source_merge_method(source),
         is_source_control_required=profile.is_protected or _boolean(source, _SOURCE_REQUIRED_ENV),
-        deployment_service_id=_optional(source, _RENDER_SERVICE_ID_ENV),
-        deployment_environment=source.get(_RENDER_ENVIRONMENT_ENV, "production"),
+        deployment_service_id=_deployment_service_id(source, deployment_provider),
+        deployment_environment=_deployment_environment(source),
+        deployment_release_mode=_deployment_release_mode(source),
+        deployment_workload_kind=source.get(_DEPLOYMENT_WORKLOAD_KIND_ENV, "web_service").strip(),
         is_deployment_required=profile.is_protected or _boolean(source, _DEPLOYMENT_REQUIRED_ENV),
     )
     return GovernedReleaseDependencies(
@@ -85,6 +119,10 @@ def build_governed_release_dependencies(
             database_backend=engine.dialect.name,
             source_provider_profile=source_adapter.profile_name,
             deployment_provider_profile=deployment_adapter.profile_name,
+            source_provider_name=source_adapter.provider_name,
+            deployment_provider_name=deployment_adapter.provider_name,
+            is_source_provider_live=source_adapter.is_live_provider,
+            is_deployment_provider_live=deployment_adapter.is_live_provider,
             source_revision=(
                 source.get(_COLLECTOR_SOURCE_REVISION_ENV, "").strip() or source.get("RENDER_GIT_COMMIT", "").strip()
             ),
@@ -96,48 +134,85 @@ def build_governed_release_dependencies(
 def _source_control_adapter(
     secret_provider: SecretProvider,
     environ: Mapping[str, str],
-) -> tuple[GitHubReleaseAdapter | UnavailableSourceControlReleasePort, SourceRepositoryRef | None]:
+    factories: Mapping[str, SourceControlAdapterFactory] | None,
+) -> tuple[SourceControlReleasePort, SourceRepositoryRef | None]:
+    provider = _source_provider(environ)
+    if provider is None:
+        return UnavailableSourceControlReleasePort(), None
+    repository = _source_repository(environ, provider)
+    registry: dict[str, SourceControlAdapterFactory] = {"github": _github_source_control_adapter}
+    if factories is not None:
+        registry.update({_provider_key(key): value for key, value in factories.items()})
+    factory = registry.get(provider)
+    if factory is None:
+        raise ValueError(f"governed release source provider '{provider}' is not registered")
+    adapter = factory(secret_provider, environ, repository)
+    if adapter.provider_name != provider:
+        raise ValueError("governed release source adapter provider identity does not match its registry key")
+    return adapter, repository
+
+
+def _github_source_control_adapter(
+    secret_provider: SecretProvider,
+    environ: Mapping[str, str],
+    repository: SourceRepositoryRef,
+) -> GitHubReleaseAdapter:
     values = _all_or_none(
         environ,
-        (_GITHUB_REPOSITORY_ID_ENV, _GITHUB_OWNER_ENV, _GITHUB_REPOSITORY_ENV, _GITHUB_TOKEN_REF_ENV),
+        (_GITHUB_TOKEN_REF_ENV,),
         "GitHub governed release",
     )
     if values is None:
-        return UnavailableSourceControlReleasePort(), None
+        raise ValueError("GitHub governed release token configuration is missing")
     token_ref = values[_GITHUB_TOKEN_REF_ENV]
     _require_resolvable_secret(secret_provider, token_ref, "GitHub governed release")
-    repository = SourceRepositoryRef(
-        provider="github",
-        repository_id=_positive_integer(values[_GITHUB_REPOSITORY_ID_ENV], _GITHUB_REPOSITORY_ID_ENV),
-        owner=values[_GITHUB_OWNER_ENV],
-        name=values[_GITHUB_REPOSITORY_ENV],
-    )
     config = GitHubReleaseConfig(
         repository=repository,
         installation_token_secret_ref=token_ref,
-        allowed_base_refs=(environ.get(_GITHUB_BASE_REF_ENV, "main"),),
-        allowed_head_ref_prefixes=(environ.get(_GITHUB_HEAD_PREFIX_ENV, "codex/"),),
+        allowed_base_refs=(_source_base_ref(environ),),
+        allowed_head_ref_prefixes=(_source_head_prefix(environ),),
         minimum_approvals=_nonnegative_integer(
             environ.get(_GITHUB_MINIMUM_APPROVALS_ENV, "0"),
             "minimum approvals",
         ),
-        allowed_merge_methods=(_merge_method(environ),),
+        allowed_merge_methods=(_source_merge_method(environ),),
         is_bypass_policy_verified=_boolean(environ, _GITHUB_BYPASS_POLICY_VERIFIED_ENV),
     )
-    return GitHubReleaseAdapter(config, secret_provider), repository
+    return GitHubReleaseAdapter(config, secret_provider)
 
 
 def _deployment_adapter(
     secret_provider: SecretProvider,
     environ: Mapping[str, str],
-) -> RenderInfrastructureDeploymentAdapter | UnavailableInfrastructureDeploymentAdapter:
+    factories: Mapping[str, DeploymentAdapterFactory] | None,
+) -> InfrastructureDeploymentAdapter:
+    provider = _deployment_provider(environ)
+    if provider is None:
+        return UnavailableInfrastructureDeploymentAdapter()
+    registry: dict[str, DeploymentAdapterFactory] = {"render": _render_deployment_adapter}
+    if factories is not None:
+        registry.update({_provider_key(key): value for key, value in factories.items()})
+    factory = registry.get(provider)
+    if factory is None:
+        raise ValueError(f"governed release deployment provider '{provider}' is not registered")
+    adapter = factory(secret_provider, environ)
+    if adapter.provider_name != provider:
+        raise ValueError("governed release deployment adapter provider identity does not match its registry key")
+    return adapter
+
+
+def _render_deployment_adapter(
+    secret_provider: SecretProvider,
+    environ: Mapping[str, str],
+) -> RenderInfrastructureDeploymentAdapter:
     values = _all_or_none(
         environ,
         (_RENDER_SERVICE_ID_ENV, _RENDER_TOKEN_REF_ENV),
         "Render governed release",
+        aliases={_RENDER_SERVICE_ID_ENV: _DEPLOYMENT_SERVICE_ID_ENV},
     )
     if values is None:
-        return UnavailableInfrastructureDeploymentAdapter()
+        raise ValueError("Render governed release configuration is missing")
     token_ref = values[_RENDER_TOKEN_REF_ENV]
     _require_resolvable_secret(secret_provider, token_ref, "Render governed release")
     return RenderInfrastructureDeploymentAdapter(
@@ -150,8 +225,14 @@ def _all_or_none(
     environ: Mapping[str, str],
     names: tuple[str, ...],
     label: str,
+    aliases: Mapping[str, str] | None = None,
 ) -> dict[str, str] | None:
-    values = {name: value.strip() for name in names if (value := environ.get(name, "")).strip()}
+    alias_map = aliases or {}
+    values = {
+        name: value.strip()
+        for name in names
+        if (value := environ.get(alias_map.get(name, name), environ.get(name, ""))).strip()
+    }
     if not values:
         return None
     if len(values) != len(names):
@@ -160,12 +241,65 @@ def _all_or_none(
     return values
 
 
-def _merge_method(environ: Mapping[str, str]) -> SourceControlMergeMethod:
-    value = environ.get(_GITHUB_MERGE_METHOD_ENV, SourceControlMergeMethod.SQUASH.value)
+def _source_provider(environ: Mapping[str, str]) -> str | None:
+    explicit = environ.get(_SOURCE_PROVIDER_ENV, "").strip()
+    if explicit:
+        return _provider_key(explicit)
+    generic_values = (
+        environ.get(_SOURCE_REPOSITORY_ID_ENV, ""),
+        environ.get(_SOURCE_OWNER_ENV, ""),
+        environ.get(_SOURCE_REPOSITORY_ENV, ""),
+    )
+    if any(value.strip() for value in generic_values):
+        raise ValueError(f"{_SOURCE_PROVIDER_ENV} is required with generic source coordinates")
+    github_values = (
+        environ.get(_GITHUB_REPOSITORY_ID_ENV, ""),
+        environ.get(_GITHUB_OWNER_ENV, ""),
+        environ.get(_GITHUB_REPOSITORY_ENV, ""),
+        environ.get(_GITHUB_TOKEN_REF_ENV, ""),
+    )
+    return "github" if any(value.strip() for value in github_values) else None
+
+
+def _source_repository(environ: Mapping[str, str], provider: str) -> SourceRepositoryRef:
+    names = (_SOURCE_REPOSITORY_ID_ENV, _SOURCE_OWNER_ENV, _SOURCE_REPOSITORY_ENV)
+    aliases = (
+        {
+            _SOURCE_REPOSITORY_ID_ENV: _GITHUB_REPOSITORY_ID_ENV,
+            _SOURCE_OWNER_ENV: _GITHUB_OWNER_ENV,
+            _SOURCE_REPOSITORY_ENV: _GITHUB_REPOSITORY_ENV,
+        }
+        if provider == "github"
+        else None
+    )
+    values = _all_or_none(environ, names, f"{provider} governed release", aliases=aliases)
+    if values is None:
+        raise ValueError(f"{provider} governed release repository configuration is missing")
+    return SourceRepositoryRef(
+        provider=provider,
+        repository_id=_positive_integer(values[_SOURCE_REPOSITORY_ID_ENV], _SOURCE_REPOSITORY_ID_ENV),
+        owner=values[_SOURCE_OWNER_ENV],
+        name=values[_SOURCE_REPOSITORY_ENV],
+    )
+
+
+def _source_base_ref(environ: Mapping[str, str]) -> str:
+    return environ.get(_SOURCE_BASE_REF_ENV, environ.get(_GITHUB_BASE_REF_ENV, "main")).strip()
+
+
+def _source_head_prefix(environ: Mapping[str, str]) -> str:
+    return environ.get(_SOURCE_HEAD_PREFIX_ENV, environ.get(_GITHUB_HEAD_PREFIX_ENV, "codex/")).strip()
+
+
+def _source_merge_method(environ: Mapping[str, str]) -> SourceControlMergeMethod:
+    value = environ.get(
+        _SOURCE_MERGE_METHOD_ENV,
+        environ.get(_GITHUB_MERGE_METHOD_ENV, SourceControlMergeMethod.SQUASH.value),
+    )
     try:
         return SourceControlMergeMethod(value)
     except ValueError as exc:
-        raise ValueError("GitHub governed release merge method must be merge, squash, or rebase") from exc
+        raise ValueError("governed release source merge method must be merge, squash, or rebase") from exc
 
 
 def _boolean(environ: Mapping[str, str], name: str) -> bool:
@@ -197,13 +331,44 @@ def _nonnegative_integer(value: str, label: str) -> int:
     return parsed
 
 
-def _optional(environ: Mapping[str, str], name: str) -> str | None:
-    value = environ.get(name, "").strip()
+def _deployment_provider(environ: Mapping[str, str]) -> str | None:
+    explicit = environ.get(_DEPLOYMENT_PROVIDER_ENV, "").strip()
+    if explicit:
+        return _provider_key(explicit)
+    render_values = (environ.get(_RENDER_SERVICE_ID_ENV, ""), environ.get(_RENDER_TOKEN_REF_ENV, ""))
+    return "render" if any(value.strip() for value in render_values) else None
+
+
+def _provider_key(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", normalized) is None:
+        raise ValueError("governed release deployment provider name is invalid")
+    return normalized
+
+
+def _deployment_service_id(environ: Mapping[str, str], provider: str | None) -> str | None:
+    value = environ.get(_DEPLOYMENT_SERVICE_ID_ENV, "").strip()
+    if not value and provider == "render":
+        value = environ.get(_RENDER_SERVICE_ID_ENV, "").strip()
     if not value:
         return None
-    if name == _RENDER_SERVICE_ID_ENV and _RENDER_SERVICE_ID_PATTERN.fullmatch(value) is None:
-        raise ValueError(f"{_RENDER_SERVICE_ID_ENV} must be a valid Render service id")
+    if provider == "render" and _RENDER_SERVICE_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{_DEPLOYMENT_SERVICE_ID_ENV} must be a valid Render service id")
     return value
+
+
+def _deployment_environment(environ: Mapping[str, str]) -> str:
+    return environ.get(
+        _DEPLOYMENT_ENVIRONMENT_ENV,
+        environ.get(_RENDER_ENVIRONMENT_ENV, "production"),
+    ).strip()
+
+
+def _deployment_release_mode(environ: Mapping[str, str]) -> DeploymentReleaseMode:
+    value = environ.get(_DEPLOYMENT_RELEASE_MODE_ENV, "source_revision").strip()
+    if value not in {"source_revision", "immutable_artifact"}:
+        raise ValueError(f"{_DEPLOYMENT_RELEASE_MODE_ENV} must be source_revision or immutable_artifact")
+    return "source_revision" if value == "source_revision" else "immutable_artifact"
 
 
 def _require_resolvable_secret(secret_provider: SecretProvider, secret_ref: str, label: str) -> None:

@@ -4,6 +4,9 @@ import pytest
 from foundry_lite.application.ports.governed_release_live_attestation_repository import (
     GovernedReleaseMcpAuthority,
 )
+from foundry_lite.application.ports.infrastructure_deployment_adapter import (
+    UnavailableInfrastructureDeploymentAdapter,
+)
 from foundry_lite.application.ports.source_control_release import (
     SourceControlMergeMethod,
     UnavailableSourceControlReleasePort,
@@ -85,6 +88,102 @@ def test_full_configuration_pins_targets_and_requires_explicit_bypass_attestatio
     assert verified_source._config.is_bypass_policy_verified is True
 
 
+def test_registered_deployment_provider_swaps_without_application_changes() -> None:
+    environment = {
+        **_full_environment(),
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER": "kubernetes",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID": "namespace/prod/deployment/foundry",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE": "immutable_artifact",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_WORKLOAD_KIND": "deployment",
+    }
+    environment.pop("FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID")
+    environment.pop("FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF")
+
+    dependencies = build_governed_release_dependencies(
+        create_engine("sqlite+pysqlite:///:memory:"),
+        _secret_provider(),
+        environment,
+        deployment_adapter_factories={"kubernetes": lambda _secrets, _environ: _KubernetesTestAdapter()},
+    )
+
+    assert isinstance(dependencies.infrastructure_deployment_adapter, _KubernetesTestAdapter)
+    assert dependencies.config.deployment_release_mode == "immutable_artifact"
+    assert dependencies.config.deployment_workload_kind == "deployment"
+    assert dependencies.live_authority.deployment_provider_name == "kubernetes"
+    assert dependencies.live_authority.is_deployment_provider_live is True
+
+
+def test_registered_source_provider_swaps_without_application_changes() -> None:
+    environment = {
+        **_full_environment(),
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER": "gitlab",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REPOSITORY_ID": "4321",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_OWNER": "platform",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REPOSITORY": "foundry-lite",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_BASE_REF": "trunk",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_HEAD_PREFIX": "release/",
+    }
+    for name in (
+        "FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY_ID",
+        "FOUNDRY_LITE_GITHUB_RELEASE_OWNER",
+        "FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY",
+        "FOUNDRY_LITE_GITHUB_RELEASE_TOKEN_SECRET_REF",
+    ):
+        environment.pop(name)
+
+    dependencies = build_governed_release_dependencies(
+        create_engine("sqlite+pysqlite:///:memory:"),
+        _secret_provider(),
+        environment,
+        source_control_adapter_factories={
+            "gitlab": lambda _secrets, _environ, _repository: _GitLabTestAdapter(),
+        },
+    )
+
+    assert isinstance(dependencies.source_control_adapter, _GitLabTestAdapter)
+    assert dependencies.config.source_repository is not None
+    assert dependencies.config.source_repository.provider == "gitlab"
+    assert dependencies.config.source_repository.repository_id == 4321
+    assert dependencies.config.source_base_ref == "trunk"
+    assert dependencies.config.source_head_ref("orders") == "release/orders"
+    assert dependencies.live_authority.source_provider_name == "gitlab"
+    assert dependencies.live_authority.is_source_provider_live is True
+
+
+def test_registered_source_provider_identity_mismatch_fails_closed() -> None:
+    with pytest.raises(ValueError, match="source adapter provider identity"):
+        build_governed_release_dependencies(
+            create_engine("sqlite+pysqlite:///:memory:"),
+            _secret_provider(),
+            {
+                **_full_environment(),
+                "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER": "gitlab",
+                "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REPOSITORY_ID": "4321",
+                "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_OWNER": "platform",
+                "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REPOSITORY": "foundry-lite",
+            },
+            source_control_adapter_factories={
+                "gitlab": lambda _secrets, _environ, _repository: _WrongSourceProviderTestAdapter(),
+            },
+        )
+
+
+def test_registered_deployment_provider_identity_mismatch_fails_closed() -> None:
+    with pytest.raises(ValueError, match="provider identity"):
+        build_governed_release_dependencies(
+            create_engine("sqlite+pysqlite:///:memory:"),
+            _secret_provider(),
+            {
+                **_full_environment(),
+                "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER": "kubernetes",
+                "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID": "deployment/foundry",
+            },
+            deployment_adapter_factories={
+                "kubernetes": lambda _secrets, _environ: _WrongProviderTestAdapter(),
+            },
+        )
+
+
 def test_live_authority_receives_only_the_validated_public_mcp_binding() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     mcp_authority = GovernedReleaseMcpAuthority(
@@ -149,3 +248,23 @@ def _full_environment() -> dict[str, str]:
         "FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID": "srv-example-service",
         "FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF": "render-token",
     }
+
+
+class _KubernetesTestAdapter(UnavailableInfrastructureDeploymentAdapter):
+    profile_name = "kubernetes-infrastructure-deployment"
+    provider_name = "kubernetes"
+    is_live_provider = True
+
+
+class _WrongProviderTestAdapter(_KubernetesTestAdapter):
+    provider_name = "wrong-provider"
+
+
+class _GitLabTestAdapter(UnavailableSourceControlReleasePort):
+    profile_name = "gitlab-source-control-release"
+    provider_name = "gitlab"
+    is_live_provider = True
+
+
+class _WrongSourceProviderTestAdapter(_GitLabTestAdapter):
+    provider_name = "wrong-provider"

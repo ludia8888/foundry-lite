@@ -6,9 +6,11 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
+from foundry_lite.application.ports.governed_release_delivery_config import GovernedReleaseDeliveryConfig
 from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentAdapter,
     InfrastructureDeploymentObservation,
+    InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
 )
 from foundry_lite.application.ports.release_delivery_repository import ReleaseDeliveryRecord
@@ -32,9 +34,7 @@ def require_manual_deployment_policy_for_service(
     row: ReleaseDeliveryRecord,
     service_id: str,
     adapter: InfrastructureDeploymentAdapter,
-    expected_repository_owner: str,
-    expected_repository_name: str,
-    expected_branch: str,
+    config: GovernedReleaseDeliveryConfig,
 ) -> None:
     """Require one exact service to remain manual immediately before mutation."""
 
@@ -48,14 +48,11 @@ def require_manual_deployment_policy_for_service(
         policy = adapter.get_service_policy(request)
     except Exception as exc:
         raise ManualDeploymentPolicyFailure(_policy_failure_evidence(exc)) from exc
-    expected_provider = adapter.profile_name.split("-", 1)[0]
     if not _service_policy_matches(
         policy,
-        expected_provider=expected_provider,
+        expected_provider=adapter.provider_name,
         expected_service_id=service_id,
-        expected_repository_owner=expected_repository_owner,
-        expected_repository_name=expected_repository_name,
-        expected_branch=expected_branch,
+        config=config,
     ):
         raise ManualDeploymentPolicyFailure(
             {
@@ -72,24 +69,39 @@ def _service_policy_matches(
     *,
     expected_provider: str,
     expected_service_id: str,
-    expected_repository_owner: str,
-    expected_repository_name: str,
-    expected_branch: str,
+    config: GovernedReleaseDeliveryConfig,
 ) -> bool:
-    return bool(
-        getattr(policy, "provider", None) == expected_provider
-        and getattr(policy, "service_id", None) == expected_service_id
-        and getattr(policy, "is_auto_deploy_enabled", None) is False
-        and _same_coordinate(getattr(policy, "source_repository_owner", None), expected_repository_owner)
-        and _same_coordinate(getattr(policy, "source_repository_name", None), expected_repository_name)
-        and getattr(policy, "source_branch", None) == expected_branch
-        and getattr(policy, "service_type", None) == "web_service"
-        and getattr(policy, "is_suspended", None) is False
+    repository = config.source_repository
+    if not isinstance(policy, InfrastructureDeploymentServicePolicyObservation):
+        return False
+    source_binding = policy.source_binding
+    if repository is None or source_binding is None:
+        return False
+    actual = (
+        policy.provider,
+        policy.service_id,
+        policy.release_mode,
+        policy.trigger_mode,
+        source_binding.provider,
+        source_binding.repository_owner.casefold(),
+        source_binding.repository_name.casefold(),
+        source_binding.ref,
+        policy.workload_kind,
+        policy.is_suspended,
     )
-
-
-def _same_coordinate(actual: object, expected: str) -> bool:
-    return isinstance(actual, str) and actual.casefold() == expected.casefold()
+    expected = (
+        expected_provider,
+        expected_service_id,
+        config.deployment_release_mode,
+        "manual",
+        repository.provider,
+        repository.owner.casefold(),
+        repository.name.casefold(),
+        config.source_base_ref,
+        config.deployment_workload_kind,
+        False,
+    )
+    return actual == expected
 
 
 def _policy_failure_evidence(exc: Exception) -> dict[str, object]:
@@ -148,12 +160,6 @@ def strict_deploy_reconciliation_candidates(
     )
 
 
-def delivery_dispatch_started_at(row: ReleaseDeliveryRecord) -> datetime | None:
-    """Return the durable, timezone-aware start of the provider mutation."""
-
-    return _aware_timestamp(row.dispatch_started_at)
-
-
 def _trigger_matches_operation(
     row: ReleaseDeliveryRecord,
     observation: InfrastructureDeploymentObservation,
@@ -207,7 +213,6 @@ def _is_valid_window(started_at: datetime | None, observed_at: datetime) -> bool
 
 __all__ = [
     "ManualDeploymentPolicyFailure",
-    "delivery_dispatch_started_at",
     "infrastructure_receipt_matches_delivery",
     "require_manual_deployment_policy_for_service",
     "strict_deploy_reconciliation_candidates",

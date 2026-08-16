@@ -36,9 +36,7 @@ def require_manual_deployment_policy(
         row,
         service_id,
         adapter,
-        repository.owner,
-        repository.name,
-        config.source_base_ref,
+        config,
     )
 
 

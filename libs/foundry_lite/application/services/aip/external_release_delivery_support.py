@@ -27,6 +27,7 @@ from foundry_lite.application.services.aip.external_release_delivery_payloads im
 from foundry_lite.application.services.aip.external_release_rollback import (
     application_rollback_target,
     application_rollback_target_for_request,
+    strict_rollback_reconciliation_candidates,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
@@ -273,10 +274,6 @@ def delivery_commit_id(row: ReleaseDeliveryRecord) -> str:
     return required_candidate_text(row, key)
 
 
-def provider_name(profile_name: str) -> str:
-    return profile_name.split("-", 1)[0]
-
-
 def mutation_identity(ctx: RequestContext) -> tuple[str, str]:
     run_id = ctx.governed_release_run_id
     binding_hash = ctx.governed_release_binding_hash
@@ -310,6 +307,20 @@ def is_settled_window(row: ReleaseDeliveryRecord) -> bool:
     return elapsed >= timedelta(seconds=RECONCILIATION_SETTLE_SECONDS)
 
 
+def delivery_dispatch_started_at(row: ReleaseDeliveryRecord) -> datetime | None:
+    """Return the durable provider-dispatch timestamp when it is valid."""
+
+    if not row.dispatch_started_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(row.dispatch_started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -320,12 +331,12 @@ __all__ = [
     "application_rollback_target_for_request",
     "complete_command",
     "delivery_commit_id",
+    "delivery_dispatch_started_at",
     "is_settled_window",
     "parse_timestamp",
     "prepare_command",
     "proposal_branch_name",
     "proposal_id",
-    "provider_name",
     "receipt_matches_delivery",
     "reconcile_command",
     "require_server_source_target",
@@ -333,6 +344,7 @@ __all__ = [
     "require_snapshot_binding",
     "required_candidate_text",
     "required_text",
+    "strict_rollback_reconciliation_candidates",
     "trace_identity",
     "utc_now",
 ]
