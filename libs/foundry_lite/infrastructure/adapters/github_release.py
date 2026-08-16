@@ -261,6 +261,8 @@ class GitHubReleaseAdapter:
     """Fail-closed GitHub PR inspection, merge, and outcome reconciliation."""
 
     profile_name = "github-release"
+    provider_name = "github"
+    is_live_provider = True
 
     def __init__(
         self,

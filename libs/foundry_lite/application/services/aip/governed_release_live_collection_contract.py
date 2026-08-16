@@ -36,7 +36,7 @@ class ServerDeliveryClaim:
     delivery_id: str
     workflow_run_id: str
     parent_delivery_id: str | None
-    provider: Literal["github", "render"]
+    provider: str
     provider_resource_id: str
     ai_run_id: str
     binding_hash: str
@@ -51,7 +51,7 @@ class ServerProviderReadback:
     release_kind: ReleaseKind
     operation: DeliveryOperation
     delivery_id: str
-    provider: Literal["github", "render"]
+    provider: str
     provider_resource_id: str
     ledger_result_fingerprint: str
     initial_evidence_fingerprint: str
@@ -90,6 +90,8 @@ class ServerLoadedCollectionClaim:
     application_id: str
     database_system: str
     provider_readback_mode: str
+    source_provider_name: str
+    deployment_provider_name: str
     authorization_policy_fingerprint: str
     submitter_subject_hash: str
     submitter_oauth_session_hash: str
@@ -202,7 +204,8 @@ def _context_blockers(claim: ServerLoadedCollectionClaim) -> tuple[str, ...]:
         blockers.append("postgresql_authoritative_ledger_required")
     if claim.provider_readback_mode != "concrete_network":
         blockers.append("concrete_provider_readback_required")
-    texts = (claim.collection_id, claim.tenant_id, claim.golden_run_id, claim.application_id)
+    texts: tuple[str, ...] = (claim.collection_id, claim.tenant_id, claim.golden_run_id, claim.application_id)
+    texts = (*texts, claim.source_provider_name, claim.deployment_provider_name)
     if not all(_text(value) for value in texts):
         blockers.append("server_collection_scope_invalid")
     identity_hashes = (
@@ -267,7 +270,7 @@ def _delivery_blockers(claim: ServerLoadedCollectionClaim) -> tuple[str, ...]:
     for delivery in deliveries.values():
         tool = _DELIVERY_TOOL.get(delivery.operation)
         action = actions.get((delivery.release_kind, tool)) if tool is not None else None
-        if action is None or not _valid_delivery_binding(delivery):
+        if action is None or not _valid_delivery_binding(delivery, claim):
             blockers.append("delivery_ledger_binding_invalid")
         elif not _delivery_matches_action(delivery, action):
             blockers.append("delivery_action_binding_mismatch")
@@ -275,9 +278,14 @@ def _delivery_blockers(claim: ServerLoadedCollectionClaim) -> tuple[str, ...]:
     return _unique(blockers)
 
 
-def _valid_delivery_binding(delivery: ServerDeliveryClaim) -> bool:
+def _valid_delivery_binding(
+    delivery: ServerDeliveryClaim,
+    claim: ServerLoadedCollectionClaim,
+) -> bool:
     texts = (delivery.proposal_id, delivery.delivery_id, delivery.workflow_run_id, delivery.provider_resource_id)
-    expected_provider = "github" if delivery.operation.startswith("source_") else "render"
+    expected_provider = (
+        claim.source_provider_name if delivery.operation.startswith("source_") else claim.deployment_provider_name
+    )
     return all(
         (
             all(_text(value) for value in texts),

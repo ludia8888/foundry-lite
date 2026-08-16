@@ -198,6 +198,8 @@ def test_render_adapter_satisfies_the_typed_port() -> None:
         transport=_SequenceTransport([]),
     )
     assert adapter.profile_name == "render-infrastructure-deployment"
+    assert adapter.provider_name == "render"
+    assert adapter.is_live_provider is True
     operations = {mode.operation for mode in adapter.failure_contract().modes}
     assert operations == {"get_service_policy", "start", "get", "list_candidates", "rollback"}
 
@@ -240,11 +242,14 @@ def test_service_policy_reads_the_exact_service_auto_deploy_setting(
 
     assert observation.provider == "render"
     assert observation.service_id == SERVICE_ID
-    assert observation.is_auto_deploy_enabled is is_auto_deploy_enabled
-    assert observation.source_repository_owner == "acme"
-    assert observation.source_repository_name == "platform"
-    assert observation.source_branch == SOURCE_BRANCH
-    assert observation.service_type == "web_service"
+    assert observation.release_mode == "source_revision"
+    assert observation.trigger_mode == ("automatic" if is_auto_deploy_enabled else "manual")
+    assert observation.source_binding is not None
+    assert observation.source_binding.provider == "github"
+    assert observation.source_binding.repository_owner == "acme"
+    assert observation.source_binding.repository_name == "platform"
+    assert observation.source_binding.ref == SOURCE_BRANCH
+    assert observation.workload_kind == "web_service"
     assert observation.is_suspended is False
     assert observation.provider_request_id == "render-policy-request-1"
     assert len(transport.requests) == 1

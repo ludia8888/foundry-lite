@@ -51,6 +51,10 @@ class GovernedReleaseDependencies:
             database_backend="unavailable",
             source_provider_profile="source-control-unavailable",
             deployment_provider_profile="unavailable-infrastructure-deployment",
+            source_provider_name="unavailable",
+            deployment_provider_name="unavailable",
+            is_source_provider_live=False,
+            is_deployment_provider_live=False,
             source_revision="",
         )
     )

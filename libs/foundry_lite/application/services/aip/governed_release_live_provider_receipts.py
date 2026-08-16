@@ -1,4 +1,4 @@
-"""Exact internal and Render receipt checks for a hosted golden run."""
+"""Exact internal and provider receipt checks for a hosted golden run."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datetime import datetime
 JsonObject = Mapping[str, object]
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-_RENDER_DEPLOY = re.compile(r"^dep-[A-Za-z0-9_-]{3,128}$")
+_DEPLOYMENT_RESOURCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{2,191}$")
 _SOURCE_MANIFEST_PATH = re.compile(
     r"^\.foundry-lite/releases/(?P<kind>ontology|pipeline)/"
     r"(?P<proposal>[A-Za-z0-9][A-Za-z0-9_-]{0,127})\.json$"
@@ -150,38 +150,48 @@ def pipeline_receipt_contract(target: JsonObject, scenario: JsonObject, source: 
     deployment = _mapping(scenario, "deployment")
     observation = _mapping(scenario, "statusObservation")
     rollback = _mapping(scenario, "rollback")
-    _render_live_contract(target, deployment, _text(source, "mergeCommitSha"))
-    _render_observation_contract(deployment, observation)
-    _render_rollback_contract(target, deployment, rollback)
+    _deployment_live_contract(target, deployment, _text(source, "mergeCommitSha"))
+    _deployment_observation_contract(deployment, observation)
+    _deployment_rollback_contract(target, deployment, rollback)
 
 
-def _render_live_contract(target: JsonObject, receipt: JsonObject, commit_id: str) -> None:
+def _deployment_live_contract(target: JsonObject, receipt: JsonObject, commit_id: str) -> None:
     for key in ("provider", "serviceId", "environment"):
-        _expect(receipt, key, target.get(key), f"render_{key}_mismatch")
-    _pattern(receipt, "deployId", _RENDER_DEPLOY, "render_deploy_id_invalid")
-    _expect(receipt, "commitId", commit_id, "render_commit_mismatch")
-    _expect(receipt, "status", "live", "render_deploy_not_live")
+        _expect(receipt, key, target.get(key), f"deployment_{key}_mismatch")
+    _pattern(receipt, "deployId", _DEPLOYMENT_RESOURCE, "deployment_resource_id_invalid")
+    _expect(receipt, "commitId", commit_id, "deployment_commit_mismatch")
+    _expect(receipt, "status", "live", "deployment_not_live")
     if receipt.get("isTerminal") is not True or receipt.get("isSuccessful") is not True:
-        raise ProviderReceiptInvalid("render_deploy_not_terminal_success")
+        raise ProviderReceiptInvalid("deployment_not_terminal_success")
     _text(receipt, "providerRequestId")
     _timestamp(receipt, "finishedAt")
 
 
-def _render_observation_contract(deployment: JsonObject, observation: JsonObject) -> None:
+def _deployment_observation_contract(deployment: JsonObject, observation: JsonObject) -> None:
     for key in ("deployId", "commitId"):
-        _expect(observation, key, deployment.get(key), f"render_status_{key}_mismatch")
-    _expect(observation, "status", "live", "render_status_not_live")
+        _expect(observation, key, deployment.get(key), f"deployment_status_{key}_mismatch")
+    _expect(observation, "status", "live", "deployment_status_not_live")
     _text(observation, "providerRequestId")
     _timestamp(observation, "observedAt")
 
 
-def _render_rollback_contract(target: JsonObject, deployment: JsonObject, rollback: JsonObject) -> None:
+def _deployment_rollback_contract(target: JsonObject, deployment: JsonObject, rollback: JsonObject) -> None:
     for key in ("provider", "serviceId", "environment"):
         _expect(rollback, key, target.get(key), f"rollback_{key}_mismatch")
     current_deploy = _text(deployment, "deployId")
     _expect(rollback, "rolledBackFromDeployId", current_deploy, "rollback_current_deploy_mismatch")
-    target_deploy = _pattern(rollback, "targetDeployId", _RENDER_DEPLOY, "rollback_target_deploy_invalid")
-    rollback_deploy = _pattern(rollback, "rollbackDeployId", _RENDER_DEPLOY, "rollback_deploy_id_invalid")
+    target_deploy = _pattern(
+        rollback,
+        "targetDeployId",
+        _DEPLOYMENT_RESOURCE,
+        "rollback_target_deploy_invalid",
+    )
+    rollback_deploy = _pattern(
+        rollback,
+        "rollbackDeployId",
+        _DEPLOYMENT_RESOURCE,
+        "rollback_deploy_id_invalid",
+    )
     if len({current_deploy, target_deploy, rollback_deploy}) != 3:
         raise ProviderReceiptInvalid("rollback_deploy_identity_reused")
     _pattern(rollback, "targetCommitId", _GIT_SHA, "rollback_target_commit_invalid")

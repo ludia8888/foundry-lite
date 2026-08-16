@@ -144,21 +144,56 @@ def _require_eligible(
     structural: GoldenEvidenceVerification,
     authority: GovernedReleaseLiveAuthority,
 ) -> None:
-    blockers: list[str] = []
-    if not authority.is_live_eligible_for(claim.application_id):
-        blockers.append("authentic_live_collector_not_eligible")
-    if (claim.tenant_id, claim.application_id) != (ctx.tenant_id, structural.application_id):
-        blockers.append("live_collection_request_scope_mismatch")
-    if not is_exact_live_reviewer_invoker(ctx, claim, authority):
-        blockers.append("live_collection_reviewer_invoker_mismatch")
-    if not contract.is_attestation_eligible or contract.blockers:
-        blockers.extend(contract.blockers or ("typed_live_collection_contract_failed",))
-    if not structural.is_structurally_complete:
-        blockers.extend(structural.blockers)
-    if structural.blockers != ("authentic_live_collector_required",):
-        blockers.append("live_structural_provenance_incomplete")
+    blockers = [
+        *_authority_eligibility_blockers(claim, authority),
+        *_request_eligibility_blockers(ctx, claim, structural, authority),
+        *_contract_eligibility_blockers(contract),
+        *_structural_eligibility_blockers(structural),
+    ]
     if blockers:
         raise ConflictDetected("server live collection is not attestation eligible", details={"blockers": blockers})
+
+
+def _authority_eligibility_blockers(
+    claim: ServerLoadedCollectionClaim,
+    authority: GovernedReleaseLiveAuthority,
+) -> tuple[str, ...]:
+    provider_identity = (claim.source_provider_name, claim.deployment_provider_name)
+    expected_identity = (authority.source_provider_name, authority.deployment_provider_name)
+    checks = (
+        (not authority.is_live_eligible_for(claim.application_id), "authentic_live_collector_not_eligible"),
+        (provider_identity != expected_identity, "live_collection_provider_authority_mismatch"),
+    )
+    return tuple(code for is_blocked, code in checks if is_blocked)
+
+
+def _request_eligibility_blockers(
+    ctx: RequestContext,
+    claim: ServerLoadedCollectionClaim,
+    structural: GoldenEvidenceVerification,
+    authority: GovernedReleaseLiveAuthority,
+) -> tuple[str, ...]:
+    checks = (
+        (
+            (claim.tenant_id, claim.application_id) != (ctx.tenant_id, structural.application_id),
+            "live_collection_request_scope_mismatch",
+        ),
+        (not is_exact_live_reviewer_invoker(ctx, claim, authority), "live_collection_reviewer_invoker_mismatch"),
+    )
+    return tuple(code for is_blocked, code in checks if is_blocked)
+
+
+def _contract_eligibility_blockers(contract: LiveCollectionContractResult) -> tuple[str, ...]:
+    if contract.is_attestation_eligible and not contract.blockers:
+        return ()
+    return contract.blockers or ("typed_live_collection_contract_failed",)
+
+
+def _structural_eligibility_blockers(structural: GoldenEvidenceVerification) -> tuple[str, ...]:
+    blockers = list(structural.blockers if not structural.is_structurally_complete else ())
+    if structural.blockers != ("authentic_live_collector_required",):
+        blockers.append("live_structural_provenance_incomplete")
+    return tuple(blockers)
 
 
 def _require_artifact_bindings(
@@ -386,6 +421,8 @@ def _claim_projection(claim: ServerLoadedCollectionClaim) -> dict[str, object]:
         "goldenRunId": claim.golden_run_id,
         "databaseSystem": claim.database_system,
         "providerReadbackMode": claim.provider_readback_mode,
+        "sourceProviderName": claim.source_provider_name,
+        "deploymentProviderName": claim.deployment_provider_name,
         "authorizationPolicyFingerprint": claim.authorization_policy_fingerprint,
         "actions": [_dataclass_json(item) for item in claim.actions],
         "deliveries": [_dataclass_json(item) for item in claim.deliveries],

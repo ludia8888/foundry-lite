@@ -17,6 +17,7 @@ from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentRollbackRequest,
     InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
+    InfrastructureDeploymentSourceBinding,
     InfrastructureDeploymentStartRequest,
     InfrastructureDeploymentStatus,
 )
@@ -91,6 +92,14 @@ class _SourceControl(SourceControlReleasePort):
     def profile_name(self) -> str:
         return self._profile_name
 
+    @property
+    def provider_name(self) -> str:
+        return "github"
+
+    @property
+    def is_live_provider(self) -> bool:
+        return self._profile_name == "github-release"
+
     def set_profile(self, value: str) -> None:
         self._profile_name = value
 
@@ -159,6 +168,14 @@ class _Infrastructure(InfrastructureDeploymentAdapter):
     def profile_name(self) -> str:
         return self._profile_name
 
+    @property
+    def provider_name(self) -> str:
+        return "render"
+
+    @property
+    def is_live_provider(self) -> bool:
+        return self._profile_name == "render-infrastructure-deployment"
+
     def set_profile(self, value: str) -> None:
         self._profile_name = value
 
@@ -181,11 +198,15 @@ class _Infrastructure(InfrastructureDeploymentAdapter):
         return InfrastructureDeploymentServicePolicyObservation(
             provider="render",
             service_id=request.service_id,
-            is_auto_deploy_enabled=self.is_auto_deploy_enabled,
-            source_repository_owner=self.source_repository_owner,
-            source_repository_name=_REPOSITORY.name,
-            source_branch="main",
-            service_type="web_service",
+            release_mode="source_revision",
+            trigger_mode="automatic" if self.is_auto_deploy_enabled else "manual",
+            source_binding=InfrastructureDeploymentSourceBinding(
+                "github",
+                self.source_repository_owner,
+                _REPOSITORY.name,
+                "main",
+            ),
+            workload_kind="web_service",
             is_suspended=False,
             provider_request_id=request_id,
         )
@@ -534,7 +555,7 @@ def test_collector_requires_exact_concrete_adapter_profiles(
     harness.source.set_profile(source_profile)
     harness.infrastructure.set_profile(infrastructure_profile)
 
-    with pytest.raises(ConflictDetected, match="concrete GitHub and Render adapters"):
+    with pytest.raises(ConflictDetected, match="concrete network provider adapters"):
         harness.collector.read_once(harness.context, harness.records, "collection-1")
 
 

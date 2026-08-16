@@ -32,6 +32,8 @@ InfrastructureDeploymentStatus = Literal[
     "unknown",
 ]
 InfrastructureDeploymentMutationOutcome = Literal["accepted", "outcome_unknown"]
+InfrastructureDeploymentReleaseMode = Literal["source_revision", "immutable_artifact"]
+InfrastructureDeploymentTriggerMode = Literal["manual", "automatic"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,16 +59,25 @@ class InfrastructureDeploymentServicePolicyRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class InfrastructureDeploymentSourceBinding:
+    """Provider-neutral source coordinates observed on a deployment target."""
+
+    provider: str
+    repository_owner: str
+    repository_name: str
+    ref: str
+
+
+@dataclass(frozen=True, slots=True)
 class InfrastructureDeploymentServicePolicyObservation:
-    """Normalized live policy evidence used before an external source merge."""
+    """Normalized target policy used before a governed deployment mutation."""
 
     provider: str
     service_id: str
-    is_auto_deploy_enabled: bool
-    source_repository_owner: str
-    source_repository_name: str
-    source_branch: str
-    service_type: str
+    release_mode: InfrastructureDeploymentReleaseMode
+    trigger_mode: InfrastructureDeploymentTriggerMode
+    source_binding: InfrastructureDeploymentSourceBinding | None
+    workload_kind: str
     is_suspended: bool
     provider_request_id: str | None
 
@@ -156,6 +167,12 @@ class InfrastructureDeploymentAdapter(Protocol):
     @property
     def profile_name(self) -> str: ...
 
+    @property
+    def provider_name(self) -> str: ...
+
+    @property
+    def is_live_provider(self) -> bool: ...
+
     def failure_contract(self) -> AdapterFailureContract: ...
 
     def get_service_policy(
@@ -188,6 +205,8 @@ class UnavailableInfrastructureDeploymentAdapter:
     """Fail closed until an infrastructure deployment provider is configured."""
 
     profile_name = "unavailable-infrastructure-deployment"
+    provider_name = "unavailable"
+    is_live_provider = False
 
     def failure_contract(self) -> AdapterFailureContract:
         modes = tuple(

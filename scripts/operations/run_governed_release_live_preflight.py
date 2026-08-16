@@ -509,24 +509,25 @@ def _render_evidence(
         )
     except Exception:  # Provider error text/body may contain secrets and must not enter the report.
         raise PreflightFailure("render_service_policy_read_failed") from None
-    if observation.source_repository_owner != config.github_owner:
+    binding = observation.source_binding
+    if binding is None or binding.repository_owner != config.github_owner:
         raise PreflightFailure("render_repository_owner_mismatch")
-    if observation.source_repository_name != config.github_repository:
+    if binding.repository_name != config.github_repository:
         raise PreflightFailure("render_repository_name_mismatch")
-    if observation.source_branch != config.github_base_ref:
+    if binding.ref != config.github_base_ref:
         raise PreflightFailure("render_source_branch_mismatch")
-    if observation.service_type != "web_service":
+    if observation.workload_kind != "web_service":
         raise PreflightFailure("render_service_not_web_service")
     if observation.is_suspended:
         raise PreflightFailure("render_service_suspended")
-    if observation.is_auto_deploy_enabled:
+    if observation.trigger_mode != "manual":
         raise PreflightFailure("render_auto_deploy_must_be_off")
     return {
         "autoDeploy": False,
-        "repository": f"{observation.source_repository_owner}/{observation.source_repository_name}",
+        "repository": f"{binding.repository_owner}/{binding.repository_name}",
         "serviceId": observation.service_id,
-        "serviceType": observation.service_type,
-        "sourceBranch": observation.source_branch,
+        "serviceType": observation.workload_kind,
+        "sourceBranch": binding.ref,
         "suspended": False,
         "secretResolved": True,
     }

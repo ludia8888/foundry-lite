@@ -15,6 +15,7 @@ from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentRollbackRequest,
     InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
+    InfrastructureDeploymentSourceBinding,
     InfrastructureDeploymentStatus,
 )
 from foundry_lite.application.ports.release_delivery_repository import (
@@ -62,6 +63,10 @@ from foundry_lite.domain.errors import ConflictDetected
 
 
 class _CandidateAdapter:
+    profile_name = "render-infrastructure-deployment"
+    provider_name = "render"
+    is_live_provider = True
+
     def __init__(self, candidates: tuple[InfrastructureDeploymentObservation, ...]) -> None:
         self.candidates = candidates
         self.candidate_calls = 0
@@ -74,6 +79,8 @@ class _CandidateAdapter:
 
 class _MutationAdapter:
     profile_name = "render-infrastructure-deployment"
+    provider_name = "render"
+    is_live_provider = True
 
     def __init__(
         self,
@@ -94,11 +101,10 @@ class _MutationAdapter:
         return InfrastructureDeploymentServicePolicyObservation(
             provider="render",
             service_id=request.service_id,
-            is_auto_deploy_enabled=self.is_auto_deploy_enabled,
-            source_repository_owner="acme",
-            source_repository_name="platform",
-            source_branch="main",
-            service_type="web_service",
+            release_mode="source_revision",
+            trigger_mode="automatic" if self.is_auto_deploy_enabled else "manual",
+            source_binding=InfrastructureDeploymentSourceBinding("github", "acme", "platform", "main"),
+            workload_kind="web_service",
             is_suspended=False,
             provider_request_id="render-policy-request-1",
         )
@@ -169,6 +175,8 @@ class _Runtime:
 
 class _PolicyAdapter:
     profile_name = "render-deployment"
+    provider_name = "render"
+    is_live_provider = True
 
     def __init__(
         self,
@@ -200,17 +208,25 @@ class _PolicyAdapter:
         return InfrastructureDeploymentServicePolicyObservation(
             provider="render",
             service_id="service-1",
-            is_auto_deploy_enabled=self.is_auto_deploy_enabled,
-            source_repository_owner=self.source_repository_owner,
-            source_repository_name=self.source_repository_name,
-            source_branch=self.source_branch,
-            service_type=self.service_type,
+            release_mode="source_revision",
+            trigger_mode="automatic" if self.is_auto_deploy_enabled else "manual",
+            source_binding=InfrastructureDeploymentSourceBinding(
+                "github",
+                self.source_repository_owner,
+                self.source_repository_name,
+                self.source_branch,
+            ),
+            workload_kind=self.service_type,
             is_suspended=self.is_suspended,
             provider_request_id="render-policy-request-1",
         )
 
 
 class _MergeAdapter:
+    profile_name = "github-release"
+    provider_name = "github"
+    is_live_provider = True
+
     def __init__(self) -> None:
         self.calls = 0
         self.lookup_calls = 0
@@ -700,9 +716,10 @@ def _infrastructure_coordinator(
 ) -> ExternalReleaseInfrastructureCoordinator:
     return ExternalReleaseInfrastructureCoordinator(
         cast(InfrastructureDeploymentAdapter, adapter),
-        "acme",
-        "platform",
-        "main",
+        GovernedReleaseDeliveryConfig(
+            source_repository=SourceRepositoryRef("github", 42, "acme", "platform"),
+            deployment_service_id="service-1",
+        ),
         cast(ExternalReleaseDeliveryLedger, ledger),
         cast(RuntimeEvidenceBoundary, _Runtime()),
     )

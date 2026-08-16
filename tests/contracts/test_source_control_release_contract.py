@@ -38,6 +38,8 @@ _CHECKS_FINGERPRINT = f"sha256:{'e' * 64}"
 
 class _FakeSourceControlReleasePort:
     profile_name = "fake-source-control-release"
+    provider_name = "fake"
+    is_live_provider = False
 
     def __init__(self) -> None:
         self.is_merged = False

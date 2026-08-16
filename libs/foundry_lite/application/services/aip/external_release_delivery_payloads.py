@@ -185,7 +185,7 @@ def _ci_receipt(snapshot: PullRequestSnapshot, is_checks_passed: bool) -> dict[s
         "id": "external-ci-receipt",
         "label": "Candidate-scoped external CI receipt",
         "status": "passed" if is_checks_passed else "blocked",
-        "proofKind": "github_merge_result_or_head_required_checks",
+        "proofKind": "source_control_merge_result_or_head_required_checks",
         "details": {
             "headSha": snapshot.target.expected_head_sha,
             "testMergeCommitSha": snapshot.test_merge_commit_sha,
@@ -209,7 +209,7 @@ def _stored_ci_receipt(row: ReleaseDeliveryRecord) -> dict[str, object]:
         "id": "external-ci-receipt",
         "label": "Candidate-scoped external CI receipt",
         "status": "passed" if is_passed else "blocked",
-        "proofKind": "github_merge_result_or_head_required_checks",
+        "proofKind": "source_control_merge_result_or_head_required_checks",
         "details": {
             "headSha": candidate.get("headSha"),
             "testMergeCommitSha": candidate.get("testMergeCommitSha"),

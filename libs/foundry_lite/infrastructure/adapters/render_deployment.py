@@ -28,6 +28,7 @@ from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentRollbackRequest,
     InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
+    InfrastructureDeploymentSourceBinding,
     InfrastructureDeploymentStartRequest,
     InfrastructureDeploymentStatus,
 )
@@ -132,6 +133,8 @@ class RenderInfrastructureDeploymentAdapter:
     """Render deploy adapter with exact commits and fail-closed mutation outcomes."""
 
     profile_name = "render-infrastructure-deployment"
+    provider_name = "render"
+    is_live_provider = True
 
     def __init__(
         self,
@@ -698,11 +701,15 @@ def _service_policy_observation(
     return InfrastructureDeploymentServicePolicyObservation(
         provider="render",
         service_id=service_id,
-        is_auto_deploy_enabled=is_auto_deploy_enabled,
-        source_repository_owner=source_owner,
-        source_repository_name=source_name,
-        source_branch=source_branch,
-        service_type=service_type,
+        release_mode="source_revision",
+        trigger_mode="automatic" if is_auto_deploy_enabled else "manual",
+        source_binding=InfrastructureDeploymentSourceBinding(
+            provider="github",
+            repository_owner=source_owner,
+            repository_name=source_name,
+            ref=source_branch,
+        ),
+        workload_kind=service_type,
         is_suspended=is_suspended,
         provider_request_id=provider_request_id,
     )

@@ -1,22 +1,19 @@
-"""Concrete GitHub and Render readbacks for the hosted golden collector."""
+"""Concrete source-control and deployment readbacks for the hosted collector."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
 
 from foundry_lite.application.ports.governed_release_delivery_config import GovernedReleaseDeliveryConfig
 from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentAdapter,
     InfrastructureDeploymentGetRequest,
     InfrastructureDeploymentObservation,
-    InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
 )
 from foundry_lite.application.ports.release_delivery_repository import ReleaseDeliveryRecord
-from foundry_lite.application.ports.source_control_candidate import SourceRefSnapshot
 from foundry_lite.application.ports.source_control_release import (
     SourceControlMergeReceipt,
     SourceControlMergeStatus,
@@ -39,10 +36,14 @@ from foundry_lite.application.services.aip.governed_release_live_collection_cont
     ServerProviderReadback,
 )
 from foundry_lite.application.services.aip.governed_release_live_evidence import canonical_digest
+from foundry_lite.application.services.aip.governed_release_live_target_policy import (
+    target_configuration_evidence,
+    target_configuration_matches,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
-Provider = Literal["github", "render"]
+Provider = str
 DeliveryKey = tuple[ReleaseKind, DeliveryOperation]
 
 
@@ -66,7 +67,7 @@ class LiveProviderObservation:
 
 @dataclass(frozen=True, slots=True)
 class LiveTargetConfigurationObservation:
-    """Fresh server-configured repository and Render policy readback."""
+    """Fresh server-configured source and deployment policy readback."""
 
     fingerprint: str
     is_exact_target: bool
@@ -132,7 +133,16 @@ class GovernedReleaseLiveProviderCollector:
         receipt = self._source_control.lookup_merge(target)
         evidence = _source_evidence(row, publication, receipt)
         provider_resource_id = _required_resource_id(row)
-        is_exact = _source_receipt_matches(row, publication, receipt, provider_resource_id)
+        repository = self._config.source_repository
+        if repository is None:
+            raise ValidationFailed("live collector requires a server-owned source target")
+        is_exact = _source_receipt_matches(
+            row,
+            publication,
+            receipt,
+            provider_resource_id,
+            repository.provider,
+        )
         return _observation(row, provider_resource_id, receipt.provider_request_id, is_exact, evidence)
 
     def _infrastructure_observation(
@@ -166,13 +176,18 @@ class GovernedReleaseLiveProviderCollector:
         repository = self._config.source_repository
         service_id = self._config.deployment_service_id
         if repository is None or service_id is None:
-            raise ValidationFailed("live collector requires server-owned GitHub and Render targets")
+            raise ValidationFailed("live collector requires server-owned source and deployment targets")
         source = self._source_control.inspect_source_ref(repository, self._config.source_base_ref)
         policy = self._infrastructure.get_service_policy(
             InfrastructureDeploymentServicePolicyRequest(ctx.tenant_id, service_id, ctx.request_id, collection_id)
         )
-        evidence = _target_configuration_evidence(self._config, source, policy)
-        is_exact = _target_configuration_matches(self._config, source, policy)
+        evidence = target_configuration_evidence(self._config, source, policy)
+        is_exact = target_configuration_matches(
+            self._config,
+            source,
+            policy,
+            self._infrastructure.provider_name,
+        )
         return LiveTargetConfigurationObservation(
             _stable_evidence_fingerprint(evidence),
             is_exact,
@@ -182,9 +197,8 @@ class GovernedReleaseLiveProviderCollector:
         )
 
     def _require_live_profiles(self) -> None:
-        profiles = (self._source_control.profile_name, self._infrastructure.profile_name)
-        if profiles != ("github-release", "render-infrastructure-deployment"):
-            raise ConflictDetected("live collector requires concrete GitHub and Render adapters")
+        if not self._source_control.is_live_provider or not self._infrastructure.is_live_provider:
+            raise ConflictDetected("live collector requires concrete network provider adapters")
 
 
 def pair_provider_snapshots(
@@ -273,6 +287,7 @@ def _source_receipt_matches(
     publication: ReleaseDeliveryRecord,
     receipt: SourceControlMergeReceipt,
     provider_resource_id: str,
+    expected_provider: str,
 ) -> bool:
     published = publication.result_ref or {}
     expected_resource = f"pull:{receipt.pull_number}"
@@ -292,8 +307,8 @@ def _source_receipt_matches(
         SourceControlMergeStatus.LANDED,
         "landed",
         "landed",
-        "github",
-        "github",
+        expected_provider,
+        expected_provider,
         publication.target_ref.get("repositoryId"),
         published.get("pullNumber"),
         published.get("headSha"),
@@ -375,64 +390,6 @@ def _observation(
     )
 
 
-def _target_configuration_evidence(
-    config: GovernedReleaseDeliveryConfig,
-    source: SourceRefSnapshot,
-    policy: InfrastructureDeploymentServicePolicyObservation,
-) -> dict[str, object]:
-    repository = config.source_repository
-    return {
-        "sourceProvider": repository.provider if repository is not None else None,
-        "repositoryId": repository.repository_id if repository is not None else None,
-        "repositoryOwner": repository.owner if repository is not None else None,
-        "repositoryName": repository.name if repository is not None else None,
-        "baseRef": config.source_base_ref,
-        "baseCommitSha": source.commit_sha,
-        "baseTreeSha": source.tree_sha,
-        "provider": policy.provider,
-        "serviceId": policy.service_id,
-        "isAutoDeployEnabled": policy.is_auto_deploy_enabled,
-        "sourceRepositoryOwner": policy.source_repository_owner,
-        "sourceRepositoryName": policy.source_repository_name,
-        "sourceBranch": policy.source_branch,
-        "serviceType": policy.service_type,
-        "isSuspended": policy.is_suspended,
-        "providerRequestId": policy.provider_request_id,
-    }
-
-
-def _target_configuration_matches(
-    config: GovernedReleaseDeliveryConfig,
-    source: SourceRefSnapshot,
-    policy: InfrastructureDeploymentServicePolicyObservation,
-) -> bool:
-    repository = config.source_repository
-    if repository is None:
-        return False
-    source_matches = (source.repository, source.ref) == (repository, config.source_base_ref)
-    actual_policy = (
-        policy.provider,
-        policy.service_id,
-        policy.is_auto_deploy_enabled,
-        policy.source_repository_owner.casefold(),
-        policy.source_repository_name.casefold(),
-        policy.source_branch,
-        policy.service_type,
-        policy.is_suspended,
-    )
-    expected_policy = (
-        "render",
-        config.deployment_service_id,
-        False,
-        repository.owner.casefold(),
-        repository.name.casefold(),
-        config.source_base_ref,
-        "web_service",
-        False,
-    )
-    return source_matches and actual_policy == expected_policy
-
-
 def _observation_key(item: LiveProviderObservation) -> tuple[ReleaseKind, DeliveryOperation, str]:
     return item.release_kind, item.operation, item.delivery_id
 
@@ -475,11 +432,9 @@ def _required_resource_id(row: ReleaseDeliveryRecord) -> str:
 
 
 def _provider(value: str) -> Provider:
-    if value == "github":
-        return "github"
-    if value == "render":
-        return "render"
-    raise ConflictDetected("live collector observed an unsupported provider")
+    if not value.strip():
+        raise ConflictDetected("live collector observed an invalid provider identity")
+    return value.strip()
 
 
 def _required_text(value: object, label: str) -> str:

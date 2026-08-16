@@ -382,7 +382,7 @@ def _release_result(kind: ReleaseKind, tool: str) -> dict[str, object]:
 def _validation_evidence() -> list[dict[str, object]]:
     return [
         {"status": "passed", "proofKind": "durable_candidate_validation"},
-        {"status": "passed", "proofKind": "github_merge_result_or_head_required_checks"},
+        {"status": "passed", "proofKind": "source_control_merge_result_or_head_required_checks"},
     ]
 
 
@@ -574,11 +574,13 @@ def _provider_snapshot(records: tuple[ReleaseDeliveryRecord, ...]) -> LiveProvid
         "baseTreeSha": "6" * 40,
         "provider": "render",
         "serviceId": "srv-foundry-lite",
-        "isAutoDeployEnabled": False,
+        "releaseMode": "source_revision",
+        "triggerMode": "manual",
+        "deploymentSourceProvider": "github",
         "sourceRepositoryOwner": "acme",
         "sourceRepositoryName": "foundry-lite",
-        "sourceBranch": "main",
-        "serviceType": "web_service",
+        "sourceRef": "main",
+        "workloadKind": "web_service",
         "isSuspended": False,
         "providerRequestId": "render-policy-request",
     }
@@ -688,6 +690,10 @@ def _authority() -> GovernedReleaseLiveAuthority:
         database_backend="postgresql",
         source_provider_profile="github-release",
         deployment_provider_profile="render-infrastructure-deployment",
+        source_provider_name="github",
+        deployment_provider_name="render",
+        is_source_provider_live=True,
+        is_deployment_provider_live=True,
         source_revision="1" * 40,
         mcp_authority=GovernedReleaseMcpAuthority(
             application_id=APPLICATION,

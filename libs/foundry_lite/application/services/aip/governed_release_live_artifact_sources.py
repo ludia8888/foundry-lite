@@ -28,6 +28,9 @@ from foundry_lite.application.services.aip.governed_release_live_provider_collec
     LiveProviderObservation,
     LiveProviderSnapshot,
 )
+from foundry_lite.application.services.aip.governed_release_live_target_policy import (
+    stored_target_configuration_matches,
+)
 from foundry_lite.domain.errors import ConflictDetected
 
 JsonObject = Mapping[str, object]
@@ -87,7 +90,7 @@ def validated_artifact_source(
     results, audits = _actions(db)
     records = _records(db)
     observations = _observations(db, provider, records)
-    _target_config(db, config, provider)
+    _target_config(db, config, provider, records)
     return LiveArtifactSource(
         db,
         provider,
@@ -234,52 +237,45 @@ def _target_config(
     db: ServerLoadedDatabaseSnapshot,
     config: GovernedReleaseDeliveryConfig,
     provider: LiveProviderSnapshot,
+    records: Mapping[DeliveryKey, ReleaseDeliveryRecord],
 ) -> None:
-    repository = config.source_repository
     target, evidence = provider.target_configuration, provider.target_configuration.evidence
-    expected = {
-        "sourceProvider": "github",
-        "repositoryId": repository.repository_id if repository else None,
-        "repositoryOwner": repository.owner if repository else None,
-        "repositoryName": repository.name if repository else None,
-        "baseRef": config.source_base_ref,
-        "provider": "render",
-        "serviceId": config.deployment_service_id,
-        "isAutoDeployEnabled": False,
-        "sourceRepositoryOwner": repository.owner if repository else None,
-        "sourceRepositoryName": repository.name if repository else None,
-        "sourceBranch": config.source_base_ref,
-        "serviceType": "web_service",
-        "isSuspended": False,
-        "providerRequestId": target.provider_request_id,
-    }
-    if not target.is_exact_target or any(evidence.get(key) != value for key, value in expected.items()):
+    deployment_provider = _deployment_provider(records)
+    if deployment_provider is None:
+        _invalid("target_configuration_provider_mismatch")
+    matches = stored_target_configuration_matches(
+        config,
+        evidence,
+        deployment_provider,
+        target.provider_request_id,
+    )
+    if not target.is_exact_target or not matches:
         _invalid("target_configuration_mismatch")
     if not _ordered(target.observed_at, provider.completed_at, db.initial_read_at):
         _invalid("target_configuration_time_mismatch")
 
 
-def render_artifact(source: LiveArtifactSource, operation: DeliveryOperation) -> dict[str, object]:
+def deployment_artifact(source: LiveArtifactSource, operation: DeliveryOperation) -> dict[str, object]:
     """Separate the original live receipt from the post-rollback readback."""
 
     row = source.records[("pipeline", operation)]
     observed = source.observations[("pipeline", operation)]
-    candidate = _required_mapping(row.candidate_ref, "render_candidate_missing")
+    candidate = _required_mapping(row.candidate_ref, "deployment_candidate_missing")
     commit_key = "commitId" if operation == "application_deploy" else "targetCommitId"
     if operation == "application_deploy":
         _require_historical_deployment(source, observed, candidate)
-        evidence = _required_mapping(row.result_ref, "render_receipt_missing")
+        evidence = _required_mapping(row.result_ref, "deployment_receipt_missing")
         request_id = _text(evidence, "providerRequestId")
     else:
         evidence = observed.evidence
         request_id = observed.provider_request_id
-    expected = _live_render_expected(source, row, candidate.get(commit_key), request_id)
+    expected = _live_deployment_expected(source, row, candidate.get(commit_key), request_id)
     if any(evidence.get(key) != value for key, value in expected.items()):
-        _invalid("render_readback_mismatch")
+        _invalid("deployment_readback_mismatch")
     return {
         **{key: value for key, value in expected.items() if key != "providerStatus"},
         "environment": source.config.deployment_environment,
-        "finishedAt": _timestamp(evidence, "finishedAt", "render_time_invalid"),
+        "finishedAt": _timestamp(evidence, "finishedAt", "deployment_time_invalid"),
     }
 
 
@@ -290,7 +286,7 @@ def _require_historical_deployment(
 ) -> None:
     evidence = observed.evidence
     expected = {
-        "provider": "render",
+        "provider": observed.provider,
         "serviceId": source.config.deployment_service_id,
         "deployId": observed.provider_resource_id,
         "commitId": candidate.get("commitId"),
@@ -301,18 +297,18 @@ def _require_historical_deployment(
         "providerRequestId": observed.provider_request_id,
     }
     if any(evidence.get(key) != value for key, value in expected.items()):
-        _invalid("render_historical_deployment_readback_mismatch")
-    _timestamp(evidence, "finishedAt", "render_historical_deployment_time_invalid")
+        _invalid("historical_deployment_readback_mismatch")
+    _timestamp(evidence, "finishedAt", "historical_deployment_time_invalid")
 
 
-def _live_render_expected(
+def _live_deployment_expected(
     source: LiveArtifactSource,
     row: ReleaseDeliveryRecord,
     commit_id: object,
     request_id: str,
 ) -> dict[str, object]:
     return {
-        "provider": "render",
+        "provider": row.provider,
         "serviceId": source.config.deployment_service_id,
         "deployId": row.provider_resource_id,
         "commitId": commit_id,
@@ -356,6 +352,11 @@ def _proposal(db: ServerLoadedDatabaseSnapshot, kind: ReleaseKind) -> str:
     return db.ontology_proposal_id if kind == "ontology" else db.pipeline_proposal_id
 
 
+def _deployment_provider(records: Mapping[DeliveryKey, ReleaseDeliveryRecord]) -> str | None:
+    providers = {row.provider for key, row in records.items() if not key[1].startswith("source_")}
+    return providers.pop() if len(providers) == 1 else None
+
+
 def _text(payload: JsonObject, key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -373,4 +374,4 @@ def _invalid(reason: str) -> NoReturn:
     raise ConflictDetected("server live artifact inputs are invalid", details={"reason": reason})
 
 
-__all__ = ["ACTION_SEQUENCE", "LiveArtifactSource", "render_artifact", "validated_artifact_source"]
+__all__ = ["ACTION_SEQUENCE", "LiveArtifactSource", "deployment_artifact", "validated_artifact_source"]

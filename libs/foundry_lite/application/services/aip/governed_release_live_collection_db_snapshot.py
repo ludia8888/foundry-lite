@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import cast
 
 from foundry_lite.application.ports.release_delivery_repository import ReleaseDeliveryRecord
 from foundry_lite.application.services.aip.fde_tool_result import hash_json
@@ -149,7 +149,7 @@ def _delivery_claim(kind: ReleaseKind, row: ReleaseDeliveryRecord) -> ServerDeli
         row.delivery_id,
         row.workflow_run_id,
         row.parent_delivery_id,
-        cast(Literal["github", "render"], row.provider),
+        row.provider,
         cast(str, row.provider_resource_id),
         row.ai_run_id,
         row.binding_hash,

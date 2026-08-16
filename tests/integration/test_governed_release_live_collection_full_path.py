@@ -22,6 +22,7 @@ from foundry_lite.application.ports.infrastructure_deployment_adapter import (
     InfrastructureDeploymentObservation,
     InfrastructureDeploymentServicePolicyObservation,
     InfrastructureDeploymentServicePolicyRequest,
+    InfrastructureDeploymentSourceBinding,
 )
 from foundry_lite.application.ports.release_delivery_repository import (
     ReleaseDeliveryOperation,
@@ -227,6 +228,10 @@ def _harness(
         database_backend="postgresql",
         source_provider_profile="github-release",
         deployment_provider_profile="render-infrastructure-deployment",
+        source_provider_name="github",
+        deployment_provider_name="render",
+        is_source_provider_live=True,
+        is_deployment_provider_live=True,
         source_revision="1" * 40,
         mcp_authority=GovernedReleaseMcpAuthority(
             application_id=APPLICATION,
@@ -372,7 +377,7 @@ def _release_result(kind: str, tool: str) -> dict[str, object]:
                 "releaseEvidence": {
                     "validationEvidence": [
                         {"status": "passed", "proofKind": "durable_candidate_validation"},
-                        {"status": "passed", "proofKind": "github_merge_result_or_head_required_checks"},
+                        {"status": "passed", "proofKind": "source_control_merge_result_or_head_required_checks"},
                     ]
                 },
             }
@@ -682,6 +687,8 @@ def _delivery_values(row: ReleaseDeliveryRecord) -> dict[str, object]:
 
 class _SourceControl:
     profile_name = "github-release"
+    provider_name = "github"
+    is_live_provider = True
 
     def __init__(self) -> None:
         self.calls = 0
@@ -710,6 +717,8 @@ class _SourceControl:
 
 class _Infrastructure:
     profile_name = "render-infrastructure-deployment"
+    provider_name = "render"
+    is_live_provider = True
 
     def __init__(self, *, engine: Engine, is_provider_drift: bool, is_database_drift: bool) -> None:
         self.engine = engine
@@ -760,11 +769,15 @@ class _Infrastructure:
         return InfrastructureDeploymentServicePolicyObservation(
             provider="render",
             service_id=request.service_id,
-            is_auto_deploy_enabled=False,
-            source_repository_owner=REPOSITORY.owner,
-            source_repository_name=REPOSITORY.name,
-            source_branch="main",
-            service_type="web_service",
+            release_mode="source_revision",
+            trigger_mode="manual",
+            source_binding=InfrastructureDeploymentSourceBinding(
+                "github",
+                REPOSITORY.owner,
+                REPOSITORY.name,
+                "main",
+            ),
+            workload_kind="web_service",
             is_suspended=False,
             provider_request_id=f"render-policy-{self.policy_calls}",
         )

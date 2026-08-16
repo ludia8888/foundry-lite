@@ -14,7 +14,7 @@ from foundry_lite.application.ports.release_delivery_repository import ReleaseDe
 from foundry_lite.application.services.aip.governed_release_live_artifact_sources import (
     ACTION_SEQUENCE,
     LiveArtifactSource,
-    render_artifact,
+    deployment_artifact,
     validated_artifact_source,
 )
 from foundry_lite.application.services.aip.governed_release_live_collection_contract import (
@@ -87,7 +87,7 @@ def _manifest(source: LiveArtifactSource, run_id: str) -> dict[str, object]:
         "requiredScope": RELEASE_SCOPE,
         "resource": source.resource,
         "sourceControl": {
-            "provider": "github",
+            "provider": repository.provider,
             "repositoryId": repository.repository_id,
             "owner": repository.owner,
             "repository": repository.name,
@@ -95,7 +95,7 @@ def _manifest(source: LiveArtifactSource, run_id: str) -> dict[str, object]:
             "publications": [_source_binding(source, kind) for kind in _KINDS],
         },
         "deployment": {
-            "provider": "render",
+            "provider": source.records[("pipeline", "application_deploy")].provider,
             "serviceId": source.config.deployment_service_id,
             "environment": source.config.deployment_environment,
         },
@@ -225,7 +225,7 @@ def _pipeline(source: LiveArtifactSource) -> dict[str, object]:
             "deploymentId": _text(current, "id"),
             "auditEventId": _audit(source, "pipeline", "deploy_release"),
         },
-        "deployment": _render(source, "application_deploy"),
+        "deployment": _deployment(source, "application_deploy"),
         "statusObservation": _status(source),
         "rollback": _rollback(source),
     }
@@ -268,7 +268,10 @@ def _validation_rows(value: object) -> tuple[JsonObject, ...]:
 
 
 def _is_external_ci_proof(item: JsonObject) -> bool:
-    return item.get("proofKind") == "github_merge_result_or_head_required_checks" and item.get("status") == "passed"
+    return (
+        item.get("proofKind") == "source_control_merge_result_or_head_required_checks"
+        and item.get("status") == "passed"
+    )
 
 
 def _source_binding(source: LiveArtifactSource, kind: ReleaseKind) -> dict[str, object]:
@@ -288,7 +291,7 @@ def _source_binding(source: LiveArtifactSource, kind: ReleaseKind) -> dict[str, 
         "kind": kind,
         "operation": "source_publish",
         "proposalId": _proposal(source.db, kind),
-        "provider": "github",
+        "provider": row.provider,
         "repositoryId": repository.repository_id,
         "owner": repository.owner,
         "repository": repository.name,
@@ -340,12 +343,12 @@ def _merge(source: LiveArtifactSource, kind: ReleaseKind) -> dict[str, object]:
     }
 
 
-def _render(source: LiveArtifactSource, operation: DeliveryOperation) -> dict[str, object]:
-    return render_artifact(source, operation)
+def _deployment(source: LiveArtifactSource, operation: DeliveryOperation) -> dict[str, object]:
+    return deployment_artifact(source, operation)
 
 
 def _status(source: LiveArtifactSource) -> dict[str, object]:
-    deployed = _render(source, "application_deploy")
+    deployed = _deployment(source, "application_deploy")
     return {
         "deployId": deployed["deployId"],
         "commitId": deployed["commitId"],
@@ -358,11 +361,11 @@ def _status(source: LiveArtifactSource) -> dict[str, object]:
 def _rollback(source: LiveArtifactSource) -> dict[str, object]:
     row = source.records[("pipeline", "application_rollback")]
     deployed = source.records[("pipeline", "application_deploy")]
-    receipt, candidate = _render(source, "application_rollback"), _required_mapping(row.candidate_ref)
+    receipt, candidate = _deployment(source, "application_rollback"), _required_mapping(row.candidate_ref)
     target_deploy, target_commit = _text(candidate, "targetDeployId"), _git(candidate, "targetCommitId")
     identities = {target_deploy, deployed.provider_resource_id, row.provider_resource_id}
     if row.prior_resource_id != deployed.provider_resource_id or len(identities) != 3:
-        _invalid("render_rollback_identity_mismatch")
+        _invalid("deployment_rollback_identity_mismatch")
     return {
         **receipt,
         "targetDeployId": target_deploy,
