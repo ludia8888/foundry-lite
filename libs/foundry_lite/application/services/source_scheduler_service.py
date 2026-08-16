@@ -33,6 +33,7 @@ from foundry_lite.application.services.source_scheduler_config import (
     source_schedule_decision,
 )
 from foundry_lite.application.services.source_scheduler_views import scheduler_tick_view
+from foundry_lite.application.services.source_workflow_completion import source_workflow_completion
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -275,11 +276,9 @@ class SourceSchedulerService(CoreService):
         run: Mapping[str, object],
         workflow: Mapping[str, object],
     ) -> Mapping[str, object]:
-        output = _mapping(workflow.get("output"))
-        status = "succeeded" if workflow["status"] == "succeeded" else "failed"
-        error = None if status == "succeeded" else _mapping(workflow.get("error"))
+        completion = source_workflow_completion(workflow)
         with self.engine.begin() as conn:
-            return self._update_run(conn, ctx, run, status, output, error)
+            return self._update_run(conn, ctx, run, completion.status, completion.output, completion.error)
 
     def _update_run(
         self,
@@ -295,7 +294,7 @@ class SourceSchedulerService(CoreService):
             tenant_id=ctx.tenant_id,
             run_id=str(run["id"]),
             status=status,
-            dataset_version_id=_optional_text(output.get("committedVersionId")),
+            dataset_version_id=_optional_text(output.get("committedVersionId")) if status == "succeeded" else None,
             checkpoint_end={},
             result_summary={"workflowOutput": dict(output)},
             error=error,

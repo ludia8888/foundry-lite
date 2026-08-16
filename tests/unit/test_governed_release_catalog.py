@@ -6,6 +6,7 @@ from foundry_lite.application.services.aip.governed_release_candidate_evidence i
     release_candidate_evidence,
 )
 from foundry_lite.application.services.aip.governed_release_catalog import (
+    GOVERNED_RELEASE_TOOLS,
     governed_release_mcp_tool,
     governed_release_tool,
 )
@@ -78,6 +79,15 @@ def test_verify_completion_schema_accepts_only_server_lookup_ids_and_idempotency
         "idempotencyKey",
         "widgetConfirmationToken",
     }
+
+
+def test_every_release_tool_schema_has_unique_required_fields() -> None:
+    for tool in GOVERNED_RELEASE_TOOLS:
+        schema = governed_release_mcp_tool(tool)["inputSchema"]
+        required = schema.get("required", [])
+
+        assert isinstance(required, list)
+        assert len(required) == len(set(required)), tool.name
 
 
 def test_ontology_candidate_revalidates_the_submitted_plan_against_the_active_version() -> None:

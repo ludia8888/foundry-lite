@@ -79,7 +79,163 @@ def test_all_v3_parameter_types_generate_one_deterministic_schema() -> None:
     assert action_contract_fingerprint(first) == action_contract_fingerprint(second)
     assert schema["x-foundry-contract-fingerprint"] == action_contract_fingerprint(first)
     assert set(schema["properties"]) == {item["apiName"] for item in parameters}  # type: ignore[arg-type]
+    assert schema["properties"]["p_decimal"] == {  # type: ignore[index]
+        "type": "string",
+        "format": "decimal",
+        "pattern": r"^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$",
+        "x-foundry-parameter-config": {
+            "apiName": "p_decimal",
+            "type": "decimal",
+            "required": False,
+            "description": None,
+            "default": None,
+            "constraints": {},
+            "overrides": [],
+        },
+    }
     assert schema["properties"]["p_timestamp"]["format"] == "date-time"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("data_type", "constraints", "message"),
+    [
+        ("string", {"type": "number"}, "unsupported action parameter constraints"),
+        ("string", {"minimum": 1}, "unsupported action parameter constraints"),
+        ("integer", {"minLength": 1}, "unsupported action parameter constraints"),
+        ("integer", {"minimum": 1.5}, "wrong type"),
+        ("decimal", {"minimum": 1}, "wrong type"),
+        ("string", {"minLength": True}, "non-negative integer"),
+        ("string", {"minLength": 4, "maxLength": 3}, "minimum cannot exceed maximum"),
+        ("string", {"enum": []}, "non-empty list"),
+        ("string", {"enum": ["a", "a"]}, "duplicate"),
+        ("float", {"enum": [1, 1.0]}, "duplicate"),
+        ("decimal", {"enum": [1.5]}, "wrong type"),
+    ],
+)
+def test_parameter_constraints_cannot_override_schema_or_use_ambiguous_types(
+    data_type: str, constraints: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationFailed, match=message):
+        compile_action_contract(_definition([{"apiName": "value", "type": data_type, "constraints": constraints}]))
+
+
+def test_override_constraints_are_compiled_before_runtime_condition_matching() -> None:
+    definition = _definition(
+        [
+            {"apiName": "mode", "type": "string"},
+            {
+                "apiName": "amount",
+                "type": "decimal",
+                "overrides": [
+                    {
+                        "when": _condition("mode", "strict"),
+                        "config": {"constraints": {"type": "number"}},
+                    }
+                ],
+            },
+        ]
+    )
+
+    with pytest.raises(ValidationFailed, match="unsupported action parameter constraints"):
+        compile_action_contract(definition)
+
+
+def test_decimal_schema_preserves_exact_bounds_as_server_owned_extensions() -> None:
+    contract = compile_action_contract(
+        _definition(
+            [
+                {
+                    "apiName": "amount",
+                    "type": "decimal",
+                    "constraints": {"minimum": "0.000000000000000001", "maximum": "999999999999999999.99"},
+                }
+            ]
+        )
+    )
+    schema = action_parameter_json_schema(contract)["properties"]["amount"]  # type: ignore[index]
+
+    assert schema["type"] == "string"
+    assert schema["x-foundry-decimal-minimum"] == "0.000000000000000001"
+    assert schema["x-foundry-decimal-maximum"] == "999999999999999999.99"
+    assert "minimum" not in schema and "maximum" not in schema
+
+
+@pytest.mark.parametrize(
+    ("parameter", "message"),
+    [
+        ({"apiName": "amount", "type": "decimal", "default": {"kind": "literal", "value": 1.5}}, "wrong type"),
+        (
+            {
+                "apiName": "amount",
+                "type": "decimal",
+                "default": {"kind": "literal", "value": "0.5"},
+                "constraints": {"minimum": "1"},
+            },
+            "constraint failed",
+        ),
+        ({"apiName": "day", "type": "date", "default": {"kind": "currentTime", "unit": "timestamp"}}, "does not match"),
+        (
+            {"apiName": "id", "type": "integer", "default": {"kind": "generatedId", "strategy": "uuid"}},
+            "string parameter",
+        ),
+        (
+            {"apiName": "actor", "type": "string", "default": {"kind": "currentUser", "attribute": " "}},
+            "non-empty text",
+        ),
+        (
+            {
+                "apiName": "actor",
+                "type": "string",
+                "default": {"kind": "literal", "value": "u-1", "typo": True},
+            },
+            "default fields",
+        ),
+        (
+            {
+                "apiName": "amounts",
+                "type": "array",
+                "itemType": "decimal",
+                "default": {"kind": "literal", "value": [0.1]},
+            },
+            "wrong type",
+        ),
+        (
+            {
+                "apiName": "references",
+                "type": "objectSet",
+                "itemType": "string",
+                "default": {"kind": "literal", "value": ["O-1", "O-1"]},
+            },
+            "wrong type",
+        ),
+        (
+            {
+                "apiName": "guest",
+                "type": "struct",
+                "fields": [{"apiName": "name", "type": "string", "required": True}],
+                "default": {"kind": "literal", "value": {}},
+            },
+            "wrong type",
+        ),
+    ],
+)
+def test_parameter_defaults_fail_during_contract_compilation_not_first_use(
+    parameter: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationFailed, match=message):
+        compile_action_contract(_definition([parameter]))
+
+
+def test_nested_decimal_enum_is_checked_against_the_recursive_parameter_type() -> None:
+    parameter = {
+        "apiName": "amounts",
+        "type": "array",
+        "itemType": "decimal",
+        "constraints": {"enum": [[0.1], ["0.20"]]},
+    }
+
+    with pytest.raises(ValidationFailed, match="wrong type"):
+        compile_action_contract(_definition([parameter]))
 
 
 def test_first_class_action_roles_are_independent_and_legacy_apply_is_normalized() -> None:
@@ -466,6 +622,46 @@ def test_nested_submission_condition_evaluates_without_expression_execution() ->
     )
 
     assert evaluate_action_condition(condition, context) is True
+
+
+def test_decimal_parameter_condition_uses_numeric_not_lexicographic_order() -> None:
+    condition = {
+        "op": "gt",
+        "left": {"kind": "parameter", "parameter": "amount"},
+        "right": {"kind": "literal", "value": "2"},
+    }
+    context = StaticActionConditionContext(
+        parameters={"amount": "10"},
+        object_properties={},
+        actor_user_id="user-7",
+        actor_groups=("ops",),
+        parameter_types={"amount": "decimal"},
+    )
+
+    assert evaluate_action_condition(condition, context) is True
+    assert (
+        evaluate_action_condition(
+            {
+                "op": "eq",
+                "left": {"kind": "parameter", "parameter": "amount"},
+                "right": {"kind": "literal", "value": "10.00"},
+            },
+            context,
+        )
+        is True
+    )
+
+
+def test_decimal_parameter_condition_rejects_numeric_literal_at_compile_time() -> None:
+    definition = _definition([{"apiName": "amount", "type": "decimal"}])
+    definition["submissionCriteria"] = {
+        "op": "gte",
+        "left": {"kind": "parameter", "parameter": "amount"},
+        "right": {"kind": "literal", "value": 1.25},
+    }
+
+    with pytest.raises(ValidationFailed, match="condition literal"):
+        compile_action_contract(definition)
 
 
 def test_submission_criteria_rejects_unknown_parameter_reference() -> None:

@@ -170,7 +170,7 @@ class OsdkOAuthSessionService(CoreService):
                 client_id=client_id,
             )
         if tenant_id is None:
-            raise PermissionDenied("OSDK OAuth client credentials are invalid")
+            raise PermissionDenied("OSDK OAuth client authentication is invalid")
         return tenant_id
 
     def application_scopes(self, application_id: str) -> tuple[str, ...]:

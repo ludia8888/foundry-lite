@@ -128,11 +128,16 @@ def initialize_api_runtime(environ: Mapping[str, str] | None = None) -> ApiRunti
             )
             if isinstance(auth_provider, HeaderTrustAuthProvider):
                 auth_provider = _runtime_auth_provider(auth_provider, dependencies.oauth_token_issuer)
-            _api_runtime = ApiRuntime(
-                foundry=FoundryLite(dependencies=dependencies),
-                auth_provider=auth_provider,
-                mcp_authorization=mcp_authorization,
-            )
+            foundry = FoundryLite(dependencies=dependencies)
+            try:
+                _api_runtime = ApiRuntime(
+                    foundry=foundry,
+                    auth_provider=auth_provider,
+                    mcp_authorization=mcp_authorization,
+                )
+            except BaseException:  # noqa: BLE001 - release resources even during process cancellation.
+                foundry.close()
+                raise
         return _api_runtime
 
 
@@ -194,11 +199,26 @@ def reset_api_runtime_for_tests() -> None:
 
     global _api_runtime
     with _api_runtime_lock:
-        if _api_runtime is not None:
-            dispose = getattr(_api_runtime.foundry.engine, "dispose", None)
-            if callable(dispose):
-                dispose()
-        _api_runtime = None
+        try:
+            if _api_runtime is not None:
+                _close_foundry(_api_runtime.foundry)
+        finally:
+            _api_runtime = None
+
+
+def shutdown_api_runtime() -> None:
+    """Close the process runtime during normal application shutdown."""
+    reset_api_runtime_for_tests()
+
+
+def _close_foundry(foundry: FoundryLite) -> None:
+    close = getattr(foundry, "close", None)
+    if callable(close):
+        close()
+        return
+    dispose = getattr(foundry.engine, "dispose", None)
+    if callable(dispose):
+        dispose()
 
 
 def _configure_observability_once() -> None:

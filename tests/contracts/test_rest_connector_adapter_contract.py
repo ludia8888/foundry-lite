@@ -126,6 +126,21 @@ def test_secure_http_json_write_rejects_private_target_without_allowlist() -> No
         )
 
 
+def test_secure_http_json_write_rejects_url_credentials_without_leaking_them() -> None:
+    secret = "connector-password-never-log"
+    with pytest.raises(ValidationFailed, match="credentials") as exc_info:
+        rest_connector_module.secure_http_json_write(
+            f"https://user:{secret}@api.example.test/action-write",
+            {"Idempotency-Key": "effect-userinfo"},
+            {"actionRunId": "run-userinfo"},
+            allow_private_network=False,
+            connection_id="connection-userinfo",
+        )
+
+    assert secret not in str(exc_info.value)
+    assert secret not in str(exc_info.value.details)
+
+
 def test_secure_http_json_write_classifies_rate_limit_as_retryable() -> None:
     with MockRestServer() as server:
         with pytest.raises(ConnectorRateLimitedError) as exc_info:
@@ -139,6 +154,68 @@ def test_secure_http_json_write_classifies_rate_limit_as_retryable() -> None:
 
     assert exc_info.value.failure.is_retryable is True
     assert exc_info.value.failure.idempotency_key == "effect-3"
+
+
+def test_secure_http_json_write_marks_post_delivery_response_overflow_as_ambiguous() -> None:
+    with MockRestServer() as server:
+        result = rest_connector_module.secure_http_json_write(
+            f"{server.base_url}/action-write",
+            {"Idempotency-Key": "effect-overflow"},
+            {"actionRunId": "run-overflow"},
+            allow_private_network=True,
+            connection_id="connection-overflow",
+            max_response_bytes=4,
+        )
+
+    assert len(server.requests) == 1
+    assert result.outcome == "ambiguous"
+    assert result.response == {"status": "outcome_unknown"}
+    assert result.network_evidence["responseFlags"] == "UPSTREAM_RESULT_UNKNOWN"
+
+
+@pytest.mark.parametrize("path", ["server-error", "redirect", "conflict"])
+def test_secure_http_json_write_marks_uncertain_post_response_status_as_ambiguous(path: str) -> None:
+    with MockRestServer() as server:
+        result = rest_connector_module.secure_http_json_write(
+            f"{server.base_url}/{path}",
+            {"Idempotency-Key": f"effect-{path}"},
+            {"actionRunId": f"run-{path}"},
+            allow_private_network=True,
+            connection_id=f"connection-{path}",
+        )
+
+    assert len(server.requests) == 1
+    assert result.outcome == "ambiguous"
+    assert result.response == {"status": "outcome_unknown"}
+
+
+def test_secure_http_json_write_keeps_explicit_client_rejection_permanent() -> None:
+    with MockRestServer() as server:
+        with pytest.raises(ValidationFailed, match="rejected") as exc_info:
+            rest_connector_module.secure_http_json_write(
+                f"{server.base_url}/client-error",
+                {"Idempotency-Key": "effect-client-error"},
+                {"actionRunId": "run-client-error"},
+                allow_private_network=True,
+                connection_id="connection-client-error",
+            )
+
+    assert len(server.requests) == 1
+    assert exc_info.value.details["status"] == 400
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        RestAuthConfig(mode="header", header_name="Host", header_value="evil.example"),
+        RestAuthConfig(mode="header", header_name="X-Bad\nInjected", header_value="secret"),
+        RestAuthConfig(mode="header", header_name="X-Api-Key", header_value="secret\r\nInjected: yes"),
+        RestAuthConfig(mode="bearer", token="secret\r\nInjected: yes"),
+    ],
+)
+def test_rest_auth_headers_reject_request_smuggling_shapes(auth: RestAuthConfig) -> None:
+    with pytest.raises(ValidationFailed, match="header"):
+        rest_connector_module._auth_headers(auth, None)
 
 
 def test_rest_connector_sends_cursor_when_resuming() -> None:
@@ -1267,6 +1344,23 @@ def _handler_class() -> type[BaseHTTPRequestHandler]:
             if urlsplit(self.path).path == "/rate-limit":
                 self.send_response(429)
                 self.send_header("Retry-After", "2")
+                self.end_headers()
+                return
+            if urlsplit(self.path).path == "/server-error":
+                self.send_response(500)
+                self.end_headers()
+                return
+            if urlsplit(self.path).path == "/client-error":
+                self.send_response(400)
+                self.end_headers()
+                return
+            if urlsplit(self.path).path == "/conflict":
+                self.send_response(409)
+                self.end_headers()
+                return
+            if urlsplit(self.path).path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/redirected")
                 self.end_headers()
                 return
             self._write_json({"id": "remote-1"})

@@ -62,6 +62,7 @@ class _FakeSourceControlReleasePort:
             request.expected_base_ref,
             request.expected_head_ref,
             request.expected_base_sha,
+            request.manifest.artifact_path,
             request.manifest.manifest_fingerprint,
             request.idempotency_key,
             head_sha=_HEAD_SHA,
@@ -79,6 +80,7 @@ class _FakeSourceControlReleasePort:
             request.expected_base_ref,
             request.expected_head_ref,
             request.expected_base_sha,
+            request.manifest.artifact_path,
             request.manifest.manifest_fingerprint,
             request.idempotency_key,
         )

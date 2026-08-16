@@ -23,6 +23,7 @@ from foundry_lite.application.services.aip.governed_release_live_provider_receip
     source_publication_manifest_contract,
     source_publication_receipt_contract,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 
 JsonObject = Mapping[str, object]
 CheckStatus = Literal["passed", "blocked"]
@@ -351,9 +352,9 @@ def _capture(name: str, operation: Callable[[], None]) -> LiveEvidenceCheck:
     try:
         operation()
     except LiveEvidenceInvalid as exc:
-        return LiveEvidenceCheck(name, "blocked", str(exc))
+        return LiveEvidenceCheck(name, "blocked", scrub_error_text(str(exc)))
     except ProviderReceiptInvalid as exc:
-        return LiveEvidenceCheck(name, "blocked", str(exc))
+        return LiveEvidenceCheck(name, "blocked", scrub_error_text(str(exc)))
     except Exception:
         return LiveEvidenceCheck(name, "blocked", f"{name}_invalid")
     return LiveEvidenceCheck(name, "passed", "verified")

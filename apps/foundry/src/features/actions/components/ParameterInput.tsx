@@ -1,4 +1,11 @@
 import type { FoundryLiteActionParameterField } from "@foundry-lite/sdk/react";
+import {
+  foundryLiteActionInputText,
+  foundryLiteActionInputType,
+  foundryLiteActionInputValue,
+  foundryLiteActionScalarError,
+  foundryLiteDecimalConstraintError,
+} from "@foundry-lite/sdk/action-values";
 import { useEffect, useState } from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
@@ -78,18 +85,31 @@ export function ParameterInput({ field, onChange, onUpload }: ParameterInputProp
       />
     );
   }
+  if (field.dataType === "decimal") {
+    return (
+      <Input
+        type="text"
+        inputMode="decimal"
+        disabled={!field.isEditable}
+        className="h-8 text-xs"
+        value={typeof field.value === "string" ? field.value : ""}
+        onChange={(event) => onChange(foundryLiteActionInputValue(field.dataType, event.target.value))}
+        placeholder={field.label}
+      />
+    );
+  }
   if (field.inputKind === "json") {
     return <JsonParameterInput field={field} onChange={onChange} />;
   }
   return (
     <Input
-      type={field.inputKind === "date" ? "date" : field.inputKind === "datetime" ? "datetime-local" : "text"}
+      type={foundryLiteActionInputType(field.dataType)}
       minLength={integerConstraint(field.schema.minLength)}
       maxLength={integerConstraint(field.schema.maxLength)}
       disabled={!field.isEditable}
       className="h-8 text-xs"
-      value={typeof field.value === "string" ? field.value : ""}
-      onChange={(event) => onChange(event.target.value)}
+      value={foundryLiteActionInputText(field.dataType, field.value)}
+      onChange={(event) => onChange(foundryLiteActionInputValue(field.dataType, event.target.value))}
       placeholder={field.label}
     />
   );
@@ -245,7 +265,12 @@ function childParameterField(
 
 function parameterConstraintError(name: string, value: unknown, schema: Record<string, unknown>): string | null {
   if (value === null || value === undefined || value === "") return null;
+  const config = recordValue(schema["x-foundry-parameter-config"]);
+  const dataType = typeof config.type === "string" ? config.type : schemaDataType(schema);
+  const scalarError = foundryLiteActionScalarError(dataType, value);
+  if (scalarError) return `${name}: ${scalarError}`;
   if (Array.isArray(schema.enum) && !schema.enum.some((item) => Object.is(item, value))) return `${name}: enum`;
+  if (schema.format === "decimal") return foundryLiteDecimalConstraintError(name, value, schema);
   if (typeof value === "string" && typeof schema.minLength === "number" && value.length < schema.minLength) return `${name}: minLength`;
   if (typeof value === "string" && typeof schema.maxLength === "number" && value.length > schema.maxLength) return `${name}: maxLength`;
   if (typeof value === "number" && typeof schema.minimum === "number" && value < schema.minimum) return `${name}: minimum`;
@@ -280,7 +305,7 @@ function inputKind(
   if (dataType === "timestamp") return "datetime";
   if (dataType === "media") return "media";
   if (dataType === "attachment") return "attachment";
-  if (["integer", "long", "float", "decimal", "number"].includes(dataType)) return "number";
+  if (["integer", "long", "float", "number"].includes(dataType)) return "number";
   if (dataType === "boolean") return "checkbox";
   if (["struct", "array", "objectSet", "unknown"].includes(dataType)) return "json";
   return "text";

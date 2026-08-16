@@ -296,7 +296,12 @@ class ActionBatchApplyService(CoreService):
         target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
         for target in command.targets:
             record = self.object_records_service._object_record(conn, ctx, command.object_type, target.object_id)
-            record = visible_record(record, target_type, ctx.roles)
+            record = visible_record(
+                record,
+                target_type,
+                ctx.roles,
+                self.ontology_service._properties_for_object_type(conn, target_type["id"]),
+            )
             if record is not None:
                 record_type = self.ontology_service._object_type_by_id_or_none(conn, ctx, record["object_type_id"])
                 if (invariant := action_target_record_error(action_type, record, record_type)) is not None:

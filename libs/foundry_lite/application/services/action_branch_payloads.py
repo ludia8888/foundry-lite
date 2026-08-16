@@ -19,6 +19,7 @@ from foundry_lite.application.ports.ontology_branch_repository import OntologyBr
 from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.application.services.action_protocols import ActionOntologyLookup
 from foundry_lite.application.services.ontology_branch_action_types import branch_action_type_item
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.action_runtime.action_contract import ActionDefinitionV3, compile_action_contract
 from foundry_lite.domain.action_runtime.action_permissions import require_action_access
 from foundry_lite.domain.context import RequestContext
@@ -188,6 +189,12 @@ def plan_version(target: Mapping[str, object]) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     raise ValidationFailed("branch Action plan target version is invalid")
+
+
+def branch_conflict_error(exc: Exception) -> dict[str, str]:
+    """Return a secret-safe terminal conflict payload."""
+
+    return {"kind": "conflict", "message": scrub_error_text(str(exc))}
 
 
 def branch_log_object(log_id: str, tenant_id: str, raw: object, index: int) -> ActionLogObjectRecord:

@@ -98,6 +98,10 @@ def test_source_management_policy_and_sync_run_lifecycle(
             updated_at="2026-06-28T00:00:40Z",
         )
         repository.create_sync_run(transaction=conn, record=_sync_run("tenant-a", "orders_sync", "run-1", "idem-1"))
+        repository.create_sync_run(
+            transaction=conn,
+            record=_sync_run("tenant-a", "orders_sync", "run-cancelled", "idem-cancelled"),
+        )
         replay = repository.sync_run_by_idempotency_key(
             transaction=conn,
             tenant_id="tenant-a",
@@ -114,6 +118,17 @@ def test_source_management_policy_and_sync_run_lifecycle(
             result_summary={"rowCount": 2},
             error=None,
             completed_at="2026-06-28T00:02:00Z",
+        )
+        cancelled = repository.update_sync_run_result(
+            transaction=conn,
+            tenant_id="tenant-a",
+            run_id="run-cancelled",
+            status="cancelled",
+            dataset_version_id=None,
+            checkpoint_end={},
+            result_summary={"workflowOutput": {"cleanup": {"status": "adapter_confirmed"}}},
+            error=None,
+            completed_at="2026-06-28T00:02:30Z",
         )
         sync_after = repository.update_sync_after_run(
             transaction=conn,
@@ -147,6 +162,9 @@ def test_source_management_policy_and_sync_run_lifecycle(
         )
 
     assert replay is not None
+    assert cancelled is not None
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["error"] is None
     assert scheduled is not None
     assert stale_pause is None
     assert scheduled["schedule"] == {"mode": "interval", "everySeconds": 3600}
@@ -169,7 +187,10 @@ def test_source_management_policy_and_sync_run_lifecycle(
     assert after_microbatch["checkpoint"] == {"lastValue": 30}
     assert policy is not None
     assert policy["agent_id"] == "agent-1"
-    assert [row["id"] for row in repository.list_sync_runs(tenant_id="tenant-a", sync_name="orders_sync")] == ["run-1"]
+    assert [row["id"] for row in repository.list_sync_runs(tenant_id="tenant-a", sync_name="orders_sync")] == [
+        "run-1",
+        "run-cancelled",
+    ]
 
 
 def _credential(tenant_id: str, credential_name: str) -> SourceCredentialRecord:

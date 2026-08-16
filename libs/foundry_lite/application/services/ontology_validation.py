@@ -52,7 +52,7 @@ DatasetColumnsLookup = Callable[
     Mapping[str, Mapping[str, object]],
 ]
 
-PROPERTY_DATA_TYPES = frozenset({"boolean", "float", "integer", "string"})
+PROPERTY_DATA_TYPES = frozenset({"boolean", "date", "float", "integer", "string", "timestamp"})
 # Object properties may additionally hold an immutable media reference (doc §1.6): the
 # Ontology pins a media_item_version via a media_reference property, never a media-backed
 # object. Action *parameters* stay scalar — media is bound via an explicit edit, not a param.

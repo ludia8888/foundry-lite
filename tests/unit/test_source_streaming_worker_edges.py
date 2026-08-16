@@ -122,6 +122,10 @@ def test_streaming_worker_builds_and_stops_kraken_bridge(monkeypatch: pytest.Mon
             assert timeout == 5.0
             starts.append("joined")
 
+        @staticmethod
+        def is_alive() -> bool:
+            return False
+
     monkeypatch.setattr(worker, "Thread", _Thread)
     config = worker.SourceStreamingServiceConfig(sync_name="live_sync", storage_root=Path("unused"))
     bridge = worker._start_bridge(
@@ -148,6 +152,52 @@ def test_streaming_worker_builds_and_stops_kraken_bridge(monkeypatch: pytest.Mon
     )
     assert kraken.config.symbol == "ETH/USD"
     assert kafka.config.subscriptions[0].partition == 2
+
+
+def test_streaming_worker_closes_owned_kafka_when_bridge_thread_returns(monkeypatch: pytest.MonkeyPatch) -> None:
+    closures: list[str] = []
+    bridge_calls: list[str] = []
+
+    class _OwnedKafka(LocalStreamAdapter):
+        def close(self) -> None:
+            closures.append("kafka")
+
+    monkeypatch.setattr(worker, "run_kraken_kafka_bridge", lambda *_args, **_kwargs: bridge_calls.append("run"))
+    kafka = _OwnedKafka()
+    worker._run_bridge(
+        config=worker.KrakenKafkaBridgeConfig(stream_name="trades"),
+        kraken=cast(object, SimpleNamespace()),
+        kafka=cast(object, kafka),
+        ctx=worker.SourceStreamingServiceConfig(sync_name="live", storage_root=Path("unused")).request_context(),
+        stop_event=Event(),
+        telemetry=worker.KrakenBridgeTelemetry(),
+        owned_kafka=cast(object, kafka),
+    )
+
+    assert bridge_calls == ["run"]
+    assert closures == ["kafka"]
+
+
+def test_streaming_worker_reports_bridge_thread_that_is_still_alive() -> None:
+    class _AliveThread:
+        @staticmethod
+        def join(*, timeout: float) -> None:
+            assert timeout == 5.0
+
+        @staticmethod
+        def is_alive() -> bool:
+            return True
+
+    bridge = worker._BridgeHandle(
+        Event(),
+        worker.KrakenBridgeTelemetry(),
+        cast(object, _AliveThread()),
+    )
+
+    with pytest.raises(RuntimeError, match="did not stop"):
+        worker._stop_bridge(bridge)
+
+    assert bridge.stop_event.is_set()
 
 
 def test_streaming_worker_telemetry_reports_bridge_degradation() -> None:

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
 
 from fastapi import File, Query
 from foundry_lite.application.services.pipeline_graph_contracts import (
     DEFAULT_PIPELINE_PREVIEW_ROWS,
     MAX_PIPELINE_PREVIEW_ROWS,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 JsonObject = dict[str, object]
 
@@ -679,8 +679,19 @@ class AipPilotPolicyConditionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     property_api_name: str = Field(alias="propertyApiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
-    operator: Literal["eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte"]
-    value: object
+    operator: Literal[
+        "eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte", "contains", "startsWith", "matches", "exists"
+    ]
+    value: object | None = None
+
+    @model_validator(mode="after")
+    def validate_value_presence(self) -> Self:
+        has_value = "value" in self.model_fields_set
+        if self.operator == "exists" and has_value:
+            raise ValueError("exists policy conditions must omit value")
+        if self.operator != "exists" and not has_value:
+            raise ValueError(f"{self.operator} policy conditions require value")
+        return self
 
 
 class AipPilotPolicyRequest(BaseModel):

@@ -28,6 +28,7 @@ from foundry_lite.application.services.aip.tool_broker import (
     published_tool_spec,
     validated_tool_arguments,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 
 
@@ -255,7 +256,7 @@ def tool_error_payload(exc: Exception) -> dict[str, object] | None:
         exc,
         AgentRuntimeToolLoopError | ToolBrokerError | ActionProposalError | FdeOntologyToolError | FdePlatformToolError,
     ):
-        return {"reason": exc.reason, "detail": exc.detail}
+        return {"reason": scrub_error_text(exc.reason), "detail": scrub_error_text(exc.detail)}
     return None
 
 

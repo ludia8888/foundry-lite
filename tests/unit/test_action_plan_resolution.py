@@ -73,6 +73,10 @@ class _Ontology:
         del conn, ctx
         return {"id": f"ot-{api_name}", "api_name": api_name, "config": {}}
 
+    def _properties_for_object_type(self, conn: Any, object_type_id: str) -> list[dict[str, Any]]:
+        del conn, object_type_id
+        return []
+
 
 class _LinkTypes:
     def link_type(self, conn: Any, ctx: RequestContext, api_name: str) -> dict[str, Any]:

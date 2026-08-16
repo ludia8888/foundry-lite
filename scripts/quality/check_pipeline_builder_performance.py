@@ -127,17 +127,20 @@ def _measure_preview(iterations: int) -> dict[str, object]:
     with tempfile.TemporaryDirectory(prefix="foundry-lite-pipeline-performance-") as raw_root:
         root = Path(raw_root)
         foundry = _preview_foundry(root)
-        ctx = demo_admin_context()
-        _seed_preview_rows(foundry, ctx, root)
-        branch = foundry.pipelines.create_branch(
-            pipeline_id="pipeline-performance",
-            name="preview",
-            idempotency_key="pipeline-performance-branch",
-            ctx=ctx,
-        )
-        graph = _preview_graph()
-        _warm_preview(foundry, ctx, str(branch["id"]), graph)
-        acknowledgements, executions = _preview_samples(foundry, ctx, str(branch["id"]), graph, iterations)
+        try:
+            ctx = demo_admin_context()
+            _seed_preview_rows(foundry, ctx, root)
+            branch = foundry.pipelines.create_branch(
+                pipeline_id="pipeline-performance",
+                name="preview",
+                idempotency_key="pipeline-performance-branch",
+                ctx=ctx,
+            )
+            graph = _preview_graph()
+            _warm_preview(foundry, ctx, str(branch["id"]), graph)
+            acknowledgements, executions = _preview_samples(foundry, ctx, str(branch["id"]), graph, iterations)
+        finally:
+            foundry.close()
     return {
         "previewAcknowledgement": _metric(
             acknowledgements,

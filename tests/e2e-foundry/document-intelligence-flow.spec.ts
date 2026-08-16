@@ -579,6 +579,15 @@ test("Document Intelligence previews a real long PDF with layout evidence and no
     `/api/pipelines/branches/${encodeURIComponent(promotionTarget.branchId)}/validate`,
   );
   expect(validation).toMatchObject({ valid: true, errors: [] });
+  const testReceipt = await apiPost<JsonRecord>(
+    page,
+    `/api/pipelines/branches/${encodeURIComponent(promotionTarget.branchId)}/tests/run`,
+  );
+  expect(testReceipt).toMatchObject({
+    status: "passed",
+    graphFingerprint: promoted.graphFingerprint,
+    proofKind: "static_graph_output_contract",
+  });
   const proposal = await apiPost<JsonRecord>(
     page,
     `/api/pipelines/branches/${encodeURIComponent(promotionTarget.branchId)}/propose`,

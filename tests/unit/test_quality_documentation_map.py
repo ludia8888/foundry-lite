@@ -456,7 +456,9 @@ def test_documentation_map_validates_cross_check_node_target(tmp_path: Path) -> 
 
     assert any(finding.code == "cross_check_command_missing_file" for finding in findings)
     assert any(
-        finding.reference == "node --experimental-strip-types tests/sdk/request_contract.mjs" for finding in findings
+        finding.reference
+        == "node --disable-warning=ExperimentalWarning --experimental-strip-types tests/sdk/request_contract.mjs"
+        for finding in findings
     )
 
 

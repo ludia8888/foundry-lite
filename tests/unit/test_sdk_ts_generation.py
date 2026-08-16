@@ -88,6 +88,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "function normalizeOsdkAggregateInput<TObject extends OsdkObjectType>" in generated
     assert "async function aggregateOsdkObjectSet<TObject extends OsdkObjectType>" in generated
     assert "INVALID_OSDK_FILTER_OPERATOR" in generated
+    assert "OSDK $contains filter value must be text" in generated
     assert "INVALID_OSDK_AGGREGATE_GROUPBY_PROPERTY" in generated
     assert "$pageSize?: number;" in generated
     assert "$orderBy?: OsdkOrderBy<TObject>;" in generated
@@ -866,7 +867,9 @@ def test_generated_sdk_exports_every_declared_frontend_foundation_helper() -> No
     assert "const osdk = useFoundryLiteOsdkClient()" in react_helpers
     assert "selectedActionForm: FoundryLiteActionFormView | null" in react_helpers
     assert "recommendedActionForm: FoundryLiteActionFormView | null" in react_helpers
-    assert "foundryLiteActionParameterFields(actionView.action.parameterSchema, params)" in react_helpers
+    assert (
+        "foundryLiteActionParameterFields(actionView.action.parameterSchema, params, conditionContext)" in react_helpers
+    )
     assert "requireIdempotencyKey" in react_helpers
     assert "export type FoundryLiteOntologyWorkspace" in react_helpers
     assert "export type FoundryLiteOntologyExplorerView" in react_helpers
@@ -1374,6 +1377,7 @@ actionTypes:
     generated_python = sdk.render_python(ontology)
 
     assert "export type UpdateAssetGuestContactStruct" in generated_ts
+    assert "amount: string;" in _type_block(generated_ts, "UpdateAssetParams")
     assert "assets?: ReadonlyArray<string | ObjectReference>;" in generated_ts
     assert "objectType: string;" in _type_block(generated_ts, "UpdateAssetValidateRequest")
     assert 'targetKind: "interface"' in generated_ts

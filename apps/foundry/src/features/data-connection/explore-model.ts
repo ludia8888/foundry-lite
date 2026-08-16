@@ -78,6 +78,7 @@ export interface ExploreTablePreview {
   rows: Record<string, unknown>[];
   columns: ExploreColumn[];
   explorationRunId: string | null;
+  operationsPath: string | null;
   errorMessage: string | null;
 }
 

@@ -67,6 +67,15 @@ class RuntimeRepositoryHarness(Protocol):
         created_at: str = "2026-06-10T00:00:00Z",
     ) -> None: ...
 
+    def add_source_exploration_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        status: str = "succeeded",
+        created_at: str = "2026-06-10T00:00:00Z",
+    ) -> None: ...
+
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None: ...
 
     def add_index_run(self, *, run_id: str, tenant_id: str, object_type_api_name: str = "Order") -> None: ...
@@ -105,6 +114,7 @@ class FakeRuntimeRepository:
             return ordered[:limit]
 
         return {
+            "sourceExplorationRuns": window("source_exploration_runs"),
             "syncRuns": window("sync_runs"),
             "transformRuns": window("transform_runs"),
             "indexRuns": window("index_runs"),
@@ -238,6 +248,7 @@ class FakeRuntimeRepository:
             return [cast(RuntimeRow, dict(row)) for row in ordered[:limit]]
 
         return {
+            "sourceExplorationRuns": [],
             "syncRuns": scoped("sync_runs", lambda row: row.get("committed_version_id") in rids),
             "transformRuns": scoped("transform_runs", lambda row: row.get("output_version_id") in rids),
             "indexRuns": scoped("index_runs", lambda row: row.get("object_type_api_name") == object_type_api_name),
@@ -668,6 +679,19 @@ class FakeRuntimeRepositoryHarness:
             _action_run_row(run_id=run_id, tenant_id=tenant_id, status=status, created_at=created_at)
         )
 
+    def add_source_exploration_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        status: str = "succeeded",
+        created_at: str = "2026-06-10T00:00:00Z",
+    ) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
+        self.repository.tables["source_exploration_runs"].append(
+            _source_exploration_run_row(run_id=run_id, tenant_id=tenant_id, status=status, created_at=created_at)
+        )
+
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None:
         assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["dead_letter_events"].append(_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
@@ -723,6 +747,23 @@ class SqlAlchemyRuntimeRepositoryHarness:
             conn.execute(
                 insert(db.action_runs).values(
                     **_action_run_row(run_id=run_id, tenant_id=tenant_id, status=status, created_at=created_at)
+                )
+            )
+
+    def add_source_exploration_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        status: str = "succeeded",
+        created_at: str = "2026-06-10T00:00:00Z",
+    ) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(db.source_exploration_runs).values(
+                    **_source_exploration_run_row(
+                        run_id=run_id, tenant_id=tenant_id, status=status, created_at=created_at
+                    )
                 )
             )
 
@@ -1236,6 +1277,7 @@ def _row_has_relation(row: dict[str, Any], ids: set[str]) -> bool:
 
 def _run_table_name(run_type: RuntimeRunType) -> str:
     return {
+        "source_exploration": "source_exploration_runs",
         "sync": "sync_runs",
         "transform": "transform_runs",
         "index": "index_runs",
@@ -1347,6 +1389,27 @@ def _action_run_row(
     }
 
 
+def _source_exploration_run_row(
+    *,
+    run_id: str,
+    tenant_id: str,
+    status: str = "succeeded",
+    created_at: str = "2026-06-10T00:00:00Z",
+) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "tenant_id": tenant_id,
+        "source_name": "customer_erp",
+        "source_type": "postgres_jdbc",
+        "request": {"databaseUrlSecretRef": "erp-db", "sampleLimit": 20},
+        "status": status,
+        "result_summary": {"tableCount": 1},
+        "error": {"type": "SOURCE_UNAVAILABLE", "message": "probe failed"} if status == "failed" else None,
+        "operations_path": f"/api/operations/runs/source_exploration/{run_id}",
+        "created_at": created_at,
+    }
+
+
 def _index_run_row(
     *,
     run_id: str,
@@ -1388,6 +1451,8 @@ def harness(request: pytest.FixtureRequest, tmp_path: Path) -> RuntimeRepository
 def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     harness: RuntimeRepositoryHarness,
 ) -> None:
+    harness.add_source_exploration_run(run_id="source_explore_1", tenant_id="tenant-demo")
+    harness.add_source_exploration_run(run_id="source_explore_other", tenant_id="tenant-other")
     harness.add_action_run(run_id="action_run_1", tenant_id="tenant-demo")
     harness.add_dead_letter_event(event_id="dlq_1", tenant_id="tenant-demo")
     harness.add_dead_letter_event(event_id="dlq_other", tenant_id="tenant-other")
@@ -1403,6 +1468,7 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
 
     assert first_insert is True
     assert duplicate_insert is False
+    assert [row["id"] for row in runs["sourceExplorationRuns"]] == ["source_explore_1"]
     assert [row["id"] for row in runs["actionRuns"]] == ["action_run_1"]
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
@@ -1607,6 +1673,35 @@ def test_runtime_repository_contract_queries_run_rows_with_keyset_page(
 
     assert [row["id"] for row in first] == ["action_c"]
     assert [row["id"] for row in second] == ["action_b", "action_a"]
+
+
+def test_runtime_repository_contract_queries_source_exploration_runs_with_status_and_tenant_scope(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_source_exploration_run(run_id="source_explore_succeeded", tenant_id="tenant-demo", status="succeeded")
+    harness.add_source_exploration_run(run_id="source_explore_failed", tenant_id="tenant-demo", status="failed")
+    harness.add_source_exploration_run(run_id="source_explore_other", tenant_id="tenant-other", status="failed")
+
+    rows = harness.repository.query_run_rows(
+        tenant_id="tenant-demo",
+        run_type="source_exploration",
+        status="failed",
+        since=None,
+        until=None,
+        cursor=None,
+        limit=10,
+    )
+    detail = harness.repository.run_row(
+        tenant_id="tenant-demo", run_type="source_exploration", run_id="source_explore_failed"
+    )
+    hidden = harness.repository.run_row(
+        tenant_id="tenant-demo", run_type="source_exploration", run_id="source_explore_other"
+    )
+
+    assert [row["id"] for row in rows] == ["source_explore_failed"]
+    assert detail is not None
+    assert detail["operations_path"] == "/api/operations/runs/source_exploration/source_explore_failed"
+    assert hidden is None
 
 
 def test_runtime_repository_contract_lineage_lookup_is_tenant_scoped(

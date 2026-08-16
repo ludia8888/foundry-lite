@@ -80,6 +80,21 @@ def test_debezium_adapter_reports_publish_validation_operation() -> None:
     assert error.value.failure.kind == "validation"
 
 
+def test_debezium_adapter_closes_its_inner_stream() -> None:
+    class _ClosingStream(LocalStreamAdapter):
+        close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    inner = _ClosingStream()
+    adapter = _adapter(inner)
+
+    adapter.close()
+
+    assert inner.close_count == 1
+
+
 def test_debezium_adapter_rejects_missing_primary_key() -> None:
     inner = LocalStreamAdapter()
     adapter = _adapter(inner)

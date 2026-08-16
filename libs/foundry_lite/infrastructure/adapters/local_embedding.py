@@ -20,6 +20,7 @@ from foundry_lite.application.ports.embedding_model import (
     EmbeddingModelError,
     EmbeddingVector,
 )
+from foundry_lite.infrastructure.adapters.fastembed_model_cache import fastembed_model_load_lock
 
 _DEFAULT_MODEL_VERSION = "local-v0"
 # Real engine (L4): the fastembed BAAI/bge-small-en-v1.5 ONNX model (384-dim, no torch).
@@ -40,12 +41,14 @@ _fastembed_model: Any | None = None
 
 def _load_fastembed_model() -> Any:
     # Build the ONNX model lazily/once (module-level cache) so repeated calls don't reload
-    # the weights. fastembed downloads the model from HuggingFace on first use (cached in
-    # ~/.cache/huggingface), like faster-whisper, and uses onnxruntime (no torch).
+    # the weights. FastEmbed downloads the model on first use into FASTEMBED_CACHE_PATH (or
+    # the system temp cache), and uses ONNX Runtime without torch.
     global _fastembed_model
     if _fastembed_model is None:
-        fastembed_module = import_module("fastembed")
-        _fastembed_model = fastembed_module.TextEmbedding(_FASTEMBED_MODEL_NAME)
+        with fastembed_model_load_lock(_FASTEMBED_MODEL_NAME) as cache_dir:
+            if _fastembed_model is None:
+                fastembed_module = import_module("fastembed")
+                _fastembed_model = fastembed_module.TextEmbedding(_FASTEMBED_MODEL_NAME, cache_dir=str(cache_dir))
     return _fastembed_model
 
 

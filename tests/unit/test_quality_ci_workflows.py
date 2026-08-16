@@ -185,7 +185,7 @@ def test_failed_mutation_state_gate_runs_after_adapter_error_trace() -> None:
     assert '"quality:failed-mutation-state"' in package_json
 
 
-def test_flaky_detector_repeats_parallel_pytest_three_times() -> None:
+def test_flaky_detector_repeats_resource_bounded_parallel_pytest_three_times() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
     nightly = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
@@ -196,9 +196,20 @@ def test_flaky_detector_repeats_parallel_pytest_three_times() -> None:
     # rerun could afford.
     assert "scripts/quality/check_flaky_detector.py" in script
     assert '"${FOUNDRY_LITE_FLAKY_ITERATIONS:-3}"' in script
-    assert '--command "uv run pytest tests -n auto --no-header -q"' in script
+    assert 'local pytest_workers="${FOUNDRY_LITE_PYTEST_WORKERS:-4}"' in script
+    assert 'local iteration_timeout_seconds="${FOUNDRY_LITE_FLAKY_ITERATION_TIMEOUT_SECONDS:-900}"' in script
+    assert '--iteration-timeout-seconds "${iteration_timeout_seconds}"' in script
+    assert '--command "uv run pytest tests -n ${pytest_workers} --dist loadfile --no-header -q"' in script
     assert 'FOUNDRY_LITE_FLAKY_ITERATIONS: "7"' in nightly
     assert '"quality:flaky-detector"' in package_json
+
+
+def test_ci_gate_exposes_docker_desktop_credential_helper_before_preflight() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+
+    helper_path = "/Applications/Docker.app/Contents/Resources/bin/docker-credential-desktop"
+    assert helper_path in script
+    assert script.index("export PATH=") < script.index("maybe_run_testcontainers_preflight()")
 
 
 def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> None:
@@ -222,7 +233,8 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "command -v pdfimages" in e2e_job
     assert "command -v ffprobe" in e2e_job
     assert "Cache faster-whisper and fastembed models" in e2e_job
-    assert "hf-models-whisper-tiny-bge-small-clip-vit-b32-v1" in e2e_job
+    assert "hf-fastembed-models-whisper-tiny-bge-small-clip-vit-b32-v2" in e2e_job
+    assert "FASTEMBED_CACHE_PATH" in e2e_job
     assert "Pre-fetch faster-whisper tiny model" in e2e_job
     assert "Pre-fetch fastembed embedding model" in e2e_job
     assert "Pre-fetch fastembed CLIP vision/text models" in e2e_job
@@ -250,7 +262,8 @@ def test_github_coverage_lane_keeps_sharded_coverage_from_timing_out() -> None:
     assert "sharded across xdist workers" in coverage_job
     gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     assert "--cov-fail-under=93" in gate
-    assert "-n auto" in gate and "--dist loadfile" in gate
+    assert 'local pytest_workers="${FOUNDRY_LITE_PYTEST_WORKERS:-4}"' in gate
+    assert '-n "${pytest_workers}"' in gate and "--dist loadfile" in gate
     # The floor is a ratchet, so the comment carrying its measurement and intent must travel
     # with it — a bare number invites someone to read 93 as the standard and lower it again.
     assert "RATCHET FLOOR" in gate
@@ -406,6 +419,24 @@ def test_error_response_request_id_is_release_gate_step() -> None:
     assert "scripts/quality/check_error_response_has_request_id.py" in script
     assert '"quality:error-request-id"' in package_json
     assert "pnpm quality:error-request-id" in package_json
+
+
+def test_exception_string_redaction_is_release_gate_step() -> None:
+    script = _static_lane_text()
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "scripts/quality/check_exception_string_redaction.py" in script
+    assert '"quality:exception-redaction"' in package_json
+    assert "pnpm quality:exception-redaction" in package_json
+
+
+def test_silent_broad_exceptions_is_release_gate_step() -> None:
+    script = _static_lane_text()
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "scripts/quality/check_silent_broad_exceptions.py" in script
+    assert '"quality:silent-exceptions"' in package_json
+    assert "pnpm quality:silent-exceptions" in package_json
 
 
 def test_function_length_is_release_gate_step() -> None:
@@ -801,6 +832,15 @@ def test_palantir_design_authority_is_a_static_gate_step() -> None:
     assert "pnpm quality:palantir-design-authority" in package_json
 
 
+def test_foundry_runtime_lifecycle_is_in_both_static_inventories() -> None:
+    script = _static_lane_text()
+    package_scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
+
+    assert "scripts/quality/check_foundry_runtime_lifecycle.py" in script
+    assert package_scripts["quality:runtime-lifecycle"].endswith("check_foundry_runtime_lifecycle.py")
+    assert "pnpm quality:runtime-lifecycle" in package_scripts["quality:static"]
+
+
 def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> None:
     static_driver = (ROOT / "scripts" / "quality" / "run_static_checks.py").read_text(encoding="utf-8")
     e2e_driver = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
@@ -828,11 +868,15 @@ def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> N
     assert "infra/code_execution/Dockerfile" in package_scripts["quality:code-execution-image"]
     isolation_live_gate = "quality:pipeline-python-isolation-live"
     assert "tests/integration/python_code_execution_container_live.py" in package_scripts[isolation_live_gate]
+    assert "scripts/quality/ensure_live_runtime_images.sh code-execution" in package_scripts[isolation_live_gate]
     assert "ensure_code_execution_image" in e2e_driver
+    assert "scripts/quality/ensure_live_runtime_images.sh code-execution" in e2e_driver
+    assert "scripts/quality/ensure_live_runtime_images.sh trained-model" in e2e_driver
     assert f"pnpm --silent {isolation_live_gate}" in e2e_driver
     assert "infra/trained_model_sidecar/Dockerfile" in package_scripts["quality:trained-model-sidecar-image"]
     model_live_gate = "quality:pipeline-trained-model-sidecar-live"
     assert "tests/integration/trained_model_sidecar_container_live.py" in package_scripts[model_live_gate]
+    assert "scripts/quality/ensure_live_runtime_images.sh trained-model" in package_scripts[model_live_gate]
     assert "ensure_trained_model_image" in e2e_driver
     assert f"pnpm --silent {model_live_gate}" in e2e_driver
     async_live_gate = "quality:pipeline-async-dag-live"
@@ -852,6 +896,7 @@ def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> N
     assert "VITE_FOUNDRY_LITE_API_URL=http://127.0.0.1:4186" in package_scripts[e2e_gate]
     assert "FOUNDRY_LITE_E2E_REUSE_EXISTING=0" in package_scripts[e2e_gate]
     assert "FOUNDRY_LITE_TRAINED_MODEL_PROFILE=container" in package_scripts[e2e_gate]
+    assert "env -u NO_COLOR pnpm exec playwright" in package_scripts[e2e_gate]
     assert f'("{e2e_gate}", "e2e")' in static_driver
     assert f"pnpm --silent {e2e_gate}" in e2e_driver
 
@@ -862,6 +907,16 @@ def test_pipeline_builder_quality_gates_execute_real_evidence_in_ci_lanes() -> N
     assert "shouldReuseExistingServer" in foundry_config
     assert 'process.env.FOUNDRY_LITE_E2E_REUSE_EXISTING === "1"' in foundry_config
     assert "!process.env.CI" not in foundry_config
+
+
+def test_runtime_image_build_context_excludes_local_qa_state() -> None:
+    ignored = {
+        line.strip()
+        for line in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+    assert {".git", ".venv", "node_modules", ".foundry-lite*", "artifacts", "output", "test-results"} <= ignored
 
 
 def test_runtime_lane_writes_root_cause_summary_from_failure_trap() -> None:
@@ -1030,7 +1085,8 @@ def test_release_gate_installs_live_media_prerequisites_before_release_gate() ->
         assert step in workflow
 
     assert "sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg" in workflow
-    assert "hf-models-whisper-tiny-bge-small-clip-vit-b32-v1" in workflow
+    assert "hf-fastembed-models-whisper-tiny-bge-small-clip-vit-b32-v2" in workflow
+    assert "FASTEMBED_CACHE_PATH" in workflow
     assert workflow.index("Install Tesseract OCR, Poppler, and FFmpeg") < workflow.index("Run release evidence gate")
     assert workflow.index("Pre-fetch fastembed CLIP vision/text models") < workflow.index("Run release evidence gate")
 

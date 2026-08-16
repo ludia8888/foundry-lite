@@ -235,7 +235,6 @@ def test_config_payload_reports_the_resolved_form_state() -> None:
         ("float", 3.5),
         ("float", 3),
         ("decimal", "10.25"),
-        ("decimal", 4),
         ("boolean", True),
         ("date", "2026-08-05"),
         ("timestamp", "2026-08-05T12:00:00Z"),
@@ -252,18 +251,91 @@ def test_a_value_of_the_declared_type_is_accepted(data_type: str, value: object)
         ("integer", "3"),
         ("integer", True),
         ("float", True),
+        ("decimal", 4),
+        ("decimal", 4.5),
+        ("decimal", " 10.25 "),
+        ("decimal", "1_000.00"),
         ("decimal", "not-a-number"),
         ("decimal", True),
         ("boolean", "true"),
         ("date", "2026-13-45"),
         ("date", 20260805),
         ("timestamp", "yesterday"),
+        ("timestamp", "2026-08-05T12:00:00"),
+        ("timestamp", "2026-08-05 12:00:00Z"),
+        ("float", float("nan")),
+        ("float", float("inf")),
+        ("decimal", "NaN"),
+        ("decimal", "Infinity"),
     ],
 )
 def test_a_value_of_the_wrong_type_is_refused(data_type: str, value: object) -> None:
     """An Action rule assigns this into an object property, so the shape must hold here."""
     with pytest.raises(ValidationFailed, match="invalid action parameter types"):
         _resolve([_param("p", data_type)], _context({"p": value}))
+
+
+def test_decimal_constraints_compare_exact_values_without_float_rounding() -> None:
+    parameter = _param(
+        "amount",
+        "decimal",
+        constraints={"minimum": "9007199254740993.000000000000000001"},
+    )
+
+    assert _resolve([parameter], _context({"amount": "9007199254740993.000000000000000001"})) == {
+        "amount": "9007199254740993.000000000000000001"
+    }
+    with pytest.raises(ValidationFailed, match="constraint failed") as caught:
+        _resolve([parameter], _context({"amount": "9007199254740993.000000000000000000"}))
+    assert caught.value.details["constraint"] == "minimum"
+
+
+def test_decimal_enum_uses_numeric_equality_without_losing_wire_precision() -> None:
+    parameter = _param(
+        "amount",
+        "decimal",
+        constraints={"enum": ["9007199254740993.000000000000000001"]},
+    )
+
+    assert _resolve([parameter], _context({"amount": "9007199254740993.0000000000000000010"})) == {
+        "amount": "9007199254740993.0000000000000000010"
+    }
+
+
+def test_decimal_enum_rejects_numerically_duplicate_spellings() -> None:
+    with pytest.raises(ValidationFailed, match="duplicate"):
+        compile_action_contract(
+            _definition(
+                [
+                    _param(
+                        "amount",
+                        "decimal",
+                        constraints={"enum": ["1", "1.0"]},
+                    )
+                ]
+            )
+        )
+
+
+def test_nested_decimal_constraints_use_the_same_wire_contract() -> None:
+    parameter = _param(
+        "lines",
+        "struct",
+        fields=[
+            {
+                "apiName": "amounts",
+                "type": "array",
+                "itemType": "decimal",
+                "required": True,
+            }
+        ],
+    )
+
+    assert _resolve([parameter], _context({"lines": {"amounts": ["0.10", "0.20"]}})) == {
+        "lines": {"amounts": ["0.10", "0.20"]}
+    }
+    with pytest.raises(ValidationFailed, match="invalid action parameter types"):
+        _resolve([parameter], _context({"lines": {"amounts": [0.1, 0.2]}}))
 
 
 @pytest.mark.parametrize("value", ["O-1", {"objectType": "Order", "objectId": "O-1"}])

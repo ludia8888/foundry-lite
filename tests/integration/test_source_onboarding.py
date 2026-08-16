@@ -73,6 +73,23 @@ def test_source_wizard_explores_customer_erp_and_runs_managed_append_sync(tmp_pa
     assert exploration["status"] == "succeeded"
     assert len(cast(list[object], result_summary["sample"])) == 2
     assert _dataset_version_count_or_zero(foundry, "raw.orders", ctx.tenant_id) == 0
+    exploration_run_id = cast(str, exploration["explorationRunId"])
+    assert exploration["operationsPath"] == (f"/api/operations/runs/source_exploration/{exploration_run_id}")
+    operations = foundry.operations.query_runs(run_type="source_exploration", limit=20, ctx=ctx)
+    operations_row = next(row for row in operations["sourceExplorationRuns"] if row["id"] == exploration_run_id)
+    assert "request" not in operations_row
+    assert "sample" not in cast(Mapping[str, object], operations_row["result_summary"])
+    detail = foundry.operations.run_detail("source_exploration", exploration_run_id, ctx=ctx)
+    assert detail["runType"] == "source_exploration"
+    assert detail["sourceEvidence"] == {
+        "operationPath": exploration["operationsPath"],
+        "explorationRunId": exploration_run_id,
+        "sourceName": "customer_erp",
+        "sourceType": "postgres_jdbc",
+        "status": "succeeded",
+        "createdAt": exploration["createdAt"],
+    }
+    assert "sqlite:///" not in str((operations_row, detail))
 
     sync = foundry.sources.create_managed_sync(
         sync_name="orders_incremental",

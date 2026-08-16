@@ -58,6 +58,7 @@ from foundry_lite.application.services.pipeline_semantic_trial_evidence import (
     semantic_trial_failure,
     semantic_trial_success,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
 
@@ -433,7 +434,11 @@ def _output_error(
     trial: SemanticTrialEvidence | None,
 ) -> JsonObject:
     row = dict(item)
-    payload = {"code": error.code, "message": str(error), "details": dict(error.details)}
+    payload = {
+        "code": error.code,
+        "message": scrub_error_text(str(error)),
+        "details": scrub_error_mapping(error.details),
+    }
     row[spec.output_column] = {"output": None, "error": payload} if spec.output_mode == "with_errors" else None
     row["_pipelineModelEvidence"] = {**dict(evidence), "outputError": payload}
     if trial is not None:

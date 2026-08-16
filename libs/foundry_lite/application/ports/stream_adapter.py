@@ -74,3 +74,7 @@ class StreamAdapter(Protocol):
     def read_events(self, stream_name: str, *, after_offset: int | None = None, limit: int = 100) -> list[StreamEvent]:
         """Read events from a stream in offset order."""
         ...
+
+    def close(self) -> None:
+        """Release adapter-owned broker clients and background resources."""
+        ...

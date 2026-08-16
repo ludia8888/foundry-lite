@@ -16,6 +16,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
+
 _MAX_HEADER_BYTES = 8 * 1024
 _BUFFER_BYTES = 64 * 1024
 
@@ -317,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         run_source_agent_proxy(_config(_parser().parse_args(argv)))
     except (OSError, ValueError) as exc:
-        print(json.dumps({"status": "failed", "errorType": type(exc).__name__, "message": str(exc)}))
+        print(json.dumps({"status": "failed", "errorType": type(exc).__name__, "message": scrub_error_text(str(exc))}))
         return 1
     return 0
 

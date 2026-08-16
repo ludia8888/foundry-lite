@@ -33,6 +33,7 @@ from foundry_lite.application.services.aip.citation_navigation import (
 )
 from foundry_lite.application.services.aip.source_permissions import source_permission_for_type
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.security.policy import PolicyService
@@ -342,7 +343,7 @@ def _decode_navigation(ctx: RequestContext, navigation_ref: str, signing_key: st
             observed_at=_now(),
         )
     except CitationNavigationTokenError as exc:
-        raise CitationServiceError(exc.reason, exc.detail) from exc
+        raise CitationServiceError(scrub_error_text(exc.reason), scrub_error_text(exc.detail)) from exc
 
 
 def _navigation_source_request(payload: Mapping[str, object]) -> CitationSourceVerificationRequest:
@@ -370,7 +371,7 @@ def _verify_source(
     try:
         return verifier.verify_source(ctx, request)
     except CitationSourceVerificationFailed as exc:
-        raise CitationServiceError(exc.reason, exc.detail) from exc
+        raise CitationServiceError(scrub_error_text(exc.reason), scrub_error_text(exc.detail)) from exc
 
 
 def _require_navigation_source_current(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
-from typing import cast
 
 from foundry_lite.application.ports import (
     RuntimeJsonObject,
@@ -23,75 +22,15 @@ from foundry_lite.application.services.backup_restore_mode import (
 )
 from foundry_lite.application.services.runtime_redaction import redact_sensitive as redact_sensitive
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.error_redaction import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
 from foundry_lite.domain.platform.traffic import decide_write_traffic
 
 AuditWriter = Callable[..., None]
 RunRelationWriter = Callable[..., bool]
-_SECRET_KEY_PARTS = frozenset(
-    {
-        "authorization",
-        "cookie",
-        "setcookie",
-        "token",
-        "accesstoken",
-        "refreshtoken",
-        "apikey",
-        "clientsecret",
-        "connectionstring",
-        "credentials",
-        "databaseurl",
-        "dsn",
-        "headervalue",
-        "hmac",
-        "jwt",
-        "privatekey",
-        "secret",
-        "signature",
-        "password",
-        "plaintext",
-        "prompt",
-        "compiledprompt",
-        "providerrequest",
-        "providerresponse",
-    }
-)
-_SAFE_OBSERVABILITY_KEYS = frozenset(
-    {
-        "inputtokens",
-        "outputtokens",
-        "prompthash",
-        "promptmode",
-        "promptversionid",
-        "totaltokens",
-        "providerrequestid",
-        "stopreason",
-    }
-)
-_TOKEN_COUNT_KEYS = frozenset({"inputtokens", "outputtokens", "totaltokens"})
-_SAFE_STOP_REASON_VALUES = frozenset(
-    {
-        "endturn",
-        "maxtokens",
-        "modelcontextwindowexceeded",
-        "pauseturn",
-        "refusal",
-        "stopsequence",
-        "tooluse",
-    }
-)
-_AUTHORIZATION_PATTERN = re.compile(r"\bauthorization\s*:\s*bearer\s+\S+", re.IGNORECASE)
-_BEARER_PATTERN = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
-_ASSIGNMENT_PATTERN = re.compile(
-    r"\b(authorization|token|access[_-]?token|refresh[_-]?token|api[_-]?key|client[_-]?secret|"
-    r"connection[_-]?string|credentials?|database[_-]?url|dsn|header[_-]?value|hmac|jwt|"
-    r"private[_-]?key|secret|signature|password)"
-    r"\s*[:=]\s*\S+",
-    re.IGNORECASE,
-)
-_SAFE_HASH_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_SAFE_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9._:@/-]{1,256}\Z")
 _CLEANUP_FAILURES_ATTRIBUTE = "_foundry_lite_cleanup_failures"
+_OPERATIONS_EVIDENCE_ATTRIBUTE = "_foundry_lite_operations_evidence"
+_OPERATIONS_PATH_COMPONENT = re.compile(r"[A-Za-z0-9_-]{1,256}\Z")
 
 
 def runtime_error_payload(
@@ -107,14 +46,6 @@ def runtime_error_payload(
     if trace:
         payload["trace"] = trace
     return payload
-
-
-def scrub_error_mapping(value: Mapping[str, object]) -> dict[str, object]:
-    return cast(dict[str, object], _scrub_error_payload(value))
-
-
-def scrub_error_text(value: str) -> str:
-    return _scrub_text(value)
 
 
 def record_runtime_cleanup_failure(
@@ -135,6 +66,43 @@ def record_runtime_cleanup_failure(
         }
     )
     setattr(primary, _CLEANUP_FAILURES_ATTRIBUTE, tuple(failures))
+
+
+def record_runtime_operations_evidence(
+    primary: Exception,
+    *,
+    run_type: str,
+    run_id: str,
+) -> None:
+    """Attach only navigational coordinates for a durably recorded failed run."""
+
+    if not _is_safe_operations_component(run_type) or not _is_safe_operations_component(run_id):
+        return
+    setattr(
+        primary,
+        _OPERATIONS_EVIDENCE_ATTRIBUTE,
+        {
+            "runType": run_type,
+            "runId": run_id,
+            "operationsPath": f"/api/operations/runs/{run_type}/{run_id}",
+        },
+    )
+
+
+def runtime_operations_evidence(exc: Exception) -> dict[str, str] | None:
+    evidence = getattr(exc, _OPERATIONS_EVIDENCE_ATTRIBUTE, None)
+    if not isinstance(evidence, Mapping):
+        return None
+    keys = ("runType", "runId", "operationsPath")
+    safe = {key: value for key in keys if isinstance((value := evidence.get(key)), str) and value}
+    if len(safe) != len(keys):
+        return None
+    expected_path = f"/api/operations/runs/{safe['runType']}/{safe['runId']}"
+    return safe if safe["operationsPath"] == expected_path else None
+
+
+def _is_safe_operations_component(value: str) -> bool:
+    return _OPERATIONS_PATH_COMPONENT.fullmatch(value) is not None
 
 
 def audit_dlq_retry(
@@ -193,7 +161,18 @@ def _base_error_payload(exc: Exception) -> dict[str, object]:
         }
     else:
         payload = {"type": exc.__class__.__name__, "message": scrub_error_text(str(exc)), "details": {}}
-    return _with_cleanup_failures(payload, exc)
+    return _with_operations_evidence(_with_cleanup_failures(payload, exc), exc)
+
+
+def _with_operations_evidence(payload: dict[str, object], exc: Exception) -> dict[str, object]:
+    evidence = runtime_operations_evidence(exc)
+    if evidence is None:
+        return payload
+    details = payload.get("details")
+    merged = dict(details) if isinstance(details, Mapping) else {}
+    merged["operationsEvidence"] = evidence
+    payload["details"] = merged
+    return payload
 
 
 def _with_cleanup_failures(payload: dict[str, object], exc: Exception) -> dict[str, object]:
@@ -206,71 +185,6 @@ def _with_cleanup_failures(payload: dict[str, object], exc: Exception) -> dict[s
     merged["cleanupFailures"] = safe
     payload["details"] = merged
     return payload
-
-
-def _scrub_error_payload(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {str(key): _scrub_mapping_item(key, item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_scrub_error_payload(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_scrub_error_payload(item) for item in value)
-    if isinstance(value, str):
-        return _scrub_text(value)
-    return value
-
-
-def _scrub_mapping_item(key: object, value: object) -> object:
-    if _is_secret_key(key):
-        return "***MASKED***"
-    if _is_safe_observability_key(key) and _is_safe_observability_value(key, value):
-        return value
-    return _scrub_error_payload(value)
-
-
-def _scrub_text(value: str) -> str:
-    if _normalize_secret_text(value) in _SAFE_STOP_REASON_VALUES:
-        return value
-    if _contains_secret_term(value):
-        return "***MASKED***"
-    scrubbed = _AUTHORIZATION_PATTERN.sub("Authorization: Bearer ***MASKED***", value)
-    scrubbed = _BEARER_PATTERN.sub("Bearer ***MASKED***", scrubbed)
-    return _ASSIGNMENT_PATTERN.sub(lambda match: f"{match.group(1)}=***MASKED***", scrubbed)
-
-
-def _is_secret_key(key: object) -> bool:
-    normalized = _normalize_secret_text(str(key))
-    if normalized in _SAFE_OBSERVABILITY_KEYS:
-        return False
-    return any(term in normalized for term in _SECRET_KEY_PARTS)
-
-
-def _is_safe_observability_key(key: object) -> bool:
-    return _normalize_secret_text(str(key)) in _SAFE_OBSERVABILITY_KEYS
-
-
-def _is_safe_observability_value(key: object, value: object) -> bool:
-    normalized = _normalize_secret_text(str(key))
-    if normalized in _TOKEN_COUNT_KEYS:
-        return isinstance(value, int) and not isinstance(value, bool)
-    if not isinstance(value, str):
-        return False
-    if normalized == "prompthash":
-        return _SAFE_HASH_PATTERN.fullmatch(value) is not None
-    if normalized == "promptmode":
-        return value in {"text", "basic_vision", "layout_aware_vision"}
-    if normalized == "stopreason":
-        return _normalize_secret_text(value) in _SAFE_STOP_REASON_VALUES
-    return _SAFE_IDENTIFIER_PATTERN.fullmatch(value) is not None
-
-
-def _contains_secret_term(value: str) -> bool:
-    normalized = _normalize_secret_text(value)
-    return any(term in normalized for term in _SECRET_KEY_PARTS)
-
-
-def _normalize_secret_text(value: str) -> str:
-    return "".join(char for char in value.casefold() if char.isalnum())
 
 
 def _error_trace(

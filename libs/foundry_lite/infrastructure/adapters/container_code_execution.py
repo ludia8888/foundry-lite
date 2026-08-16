@@ -197,7 +197,7 @@ class ContainerCodeExecutionAdapter:
             else (self.config.policy.timeout_seconds)
         )
         try:
-            return self._command_runner(command, budget, self._client_environment)
+            result = self._command_runner(command, budget, self._client_environment)
         except subprocess.TimeoutExpired as exc:
             cleanup = self._force_remove(container_name)
             raise self._error(
@@ -209,6 +209,16 @@ class ContainerCodeExecutionAdapter:
             ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise self._error("runtime_unavailable", "unavailable", False) from exc
+        cleanup = self._force_remove(container_name)
+        if not cleanup.is_confirmed:
+            raise self._error(
+                "runtime_unavailable",
+                "unavailable",
+                False,
+                result=result,
+                cleanup=cleanup,
+            )
+        return result
 
     def _force_remove(self, container_name: str) -> ContainerCleanupEvidence:
         return force_remove_container(

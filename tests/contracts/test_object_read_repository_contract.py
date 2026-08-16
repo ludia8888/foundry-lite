@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +15,13 @@ from foundry_lite.application.ports import (
     ObjectQueryCursor,
     ObjectReadRepository,
     ObjectRecordRow,
+)
+from foundry_lite.domain.scalar_values import (
+    finite_number_value,
+    integer_value,
+    is_iso_date,
+    timestamp_from_microseconds,
+    timestamp_microseconds,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectReadRepository
@@ -460,11 +467,16 @@ def _property_sort_key(
 
 def _sort_key(value: object, data_type: str) -> tuple[int, float, str]:
     if data_type in {"float", "integer", "number"}:
-        number = _number_value(value)
+        number = _integer_value(value) if data_type == "integer" else _number_value(value)
         return (0, cast(float, number) if number is not _INVALID_VALUE else -1e308, "")
     if data_type == "boolean":
         return (1, 1.0 if value is True else 0.0, "")
-    return (2, 0.0, str(value) if value is not None else "")
+    if data_type == "timestamp":
+        microseconds = timestamp_microseconds(value)
+        return (2, microseconds if microseconds is not None else -1e308, "")
+    if data_type == "date":
+        return (2, 0.0, str(value) if is_iso_date(value) else "")
+    return (2, 0.0, value if isinstance(value, str) else "")
 
 
 def _matches_typed_filter(
@@ -490,13 +502,18 @@ def _matches_property_filter(
 ) -> bool:
     prop = str(filter_ast["property"])
     data_type = _require_property_data_type(property_data_types, prop)
+    op = str(filter_ast["op"])
+    if op not in {"eq", "in", "gt", "gte", "lt", "lte", "contains"}:
+        return False
+    if op == "eq" and filter_ast["value"] is None:
+        return properties.get(prop) is None
     current = _filter_value(properties.get(prop), data_type)
-    if str(filter_ast["op"]) == "in":
+    if op == "in":
         return _matches_in_filter(current, filter_ast["value"], data_type)
     expected = _filter_value(filter_ast["value"], data_type)
     if current is _INVALID_VALUE or expected is _INVALID_VALUE:
         return False
-    return _evaluate_filter(current, str(filter_ast["op"]), expected)
+    return _evaluate_filter(current, op, expected)
 
 
 def _filter_group(value: object) -> list[Mapping[str, object]]:
@@ -505,40 +522,54 @@ def _filter_group(value: object) -> list[Mapping[str, object]]:
 
 def _filter_value(value: object, data_type: str) -> object:
     if data_type in {"float", "integer", "number"}:
-        return _number_value(value)
+        return _integer_value(value) if data_type == "integer" else _number_value(value)
     if data_type == "boolean":
         return value if isinstance(value, bool) else _INVALID_VALUE
-    return str(value) if value is not None else _INVALID_VALUE
+    if data_type == "timestamp":
+        microseconds = timestamp_microseconds(value)
+        return microseconds if microseconds is not None else _INVALID_VALUE
+    if data_type == "date":
+        return value if is_iso_date(value) else _INVALID_VALUE
+    return value if isinstance(value, str) else _INVALID_VALUE
 
 
 def _matches_in_filter(current: object, value: object, data_type: str) -> bool:
-    if current is _INVALID_VALUE or not isinstance(value, Collection) or isinstance(value, str):
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return False
+    if current is _INVALID_VALUE:
+        return any(item is None for item in value)
     candidates = [_filter_value(item, data_type) for item in value]
     return current in [item for item in candidates if item is not _INVALID_VALUE]
 
 
 def _number_value(value: object) -> float | object:
-    if isinstance(value, bool):
-        return _INVALID_VALUE
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return _INVALID_VALUE
-    return _INVALID_VALUE
+    parsed = finite_number_value(value)
+    return parsed if parsed is not None else _INVALID_VALUE
+
+
+def _integer_value(value: object) -> int | object:
+    parsed = integer_value(value)
+    return parsed if parsed is not None else _INVALID_VALUE
 
 
 def _evaluate_filter(current: object, op: str, expected: object) -> bool:
     if op == "eq":
         return current == expected
     if op == "gte":
-        return isinstance(current, int | float) and isinstance(expected, int | float) and current >= expected
+        return _same_orderable_type(current, expected) and current >= expected  # type: ignore[operator]
+    if op == "gt":
+        return _same_orderable_type(current, expected) and current > expected  # type: ignore[operator]
     if op == "lte":
-        return isinstance(current, int | float) and isinstance(expected, int | float) and current <= expected
-    return str(expected).lower() in str(current).lower()
+        return _same_orderable_type(current, expected) and current <= expected  # type: ignore[operator]
+    if op == "lt":
+        return _same_orderable_type(current, expected) and current < expected  # type: ignore[operator]
+    return isinstance(current, str) and isinstance(expected, str) and expected.lower() in current.lower()
+
+
+def _same_orderable_type(current: object, expected: object) -> bool:
+    return (isinstance(current, int | float) and isinstance(expected, int | float)) or (
+        isinstance(current, str) and isinstance(expected, str)
+    )
 
 
 def _require_property_data_type(property_data_types: Mapping[str, str], property_name: str) -> str:
@@ -565,7 +596,13 @@ def _fake_aggregated_groups(
         for metric in metrics:
             if metric["function"] == "count":
                 continue
-            number = _number_value(row["properties"].get(str(metric["property"])))
+            property_name = str(metric["property"])
+            data_type = _require_property_data_type(property_data_types, property_name)
+            number = (
+                _integer_value(row["properties"].get(property_name))
+                if data_type == "integer"
+                else _number_value(row["properties"].get(property_name))
+            )
             if number is not _INVALID_VALUE:
                 state["values"][metric["name"]].append(cast(float, number))
     if not states and not group_by:
@@ -596,15 +633,18 @@ def _fake_metric_value(function: str, values: list[float]) -> float | None:
 
 
 def _fake_key_value(value: object, data_type: str) -> object:
-    if value is None:
+    normalized = _filter_value(value, data_type)
+    if normalized is _INVALID_VALUE or normalized is None:
         return None
     if data_type == "boolean":
-        return bool(value)
+        return bool(normalized)
     if data_type == "integer":
-        return int(float(cast("str | int | float", value)))
+        return int(cast("str | int | float", normalized))
     if data_type in {"float", "number"}:
-        return float(cast("str | int | float", value))
-    return str(value)
+        return float(cast("str | int | float", normalized))
+    if data_type == "timestamp":
+        return timestamp_from_microseconds(normalized)
+    return str(normalized)
 
 
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
@@ -876,6 +916,430 @@ def test_object_query_numeric_property_casts_for_sort_and_filter(
     assert [row["object_id"] for row in rows] == ["O-07", "O-10"]
 
 
+def test_object_read_repository_contract_preserves_null_and_empty_string_filter_semantics(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_note", api_name="note", data_type="string")
+    harness.add_object(row_id="obj_null", object_id="O-null", properties={"note": None})
+    harness.add_object(row_id="obj_missing", object_id="O-missing", properties={"status": "PENDING"})
+    harness.add_object(row_id="obj_empty", object_id="O-empty", properties={"note": ""})
+
+    with harness.transaction() as transaction:
+        null_rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "note", "op": "eq", "value": None},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+        empty_rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "note", "op": "eq", "value": ""},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert {row["object_id"] for row in null_rows} == {"O-null", "O-missing"}
+    assert [row["object_id"] for row in empty_rows] == ["O-empty"]
+
+
+def test_object_read_repository_contract_rejects_cross_type_contains_and_equality(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_note", api_name="note", data_type="string")
+    harness.add_object(row_id="obj_number", object_id="O-number", properties={"note": 123})
+    harness.add_object(row_id="obj_text", object_id="O-text", properties={"note": "123"})
+
+    with harness.transaction() as transaction:
+        numeric_eq_rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "note", "op": "eq", "value": 123},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+        numeric_contains_rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "note", "op": "contains", "value": 23},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert numeric_eq_rows == []
+    assert numeric_contains_rows == []
+
+
+def test_object_read_repository_contract_string_filter_does_not_coerce_json_numbers(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_note", api_name="note", data_type="string")
+    harness.add_object(row_id="obj_number", object_id="O-number", properties={"note": 123})
+    harness.add_object(row_id="obj_text", object_id="O-text", properties={"note": "123"})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "note", "op": "eq", "value": "123"},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-text"]
+
+
+def test_object_read_repository_contract_invalid_stored_number_fails_closed_without_query_error(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_invalid", object_id="O-invalid", properties={"amount": "not-a-number"})
+    harness.add_object(row_id="obj_valid", object_id="O-valid", properties={"amount": "7"})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "amount", "op": "gte", "value": 5},
+            order_by=[{"property": "amount", "direction": "asc"}],
+            cursor=None,
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-valid"]
+
+
+def test_object_read_repository_contract_numeric_filter_does_not_treat_json_boolean_as_one(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_boolean", object_id="O-boolean", properties={"amount": True})
+    harness.add_object(row_id="obj_number", object_id="O-number", properties={"amount": 1})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "amount", "op": "eq", "value": 1},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-number"]
+
+
+def test_object_read_repository_contract_integer_filter_rejects_fractional_storage_and_operand(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_count", api_name="count", data_type="integer")
+    harness.add_object(row_id="obj_fraction", object_id="O-fraction", properties={"count": 1.5})
+    harness.add_object(row_id="obj_integer", object_id="O-integer", properties={"count": 2})
+
+    with harness.transaction() as transaction:
+        fractional_operand = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "count", "op": "gte", "value": 1.5},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+        integer_operand = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "count", "op": "gte", "value": 1},
+            order_by=[{"property": "count", "direction": "asc"}],
+            cursor=None,
+            limit=10,
+        )
+
+    assert fractional_operand == []
+    assert [row["object_id"] for row in integer_operand] == ["O-integer"]
+
+
+def test_object_read_repository_contract_invalid_stored_date_never_matches_range(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_due_date", api_name="dueDate", data_type="date")
+    harness.add_object(row_id="obj_invalid", object_id="O-invalid", properties={"dueDate": "not-a-date"})
+    harness.add_object(row_id="obj_valid", object_id="O-valid", properties={"dueDate": "2026-01-01"})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "dueDate", "op": "gte", "value": "2025-12-31"},
+            order_by=[{"property": "dueDate", "direction": "asc"}],
+            cursor=None,
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-valid"]
+
+
+@pytest.mark.parametrize(
+    ("data_type", "invalid_value", "valid_value"),
+    [
+        ("date", "not-a-date", "2026-01-01"),
+        ("string", 123, "abc"),
+        ("boolean", "false", True),
+    ],
+)
+def test_object_read_repository_contract_cursor_normalizes_invalid_stored_sort_values(
+    harness: ObjectReadHarness,
+    data_type: str,
+    invalid_value: object,
+    valid_value: object,
+) -> None:
+    harness.add_property_type(row_id="pt_value", api_name="value", data_type=data_type)
+    harness.add_object(row_id="obj_invalid", object_id="O-invalid", properties={"value": invalid_value})
+    harness.add_object(row_id="obj_valid", object_id="O-valid", properties={"value": valid_value})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "value", "direction": "asc"}],
+            cursor={"values": [invalid_value], "object_id": "O-invalid"},
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-valid"]
+
+
+@pytest.mark.parametrize(("needle", "expected_id"), [("%", "O-percent"), ("_", "O-underscore"), ("/", "O-slash")])
+def test_object_read_repository_contract_contains_treats_sql_wildcards_as_literal_text(
+    harness: ObjectReadHarness,
+    needle: str,
+    expected_id: str,
+) -> None:
+    harness.add_property_type(row_id="pt_note", api_name="note", data_type="string")
+    harness.add_object(row_id="obj_plain", object_id="O-plain", properties={"note": "ordinary text"})
+    harness.add_object(row_id="obj_percent", object_id="O-percent", properties={"note": "margin 10%"})
+    harness.add_object(row_id="obj_underscore", object_id="O-underscore", properties={"note": "snake_case"})
+    harness.add_object(row_id="obj_slash", object_id="O-slash", properties={"note": "path/name"})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "note", "op": "contains", "value": needle},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == [expected_id]
+
+
+@pytest.mark.parametrize("invalid_number", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"])
+def test_object_read_repository_contract_rejects_non_finite_numeric_filter_values(
+    harness: ObjectReadHarness,
+    invalid_number: object,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_order", object_id="O-1", properties={"amount": 10})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "amount", "op": "eq", "value": invalid_number},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("op", "expected_ids"),
+    [("gt", ["O-10"]), ("gte", ["O-07", "O-10"]), ("lt", ["O-02"]), ("lte", ["O-02", "O-07"])],
+)
+def test_object_read_repository_contract_supports_every_declared_numeric_range_operator(
+    harness: ObjectReadHarness,
+    op: str,
+    expected_ids: list[str],
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_order_02", object_id="O-02", properties={"amount": 2})
+    harness.add_object(row_id="obj_order_07", object_id="O-07", properties={"amount": 7})
+    harness.add_object(row_id="obj_order_10", object_id="O-10", properties={"amount": 10})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "amount", "op": op, "value": 7},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == expected_ids
+
+
+def test_object_read_repository_contract_compares_timestamp_instants_not_offset_text(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_scheduled_at", api_name="scheduledAt", data_type="timestamp")
+    harness.add_object(
+        row_id="obj_early_offset",
+        object_id="O-early",
+        properties={"scheduledAt": "2026-01-01T01:00:00+02:00"},
+    )
+    harness.add_object(
+        row_id="obj_middle_utc",
+        object_id="O-middle",
+        properties={"scheduledAt": "2025-12-31T23:30:00Z"},
+    )
+    harness.add_object(
+        row_id="obj_late_utc",
+        object_id="O-late",
+        properties={"scheduledAt": "2026-01-01T00:00:00Z"},
+    )
+
+    with harness.transaction() as transaction:
+        ordered = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "scheduledAt", "direction": "asc"}],
+            cursor=None,
+            limit=10,
+        )
+        equal = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "scheduledAt", "op": "eq", "value": "2025-12-31T23:00:00Z"},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+        after_cursor = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "scheduledAt", "direction": "asc"}],
+            cursor={"values": ["2025-12-31T23:00:00Z"], "object_id": "O-early"},
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in ordered] == ["O-early", "O-middle", "O-late"]
+    assert [row["object_id"] for row in equal] == ["O-early"]
+    assert [row["object_id"] for row in after_cursor] == ["O-middle", "O-late"]
+
+
+@pytest.mark.parametrize("invalid_timestamp", ["2026-01-01", "2026-01-01 00:00:00Z", "not-a-timestamp"])
+def test_object_read_repository_contract_rejects_invalid_timestamp_filter_values(
+    harness: ObjectReadHarness,
+    invalid_timestamp: str,
+) -> None:
+    harness.add_property_type(row_id="pt_scheduled_at", api_name="scheduledAt", data_type="timestamp")
+    harness.add_object(
+        row_id="obj_invalid",
+        object_id="O-invalid",
+        properties={"scheduledAt": invalid_timestamp},
+    )
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "scheduledAt", "op": "eq", "value": invalid_timestamp},
+            order_by=[],
+            cursor=None,
+            limit=10,
+        )
+
+    assert rows == []
+
+
+def test_object_read_repository_contract_timestamp_cursor_preserves_fractional_seconds(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_scheduled_at", api_name="scheduledAt", data_type="timestamp")
+    harness.add_object(
+        row_id="obj_100ms",
+        object_id="O-100ms",
+        properties={"scheduledAt": "2026-01-01T00:00:00.100Z"},
+    )
+    harness.add_object(
+        row_id="obj_900ms",
+        object_id="O-900ms",
+        properties={"scheduledAt": "2026-01-01T00:00:00.900Z"},
+    )
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "scheduledAt", "direction": "asc"}],
+            cursor={"values": ["2026-01-01T00:00:00.100Z"], "object_id": "O-100ms"},
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-900ms"]
+
+
+def test_object_read_repository_contract_timestamp_cursor_preserves_microseconds(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_scheduled_at", api_name="scheduledAt", data_type="timestamp")
+    harness.add_object(
+        row_id="obj_1us",
+        object_id="O-1us",
+        properties={"scheduledAt": "2026-01-01T00:00:00.000001Z"},
+    )
+    harness.add_object(
+        row_id="obj_2us",
+        object_id="O-2us",
+        properties={"scheduledAt": "2026-01-01T00:00:00.000002Z"},
+    )
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "scheduledAt", "direction": "asc"}],
+            cursor={"values": ["2026-01-01T00:00:00.000001Z"], "object_id": "O-1us"},
+            limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-2us"]
+
+
 def test_object_read_repository_contract_lists_active_outgoing_links(
     harness: ObjectReadHarness,
 ) -> None:
@@ -1054,6 +1518,125 @@ def test_object_read_repository_contract_aggregates_groups_with_metrics(harness:
         "PENDING": {"count": 2, "sum_amount": 40.0, "avg_amount": 20.0, "min_amount": 10.0, "max_amount": 30.0},
         "REVIEW": {"count": 1, "sum_amount": 5.0, "avg_amount": 5.0, "min_amount": 5.0, "max_amount": 5.0},
     }
+
+
+def test_object_read_repository_contract_aggregate_ignores_invalid_numeric_storage(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_valid", object_id="O-valid", properties={"amount": 10.0})
+    harness.add_object(row_id="obj_invalid", object_id="O-invalid", properties={"amount": "not-a-number"})
+    harness.add_object(row_id="obj_boolean", object_id="O-boolean", properties={"amount": True})
+    metrics: list[ObjectAggregationMetric] = [
+        {"name": "count", "function": "count", "property": None},
+        {"name": "sum_amount", "function": "sum", "property": "amount"},
+        {"name": "avg_amount", "function": "avg", "property": "amount"},
+        {"name": "min_amount", "function": "min", "property": "amount"},
+        {"name": "max_amount", "function": "max", "property": "amount"},
+    ]
+
+    with harness.transaction() as transaction:
+        groups = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            group_by=[],
+            metrics=metrics,
+            group_limit=10,
+        )
+
+    assert groups == [
+        {
+            "key": {},
+            "metrics": {
+                "count": 3,
+                "sum_amount": 10.0,
+                "avg_amount": 10.0,
+                "min_amount": 10.0,
+                "max_amount": 10.0,
+            },
+        }
+    ]
+
+
+def test_object_read_repository_contract_aggregate_normalizes_timestamp_groups_without_precision_loss(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_observed_at", api_name="observedAt", data_type="timestamp")
+    maximum_timestamp = "9999-12-31T23:59:59.999999Z"
+    harness.add_object(row_id="obj_valid", object_id="O-valid", properties={"observedAt": maximum_timestamp})
+    harness.add_object(row_id="obj_naive", object_id="O-naive", properties={"observedAt": "2026-01-01T00:00:00"})
+    harness.add_object(row_id="obj_number", object_id="O-number", properties={"observedAt": 123})
+
+    with harness.transaction() as transaction:
+        groups = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            group_by=["observedAt"],
+            metrics=[{"name": "count", "function": "count", "property": None}],
+            group_limit=10,
+        )
+
+    by_timestamp = {group["key"]["observedAt"]: group["metrics"]["count"] for group in groups}
+    assert by_timestamp == {None: 2, maximum_timestamp: 1}
+
+
+def test_object_read_repository_contract_numeric_strings_use_one_decimal_grammar(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    for index, value in enumerate(("12", "+12", "01", ".5", "1.", "1e1", "1_2", " 12 ")):
+        harness.add_object(row_id=f"obj_{index}", object_id=f"O-{index}", properties={"amount": value})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "amount", "op": "eq", "value": 12},
+            order_by=[],
+            cursor=None,
+            limit=20,
+        )
+
+    assert {row["object_id"] for row in rows} == {"O-0", "O-1"}
+
+
+def test_object_read_repository_contract_integer_range_is_safe_and_backend_independent(
+    harness: ObjectReadHarness,
+) -> None:
+    maximum = 2**31 - 1
+    harness.add_property_type(row_id="pt_quantity", api_name="quantity", data_type="integer")
+    harness.add_object(row_id="obj_max", object_id="O-max", properties={"quantity": maximum})
+    harness.add_object(row_id="obj_large", object_id="O-large", properties={"quantity": 2**31})
+    harness.add_object(row_id="obj_huge", object_id="O-huge", properties={"quantity": 10**100})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "quantity", "op": "eq", "value": maximum},
+            order_by=[{"property": "quantity", "direction": "asc"}],
+            cursor=None,
+            limit=20,
+        )
+        groups = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            group_by=["quantity"],
+            metrics=[{"name": "count", "function": "count", "property": None}],
+            group_limit=10,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-max"]
+    by_quantity = {group["key"]["quantity"]: group["metrics"]["count"] for group in groups}
+    assert by_quantity == {None: 2, maximum: 1}
 
 
 def test_object_read_repository_contract_aggregate_applies_filter_and_group_limit(

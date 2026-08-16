@@ -237,23 +237,24 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
     dependencies = create_local_core_dependencies(storage_root=storage_root)
     instrument_sqlalchemy_engine(dependencies.engine)
     foundry = FoundryLite(dependencies=dependencies)
-    exporter.clear()
-
-    ctx = RequestContext(
-        tenant_id=DEFAULT_TENANT_ID,
-        actor_user_id=DEFAULT_ACTOR_USER_ID,
-        request_id=REQUEST_ID,
-        roles=("admin", "data_engineer", "ops_manager", "finance"),
-    )
-    tracer = trace.get_tracer("foundry_lite.quality.trace_continuity")
-    with tracer.start_as_current_span(REQUEST_SPAN_NAME) as span:
-        span.set_attribute("foundry_lite.tenant_hash", trace_identity_hash(ctx.tenant_id))
-        span.set_attribute("foundry_lite.actor_user_hash", trace_identity_hash(ctx.actor_user_id))
-        span.set_attribute("foundry_lite.request_id", ctx.request_id)
-        foundry.demo.run(ctx=ctx, fresh=True)
-
-    provider.force_flush()
-    return [_span_record(span) for span in exporter.get_finished_spans()]
+    try:
+        exporter.clear()
+        ctx = RequestContext(
+            tenant_id=DEFAULT_TENANT_ID,
+            actor_user_id=DEFAULT_ACTOR_USER_ID,
+            request_id=REQUEST_ID,
+            roles=("admin", "data_engineer", "ops_manager", "finance"),
+        )
+        tracer = trace.get_tracer("foundry_lite.quality.trace_continuity")
+        with tracer.start_as_current_span(REQUEST_SPAN_NAME) as span:
+            span.set_attribute("foundry_lite.tenant_hash", trace_identity_hash(ctx.tenant_id))
+            span.set_attribute("foundry_lite.actor_user_hash", trace_identity_hash(ctx.actor_user_id))
+            span.set_attribute("foundry_lite.request_id", ctx.request_id)
+            foundry.demo.run(ctx=ctx, fresh=True)
+        provider.force_flush()
+        return [_span_record(span) for span in exporter.get_finished_spans()]
+    finally:
+        foundry.close()
 
 
 def run_gate(*, storage_root: Path = DEFAULT_STORAGE_ROOT, output: Path = DEFAULT_OUTPUT) -> list[TraceFinding]:

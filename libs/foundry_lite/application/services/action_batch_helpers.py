@@ -20,6 +20,7 @@ from foundry_lite.application.ports import ActionRunRow, ActionTypeRow, ObjectRe
 from foundry_lite.application.primitives import _json_hash
 from foundry_lite.application.safe_expression import validate_action_request
 from foundry_lite.application.services.action_protocols import ActionRuntimeBoundary
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
 
@@ -177,11 +178,11 @@ def target_request_error(
 
 
 def target_failure(object_id: str, error: Exception) -> TargetFailure:
-    failure: TargetFailure = {"objectId": object_id, "message": str(error)}
+    failure: TargetFailure = {"objectId": object_id, "message": scrub_error_text(str(error))}
     if isinstance(error, FoundryLiteError):
         failure["code"] = error.code
         if error.details:
-            failure["details"] = error.details
+            failure["details"] = scrub_error_mapping(error.details)
     else:
         failure["code"] = "VALIDATION_FAILED"
     return failure

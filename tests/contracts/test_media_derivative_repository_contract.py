@@ -204,6 +204,27 @@ def test_media_run_lifecycle_create_complete_and_list(
     assert [run.media_processing_run_id for run in fetched] == ["mrun-1"]
 
 
+def test_media_run_completion_rejects_unknown_terminal_status_without_mutating_run(
+    derivative_repo: tuple[SqlAlchemyMediaDerivativeRepository, Engine],
+) -> None:
+    repo, engine = derivative_repo
+    with engine.begin() as conn:
+        repo.create_media_run(transaction=conn, record=_run("mrun-invalid-status"))
+        with pytest.raises(ValueError, match="must be SUCCEEDED or FAILED"):
+            repo.complete_media_run(
+                transaction=conn,
+                tenant_id="tenant-demo",
+                media_processing_run_id="mrun-invalid-status",
+                status="SUCESS",
+                finished_at="2026-06-24T00:05:00Z",
+            )
+        current = repo.get_media_runs(transaction=conn, ids=["mrun-invalid-status"])
+
+    assert len(current) == 1
+    assert current[0].status == "RUNNING"
+    assert current[0].finished_at is None
+
+
 def test_list_media_runs_filters_by_version_and_tenant(
     derivative_repo: tuple[SqlAlchemyMediaDerivativeRepository, Engine],
 ) -> None:

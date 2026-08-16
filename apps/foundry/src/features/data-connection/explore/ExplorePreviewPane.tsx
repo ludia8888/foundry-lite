@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 
 import type { ExploreTablePreview } from "../explore-model";
 import { formatSampleCell } from "../explore-model";
+import { SourceExplorationEvidenceLink } from "./SourceExplorationEvidenceLink";
 
 interface ExplorePreviewPaneProps {
   openTables: readonly string[];
@@ -153,8 +154,15 @@ function PreviewBody({
   }
   if (preview.status === "failed") {
     return (
-      <div className="p-4 text-xs text-destructive">
-        미리보기에 실패했습니다: {preview.errorMessage ?? "알 수 없는 오류"}
+      <div className="space-y-2 p-4 text-xs text-destructive">
+        <div>
+          미리보기에 실패했습니다: {preview.errorMessage ?? "알 수 없는 오류"}
+        </div>
+        <SourceExplorationEvidenceLink
+          result={previewEvidenceResult(preview)}
+          className="inline-block text-xs"
+          label="실패 실행 조사"
+        />
       </div>
     );
   }
@@ -170,14 +178,21 @@ function PreviewBody({
 
   if (preview.rows.length === 0) {
     return (
-      <div className="p-4 text-xs text-muted-foreground">
-        샘플 행이 없습니다.
+      <div className="space-y-2 p-4 text-xs text-muted-foreground">
+        <div>샘플 행이 없습니다.</div>
+        <SourceExplorationEvidenceLink result={previewEvidenceResult(preview)} />
       </div>
     );
   }
 
   return (
-    <table className="w-full text-left">
+    <div>
+      <div className="border-b px-3 py-2 text-[10px]">
+        <SourceExplorationEvidenceLink
+          result={previewEvidenceResult(preview)}
+        />
+      </div>
+      <table className="w-full text-left">
       <thead className="sticky top-0 bg-muted/60 backdrop-blur">
         <tr className="border-b">
           <th className="w-8 px-2 py-1.5 text-right font-mono text-[10px] font-normal text-muted-foreground">
@@ -210,6 +225,16 @@ function PreviewBody({
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+    </div>
   );
+}
+
+function previewEvidenceResult(preview: ExploreTablePreview) {
+  return preview.explorationRunId
+    ? {
+        explorationRunId: preview.explorationRunId,
+        operationsPath: preview.operationsPath,
+      }
+    : null;
 }

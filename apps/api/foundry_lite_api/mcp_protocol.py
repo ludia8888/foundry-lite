@@ -12,6 +12,7 @@ from foundry_lite_api.mcp_envelope import JsonRpcEnvelope
 
 SUPPORTED_PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({SUPPORTED_PROTOCOL_VERSION})
+MAX_MCP_EVENT_SEQUENCE = 2_147_483_647
 _REQUEST_METHODS = frozenset({"initialize", "ping", "tools/list", "tools/call", "resources/list", "resources/read"})
 
 
@@ -131,6 +132,25 @@ def require_mcp_session_id(request: Request, plane: str) -> str:
 def reject_initialize_session_id(request: Request) -> None:
     if request.headers.get("Mcp-Session-Id") is not None:
         raise McpInvalidRequest("MCP initialize request must not include Mcp-Session-Id")
+
+
+def mcp_last_event_sequence(request: Request, session_id: str, plane: str) -> int:
+    """Parse only event cursors that this server can canonically issue and store."""
+
+    last_event_id = request.headers.get("Last-Event-ID")
+    if not last_event_id:
+        return 0
+    prefix = f"{session_id}:"
+    if not last_event_id.startswith(prefix):
+        raise ValidationFailed(f"{plane} MCP Last-Event-ID does not belong to this session")
+    raw_sequence = last_event_id.removeprefix(prefix)
+    is_canonical = raw_sequence.isascii() and raw_sequence.isdigit() and not raw_sequence.startswith("0")
+    if not is_canonical or len(raw_sequence) > 10:
+        raise ValidationFailed(f"{plane} MCP Last-Event-ID sequence is invalid")
+    sequence = int(raw_sequence)
+    if sequence > MAX_MCP_EVENT_SEQUENCE:
+        raise ValidationFailed(f"{plane} MCP Last-Event-ID sequence is invalid")
+    return sequence
 
 
 def _require_request_id(payload: JsonRpcEnvelope) -> None:

@@ -102,18 +102,20 @@ def run_smoke(
     _reset_path(workspace_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
-    ctx = demo_admin_context()
-
-    csv_report, csv_findings = _measure_csv_ingest(foundry, ctx, workspace_root, profile.csv_rows)
-    object_report, object_findings = _measure_object_flow(foundry, ctx, workspace_root, profile)
-    report = _build_report(profile, csv_report, object_report, should_enforce_targets)
-    findings = [*csv_findings, *object_findings]
-    if should_enforce_targets:
-        findings.extend(target_findings(report))
-    report["count"] = len(findings)
-    report["gatePass"] = not findings
-    report["violations"] = [asdict(finding) for finding in findings]
-    return report, findings
+    try:
+        ctx = demo_admin_context()
+        csv_report, csv_findings = _measure_csv_ingest(foundry, ctx, workspace_root, profile.csv_rows)
+        object_report, object_findings = _measure_object_flow(foundry, ctx, workspace_root, profile)
+        report = _build_report(profile, csv_report, object_report, should_enforce_targets)
+        findings = [*csv_findings, *object_findings]
+        if should_enforce_targets:
+            findings.extend(target_findings(report))
+        report["count"] = len(findings)
+        report["gatePass"] = not findings
+        report["violations"] = [asdict(finding) for finding in findings]
+        return report, findings
+    finally:
+        foundry.close()
 
 
 def target_findings(report: Mapping[str, object]) -> list[PerformanceFinding]:

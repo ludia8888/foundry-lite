@@ -155,7 +155,7 @@ class ContainerTrainedModelInferenceAdapter:
 
     def _execute_container(self, command: Sequence[str], container_name: str) -> ContainerCommandResult:
         try:
-            return self._command_runner(command, self.config.policy.timeout_seconds, self._client_environment)
+            result = self._command_runner(command, self.config.policy.timeout_seconds, self._client_environment)
         except subprocess.TimeoutExpired as exc:
             cleanup = self._force_remove(container_name)
             raise self._error(
@@ -166,6 +166,16 @@ class ContainerTrainedModelInferenceAdapter:
             ) from exc
         except (FileNotFoundError, OSError) as exc:
             raise self._error("runtime_unavailable", "unavailable", False) from exc
+        cleanup = self._force_remove(container_name)
+        if not cleanup.is_confirmed:
+            raise self._error(
+                "runtime_unavailable",
+                "unavailable",
+                False,
+                result=result,
+                cleanup=cleanup,
+            )
+        return result
 
     def _force_remove(self, container_name: str) -> ContainerCleanupEvidence:
         return force_remove_container(

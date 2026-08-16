@@ -104,7 +104,7 @@ REQUIRED_CROSS_CHECK_COMMANDS = (
     "pnpm --silent quality:source-of-truth",
     "pnpm --silent quality:operator-evidence",
     "pnpm --silent quality:frontend-backend-surface",
-    "node --experimental-strip-types tests/sdk/request_contract.mjs",
+    "node --disable-warning=ExperimentalWarning --experimental-strip-types tests/sdk/request_contract.mjs",
     "pnpm --silent quality:sdk-generated",
     "pnpm --silent quality:frontend-foundation",
     "pnpm --silent quality:insight-review",

@@ -9,7 +9,10 @@ Action definition, not from tenant data.
 
 from __future__ import annotations
 
+from typing import cast
+
 from foundry_lite.domain.action_runtime.action_condition_explanation import explain_action_condition
+from foundry_lite.domain.action_runtime.action_conditions import StaticActionConditionContext
 
 
 class _Context:
@@ -75,7 +78,7 @@ def test_every_value_source_kind_is_redacted_to_a_reference() -> None:
 
     text = _payload_text(payload)
     assert "SECRET" not in text, "no context-read value may reach the explanation tree"
-    first, second = payload["children"]  # type: ignore[misc]
+    first, second = cast(list[dict[str, object]], payload["children"])
     assert first["left"] == {"kind": "parameter", "reference": "reason"}
     assert first["right"] == {"kind": "currentUser", "reference": "department"}
     assert second["left"] == {
@@ -110,6 +113,43 @@ def test_exists_operator_omits_the_right_source() -> None:
     assert "right" not in payload
 
 
+def test_explanation_does_not_turn_a_missing_value_into_a_satisfied_not_condition() -> None:
+    """The redacted tree and the real evaluator must make the same fail-closed decision."""
+    condition = {
+        "not": {
+            "op": "eq",
+            "left": {"kind": "objectProperty", "property": "missing"},
+            "right": {"kind": "literal", "value": "APPROVED"},
+        }
+    }
+    context = StaticActionConditionContext({}, {}, "u-1", ())
+
+    payload = explain_action_condition(condition, context)
+
+    assert payload["isSatisfied"] is False
+    children = cast(list[dict[str, object]], payload["children"])
+    assert children[0]["isSatisfied"] is False
+
+
+def test_group_explanation_uses_the_same_unknown_propagation_as_execution() -> None:
+    missing = {
+        "op": "eq",
+        "left": {"kind": "parameter", "parameter": "missing"},
+        "right": {"kind": "literal", "value": "yes"},
+    }
+    condition = {
+        "all": [
+            {"op": "eq", "left": {"kind": "literal", "value": 1}, "right": {"kind": "literal", "value": 1}},
+            missing,
+        ]
+    }
+    context = StaticActionConditionContext({}, {}, "u-1", ())
+
+    payload = explain_action_condition(condition, context)
+
+    assert payload["isSatisfied"] is False
+
+
 def test_group_paths_are_deterministic_and_address_each_child() -> None:
     condition = {
         "all": [
@@ -122,10 +162,11 @@ def test_group_paths_are_deterministic_and_address_each_child() -> None:
 
     assert payload["path"] == "root"
     assert payload["kind"] == "all"
-    first, second = payload["children"]  # type: ignore[misc]
+    first, second = cast(list[dict[str, object]], payload["children"])
     assert first["path"] == "root.all[0]"
     assert second["path"] == "root.all[1]"
-    assert second["children"][0]["path"] == "root.all[1].any[0]"  # type: ignore[index]
+    nested = cast(list[dict[str, object]], second["children"])
+    assert nested[0]["path"] == "root.all[1].any[0]"
 
 
 def test_all_requires_every_child_while_any_requires_one() -> None:

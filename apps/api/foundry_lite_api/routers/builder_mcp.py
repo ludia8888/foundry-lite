@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Mapping
 from uuid import uuid4
 
@@ -10,8 +11,9 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from foundry_lite.application.services.aip.fde_mcp_service import FdeMcpToolCall
 from foundry_lite.application.services.mcp_session_namespace import require_mcp_session_namespace
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, RateLimited, ValidationFailed
+from foundry_lite.domain.errors import FoundryLiteError, NotFound, PermissionDenied, RateLimited, ValidationFailed
 from pydantic import ValidationError as PydanticValidationError
 
 from foundry_lite_api import runtime
@@ -30,9 +32,11 @@ from foundry_lite_api.mcp_authorization import (
     require_mcp_context,
 )
 from foundry_lite_api.mcp_envelope import JsonRpcEnvelope
+from foundry_lite_api.mcp_internal_error_observability import log_mcp_internal_failure
 from foundry_lite_api.mcp_protocol import (
     McpInvalidRequest,
     McpMethodNotFound,
+    mcp_last_event_sequence,
     method_not_found,
     reject_initialize_session_id,
     require_mcp_protocol_version,
@@ -43,6 +47,7 @@ from foundry_lite_api.mcp_protocol import (
 from foundry_lite_api.mcp_rate_limit import mcp_rate_limit_http_error, mcp_result_headers
 
 router = APIRouter()
+_LOGGER = logging.getLogger(__name__)
 
 
 @router.post("/mcp/builder/{application_id}")
@@ -79,7 +84,8 @@ def _builder_mcp_post_response(
         result = _dispatch(application_id, session_id, request, payload, negotiated_protocol, ctx)
     except FoundryLiteError as exc:
         return _builder_mcp_domain_failure(application_id, request, payload, session_id, rpc_id, exc)
-    except Exception:
+    except Exception as exc:
+        log_mcp_internal_failure(_LOGGER, request, plane="builder", rpc_method=payload.method, exc=exc)
         return _builder_mcp_internal_failure(request, payload, session_id, rpc_id)
     return _builder_mcp_success(payload, session_id, rpc_id, result)
 
@@ -135,7 +141,7 @@ async def builder_mcp_get(application_id: str, request: Request) -> StreamingRes
             events = runtime.foundry.aip.fde_mcp_session_events(
                 application_id,
                 session_id,
-                after_sequence=_last_event_sequence(request, session_id),
+                after_sequence=mcp_last_event_sequence(request, session_id, "Builder"),
                 ctx=ctx,
             )
         except Exception:
@@ -340,7 +346,7 @@ async def _session_events(
     try:
         for event in events:
             sequence = event.get("sequence")
-            if not isinstance(sequence, int):
+            if type(sequence) is not int or sequence < 1:
                 raise ValidationFailed("Builder MCP event sequence is invalid")
             method = str(event.get("event_type", ""))
             params = event.get("payload_json")
@@ -387,22 +393,6 @@ def _required_existing_session_id(request: Request) -> str:
     return session_id
 
 
-def _last_event_sequence(request: Request, session_id: str) -> int:
-    last_event_id = request.headers.get("Last-Event-ID")
-    if not last_event_id:
-        return 0
-    prefix = f"{session_id}:"
-    if not last_event_id.startswith(prefix):
-        raise ValidationFailed("Builder MCP Last-Event-ID does not belong to this session")
-    try:
-        sequence = int(last_event_id.removeprefix(prefix))
-    except ValueError as exc:
-        raise ValidationFailed("Builder MCP Last-Event-ID sequence is invalid") from exc
-    if sequence < 0:
-        raise ValidationFailed("Builder MCP Last-Event-ID sequence is invalid")
-    return sequence
-
-
 def _mapping(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise ValidationFailed(f"Builder MCP {field} must be an object")
@@ -427,8 +417,8 @@ def _rpc_error(rpc_id: object, exc: FoundryLiteError, request: Request) -> dict[
         "id": rpc_id,
         "error": {
             "code": code,
-            "message": exc.message,
-            "data": {"type": exc.code, **exc.details, "requestId": _request_id(request)},
+            "message": scrub_error_text(exc.message),
+            "data": scrub_error_mapping({"type": exc.code, **exc.details, "requestId": _request_id(request)}),
         },
     }
 
@@ -438,6 +428,8 @@ def _rpc_error_code(exc: FoundryLiteError) -> int:
         return -32600
     if isinstance(exc, McpMethodNotFound):
         return -32601
+    if isinstance(exc, NotFound):
+        return -32002
     return -32602 if exc.code == "VALIDATION_FAILED" else -32001
 
 

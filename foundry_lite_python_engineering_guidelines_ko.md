@@ -106,6 +106,10 @@ def do_commit(id: str) -> dict:
 
 ### 2.3 숨은 부작용 금지
 
+- [ ] composition root가 직접 만든 DB engine, stream client, background resource는 정상 종료와 예외 경로 모두에서 `finally`로 닫는다.
+- [ ] 외부에서 주입받은 공유 자원은 임의로 닫지 않고, 생성자에서 소유권을 명시한다.
+- [ ] 초기화 도중 실패한 객체도 이미 확보한 자원을 회수하며, cleanup 실패가 원래 초기화 오류를 덮어쓰지 않는다.
+
 부작용은 DB write, 파일 write, 외부 API 호출, queue publish, audit write처럼 시스템 상태를 바꾸는 동작이다.
 
 - [ ] 조회 함수는 상태를 바꾸지 않는다.
@@ -262,6 +266,7 @@ Infra swap 체크리스트:
 - [ ] adapter를 교체해도 public API response, audit event, outbox event, lineage edge의 의미가 바뀌지 않는다.
 - [ ] trace key는 boundary를 넘을 때 유지된다: `tenant_id`, `actor_user_id`, `request_id`, `run_id`, `correlation_id`, domain id, cursor/checkpoint.
 - [ ] 새 infra boundary를 추가하면 문서에 local implementation, scale implementation, owner, failure mode, contract test를 같이 추가한다.
+- [ ] composition root는 stream/DB client 소유권과 종료 순서를 명시하고, 생성 실패·업무 예외·정상 종료를 contract test로 검증한다.
 - [ ] “나중에 바꿀 예정”이라는 말만 있고 port/interface와 contract test가 없으면 완료로 보지 않는다.
 
 Scale Foundation 이후 금지:

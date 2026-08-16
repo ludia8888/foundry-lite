@@ -45,7 +45,9 @@ IMPLEMENTS_CONFIG_KEY = "implements"
 #: Interface properties use the object property type vocabulary. Kept in sync
 #: with OBJECT_PROPERTY_DATA_TYPES in ontology_validation (importing it here
 #: would create a module cycle once validation delegates to this module).
-INTERFACE_PROPERTY_DATA_TYPES = frozenset({"attachment", "boolean", "float", "integer", "media_reference", "string"})
+INTERFACE_PROPERTY_DATA_TYPES = frozenset(
+    {"attachment", "boolean", "date", "float", "integer", "media_reference", "string", "timestamp"}
+)
 
 
 def object_type_implements(item: YamlObject) -> tuple[str, ...]:

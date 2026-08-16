@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Barrier, Event
-from typing import cast
+from typing import Any, cast
 
 import yaml
 from foundry_lite.application.foundry import FoundryLite
@@ -589,6 +589,56 @@ def test_notification_best_effort_filters_each_recipient_by_current_object_acces
     assert "blocked" not in str(authorization)
 
 
+def test_notification_authorization_failure_before_dispatch_is_safely_retryable(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _notification_definition())
+    foundry._services.action.distributed.action_function_executor.register_driver(
+        lambda _request: {"output": _edit_batch(version), "logicRunId": "notification-auth-failure-function"}
+    )
+
+    class FailingRecipientDirectory:
+        def policy_for(self, **_kwargs):
+            raise RuntimeError("recipient directory is temporarily unavailable")
+
+    foundry._services.action_effects.action_notification_recipient_directory = FailingRecipientDirectory()
+    calls = 0
+
+    def delivered(_request) -> ActionEffectExecutionResult:
+        nonlocal calls
+        calls += 1
+        return ActionEffectExecutionResult("delivered", "notification:unexpected", {}, {})
+
+    adapter = AllowlistedActionEffectExecutor()
+    adapter.register_target(
+        "notification-policy:operations",
+        delivered,
+        allowed_kinds=frozenset({"notification"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+    run = foundry.actions.start_run(
+        "ApproveOrderWithNotification",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="notification-auth-failure-one",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    result = foundry._services.action_effects.deliver_all(worker_id="notification-auth-failure-worker")
+    refreshed = foundry.actions.get_run(str(run["actionRunId"]), ctx=ctx)
+
+    assert result["retry_wait"] == 1
+    assert result["outcome_unknown"] == 0
+    assert calls == 0
+    assert refreshed["effects"][0]["status"] == "retry_wait"
+    assert refreshed["effects"][0]["dispatchStartedAt"] is None
+
+
 def test_notification_payload_is_frozen_from_pre_edit_object_values(foundry: FoundryLite, tmp_path: Path) -> None:
     ctx = demo_admin_context()
     definition = _notification_definition()
@@ -825,6 +875,39 @@ def test_ambiguous_before_effect_never_commits_or_replays_provider_call(foundry:
     assert foundry.objects.get("Order", "O-1", ctx=ctx)["properties"]["status"] == "PENDING"
 
 
+def test_unknown_before_effect_adapter_outcome_never_commits(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _effect_definition(1))
+    _register_effect_connector(foundry)
+    adapter = AllowlistedActionEffectExecutor()
+    adapter.register_target(
+        "connector:erp/orders",
+        lambda _request: ActionEffectExecutionResult(
+            cast(Any, "deliverd"),
+            "remote-invalid-outcome",
+            {"status": 202},
+            {},
+        ),
+        allowed_kinds=frozenset({"webhook"}),
+    )
+    foundry._services.action_effects.action_effect_executor = adapter
+
+    run = foundry.actions.start_run(
+        "ApproveOrderWithEffects",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="invalid-before-outcome",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    assert run["status"] == "outcome_unknown"
+    assert run["effects"][0]["status"] == "outcome_unknown"
+    assert foundry.objects.get("Order", "O-1", ctx=ctx)["properties"]["status"] == "PENDING"
+
+
 def test_known_before_action_effect_failure_fails_without_commit_or_replay(
     foundry: FoundryLite, tmp_path: Path
 ) -> None:
@@ -947,3 +1030,34 @@ def test_after_action_effect_permanent_failure_moves_directly_to_dlq(foundry: Fo
     assert refreshed["status"] == "succeeded"
     assert refreshed["effects"][1]["status"] == "dead_letter"
     assert foundry.objects.get("Order", "O-1", ctx=ctx)["properties"]["status"] == "APPROVED"
+
+
+def test_unknown_after_effect_adapter_outcome_requires_reconciliation(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    version = _prepare(foundry, tmp_path, _effect_definition(1))
+    _register_effect_connector(foundry)
+    adapter = AllowlistedActionEffectExecutor()
+
+    def delivered(request) -> ActionEffectExecutionResult:
+        outcome = "delivered" if request.effect.phase == "before_commit" else "deliverd"
+        return ActionEffectExecutionResult(cast(Any, outcome), None, {"status": 202}, {})
+
+    adapter.register_target("connector:erp/orders", delivered, allowed_kinds=frozenset({"webhook"}))
+    adapter.register_target("topic:order-approved", delivered, allowed_kinds=frozenset({"event"}))
+    foundry._services.action_effects.action_effect_executor = adapter
+    run = foundry.actions.start_run(
+        "ApproveOrderWithEffects",
+        object_type="Order",
+        object_id="O-1",
+        expected_object_version=version,
+        params={},
+        idempotency_key="invalid-after-outcome",
+        wait_seconds=5,
+        ctx=ctx,
+    )
+
+    result = foundry._services.action_effects.deliver_all(worker_id="invalid-after-outcome-worker")
+    refreshed = foundry.actions.get_run(str(run["actionRunId"]), ctx=ctx)
+
+    assert result["outcome_unknown"] == 1
+    assert refreshed["effects"][1]["status"] == "outcome_unknown"

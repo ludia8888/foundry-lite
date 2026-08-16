@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -26,8 +28,55 @@ from foundry_lite.osdk import (
     sdk_package_manifest,
 )
 from foundry_lite_sdk import GeneratedActionEffectClient, GeneratedActionNotificationPolicyClient
+from foundry_lite_sdk.runtime import _parameter_mapping
 
 from tests.conftest import prepare_indexed_demo
+
+
+def test_python_osdk_normalizes_typed_parameters_to_wire_safe_json() -> None:
+    params = _parameter_mapping(
+        {
+            "amount": Decimal("12345678901234567890.123400"),
+            "serviceDate": date(2026, 8, 14),
+            "observedAt": datetime(2026, 8, 14, 9, 30, 45, 123456, tzinfo=UTC),
+            "nested": {"amounts": (Decimal("0.10"), Decimal("0.20"))},
+        }
+    )
+
+    assert params == {
+        "amount": "12345678901234567890.123400",
+        "serviceDate": "2026-08-14",
+        "observedAt": "2026-08-14T09:30:45.123456Z",
+        "nested": {"amounts": ["0.10", "0.20"]},
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"amount": Decimal("NaN")},
+        {"observedAt": datetime(2026, 8, 14, 9, 30)},
+        {"score": float("inf")},
+        {"bad": {1: "non-string-key"}},
+        {"bad": {"unsupported"}},
+    ],
+)
+def test_python_osdk_rejects_values_that_cannot_cross_the_json_boundary(params: object) -> None:
+    with pytest.raises(ValidationFailed, match="wire-safe JSON"):
+        _parameter_mapping(params)
+
+
+def test_python_osdk_rejects_cyclic_or_over_nested_parameters() -> None:
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+    nested: object = "leaf"
+    for _ in range(66):
+        nested = [nested]
+
+    with pytest.raises(ValidationFailed, match="cyclic"):
+        _parameter_mapping(cyclic)
+    with pytest.raises(ValidationFailed, match="nesting limit"):
+        _parameter_mapping({"nested": nested})
 
 
 def test_python_osdk_notification_policy_client_uses_governed_registry(foundry: FoundryLite) -> None:

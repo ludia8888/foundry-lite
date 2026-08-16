@@ -58,6 +58,8 @@ def test_action_monitoring_alert_reaches_live_kafka_once(tmp_path: Path) -> None
     topic = f"foundry-lite-action-alert-{uuid4().hex}"
     container = KafkaContainer().with_kraft()
     container.start(timeout=90)
+    adapter: KafkaStreamAdapter | None = None
+    foundry: FoundryLite | None = None
     try:
         adapter = KafkaStreamAdapter(
             KafkaStreamAdapterConfig(
@@ -92,6 +94,10 @@ def test_action_monitoring_alert_reaches_live_kafka_once(tmp_path: Path) -> None
             "action-p95-duration",
         }
     finally:
+        if foundry is not None:
+            foundry.close()
+        elif adapter is not None:
+            adapter.close()
         container.stop()
 
 
@@ -288,16 +294,19 @@ def _publish_live_event(bootstrap_servers: str, topic: str) -> None:
             producer_flush_timeout_seconds=10.0,
         )
     )
-    adapter.publish_event(
-        StreamPublishRequest(
-            stream_name="shipments",
-            event_type="shipment.updated",
-            tenant_id="tenant-demo",
-            request_id="req-kafka-live",
-            key="S-LIVE-100",
-            payload={"shipment_id": "S-LIVE-100", "status": "IN_TRANSIT"},
+    try:
+        adapter.publish_event(
+            StreamPublishRequest(
+                stream_name="shipments",
+                event_type="shipment.updated",
+                tenant_id="tenant-demo",
+                request_id="req-kafka-live",
+                key="S-LIVE-100",
+                payload={"shipment_id": "S-LIVE-100", "status": "IN_TRANSIT"},
+            )
         )
-    )
+    finally:
+        adapter.close()
 
 
 def _insert_action_monitoring_runs(foundry: FoundryLite, observed_at: datetime) -> None:

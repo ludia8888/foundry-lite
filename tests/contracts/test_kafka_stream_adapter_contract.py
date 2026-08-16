@@ -132,6 +132,62 @@ def test_kafka_stream_adapter_publish_supports_unknown_offset() -> None:
     assert event.offset == -1
 
 
+def test_kafka_stream_adapter_closes_only_its_owned_producer_and_is_idempotent() -> None:
+    producer = _FakeProducer(offset=3)
+    adapter = KafkaStreamAdapter(_adapter_config(), producer_factory=lambda _config: producer)
+    request = StreamPublishRequest(
+        stream_name="shipments",
+        event_type="shipment.updated",
+        tenant_id="tenant-demo",
+        request_id="req-owned-producer",
+        key="S-110",
+        payload={"shipment_id": "S-110"},
+    )
+
+    adapter.publish_event(request)
+    assert producer.flush_count == 1
+
+    adapter.close()
+    adapter.close()
+
+    assert producer.flush_count == 2
+
+
+def test_kafka_stream_adapter_close_keeps_pending_owned_producer_retryable() -> None:
+    producer = _FakeProducer(offset=3)
+    adapter = KafkaStreamAdapter(_adapter_config(), producer_factory=lambda _config: producer)
+    adapter.publish_event(
+        StreamPublishRequest(
+            stream_name="shipments",
+            event_type="shipment.updated",
+            tenant_id="tenant-demo",
+            request_id="req-pending-producer",
+            key="S-111",
+            payload={"shipment_id": "S-111"},
+        )
+    )
+
+    producer._pending_flushes = 1
+    with pytest.raises(AdapterError) as error:
+        adapter.close()
+    assert error.value.failure.operation == "close"
+    assert error.value.failure.kind == "timeout"
+    assert error.value.failure.is_retryable is True
+
+    producer._pending_flushes = 0
+    adapter.close()
+    assert producer.flush_count == 3
+
+
+def test_kafka_stream_adapter_does_not_close_injected_producer() -> None:
+    producer = _FakeProducer(offset=3)
+    adapter = KafkaStreamAdapter(_adapter_config(), producer=producer)
+
+    adapter.close()
+
+    assert producer.flush_count == 0
+
+
 def test_kafka_stream_adapter_consumer_factory_closes_internal_consumer() -> None:
     consumer = _FakeConsumer(
         [
@@ -235,6 +291,104 @@ def test_kafka_stream_worker_archives_broker_event(tmp_path: Path) -> None:
     assert result.row_count == 1
     assert preview[0]["event_id"] == "shipment_events:0:0"
     assert preview[0]["payload_json"] == '{"shipment_id":"S-100","status":"IN_TRANSIT"}'
+
+
+def test_stream_archive_worker_preserves_injected_stream_and_disposes_runtime_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class _CallerOwnedStream(LocalStreamAdapter):
+        def close(self) -> None:
+            events.append("stream")
+
+    class _EngineProxy:
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        def dispose(self) -> None:
+            events.append("engine")
+            self._inner.dispose()  # type: ignore[attr-defined]
+
+    adapter = _CallerOwnedStream()
+    original_build = worker_module.build_stream_archive_runtime
+
+    def tracked_build(*args: object, **kwargs: object):
+        runtime = original_build(*args, **kwargs)
+        runtime.foundry.engine = _EngineProxy(runtime.foundry.engine)  # type: ignore[assignment]
+        return runtime
+
+    monkeypatch.setattr(worker_module, "build_stream_archive_runtime", tracked_build)
+
+    result = run_stream_archive_once(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.empty_stream",
+            stream_name="empty",
+            topic="empty_topic",
+            bootstrap_servers="redpanda:9092",
+            storage_root=tmp_path / "worker-lifecycle",
+            poll_timeout_seconds=0,
+            max_empty_polls=0,
+        ),
+        stream_adapter=adapter,
+    )
+
+    assert result is None
+    assert events == ["engine"]
+
+
+def test_stream_archive_worker_closes_owned_stream_and_engine_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class _OwnedStream(LocalStreamAdapter):
+        def close(self) -> None:
+            events.append("stream")
+
+    class _EngineProxy:
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        def dispose(self) -> None:
+            events.append("engine")
+            self._inner.dispose()  # type: ignore[attr-defined]
+
+    owned = _OwnedStream()
+    original_build = worker_module.build_stream_archive_runtime
+
+    def tracked_build(*args: object, **kwargs: object):
+        runtime = original_build(*args, stream_adapter=owned)
+        runtime.foundry.engine = _EngineProxy(runtime.foundry.engine)  # type: ignore[assignment]
+        return runtime
+
+    monkeypatch.setattr(worker_module, "build_stream_archive_runtime", tracked_build)
+    monkeypatch.setattr(
+        worker_module,
+        "_run_stream_archive_once",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("archive failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="archive failed"):
+        run_stream_archive_once(
+            StreamArchiveWorkerConfig(
+                dataset_ref="raw.empty_stream",
+                stream_name="empty",
+                topic="empty_topic",
+                bootstrap_servers="redpanda:9092",
+                storage_root=tmp_path / "worker-failure-lifecycle",
+            )
+        )
+
+    assert events == ["stream", "engine"]
 
 
 def test_stream_archive_worker_continuous_loop_archives_until_empty_poll(tmp_path: Path) -> None:
@@ -856,6 +1010,7 @@ class _FakeProducer:
         self._offset = offset
         self._pending_flushes = pending_flushes
         self.produced: list[dict[str, object]] = []
+        self.flush_count = 0
 
     def produce(
         self,
@@ -869,4 +1024,5 @@ class _FakeProducer:
         return self._offset
 
     def flush(self, _timeout: float | None = None) -> int:
+        self.flush_count += 1
         return self._pending_flushes

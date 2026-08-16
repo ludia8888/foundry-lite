@@ -32,6 +32,7 @@ export type RebaseBranchPayload = {
   branchId: string;
   expectedFingerprint: string;
 };
+export type RunBranchTestsPayload = { branchId: string };
 export type ProposePayload = {
   branchId: string;
   title: string;
@@ -110,6 +111,16 @@ export function usePipelineActions(callbacks: ActionCallbacks = {}) {
     {
       lockKey: (payload) => `pipelines:rebase:${payload.branchId}`,
       onSuccess: callbacks.onGraphSaved,
+    },
+  );
+
+  const runBranchTests = useFoundryLiteMutation(
+    async (payload: RunBranchTestsPayload): Promise<Record<string, unknown>> => ({
+      ...(await recipe.runTests(payload.branchId)),
+      branchId: payload.branchId,
+    }),
+    {
+      lockKey: (payload) => `pipelines:test:${payload.branchId}`,
     },
   );
 
@@ -323,6 +334,7 @@ export function usePipelineActions(callbacks: ActionCallbacks = {}) {
     saveGraph,
     createBranch,
     rebaseBranch,
+    runBranchTests,
     propose,
     assignProposal,
     decideProposal,

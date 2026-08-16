@@ -15,6 +15,7 @@ from foundry_lite.application.action_types import (
 )
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow
 from foundry_lite.application.safe_expression import resolve_action_request_parameters, validate_action_request
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.action_runtime.action_condition_explanation import explain_action_condition
 from foundry_lite.domain.action_runtime.action_conditions import StaticActionConditionContext
 from foundry_lite.domain.context import RequestContext
@@ -85,6 +86,7 @@ def _criteria_evaluation(
         actor_groups=request_context.roles,
         actor_attributes=request_context.user_attributes,
         linked_object_properties=linked_object_properties,
+        parameter_types=_action_parameter_types(action_type),
     )
     tree = explain_action_condition(criteria, condition_context)
     return {"status": "PASSED" if tree["isSatisfied"] else "FAILED", "reason": None, "tree": tree}
@@ -101,6 +103,18 @@ def _effective_criteria_parameters(
     except FoundryLiteError:
         return None
     return resolution.values if resolution is not None else params
+
+
+def _action_parameter_types(action_type: ActionTypeRow) -> dict[str, str]:
+    definition = _mapping(action_type.get("definition"))
+    result: dict[str, str] = {}
+    for raw in _object_sequence(definition.get("parameters")):
+        parameter = _mapping(raw)
+        name = parameter.get("apiName")
+        data_type = parameter.get("type")
+        if isinstance(name, str) and name and isinstance(data_type, str) and data_type:
+            result[name] = data_type
+    return result
 
 
 def action_edit_summary(
@@ -249,15 +263,22 @@ def _parameters_valid(results: Mapping[str, ActionValidationParameterResult]) ->
 
 def _issue(error: Exception, *, message: str | None = None) -> ActionValidationIssue:
     if isinstance(error, FoundryLiteError):
-        payload: ActionValidationIssue = {"code": error.code, "message": message or error.message}
+        payload: ActionValidationIssue = {
+            "code": error.code,
+            "message": scrub_error_text(message or error.message),
+        }
         if error.details:
-            payload["details"] = error.details
+            payload["details"] = scrub_error_mapping(error.details)
         return payload
-    return {"code": "VALIDATION_FAILED", "message": message or str(error)}
+    return {"code": "VALIDATION_FAILED", "message": scrub_error_text(message or str(error))}
 
 
 def _mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _object_sequence(value: object) -> tuple[object, ...]:
+    return tuple(value) if isinstance(value, list | tuple) else ()
 
 
 def _string_sequence(value: object) -> tuple[str, ...]:

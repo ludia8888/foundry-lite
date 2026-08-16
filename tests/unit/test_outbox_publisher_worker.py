@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
+import pytest
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import OutboxEventRecord
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from foundry_lite_worker import outbox_publisher
 from foundry_lite_worker.outbox_publisher import (
     OutboxPublisherWorkerConfig,
     config_from_env,
@@ -85,6 +88,24 @@ def test_outbox_publisher_worker_config_from_env(tmp_path: Path) -> None:
     assert config.max_batches == 3
     assert config.max_empty_batches == 2
     assert config.evidence_path == tmp_path / "evidence.json"
+
+
+def test_outbox_publisher_worker_closes_runtime_when_publish_raises(monkeypatch, tmp_path: Path) -> None:
+    class FailingOperations:
+        def publish_pending_outbox(self, **_kwargs: object) -> object:
+            raise RuntimeError("injected publish failure")
+
+    close_calls: list[str] = []
+    monkeypatch.setattr(
+        outbox_publisher,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(operations=FailingOperations(), close=lambda: close_calls.append("close")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected publish failure"):
+        publish_outbox_batches(OutboxPublisherWorkerConfig(storage_root=tmp_path))
+
+    assert close_calls == ["close"]
 
 
 def _seeded_foundry(tmp_path: Path, *event_ids: str) -> tuple[FoundryLite, str, Path]:

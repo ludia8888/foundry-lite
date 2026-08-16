@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from pathlib import Path
 
@@ -27,6 +28,16 @@ def test_migration_runner_passes_locked_connection_to_alembic(tmp_path: Path) ->
     assert result.has_run_migration is True
     assert result.is_lock_busy is False
     assert len(observed_connections) == 1
+
+
+def test_alembic_does_not_disable_existing_application_loggers(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'migrated.db'}"
+    application_logger = logging.getLogger("foundry_lite.regression.migration_logging")
+    application_logger.disabled = False
+
+    run_migrations.run_migrations_with_singleton_lock(database_url=database_url)
+
+    assert application_logger.disabled is False
 
 
 def test_failed_migration_leaves_operator_evidence(tmp_path: Path) -> None:

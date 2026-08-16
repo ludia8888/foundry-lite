@@ -38,6 +38,10 @@ class ActionRunOrchestrator(Protocol):
 
     def cancel(self, tenant_id: str, workflow_run_id: str, *, reason: str | None = None) -> bool: ...
 
+    def close(self) -> None:
+        """Drain and stop any process-local orchestration resources."""
+        ...
+
 
 class UnavailableActionRunOrchestrator:
     profile_name = "unavailable-action-run"
@@ -48,3 +52,6 @@ class UnavailableActionRunOrchestrator:
     def cancel(self, tenant_id: str, workflow_run_id: str, *, reason: str | None = None) -> bool:
         del tenant_id, workflow_run_id, reason
         return False
+
+    def close(self) -> None:
+        return None

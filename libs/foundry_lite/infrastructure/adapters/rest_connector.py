@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from http.client import HTTPConnection, HTTPMessage, HTTPResponse, HTTPSConnection
+from http.client import HTTPConnection, HTTPException, HTTPMessage, HTTPResponse, HTTPSConnection
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import IO, Protocol, cast
 from urllib.error import HTTPError, URLError
@@ -37,6 +37,7 @@ from foundry_lite.application.ports.connector_adapter import (
 from foundry_lite.application.ports.secret_provider import REDACTED_VALUE, SecretProvider
 from foundry_lite.application.private_network_policy import private_network_bypass_permitted
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.http_headers import is_safe_custom_header_name, is_safe_http_header_value
 from foundry_lite.infrastructure.adapters.source_agent_proxy_transport import connect_source_target
 
 REST_CONNECTOR_PROFILE = "rest-pull-connector"
@@ -289,7 +290,7 @@ def _auth_headers(auth: RestAuthConfig, secret_provider: SecretProvider | None) 
         return {}
     if auth.mode == "bearer":
         token = _secret_ref_or_value(auth.token, auth.token_secret_ref, secret_provider)
-        if token:
+        if is_safe_http_header_value(token):
             return {"Authorization": f"Bearer {token}"}
     if auth.mode == "basic":
         credentials = _secret_ref_or_value(
@@ -297,14 +298,14 @@ def _auth_headers(auth: RestAuthConfig, secret_provider: SecretProvider | None) 
             auth.basic_credentials_secret_ref,
             secret_provider,
         )
-        if credentials and _is_basic_credentials(credentials):
+        if is_safe_http_header_value(credentials) and _is_basic_credentials(credentials):
             encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
             return {"Authorization": f"Basic {encoded}"}
-    if auth.mode == "header" and auth.header_name:
+    if auth.mode == "header" and is_safe_custom_header_name(auth.header_name):
         header_value = _secret_ref_or_value(auth.header_value, auth.header_value_secret_ref, secret_provider)
-        if header_value:
+        if is_safe_http_header_value(header_value):
             return {auth.header_name: header_value}
-    raise ValidationFailed("REST connector auth config is incomplete")
+    raise ValidationFailed("REST connector auth config is incomplete or contains an unsafe header")
 
 
 def _is_basic_credentials(value: str) -> bool:
@@ -443,22 +444,39 @@ def secure_http_json_write(
                 operation="action_effect",
                 idempotency_key=request.headers.get("Idempotency-key"),
             ) from exc
+        if exc.code in {408, 409, 425} or 500 <= exc.code:
+            return _ambiguous_write_result(target, request, connection_id, started_at)
         raise ValidationFailed(
             "registered Action webhook rejected the request",
             details={"status": exc.code, "targetRef": "registered_connector"},
         ) from exc
-    except URLError:
-        evidence = _network_evidence(
-            target,
-            None,
-            connection_id=connection_id,
-            duration_ms=_duration_ms(started_at),
-            response_flags="UPSTREAM_RESULT_UNKNOWN",
-            bytes_sent=_estimated_request_bytes(request),
-            bytes_received=0,
-            is_egress_succeeded=False,
-        )
-        return SecureHttpWriteResult("ambiguous", {"status": "outcome_unknown"}, evidence)
+    except AdapterError as exc:
+        bytes_read = exc.failure.details.get("bytesRead")
+        received = bytes_read if isinstance(bytes_read, int) and not isinstance(bytes_read, bool) else 0
+        return _ambiguous_write_result(target, request, connection_id, started_at, bytes_received=received)
+    except (ValidationFailed, URLError, HTTPException, TimeoutError, OSError):
+        return _ambiguous_write_result(target, request, connection_id, started_at)
+
+
+def _ambiguous_write_result(
+    target: _ValidatedHttpTarget,
+    request: Request,
+    connection_id: str,
+    started_at: float,
+    *,
+    bytes_received: int = 0,
+) -> SecureHttpWriteResult:
+    evidence = _network_evidence(
+        target,
+        None,
+        connection_id=connection_id,
+        duration_ms=_duration_ms(started_at),
+        response_flags="UPSTREAM_RESULT_UNKNOWN",
+        bytes_sent=_estimated_request_bytes(request),
+        bytes_received=bytes_received,
+        is_egress_succeeded=False,
+    )
+    return SecureHttpWriteResult("ambiguous", {"status": "outcome_unknown"}, evidence)
 
 
 def _connection_id(request: ConnectorSnapshotRequest, page_index: int = 0) -> str:
@@ -801,6 +819,8 @@ def _validated_http_url(url: str, *, allow_private_network: bool = False) -> str
 
 def _validated_http_target(url: str, *, allow_private_network: bool = False) -> _ValidatedHttpTarget:
     split = urlsplit(url)
+    if split.username is not None or split.password is not None:
+        raise ValidationFailed("REST connector URL cannot include inline credentials")
     if split.scheme not in {"http", "https"} or not split.netloc:
         raise ValidationFailed("REST connector URL must use http or https", details={"url": url})
     host = split.hostname

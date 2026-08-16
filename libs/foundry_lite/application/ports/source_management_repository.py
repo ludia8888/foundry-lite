@@ -331,7 +331,7 @@ class SourceManagementRepository(Protocol):
         checkpoint_end: Mapping[str, object],
         result_summary: Mapping[str, object],
         error: Mapping[str, object] | None,
-        completed_at: str,
+        completed_at: str | None,
         workflow_run_id: str | None = None,
     ) -> SourceSyncRunRow | None: ...
 

@@ -23,6 +23,7 @@ from foundry_lite.application.services.aip.tool_broker import (
     ToolSpec,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 
 JsonObject = Mapping[str, object]
@@ -427,7 +428,7 @@ def _safe_preview(value: object) -> object:
 
 def _error_payload(exc: Exception) -> JsonObject:
     reason = exc.reason if isinstance(exc, LogicRuntimeError) else exc.__class__.__name__
-    return {"reason": reason, "detail": str(exc)[:240]}
+    return {"reason": reason, "detail": scrub_error_text(str(exc))[:240]}
 
 
 def _arguments_json(value: object) -> str:

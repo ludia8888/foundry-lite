@@ -8,6 +8,7 @@ dependencies = [
   "duckdb>=1.0",
   "fastapi>=0.110",
   "fastembed>=0.8.0",
+  "filelock>=3.20",
   "faster-whisper>=1.2.1",
   "opentelemetry-api>=1.25",
   "opentelemetry-exporter-otlp-proto-http>=1.25",

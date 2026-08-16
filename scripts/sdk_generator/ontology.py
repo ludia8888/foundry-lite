@@ -14,7 +14,7 @@ SCALAR_TYPES = {
     "float": "number",
     "integer": "number",
     "long": "number",
-    "decimal": "number",
+    "decimal": "string",
     "date": "string",
     "timestamp": "string",
     "string": "string",

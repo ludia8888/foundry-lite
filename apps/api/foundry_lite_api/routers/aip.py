@@ -8,6 +8,7 @@ from typing import cast
 from fastapi import APIRouter, Header, Request
 from foundry_lite.application.services.aip.citation_service import CitationServiceError
 from foundry_lite.application.services.aip.eval_types import AiEvalError, EvalCaseInput
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, ValidationFailed
 
 from foundry_lite_api import runtime
@@ -76,7 +77,9 @@ def plan_aip_pilot(request: Request, payload: AipPilotPlanRequest) -> JsonObject
     try:
         return cast(
             JsonObject,
-            runtime.foundry.aip.plan_pilot_application(payload.model_dump(by_alias=True), ctx=_ctx(request)),
+            runtime.foundry.aip.plan_pilot_application(
+                payload.model_dump(by_alias=True, exclude_none=True), ctx=_ctx(request)
+            ),
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
@@ -217,4 +220,7 @@ def _eval_case(payload: AipEvalCaseRequest) -> EvalCaseInput:
 
 
 def _aip_eval_validation_error(exc: AiEvalError) -> ValidationFailed:
-    return ValidationFailed("AIP eval request failed", details={"reason": exc.reason, "detail": exc.detail})
+    return ValidationFailed(
+        "AIP eval request failed",
+        details={"reason": scrub_error_text(exc.reason), "detail": scrub_error_text(exc.detail)},
+    )

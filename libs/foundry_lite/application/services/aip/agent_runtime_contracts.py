@@ -37,6 +37,11 @@ from foundry_lite.application.services.aip.retrieval_orchestrator import (
     RetrievalObjectQuery,
     RetrievalOrchestrator,
 )
+from foundry_lite.application.services.runtime_error_payloads import (
+    record_runtime_cleanup_failure,
+    runtime_error_payload,
+    scrub_error_text,
+)
 from foundry_lite.domain.context import RequestContext
 
 JsonObject = Mapping[str, object]
@@ -296,22 +301,22 @@ def aggregate_response(first: ModelResponse, final: ModelResponse) -> ModelRespo
 
 
 def error_payload(exc: Exception) -> dict[str, object]:
+    payload: dict[str, object]
     if isinstance(exc, AgentRuntimeError):
-        return {"reason": _exception_arg(exc, 0), "detail": _exception_arg(exc, 1)}
-    if isinstance(exc, ContextCompilationError):
-        return {"reason": exc.reason, "detail": exc.detail}
-    if isinstance(exc, ContextRetrievalError):
-        return {"reason": exc.reason, "detail": exc.detail}
-    tool_payload = tool_error_payload(exc)
-    if tool_payload is not None:
-        return tool_payload
-    citation_payload = citation_error_payload(exc)
-    if citation_payload is not None:
-        return citation_payload
-    adapter_payload = _adapter_error_payload(exc)
-    if adapter_payload is not None:
-        return adapter_payload
-    return {"reason": exc.__class__.__name__, "detail": str(exc)[:240]}
+        payload = {"reason": _exception_arg(exc, 0), "detail": _exception_arg(exc, 1)}
+    elif isinstance(exc, ContextCompilationError):
+        payload = {"reason": scrub_error_text(exc.reason), "detail": scrub_error_text(exc.detail)}
+    elif isinstance(exc, ContextRetrievalError):
+        payload = {"reason": scrub_error_text(exc.reason), "detail": scrub_error_text(exc.detail)}
+    elif tool_payload := tool_error_payload(exc):
+        payload = tool_payload
+    elif citation_payload := citation_error_payload(exc):
+        payload = citation_payload
+    elif adapter_payload := _adapter_error_payload(exc):
+        payload = adapter_payload
+    else:
+        payload = {"reason": exc.__class__.__name__, "detail": scrub_error_text(str(exc)[:240])}
+    return _with_cleanup_failures(payload, exc)
 
 
 def success_result(
@@ -350,6 +355,16 @@ def failed_result(
     )
 
 
+def record_agent_failure_evidence_error(primary: Exception, cleanup_error: Exception) -> None:
+    """Attach a secret-safe secondary ledger-write failure to the primary error."""
+
+    record_runtime_cleanup_failure(
+        primary,
+        operation="agentRunFailureRecord",
+        cleanup_error=cleanup_error,
+    )
+
+
 def _response_schema(output_schema: JsonObject | None) -> str | None:
     if not output_schema:
         return None
@@ -364,8 +379,19 @@ def _adapter_error_payload(exc: Exception) -> dict[str, object] | None:
     reason = exc.__class__.__name__
     if isinstance(details, Mapping):
         reason = str(details.get("reason", getattr(failure, "kind", reason)))
-    return {"reason": str(reason), "detail": str(getattr(failure, "operator_message", str(exc)))}
+    return {
+        "reason": scrub_error_text(str(reason)),
+        "detail": scrub_error_text(str(getattr(failure, "operator_message", str(exc)))),
+    }
+
+
+def _with_cleanup_failures(payload: dict[str, object], exc: Exception) -> dict[str, object]:
+    details = runtime_error_payload(exc).get("details")
+    failures = details.get("cleanupFailures") if isinstance(details, Mapping) else None
+    if isinstance(failures, list):
+        payload["cleanupFailures"] = [dict(item) for item in failures if isinstance(item, Mapping)]
+    return payload
 
 
 def _exception_arg(exc: Exception, index: int) -> str:
-    return str(exc.args[index]) if len(exc.args) > index else exc.__class__.__name__
+    return scrub_error_text(str(exc.args[index])) if len(exc.args) > index else exc.__class__.__name__

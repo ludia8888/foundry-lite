@@ -45,6 +45,7 @@ from foundry_lite.application.services.media.content_chunking_types import (
     SourceContentUnitSet as _SourceContentUnitSet,
 )
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
+from foundry_lite.application.services.runtime_error_payloads import record_runtime_cleanup_failure
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
@@ -259,8 +260,12 @@ class ContentUnitChunkingService(CoreService):
                     failure_kind=failure_kind,
                     failure_reason=f"content chunking failed: {failure_kind}",
                 )
-        except Exception:
-            return
+        except Exception as cleanup_error:
+            record_runtime_cleanup_failure(
+                exc,
+                operation="contentChunkRunFailureRecord",
+                cleanup_error=cleanup_error,
+            )
 
     def _audit_run_started(
         self,

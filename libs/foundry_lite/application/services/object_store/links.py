@@ -196,9 +196,11 @@ class ObjectLinksService(CoreService):
         The record read only happens for row-policy-protected types, keeping
         the common path free of an extra query.
         """
+        object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
         scope = row_policy_scope(
-            self.ontology_service._active_object_type(conn, ctx, object_type_api_name),
+            object_type,
             ctx.roles,
+            self.ontology_service._properties_for_object_type(conn, object_type["id"]),
         )
         if scope.is_unrestricted:
             return True
@@ -263,8 +265,11 @@ class ObjectLinksService(CoreService):
     ) -> RowPolicyScope:
         """Resolve the caller's scope once per target type, not once per link row."""
         if target_type not in scopes:
+            object_type = self.ontology_service._active_object_type(conn, ctx, target_type)
             scopes[target_type] = row_policy_scope(
-                self.ontology_service._active_object_type(conn, ctx, target_type), ctx.roles
+                object_type,
+                ctx.roles,
+                self.ontology_service._properties_for_object_type(conn, object_type["id"]),
             )
         return scopes[target_type]
 

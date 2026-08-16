@@ -8,6 +8,7 @@ address crosses into the sandbox.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import types
@@ -17,6 +18,7 @@ from pathlib import Path
 from uuid import uuid4
 
 _bridge: QueryBridge | None = None
+_MAX_OBJECT_SET_PAGES = 512
 
 
 @dataclass(frozen=True)
@@ -31,7 +33,7 @@ class QueryBridge:
         response_path = self.directory / f"response-{self.nonce}-{request_id}.json"
         temporary_path = request_path.with_suffix(".tmp")
         temporary_path.write_text(
-            json.dumps(dict(request), sort_keys=True),
+            json.dumps(dict(request), sort_keys=True, allow_nan=False),
             encoding="utf-8",
         )
         temporary_path.replace(request_path)
@@ -129,6 +131,8 @@ class ObjectSet:
         return replace(self, filter_ast=_and_filter(self.filter_ast, compiled))
 
     def order_by_fields(self, **properties: str) -> ObjectSet:
+        if not properties or any(not key or value not in {"asc", "desc"} for key, value in properties.items()):
+            raise ValueError("ObjectSet order fields require non-empty names and asc or desc directions")
         order = tuple({"property": key, "direction": value} for key, value in properties.items())
         return replace(self, order_by=order)
 
@@ -137,19 +141,28 @@ class ObjectSet:
         rows = result.get("items")
         if not isinstance(rows, Sequence) or isinstance(rows, str | bytes):
             raise RuntimeError("Ontology ObjectSet page did not contain items")
-        items = tuple(OntologyObject(item) for item in rows if isinstance(item, Mapping))
+        if not all(isinstance(item, Mapping) for item in rows):
+            raise RuntimeError("Ontology ObjectSet page contained an invalid item")
+        items = tuple(OntologyObject(item) for item in rows)
         token = result.get("nextCursor")
-        return ObjectPage(items, token if isinstance(token, str) else None)
+        if token is not None and not isinstance(token, str):
+            raise RuntimeError("Ontology ObjectSet page returned an invalid cursor")
+        return ObjectPage(items, token)
 
     def all(self) -> list[OntologyObject]:
         objects: list[OntologyObject] = []
         token: str | None = None
-        while True:
+        seen_tokens: set[str] = set()
+        for _page_number in range(_MAX_OBJECT_SET_PAGES):
             page = self.fetch_page(page_token=token)
             objects.extend(page.items)
             token = page.next_page_token
             if token is None:
                 return objects
+            if token in seen_tokens:
+                raise RuntimeError("Ontology ObjectSet pagination repeated a cursor")
+            seen_tokens.add(token)
+        raise RuntimeError("Ontology ObjectSet pagination exceeded its page limit")
 
     def aggregate(
         self,
@@ -204,7 +217,16 @@ def configure(manifest: Mapping[str, object]) -> None:
     directory = config.get("directory")
     nonce = config.get("nonce")
     timeout = config.get("timeoutSeconds")
-    if not isinstance(directory, str) or not isinstance(nonce, str) or not isinstance(timeout, int | float):
+    if (
+        not isinstance(directory, str)
+        or not directory
+        or not isinstance(nonce, str)
+        or not nonce
+        or not isinstance(timeout, int | float)
+        or isinstance(timeout, bool)
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
         raise ValueError("queryBridge manifest is invalid")
     _bridge = QueryBridge(Path(directory), nonce, float(timeout))
 
@@ -265,6 +287,8 @@ def _dynamic_module(
     module = types.ModuleType(name)
 
     def resolve(attribute: str) -> object:
+        if attribute.startswith("__") and attribute.endswith("__"):
+            raise AttributeError(attribute)
         if has_object_types:
             return ObjectTypeMeta(attribute, (OntologyObjectType,), {})
         if has_object_sets:
@@ -277,15 +301,33 @@ def _dynamic_module(
 
 def _wrapped_value(value: object) -> object:
     if isinstance(value, Mapping) and isinstance(value.get("$foundryObjectSet"), Mapping):
-        descriptor = value["$foundryObjectSet"]
-        return ObjectSet(
-            str(descriptor.get("objectType") or ""),
-            descriptor.get("filter") if isinstance(descriptor.get("filter"), Mapping) else None,
-            tuple(item for item in descriptor.get("orderBy", []) if isinstance(item, Mapping)),
-        )
+        return _object_set_from_descriptor(value["$foundryObjectSet"])
     if isinstance(value, Mapping) and isinstance(value.get("objectId"), str):
         return OntologyObject(value)
     return value
+
+
+def _object_set_from_descriptor(descriptor: Mapping[str, object]) -> ObjectSet:
+    object_type = descriptor.get("objectType")
+    filter_ast = descriptor.get("filter")
+    order_by = descriptor.get("orderBy", [])
+    if not isinstance(object_type, str) or not object_type:
+        raise ValueError("ObjectSet descriptor objectType must be non-empty text")
+    if filter_ast is not None and not isinstance(filter_ast, Mapping):
+        raise ValueError("ObjectSet descriptor filter must be an object")
+    if not isinstance(order_by, Sequence) or isinstance(order_by, str | bytes):
+        raise ValueError("ObjectSet descriptor orderBy must be a list")
+    normalized_order = tuple(_order_item(item) for item in order_by)
+    return ObjectSet(object_type, filter_ast, normalized_order)
+
+
+def _order_item(value: object) -> Mapping[str, str]:
+    if not isinstance(value, Mapping) or set(value) != {"property", "direction"}:
+        raise ValueError("ObjectSet order item must contain property and direction")
+    prop, direction = value.get("property"), value.get("direction")
+    if not isinstance(prop, str) or not prop or direction not in {"asc", "desc"}:
+        raise ValueError("ObjectSet order item is invalid")
+    return {"property": prop, "direction": str(direction)}
 
 
 def _required_bridge() -> QueryBridge:
@@ -313,7 +355,11 @@ def _property_filters(filters: Mapping[str, object]) -> Mapping[str, object] | N
 
 
 def _property_filter(name: str, operator: str, value: object) -> Mapping[str, object]:
-    if isinstance(value, Mapping) and len(value) == 1:
+    if not name:
+        raise ValueError("ObjectSet filter property must be non-empty text")
+    if isinstance(value, Mapping):
+        if len(value) != 1:
+            raise ValueError("ObjectSet property filter must contain one operator")
         operator, value = next(iter(value.items()))
     operators = {
         "$eq": "eq",
@@ -333,6 +379,8 @@ def _normalize_filter(value: Mapping[str, object]) -> Mapping[str, object]:
     if "and" in value or "or" in value or "property" in value:
         return dict(value)
     compiled = [_property_filter(name, "$eq", operand) for name, operand in value.items()]
+    if not compiled:
+        raise ValueError("ObjectSet where filter must not be empty")
     return compiled[0] if len(compiled) == 1 else {"and": compiled}
 
 

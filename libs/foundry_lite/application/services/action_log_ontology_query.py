@@ -120,7 +120,7 @@ def filtered_sorted_logs(
     search_text: str | None,
 ) -> list[ObjectQueryItem]:
     validate_log_filter(filter_ast)
-    visible = [item for item in items if filter_ast is None or matches_filter(item["properties"], filter_ast)]
+    visible = [item for item in items if filter_ast is None or _matches_log_filter(item["properties"], filter_ast)]
     if search_text:
         needle = search_text.casefold()
         visible = [item for item in visible if needle in json.dumps(item["properties"], default=str).casefold()]
@@ -129,6 +129,38 @@ def filtered_sorted_logs(
         return _compare_items(left, right, order_by)
 
     return sorted(visible, key=cmp_to_key(compare))
+
+
+def _matches_log_filter(properties: Mapping[str, object], filter_ast: Mapping[str, object]) -> bool:
+    for logical in ("and", "or"):
+        raw_group = filter_ast.get(logical)
+        if isinstance(raw_group, Sequence) and not isinstance(raw_group, str | bytes):
+            group = cast(Sequence[Mapping[str, object]], raw_group)
+            results = (_matches_log_filter(properties, item) for item in group)
+            return all(results) if logical == "and" else any(results)
+    property_name = filter_ast.get("property")
+    expected = filter_ast.get("value")
+    if property_name == "parameters":
+        return _serialized_contains(properties.get("parameters"), expected)
+    if property_name == "result":
+        return _serialized_contains(properties.get("result"), expected)
+    if property_name == "editedObjects":
+        return _edited_objects_contain(properties.get("editedObjects"), expected)
+    return matches_filter(properties, filter_ast)
+
+
+def _serialized_contains(value: object, expected: object) -> bool:
+    return isinstance(expected, str) and expected.casefold() in json.dumps(value, default=str).casefold()
+
+
+def _edited_objects_contain(value: object, expected: object) -> bool:
+    if not isinstance(expected, str) or not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return False
+    names = ("objectType", "object_type_api_name", "objectId", "object_id", "editType", "edit_type")
+    needle = expected.casefold()
+    return any(
+        needle in str(item.get(name, "")).casefold() for item in value if isinstance(item, Mapping) for name in names
+    )
 
 
 def log_cursor_page(
@@ -233,6 +265,8 @@ def _validate_sql_filter_operations(filter_ast: Mapping[str, object]) -> None:
             "Action Log structured properties support contains filters only",
             details={"property": prop, "operation": operation},
         )
+    if operation == "contains" and not isinstance(filter_ast.get("value"), str):
+        raise ValidationFailed("Action Log contains filter value must be a string", details={"property": prop})
 
 
 def _filter_properties(filter_ast: Mapping[str, object]) -> set[str]:

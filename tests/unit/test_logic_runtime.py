@@ -150,6 +150,29 @@ def test_logic_runtime_rejects_missing_run_before_events(foundry: Any) -> None:
     assert excinfo.value.reason == "run_not_found"
 
 
+def test_logic_runtime_scrubs_secret_from_durable_failure_event(foundry: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed_ai_run(foundry.engine)
+
+    def fail_blocks(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("Authorization: Bearer raw-logic-token password=raw-logic-password")
+
+    monkeypatch.setattr(foundry.aip._logic_runtime, "_run_blocks", fail_blocks)
+
+    with pytest.raises(RuntimeError, match="raw-logic-token"):
+        foundry.aip.run_logic(
+            logic_run_id="logic-secret-failure",
+            ai_run_id="ai-run-logic",
+            blocks=(LogicBlock("input", "Input"),),
+            input_json={},
+            ctx=_CTX,
+        )
+
+    failure = _ledger(foundry.engine)["events"][-1]
+    assert failure["event_type"] == "aip.logic.failed"
+    assert '"detail":"***MASKED***"' in failure["redacted_preview"]
+    assert "raw-logic" not in str(failure)
+
+
 def test_logic_runtime_create_action_proposal_uses_review_queue_not_action_side_effect(foundry: Any) -> None:
     ctx = prepare_indexed_demo(foundry)
     order = foundry.objects.get("Order", "O-1001", ctx=ctx)

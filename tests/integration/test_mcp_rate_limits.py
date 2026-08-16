@@ -429,11 +429,16 @@ def _plane_session(foundry: Any, tmp_path: Any, monkeypatch: Any, plane: str) ->
 
 
 def _configure_limits(foundry: Any, *, endpoint_limit: int, tool_limit: int) -> None:
-    foundry._services.mcp_rate_limits.config = McpRateLimitConfig(
+    rate_limits = foundry._services.mcp_rate_limits
+    rate_limits.config = McpRateLimitConfig(
         endpoint_limit=endpoint_limit,
         tool_limit=tool_limit,
         window_seconds=60,
     )
+    # This suite verifies admission/replay behavior, not wall-clock rollover.
+    # Pin all calls to one fixed window so a real minute boundary cannot reset
+    # the counter midway through a scenario. Adapter contracts cover rollover.
+    rate_limits._clock = lambda: 121.25
 
 
 def _initialize_builder(client: TestClient, app_id: str, headers: dict[str, str]) -> dict[str, str]:

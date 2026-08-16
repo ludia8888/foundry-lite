@@ -19,6 +19,7 @@ from foundry_lite.application.ports.connector_registry_repository import Connect
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter, StreamPublishRequest
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.http_targets import is_relative_http_resource_path, is_safe_http_base_url
 from foundry_lite.infrastructure.adapters.rest_connector import (
     _auth_headers,
     secure_http_json_write,
@@ -95,11 +96,12 @@ class ConnectorActionEffectExecutor:
             )
         if connection is None or resource is None or connection["status"] != "active":
             raise ActionEffectPermanentError("Action effect connector target is unavailable")
-        headers = _auth_headers(_rest_auth(connection["auth"]), self._secret_provider)
-        headers["Idempotency-Key"] = request.idempotency_key
+        target_url = _registered_resource_url(connection["base_url"], resource["resource_path"])
         try:
+            headers = _auth_headers(_rest_auth(connection["auth"]), self._secret_provider)
+            headers["Idempotency-Key"] = request.idempotency_key
             result = secure_http_json_write(
-                urljoin(connection["base_url"].rstrip("/") + "/", resource["resource_path"].lstrip("/")),
+                target_url,
                 headers,
                 _effect_body(request),
                 allow_private_network=connection["allow_private_network"],
@@ -155,6 +157,14 @@ def _connector_target(target_ref: str) -> tuple[str, str]:
     if len(path) != 2 or not all(item.strip() for item in path):
         raise ActionEffectPermanentError("webhook Action effect target must include a registered resource")
     return path[0], path[1]
+
+
+def _registered_resource_url(base_url: str, resource_path: str) -> str:
+    if not is_safe_http_base_url(base_url):
+        raise ActionEffectPermanentError("Action effect connector base URL is unsafe")
+    if not is_relative_http_resource_path(resource_path):
+        raise ActionEffectPermanentError("Action effect resource must stay under the same registered origin")
+    return urljoin(base_url.rstrip("/") + "/", resource_path.lstrip("/"))
 
 
 def _rest_auth(auth: Mapping[str, object]) -> RestAuthConfig:

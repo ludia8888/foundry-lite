@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from foundry_lite.application.ports import RuntimeRunSnapshot
 from foundry_lite.application.services import runtime_run_queries as queries
+from foundry_lite.application.services.runtime_run_projection import operator_safe_run_row
 from foundry_lite.domain.errors import ValidationFailed
 
 
@@ -82,6 +83,32 @@ def test_runtime_run_query_helpers_cover_error_and_empty_branches() -> None:
     assert before_window["actionRuns"] == []
     assert after_window["actionRuns"] == []
     assert no_timestamp_filtered["actionRuns"] == []
+
+
+def test_source_exploration_operations_projection_excludes_requests_and_sample_rows() -> None:
+    row = {
+        "id": "source_explore_1",
+        "tenant_id": "tenant-demo",
+        "source_name": "customer_erp",
+        "source_type": "postgres_jdbc",
+        "request": {"databaseUrlSecretRef": "secretRef:erp"},
+        "status": "succeeded",
+        "result_summary": {
+            "rowCount": 2,
+            "tableCount": 1,
+            "sample": [{"customerEmail": "private@example.test"}],
+            "schema": {"columns": [{"name": "customerEmail"}]},
+        },
+        "error": None,
+        "operations_path": "/api/operations/runs/source_exploration/source_explore_1",
+        "created_at": "2026-06-10T00:00:00Z",
+    }
+
+    safe = operator_safe_run_row(row, "source_exploration")
+
+    assert "request" not in safe
+    assert safe["result_summary"] == {"rowCount": 2, "tableCount": 1}
+    assert "private@example.test" not in str(safe)
 
 
 def test_run_investigation_summarizes_failed_run_for_operator() -> None:
@@ -212,6 +239,7 @@ def _snapshot() -> RuntimeRunSnapshot:
         "created_at": "2026-06-10T00:00:00Z",
     }
     return {
+        "sourceExplorationRuns": [],
         "syncRuns": [],
         "transformRuns": [{"id": "transform_1", "status": "SUCCESS", "created_at": "2026-06-10T00:00:00Z"}],
         "indexRuns": [],

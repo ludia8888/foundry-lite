@@ -14,7 +14,11 @@ from foundry_lite.infrastructure import schema as db  # noqa: E402
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Alembic shares this process with the explicit migration runner in tests
+    # and operator tooling. The stdlib default disables every pre-existing
+    # application logger, which can silently erase worker failure evidence
+    # after a migration. Configure Alembic without mutating logger liveness.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # autogenerate diffs migrations against the live SQLAlchemy metadata
 target_metadata = db.metadata

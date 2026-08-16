@@ -8,6 +8,7 @@ from typing import Literal, NotRequired, TypedDict
 
 RuntimeLookupTable = Literal["transforms", "materializations"]
 RuntimeRowsTable = Literal[
+    "source_exploration_runs",
     "sync_runs",
     "transform_runs",
     "index_runs",
@@ -23,6 +24,7 @@ RuntimeRowsTable = Literal[
     "object_records",
 ]
 RuntimeRunType = Literal[
+    "source_exploration",
     "sync",
     "transform",
     "index",
@@ -181,6 +183,7 @@ class RuntimeRetryMaterializationResult(TypedDict):
 
 
 class RuntimeRunSnapshot(TypedDict):
+    sourceExplorationRuns: list[RuntimeRow]
     syncRuns: list[RuntimeRow]
     transformRuns: list[RuntimeRow]
     indexRuns: list[RuntimeRow]

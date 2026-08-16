@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.ports.mcp_rate_limiter import McpRateLimitRequest
-from foundry_lite.application.services import mcp_rate_limit_service as rate_limit_module
 from foundry_lite.application.services.mcp_rate_limit_service import (
     McpRateLimitConfig,
     McpRateLimitService,
@@ -93,16 +92,30 @@ def test_expired_window_pruning_is_bounded_and_tenant_scoped(engine: Engine) -> 
     assert other_count == 1
 
 
+def test_counter_rolls_over_at_the_exact_fixed_window_boundary(engine: Engine) -> None:
+    limiter = SqlAlchemyMcpRateLimiter()
+    before_boundary = _request(observed_at_epoch=119.999)
+    at_boundary = _request(request_id="req-next-window", observed_at_epoch=120.0)
+    with engine.begin() as conn:
+        first = limiter.consume(transaction=conn, request=before_boundary)
+        next_window = limiter.consume(transaction=conn, request=at_boundary)
+    assert first.is_allowed is True
+    assert first.window_started_at_epoch == 60
+    assert next_window.is_allowed is True
+    assert next_window.request_count == 1
+    assert next_window.window_started_at_epoch == 120
+    assert next_window.evidence_id != first.evidence_id
+
+
 def test_service_preserves_denial_audit_and_exact_retry_after(
     engine: Engine,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(rate_limit_module.time, "time", lambda: 121.25)
     service = McpRateLimitService(
         engine=engine,
         mcp_rate_limiter=SqlAlchemyMcpRateLimiter(),
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         config=McpRateLimitConfig(endpoint_limit=1, tool_limit=1, window_seconds=60),
+        clock=lambda: 121.25,
     )
     first_ctx = _context("req-first")
     denied_ctx = _context("req-denied")

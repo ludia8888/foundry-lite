@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
+from foundry_lite.domain.error_redaction import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.errors import FoundryLiteError
 
 AdapterFailureKind = Literal[
@@ -84,9 +85,11 @@ class AdapterError(FoundryLiteError):
 
 
 def adapter_failure_payload(exc: AdapterError) -> dict[str, object]:
-    return {
-        "type": exc.code,
-        "message": exc.message,
-        "details": exc.details,
-        "adapterFailure": exc.failure.to_payload(),
-    }
+    return scrub_error_mapping(
+        {
+            "type": exc.code,
+            "message": scrub_error_text(exc.message),
+            "details": exc.details,
+            "adapterFailure": exc.failure.to_payload(),
+        }
+    )

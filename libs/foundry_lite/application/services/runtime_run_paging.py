@@ -16,6 +16,7 @@ from foundry_lite.application.services.runtime_run_cursors import (
     decode_runtime_run_cursor,
     encode_runtime_run_cursor,
 )
+from foundry_lite.application.services.runtime_run_projection import operator_safe_run_row
 from foundry_lite.application.services.runtime_run_queries import RUN_GROUPS
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -76,7 +77,7 @@ def _query_run_type(
     )
     result = _empty_run_query_result()
     page = rows[:limit]
-    _set_run_group(result, run_type, page)
+    _set_run_group(result, run_type, [operator_safe_run_row(row, run_type) for row in page])
     result["nextCursor"] = _next_run_cursor(
         page,
         len(rows) > limit,
@@ -132,7 +133,7 @@ def _query_all_run_types(
             limit=limit + 1,
         )
         page = rows[:limit]
-        _set_run_group(result, current_type, page)
+        _set_run_group(result, current_type, [operator_safe_run_row(row, current_type) for row in page])
         next_cursor = _next_run_cursor(
             page,
             len(rows) > limit,
@@ -163,6 +164,7 @@ def _operations_run_limit(limit: int) -> int:
 
 def _empty_run_query_result() -> RuntimeRunQueryResult:
     return {
+        "sourceExplorationRuns": [],
         "syncRuns": [],
         "transformRuns": [],
         "indexRuns": [],

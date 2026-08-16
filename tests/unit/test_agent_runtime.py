@@ -237,6 +237,11 @@ class _FailingPromptArtifactService:
         raise RuntimeError("prompt artifact store unavailable")
 
 
+class _SecretFailingPromptArtifactService:
+    def record_compiled_prompt(self, *_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("Authorization: Bearer raw-agent-token password=raw-agent-password")
+
+
 class _UnexpectedCitationResolver:
     def resolve(self, ctx: RequestContext, request: CitationResolveRequest) -> CitationResolveResult:
         raise AssertionError("citation resolver should not be called")
@@ -772,11 +777,51 @@ def test_agent_runtime_fails_before_model_when_prompt_artifact_write_fails(found
 
     assert result.run_status == "failed"
     assert result.ai_run_id is not None
-    assert result.error == {"reason": "RuntimeError", "detail": "prompt artifact store unavailable"}
+    assert result.error == {"reason": "RuntimeError", "detail": "***MASKED***"}
     detail = foundry.operations.run_detail("ai", result.ai_run_id, ctx=_CTX)
     assert detail["row"]["status"] == "failed"
     assert detail["ai"]["summary"]["modelCallCount"] == 0
     assert detail["ai"]["summary"]["promptArtifactCount"] == 0
+
+
+def test_agent_runtime_redacts_unexpected_secret_and_surfaces_failure_record_error(
+    foundry: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_indexed_demo(foundry)
+    runtime = foundry._services.agent_runtime
+    runtime.prompt_artifact_service = _SecretFailingPromptArtifactService()
+    foundry._services.model_gateway.language_model_adapter = _FailIfCalledLanguageModel()
+    repository = runtime.ai_run_repository
+    original = repository.update_execution_run_status
+
+    def fail_terminal_record(**kwargs: object) -> object:
+        transition = kwargs.get("transition")
+        if getattr(transition, "to_status", None) == "failed":
+            raise RuntimeError("token=secondary-ledger-secret")
+        return original(**kwargs)
+
+    monkeypatch.setattr(repository, "update_execution_run_status", fail_terminal_record)
+
+    result = foundry.aip.run_agent_payload(
+        payload={**_payload(), "agentRunId": "agent-runtime-secret-failure"},
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    assert result.error == {
+        "reason": "RuntimeError",
+        "detail": "***MASKED***",
+        "cleanupFailures": [
+            {
+                "operation": "agentRunFailureRecord",
+                "status": "FAILED",
+                "exceptionType": "RuntimeError",
+            }
+        ],
+    }
+    assert "raw-agent-token" not in str(result.to_payload())
+    assert "raw-agent-password" not in str(result.to_payload())
+    assert "secondary-ledger-secret" not in str(result.to_payload())
 
 
 def test_agent_runtime_rejects_non_allowlisted_partition_before_ledger(foundry: Any) -> None:

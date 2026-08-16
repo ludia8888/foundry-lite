@@ -160,7 +160,12 @@ class LivePlanResolutionContext:
     def _visible_record(self, object_type: str, object_id: str) -> ObjectRecordRow | None:
         record = self.object_lookup._object_record(self.conn, self.ctx, object_type, object_id)
         target_type = self.ontology_lookup._active_object_type(self.conn, self.ctx, object_type)
-        return visible_record(record, target_type, self.ctx.roles)
+        return visible_record(
+            record,
+            target_type,
+            self.ctx.roles,
+            self.ontology_lookup._properties_for_object_type(self.conn, target_type["id"]),
+        )
 
     def _require_ref(self, object_type: str, object_id: str) -> ObjectRef:
         record = self._visible_record(object_type, object_id)

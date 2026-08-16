@@ -13,7 +13,7 @@ from foundry_lite.application.services.outbox_publisher_service import (
     DEFAULT_OUTBOX_STREAM_NAME,
     OutboxPublishBatchResult,
 )
-from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -60,6 +60,13 @@ class OutboxPublisherWorkerResult:
 
 def publish_outbox_batches(config: OutboxPublisherWorkerConfig) -> OutboxPublisherWorkerResult:
     runtime = _build_foundry(config)
+    try:
+        return _publish_batches(runtime, config)
+    finally:
+        runtime.close()
+
+
+def _publish_batches(runtime: FoundryLite, config: OutboxPublisherWorkerConfig) -> OutboxPublisherWorkerResult:
     accumulator = _OutboxAccumulator(config.stream_name)
     empty_batches = 0
     for batch_number in range(1, _positive(config.max_batches) + 1):
@@ -223,7 +230,11 @@ def _failure_json(exc: Exception, config: OutboxPublisherWorkerConfig | None) ->
 
 def _failure_payload(exc: Exception, config: OutboxPublisherWorkerConfig | None) -> Mapping[str, object]:
     if isinstance(exc, ValueError):
-        payload: dict[str, object] = {"type": "CONFIGURATION_ERROR", "message": str(exc), "details": {}}
+        payload: dict[str, object] = {
+            "type": "CONFIGURATION_ERROR",
+            "message": scrub_error_text(str(exc)),
+            "details": {},
+        }
         if trace := _failure_trace(config):
             payload["trace"] = trace
         return payload

@@ -17,7 +17,7 @@ from foundry_lite.application.services.aip.governed_release_authorization import
 from foundry_lite.application.services.aip.governed_release_catalog import GOVERNED_RELEASE_UI_RESOURCE_URI
 from foundry_lite.application.services.aip.governed_release_mcp_types import GovernedReleaseMcpToolCall
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
@@ -304,6 +304,36 @@ def test_status_tool_and_authenticated_endpoint_expose_fail_closed_live_readines
     assert direct.json() == readiness
 
 
+def test_authenticated_live_readiness_preserves_domain_error_status(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    app_id, headers, _builder_headers = _release_application(foundry, monkeypatch, suffix="readiness_error")
+    _install_release_transport_gateway(foundry, monkeypatch, [])
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+
+    def fail_readiness(_application_id: str, *, ctx: RequestContext) -> dict[str, object]:
+        del ctx
+        raise ConflictDetected(
+            "live readiness changed while it was read",
+            details={"reason": "configuration_fingerprint_changed"},
+        )
+
+    monkeypatch.setattr(foundry.release, "release_live_readiness", fail_readiness)
+    response = TestClient(app, raise_server_exceptions=False).get(
+        f"/mcp/release/{app_id}/live-readiness",
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "CONFLICT",
+        "message": "live readiness changed while it was read",
+        "details": {"reason": "configuration_fingerprint_changed"},
+        "request_id": "governed-release-readiness_error-release",
+    }
+
+
 def test_governed_release_transport_accepts_external_oidc_human_and_public_https_audience(
     foundry: Any,
     monkeypatch: Any,
@@ -470,7 +500,7 @@ def test_governed_release_mcp_resource_read_reports_missing_widget_clearly(
 
     assert response.status_code == 200
     error = response.json()["error"]
-    assert error["code"] == -32001
+    assert error["code"] == -32002
     assert error["data"]["type"] == "NOT_FOUND"
     assert error["data"]["expectedAsset"] == "apps/chatgpt-release-widget/index.html"
 

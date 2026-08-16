@@ -1251,11 +1251,13 @@ def test_builder_widget_recovery_and_exact_mutation_replay_do_not_reconsume_tool
     monkeypatch: Any,
 ) -> None:
     app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
-    foundry._services.mcp_rate_limits.config = McpRateLimitConfig(
+    rate_limits = foundry._services.mcp_rate_limits
+    rate_limits.config = McpRateLimitConfig(
         endpoint_limit=50,
         tool_limit=3,
         window_seconds=60,
     )
+    rate_limits._clock = lambda: 121.25
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     session_headers = _builder_session_headers(client, app_id, headers)

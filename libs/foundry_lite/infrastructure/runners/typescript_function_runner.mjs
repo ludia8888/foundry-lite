@@ -18,6 +18,7 @@ import { createRequire } from "node:module";
 import { Script, createContext } from "node:vm";
 
 const RESULT_SCHEMA_VERSION = 1;
+const MAX_OBJECT_SET_PAGES = 512;
 const require = createRequire(import.meta.url);
 
 // The value shapes a function may return, keyed by the declared ontology output type. `object`
@@ -54,10 +55,20 @@ function isPlainObject(value) {
 
 class ObjectSet {
   constructor(descriptor, bridge) {
+    if (!isPlainObject(descriptor) || typeof descriptor.objectType !== "string" || descriptor.objectType.length === 0) {
+      throw new Error("ObjectSet descriptor objectType must be non-empty text");
+    }
+    if (descriptor.filter !== null && descriptor.filter !== undefined && !isPlainObject(descriptor.filter)) {
+      throw new Error("ObjectSet descriptor filter must be an object");
+    }
+    const orderBy = descriptor.orderBy ?? [];
+    if (!Array.isArray(orderBy) || !orderBy.every(isOrderItem)) {
+      throw new Error("ObjectSet descriptor orderBy is invalid");
+    }
     this.descriptor = {
       objectType: descriptor.objectType,
       filter: descriptor.filter ?? null,
-      orderBy: descriptor.orderBy ?? [],
+      orderBy: orderBy.map((item) => ({ property: item.property, direction: item.direction })),
     };
     this.bridge = bridge;
   }
@@ -67,7 +78,11 @@ class ObjectSet {
   }
 
   orderBy(order) {
+    if (!isPlainObject(order) || Object.keys(order).length === 0) {
+      throw new Error("ObjectSet order fields must be a non-empty object");
+    }
     const orderBy = Object.entries(order).map(([property, direction]) => ({ property, direction }));
+    if (!orderBy.every(isOrderItem)) throw new Error("ObjectSet order fields require asc or desc directions");
     return new ObjectSet({ ...this.descriptor, orderBy }, this.bridge);
   }
 
@@ -81,18 +96,26 @@ class ObjectSet {
       pageToken: options.pageToken ?? null,
     });
     if (!Array.isArray(result.items)) throw new Error("Ontology ObjectSet page did not contain items");
+    if (!result.items.every(isPlainObject)) throw new Error("Ontology ObjectSet page contained an invalid item");
+    if (result.nextCursor !== null && result.nextCursor !== undefined && typeof result.nextCursor !== "string") {
+      throw new Error("Ontology ObjectSet page returned an invalid cursor");
+    }
     return { items: result.items.map(wrapObject), nextPageToken: result.nextCursor ?? null };
   }
 
   all() {
     const objects = [];
     let pageToken = null;
-    do {
+    const seenTokens = new Set();
+    for (let pageNumber = 0; pageNumber < MAX_OBJECT_SET_PAGES; pageNumber += 1) {
       const page = this.fetchPage({ pageToken });
       objects.push(...page.items);
       pageToken = page.nextPageToken;
-    } while (pageToken !== null);
-    return objects;
+      if (pageToken === null) return objects;
+      if (seenTokens.has(pageToken)) throw new Error("Ontology ObjectSet pagination repeated a cursor");
+      seenTokens.add(pageToken);
+    }
+    throw new Error("Ontology ObjectSet pagination exceeded its page limit");
   }
 
   aggregate({ groupBy = [], select }) {
@@ -112,9 +135,22 @@ class ObjectSet {
 
 class QueryBridge {
   constructor(config) {
+    if (config === undefined || config === null) {
+      this.directory = undefined;
+      this.nonce = undefined;
+      this.timeoutMs = 30_000;
+      return;
+    }
+    if (!isPlainObject(config)
+        || typeof config.directory !== "string" || config.directory.length === 0
+        || typeof config.nonce !== "string" || config.nonce.length === 0
+        || typeof config.timeoutSeconds !== "number" || !Number.isFinite(config.timeoutSeconds)
+        || config.timeoutSeconds <= 0) {
+      throw new Error("queryBridge manifest is invalid");
+    }
     this.directory = config?.directory;
     this.nonce = config?.nonce;
-    this.timeoutMs = Number(config?.timeoutSeconds ?? 30) * 1000;
+    this.timeoutMs = config.timeoutSeconds * 1000;
   }
 
   call(request) {
@@ -144,10 +180,12 @@ function compileFilter(filter) {
   if (!isPlainObject(filter)) throw new Error("ObjectSet where filter must be an object");
   if ("and" in filter || "or" in filter || "property" in filter) return filter;
   const items = Object.entries(filter).map(([property, value]) => propertyFilter(property, value));
+  if (items.length === 0) throw new Error("ObjectSet where filter must not be empty");
   return items.length === 1 ? items[0] : { and: items };
 }
 
 function propertyFilter(property, value) {
+  if (property.length === 0) throw new Error("ObjectSet filter property must be non-empty text");
   if (!isPlainObject(value)) return { property, op: "eq", value };
   const entries = Object.entries(value);
   if (entries.length !== 1) throw new Error("ObjectSet property filter must contain one operator");
@@ -157,6 +195,14 @@ function propertyFilter(property, value) {
   };
   if (!(operator in operators)) throw new Error(`unsupported ObjectSet filter operator ${operator}`);
   return { property, op: operators[operator], value: operand };
+}
+
+function isOrderItem(value) {
+  return isPlainObject(value)
+    && Object.keys(value).length === 2
+    && typeof value.property === "string"
+    && value.property.length > 0
+    && (value.direction === "asc" || value.direction === "desc");
 }
 
 function andFilter(left, right) {
@@ -254,7 +300,10 @@ function requireOutputType(output, outputType) {
     throw new RunnerFailure("output_validation_error", new Error(`declared output type is ${outputType}`));
   }
   try {
-    JSON.stringify(output);
+    JSON.stringify(output, (_key, value) => {
+      if (typeof value === "number" && !Number.isFinite(value)) throw new Error("non-finite number");
+      return value;
+    });
   } catch (error) {
     throw new RunnerFailure("output_validation_error", error);
   }

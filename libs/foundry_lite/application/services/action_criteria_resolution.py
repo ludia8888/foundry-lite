@@ -307,7 +307,12 @@ def _linked_records(
         transaction, ctx, linked_type, object_ids, base_records, branch_repository, branch_id
     )
     by_id = {record["object_id"]: record for record in records if not record["deleted"]}
-    scope = row_policy_scope(ontology._active_object_type(transaction, ctx, linked_type), ctx.roles)
+    object_type = ontology._active_object_type(transaction, ctx, linked_type)
+    scope = row_policy_scope(
+        object_type,
+        ctx.roles,
+        ontology._properties_for_object_type(transaction, object_type["id"]),
+    )
     visible = [
         by_id[object_id]
         for object_id in object_ids

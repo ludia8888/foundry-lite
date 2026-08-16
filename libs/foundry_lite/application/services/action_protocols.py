@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     OntologyVersionRow,
     OsdkResourceOperation,
     OsdkResourceType,
+    PropertyTypeRow,
     RuntimeRunType,
     TransactionContext,
 )
@@ -95,6 +96,12 @@ class ActionOntologyLookup(Protocol):
         ctx: RequestContext,
         object_type_id: str,
     ) -> ObjectTypeRow | None: ...
+
+    def _properties_for_object_type(
+        self,
+        conn: TransactionContext,
+        object_type_id: str,
+    ) -> Sequence[PropertyTypeRow]: ...
 
     def link_type(
         self,

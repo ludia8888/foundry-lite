@@ -118,18 +118,24 @@ def run_source_streaming_service(
     kafka: KafkaStreamAdapter | None = None,
 ) -> SourceStreamingServiceResult:
     runtime = foundry or build_source_streaming_foundry(config)
+    is_runtime_owned = foundry is None
     requested_stop = stop_event or Event()
-    ctx = config.request_context()
-    sync = runtime.sources.get_managed_sync(config.sync_name, ctx=ctx)
-    source = runtime.sources.get_source(str(sync["sourceName"]), ctx=ctx)
-    row = _linked_workflow(runtime, config, sync)
-    state = _state_from_output(row["output"])
-    lease = _claim_lease(runtime, config, row, state, None, None)
-    bridge = _start_bridge(config, sync, source, ctx, kraken=kraken, kafka=kafka)
+    bridge: _BridgeHandle | None = None
     try:
+        ctx = config.request_context()
+        sync = runtime.sources.get_managed_sync(config.sync_name, ctx=ctx)
+        source = runtime.sources.get_source(str(sync["sourceName"]), ctx=ctx)
+        row = _linked_workflow(runtime, config, sync)
+        state = _state_from_output(row["output"])
+        lease = _claim_lease(runtime, config, row, state, None, None)
+        bridge = _start_bridge(config, sync, source, ctx, kraken=kraken, kafka=kafka)
         return _run_loop(runtime, config, sync, lease, state, requested_stop, bridge)
     finally:
-        _stop_bridge(bridge)
+        try:
+            _stop_bridge(bridge)
+        finally:
+            if is_runtime_owned:
+                runtime.close()
 
 
 def _run_loop(
@@ -452,10 +458,11 @@ def _start_bridge(
     stream_name = support.required_config(summary, "streamName")
     kraken_adapter = kraken or _kraken_adapter(summary)
     kafka_adapter = kafka or _kafka_adapter(config, summary, stream_name)
+    owned_kafka = kafka_adapter if kafka is None else None
     stop_event = Event()
     telemetry = KrakenBridgeTelemetry()
     thread = Thread(
-        target=run_kraken_kafka_bridge,
+        target=_run_bridge,
         kwargs={
             "config": KrakenKafkaBridgeConfig(stream_name=stream_name),
             "kraken": kraken_adapter,
@@ -463,12 +470,42 @@ def _start_bridge(
             "ctx": ctx,
             "stop_event": stop_event,
             "telemetry": telemetry,
+            "owned_kafka": owned_kafka,
         },
         name=f"kraken-kafka-{config.sync_name}",
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        if owned_kafka is not None:
+            owned_kafka.close()
+        raise
     return _BridgeHandle(stop_event=stop_event, telemetry=telemetry, thread=thread)
+
+
+def _run_bridge(
+    *,
+    config: KrakenKafkaBridgeConfig,
+    kraken: KrakenWebSocketV2Adapter,
+    kafka: KafkaStreamAdapter,
+    ctx: RequestContext,
+    stop_event: Event,
+    telemetry: KrakenBridgeTelemetry,
+    owned_kafka: KafkaStreamAdapter | None,
+) -> None:
+    try:
+        run_kraken_kafka_bridge(
+            config,
+            kraken=kraken,
+            kafka=kafka,
+            ctx=ctx,
+            stop_event=stop_event,
+            telemetry=telemetry,
+        )
+    finally:
+        if owned_kafka is not None:
+            owned_kafka.close()
 
 
 def _kraken_adapter(summary: Mapping[str, object]) -> KrakenWebSocketV2Adapter:
@@ -505,6 +542,8 @@ def _stop_bridge(bridge: _BridgeHandle | None) -> None:
         return
     bridge.stop_event.set()
     bridge.thread.join(timeout=5.0)
+    if bridge.thread.is_alive():
+        raise RuntimeError("Kraken Kafka bridge did not stop within 5 seconds")
 
 
 def _workflow_was_stopped(foundry: FoundryLite, config: SourceStreamingServiceConfig, lease: _WorkerLease) -> bool:

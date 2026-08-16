@@ -437,6 +437,142 @@ def test_readiness_can_reach_ready_for_live_run_but_not_live_verified() -> None:
     assert "authentic_live_collector_required" in readiness.blockers
 
 
+@pytest.mark.parametrize(
+    ("mutate", "code", "is_structurally_complete"),
+    [
+        (
+            lambda manifest, _evidence, _preflight: manifest.update(requiredScenarios=["ontology"]),
+            "manifest_required_scenarios_mismatch",
+            False,
+        ),
+        (lambda _manifest, _evidence, preflight: preflight.update(is_ready=False), "preflight_not_ready", False),
+        (
+            lambda _manifest, _evidence, preflight: preflight["checks"][0]["evidence"].update(repositoryId=99),
+            "preflight_target_binding_mismatch",
+            False,
+        ),
+        (
+            lambda _manifest, evidence, _preflight: evidence["principals"]["submitter"].update(isHuman=False),
+            "principal_human_grant_missing",
+            False,
+        ),
+        (
+            lambda _manifest, evidence, _preflight: evidence["scenarios"][0]["governance"].update(
+                validationPassed=False
+            ),
+            "proposal_validation_not_passed",
+            False,
+        ),
+        (
+            lambda _manifest, evidence, _preflight: evidence["scenarios"][0]["governance"].update(
+                auditEventIds=["one"]
+            ),
+            "governance_audit_evidence_incomplete",
+            False,
+        ),
+        (
+            lambda _manifest, evidence, _preflight: evidence["scenarios"][0]["sourceControl"].update(isMerged=False),
+            "source_merge_or_checks_unverified",
+            False,
+        ),
+        (
+            lambda manifest, _evidence, _preflight: manifest["deployment"].update(environment="preview"),
+            "deployment_environment_mismatch",
+            False,
+        ),
+        (
+            lambda _manifest, evidence, _preflight: evidence["capture"].update(isSimulated=True),
+            "simulated_evidence_cannot_be_live",
+            True,
+        ),
+        (
+            lambda _manifest, evidence, _preflight: evidence.update(scenarios=[evidence["scenarios"][0]]),
+            "pipeline_scenario_missing_or_duplicated",
+            False,
+        ),
+    ],
+)
+def test_live_evidence_fail_closed_matrix_reports_stable_blocker_codes(
+    mutate,
+    code: str,
+    is_structurally_complete: bool,
+) -> None:
+    manifest = _manifest()
+    evidence = _evidence()
+    preflight = _preflight("live_provider_readback")
+    mutate(manifest, evidence, preflight)
+
+    result = verify_golden_evidence(manifest, evidence, preflight)
+
+    assert result.is_structurally_complete is is_structurally_complete
+    assert result.is_live_verified is False
+    assert code in result.blockers
+
+
+@pytest.mark.parametrize(
+    ("manifest", "preflight", "code"),
+    [
+        (None, _preflight("live_provider_readback"), "golden_manifest_missing"),
+        (_manifest(), None, "live_preflight_missing"),
+        (_manifest(), _preflight(), "live_provider_preflight_required"),
+    ],
+)
+def test_readiness_missing_or_non_live_inputs_are_explicitly_blocked(
+    manifest: dict[str, object] | None,
+    preflight: dict[str, object] | None,
+    code: str,
+) -> None:
+    readiness = assess_live_readiness(APP_ID, manifest, preflight, None)
+
+    assert readiness.status == "blocked"
+    assert code in readiness.blockers
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "code"),
+    [
+        ("publicBaseUrl", "http://foundry.example.test", "public_https_origin_required"),
+        ("publicBaseUrl", "https://foundry.example.test/path", "public_https_origin_required"),
+        ("authorizationServer", "https://identity.example.test?secret=value", "authorization_server_https_required"),
+    ],
+)
+def test_manifest_rejects_non_origin_or_non_https_authority_coordinates(
+    field: str,
+    replacement: str,
+    code: str,
+) -> None:
+    manifest = _manifest()
+    manifest[field] = replacement
+
+    result = verify_golden_evidence(manifest, _evidence(), _preflight("live_provider_readback"))
+
+    assert code in result.blockers
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "code"),
+    [
+        ("mergedAt", "not-a-time", "mergedAt_timestamp_invalid"),
+        ("mergedAt", "2026-08-09T01:00:00", "mergedAt_timezone_required"),
+        ("pullNumber", True, "source_merge_publication_pullNumber_mismatch"),
+        ("headSha", "short", "source_merge_publication_headSha_mismatch"),
+    ],
+)
+def test_source_receipt_requires_typed_identity_and_zoned_timestamp(
+    field: str,
+    replacement: object,
+    code: str,
+) -> None:
+    evidence = _evidence()
+    receipt = _scenario_by_kind(evidence, "ontology")["sourceControl"]
+    assert isinstance(receipt, dict)
+    receipt[field] = replacement
+
+    result = verify_golden_evidence(_manifest(), evidence, _preflight("live_provider_readback"))
+
+    assert code in result.blockers
+
+
 def test_verifier_cli_writes_blocked_report_and_nonzero_exit(tmp_path: Path) -> None:
     manifest_path = tmp_path / "manifest.json"
     evidence_path = tmp_path / "evidence.json"

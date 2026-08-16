@@ -7,6 +7,7 @@ from typing import Literal, NotRequired, TypedDict
 
 RuntimeJsonObject = Mapping[str, object]
 RuntimeRunType = Literal[
+    "source_exploration",
     "sync",
     "transform",
     "index",

@@ -191,6 +191,7 @@ class SourceCandidatePublicationReceipt:
     expected_base_ref: str
     expected_head_ref: str
     expected_base_sha: str
+    manifest_artifact_path: str
     manifest_fingerprint: str
     idempotency_key: str
     head_sha: str | None = None
@@ -224,6 +225,8 @@ def _validate_publication_receipt_identity(receipt: SourceCandidatePublicationRe
     _require_publication_status(receipt.status)
     if not _is_safe_git_ref(receipt.expected_base_ref) or not _is_safe_git_ref(receipt.expected_head_ref):
         raise ValueError("source candidate receipt refs are invalid")
+    if _MANIFEST_PATH.fullmatch(receipt.manifest_artifact_path) is None:
+        raise ValueError("source candidate receipt manifest path is invalid")
     if not _is_full_sha(receipt.expected_base_sha) or not _is_sha256(receipt.manifest_fingerprint):
         raise ValueError("source candidate receipt fingerprints are invalid")
     if not receipt.idempotency_key.strip():
@@ -262,6 +265,8 @@ def _validate_receipt_binding(receipt: SourceCandidatePublicationReceipt) -> Non
         raise ValueError("source candidate receipt base binding changed")
     if binding.expected_head_ref != receipt.expected_head_ref:
         raise ValueError("source candidate receipt head binding changed")
+    if binding.manifest.artifact_path != receipt.manifest_artifact_path:
+        raise ValueError("source candidate receipt manifest path binding changed")
     if binding.manifest.manifest_fingerprint != receipt.manifest_fingerprint:
         raise ValueError("source candidate receipt manifest binding changed")
 

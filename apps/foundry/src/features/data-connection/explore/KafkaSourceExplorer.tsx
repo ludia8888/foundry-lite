@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { readNumberField, readTextField } from "../source-model";
+import { SourceExplorationEvidenceLink } from "./SourceExplorationEvidenceLink";
 
 interface KafkaSourceExplorerProps {
   source: SourceConnection;
@@ -125,8 +126,18 @@ export function KafkaSourceExplorer({ source, onCreateSync }: KafkaSourceExplore
           </Button>
         </div>
       </div>
-      {topicsMutation.error ? <ErrorState error={topicsMutation.error} /> : null}
-      {previewMutation.error ? <ErrorState error={previewMutation.error} /> : null}
+      {topicsMutation.error ? (
+        <div className="space-y-2">
+          <ErrorState error={topicsMutation.error} />
+          <SourceExplorationEvidenceLink error={topicsMutation.error} label="실패 실행 조사" />
+        </div>
+      ) : null}
+      {previewMutation.error ? (
+        <div className="space-y-2">
+          <ErrorState error={previewMutation.error} />
+          <SourceExplorationEvidenceLink error={previewMutation.error} label="실패 실행 조사" />
+        </div>
+      ) : null}
       <div className="grid min-h-[480px] overflow-hidden rounded border bg-card lg:grid-cols-[280px_1fr]">
         <aside className="border-r">
           <div className="section-label border-b px-3 py-2">Topics</div>
@@ -170,6 +181,10 @@ export function KafkaSourceExplorer({ source, onCreateSync }: KafkaSourceExplore
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <SourceExplorationEvidenceLink
+                result={previewMutation.result ?? topicsMutation.result}
+                className="text-[10px]"
+              />
               <StatusPill intent="neutral">미리보기 전용</StatusPill>
               {checkpoint !== null ? (
                 <span className="font-mono text-[10px] text-muted-foreground">

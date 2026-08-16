@@ -24,6 +24,7 @@ from foundry_lite.domain.errors import (
     ExternalSystemError,
 )
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from foundry_lite_worker import writeback_reconciliation
 from foundry_lite_worker.writeback_reconciliation import (
     WritebackReconciliationWorkerConfig,
     WritebackReconciliationWorkerRuntime,
@@ -692,6 +693,59 @@ def test_writeback_reconciliation_worker_stops_at_max_batches(tmp_path: Path) ->
     assert result.skipped == 1
     assert result.failed == 0
     assert result.writeback_ids == ("wb-1", "wb-2")
+
+
+def test_writeback_worker_preserves_injected_runtime_when_recovery_raises(tmp_path: Path) -> None:
+    class FailingOperations:
+        def recover_action_writebacks(self, **_kwargs: object) -> object:
+            raise RuntimeError("injected recovery failure")
+
+    class InjectedFoundry:
+        operations = FailingOperations()
+
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    foundry = InjectedFoundry()
+    runtime = WritebackReconciliationWorkerRuntime(foundry=cast(FoundryLite, foundry))
+
+    with pytest.raises(RuntimeError, match="injected recovery failure"):
+        run_writeback_reconciliation_batches(
+            WritebackReconciliationWorkerConfig(storage_root=tmp_path),
+            runtime=runtime,
+        )
+
+    assert foundry.close_calls == 0
+
+
+def test_writeback_worker_closes_owned_runtime_when_recovery_raises(monkeypatch, tmp_path: Path) -> None:
+    class FailingOperations:
+        def recover_action_writebacks(self, **_kwargs: object) -> object:
+            raise RuntimeError("injected recovery failure")
+
+    class OwnedFoundry:
+        operations = FailingOperations()
+
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    foundry = OwnedFoundry()
+    monkeypatch.setattr(
+        writeback_reconciliation,
+        "build_writeback_reconciliation_runtime",
+        lambda _config: WritebackReconciliationWorkerRuntime(foundry=cast(FoundryLite, foundry)),
+    )
+
+    with pytest.raises(RuntimeError, match="injected recovery failure"):
+        run_writeback_reconciliation_batches(WritebackReconciliationWorkerConfig(storage_root=tmp_path))
+
+    assert foundry.close_calls == 1
 
 
 def test_writeback_reconciliation_worker_builds_s3_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

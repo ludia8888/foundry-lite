@@ -10,6 +10,16 @@ import {
 } from "react";
 import type { ReactElement, ReactNode } from "react";
 
+import { foundryLiteActionConditionMatches } from "./action-conditions";
+import type {
+  FoundryLiteActionConditionContext,
+  FoundryLiteActionConditionCurrentUser,
+} from "./action-conditions";
+import {
+  foundryLiteActionEnumContains,
+  foundryLiteActionScalarError,
+  foundryLiteDecimalConstraintError,
+} from "./action-values";
 import {
   actionLockKey,
   adminCapabilityView,
@@ -1639,6 +1649,7 @@ export type FoundryLiteActionTargetLike = {
   objectType?: string | null;
   objectId?: string | null;
   objectVersion?: number | null;
+  properties?: Readonly<Record<string, unknown>> | null;
 };
 
 export type FoundryLiteActionFormSelection = {
@@ -1648,6 +1659,8 @@ export type FoundryLiteActionFormSelection = {
   params?: Record<string, unknown>;
   idempotencyKey?: string | null;
   requireIdempotencyKey?: boolean;
+  currentUser?: FoundryLiteActionConditionCurrentUser | null;
+  linkedObjectProperties?: Readonly<Record<string, unknown>>;
 };
 
 export type FoundryLiteActionParameterInputKind =
@@ -1829,8 +1842,13 @@ export function foundryLiteActionFormView(
   );
   const params = selection.params ?? {};
   const idempotencyKey = selection.idempotencyKey ?? null;
+  const conditionContext: Omit<FoundryLiteActionConditionContext, "parameters"> = {
+    objectProperties: readFoundryLiteActionTargetObjectProperties(targetObject),
+    currentUser: selection.currentUser ?? null,
+    linkedObjectProperties: selection.linkedObjectProperties,
+  };
   const parameterFields = actionView
-    ? foundryLiteActionParameterFields(actionView.action.parameterSchema, params)
+    ? foundryLiteActionParameterFields(actionView.action.parameterSchema, params, conditionContext)
     : [];
   const parameterSections = actionView
     ? foundryLiteActionParameterSections(actionView.action.parameterSchema, parameterFields)
@@ -1951,6 +1969,8 @@ export function useFoundryLiteActionForm(
     objectId,
     expectedObjectVersion,
     requireIdempotencyKey = true,
+    currentUser: suppliedCurrentUser,
+    linkedObjectProperties,
     initialParams,
     initialIdempotencyKey = null,
     actionLock,
@@ -1960,6 +1980,7 @@ export function useFoundryLiteActionForm(
   } = options;
   const [params, setParamsState] = useState<Record<string, unknown>>(() => ({ ...(initialParams ?? {}) }));
   const [idempotencyKey, setIdempotencyKeyState] = useState<string | null>(initialIdempotencyKey);
+  const currentUser = suppliedCurrentUser ?? foundryLiteActionCurrentUserFromRequestContext(osdk.requestContext);
   const view = useMemo(
     () =>
       foundryLiteActionFormView(actionView, {
@@ -1969,14 +1990,18 @@ export function useFoundryLiteActionForm(
         params,
         idempotencyKey,
         requireIdempotencyKey,
+        currentUser,
+        linkedObjectProperties,
       }),
     [
       actionView,
+      currentUser,
       expectedObjectVersion,
       idempotencyKey,
       objectId,
       params,
       requireIdempotencyKey,
+      linkedObjectProperties,
       targetObject,
     ],
   );
@@ -2955,6 +2980,7 @@ function emptyFoundryLiteOperatorWorkspaceHome(): OperatorWorkspaceHomeView {
 
 function emptyFoundryLiteRuntimeRunQueryResult(): RuntimeRunQueryResult {
   return {
+    sourceExplorationRuns: [],
     syncRuns: [],
     transformRuns: [],
     indexRuns: [],
@@ -5010,6 +5036,7 @@ export type FoundryLiteOperationsInvestigationState = {
 const OPERATIONS_RUN_COLLECTIONS: readonly {
   key: keyof Pick<
     RuntimeRunQueryResult,
+    | "sourceExplorationRuns"
     | "syncRuns"
     | "transformRuns"
     | "indexRuns"
@@ -5024,6 +5051,7 @@ const OPERATIONS_RUN_COLLECTIONS: readonly {
   >;
   runType: RuntimeRunType;
 }[] = [
+  { key: "sourceExplorationRuns", runType: "source_exploration" },
   { key: "syncRuns", runType: "sync" },
   { key: "transformRuns", runType: "transform" },
   { key: "indexRuns", runType: "index" },
@@ -6968,10 +6996,15 @@ function foundryLiteSchemaPropertyCount(schema: Record<string, unknown>): number
 function foundryLiteActionParameterFields(
   schema: Record<string, unknown>,
   params: Record<string, unknown>,
+  context: Omit<FoundryLiteActionConditionContext, "parameters">,
 ): FoundryLiteActionParameterField[] {
   const properties = foundryLiteActionSchemaProperties(schema);
   const requiredNames = foundryLiteActionSchemaRequiredNames(schema);
   const resolvedValues: Record<string, unknown> = { ...params };
+  const typedContext = {
+    ...context,
+    parameterTypes: { ...context.parameterTypes, ...foundryLiteActionParameterTypes(properties) },
+  };
   return Object.entries(properties).map(([name, fieldSchema]) => {
     const fieldRecord = isFoundryLiteRecord(fieldSchema) ? fieldSchema : {};
     const parameterConfig = isFoundryLiteRecord(fieldRecord["x-foundry-parameter-config"])
@@ -6982,11 +7015,16 @@ function foundryLiteActionParameterFields(
       requiredNames.has(name),
       resolvedValues,
       foundryLiteParameterConstraints(fieldRecord),
+      typedContext,
     );
     const effectiveSchema = foundryLiteEffectiveParameterSchema(fieldRecord, effectiveConfig.constraints);
     const dataType = foundryLiteActionParameterDataType(fieldRecord, parameterConfig);
     const submittedValue = params[name];
-    const defaultValue = foundryLiteActionParameterDefaultValue(effectiveConfig.defaultValue, resolvedValues);
+    const defaultValue = foundryLiteActionParameterDefaultValue(
+      effectiveConfig.defaultValue,
+      resolvedValues,
+      typedContext,
+    );
     const value = submittedValue ?? defaultValue;
     if (value !== undefined) resolvedValues[name] = value;
     return {
@@ -7021,6 +7059,7 @@ function foundryLiteActionParameterSections(
   const rawSections = Array.isArray(layout.sections) ? layout.sections : [];
   const fieldsByName = new Map(fields.map((field) => [field.name, field]));
   const values = Object.fromEntries(fields.filter((field) => field.hasValue).map((field) => [field.name, field.value]));
+  const parameterTypes = Object.fromEntries(fields.map((field) => [field.name, field.dataType]));
   const assigned = new Set<string>();
   const sections = rawSections.map((raw, index) => {
     const section = isFoundryLiteRecord(raw) ? raw : {};
@@ -7033,7 +7072,7 @@ function foundryLiteActionParameterSections(
       assigned.add(name);
       return [field];
     });
-    return foundryLiteActionFormSection(section, index, names, sectionFields, values);
+    return foundryLiteActionFormSection(section, index, names, sectionFields, values, parameterTypes);
   });
   const remaining = fields.filter((field) => !assigned.has(field.name));
   if (remaining.length > 0 || sections.length === 0) {
@@ -7044,6 +7083,7 @@ function foundryLiteActionParameterSections(
         remaining.map((field) => field.name),
         remaining,
         values,
+        parameterTypes,
       ),
     );
   }
@@ -7056,6 +7096,7 @@ function foundryLiteActionFormSection(
   parameterNames: string[],
   fields: FoundryLiteActionParameterField[],
   values: Record<string, unknown>,
+  parameterTypes: Record<string, string>,
 ): FoundryLiteActionFormSection {
   const columns = section.columns === 2 ? 2 : 1;
   const visibleWhen = isFoundryLiteRecord(section.visibleWhen) ? section.visibleWhen : null;
@@ -7066,7 +7107,10 @@ function foundryLiteActionFormSection(
     columns,
     isCollapsible: section.isCollapsible === true,
     isInitiallyCollapsed: section.isInitiallyCollapsed === true,
-    isVisible: visibleWhen === null || foundryLiteActionConditionMatches(visibleWhen, values),
+    isVisible: visibleWhen === null || foundryLiteActionConditionMatches(visibleWhen, {
+      parameters: values,
+      parameterTypes,
+    }),
     visibleWhen,
     parameterNames,
     fields,
@@ -7087,6 +7131,7 @@ function foundryLiteEffectiveParameterConfig(
   schemaRequired: boolean,
   values: Record<string, unknown>,
   schemaConstraints: Record<string, unknown>,
+  context: Omit<FoundryLiteActionConditionContext, "parameters">,
 ): FoundryLiteEffectiveParameterConfig {
   const result: FoundryLiteEffectiveParameterConfig = {
     isRequired: typeof config.required === "boolean" ? config.required : schemaRequired,
@@ -7099,7 +7144,7 @@ function foundryLiteEffectiveParameterConfig(
   const overrides = Array.isArray(config.overrides) ? config.overrides : [];
   overrides.some((raw, index) => {
     const override = isFoundryLiteRecord(raw) ? raw : {};
-    if (!foundryLiteActionConditionMatches(override.when, values)) return false;
+    if (!foundryLiteActionConditionMatches(override.when, { ...context, parameters: values })) return false;
     const next = isFoundryLiteRecord(override.config) ? override.config : {};
     if (typeof next.required === "boolean") result.isRequired = next.required;
     if (typeof next.visible === "boolean") result.isVisible = next.visible;
@@ -7130,6 +7175,17 @@ function foundryLiteEffectiveParameterSchema(
 ): Record<string, unknown> {
   const result = { ...schema };
   for (const key of FOUNDRY_LITE_PARAMETER_CONSTRAINT_KEYS) delete result[key];
+  delete result["x-foundry-decimal-minimum"];
+  delete result["x-foundry-decimal-maximum"];
+  if (schema.format === "decimal") {
+    const { minimum, maximum, ...rest } = constraints;
+    return {
+      ...result,
+      ...rest,
+      ...(typeof minimum === "string" ? { "x-foundry-decimal-minimum": minimum } : {}),
+      ...(typeof maximum === "string" ? { "x-foundry-decimal-maximum": maximum } : {}),
+    };
+  }
   return { ...result, ...constraints };
 }
 
@@ -7139,8 +7195,15 @@ function foundryLiteActionParameterConstraintError(
   constraints: Record<string, unknown>,
 ): string | null {
   if (value === null || value === undefined || value === "") return null;
-  if (Array.isArray(constraints.enum) && !constraints.enum.some((item) => Object.is(item, value))) {
+  const dataType = foundryLiteActionParameterDataType(constraints, isFoundryLiteRecord(constraints["x-foundry-parameter-config"])
+    ? constraints["x-foundry-parameter-config"] : {});
+  const scalarError = foundryLiteActionScalarError(dataType, value);
+  if (scalarError) return `${name}: ${scalarError}`;
+  if (Array.isArray(constraints.enum) && !foundryLiteActionEnumContains(dataType, constraints.enum, value)) {
     return `${name}: enum`;
+  }
+  if (dataType === "decimal") {
+    return foundryLiteDecimalConstraintError(name, value, constraints);
   }
   if (typeof value === "string") {
     if (typeof constraints.minLength === "number" && value.length < constraints.minLength) return `${name}: minLength`;
@@ -7157,60 +7220,23 @@ function foundryLiteActionParameterConstraintError(
   return null;
 }
 
-function foundryLiteActionConditionMatches(
-  raw: unknown,
-  values: Record<string, unknown>,
-): boolean {
-  const condition = isFoundryLiteRecord(raw) ? raw : {};
-  if (Array.isArray(condition.all)) {
-    return condition.all.every((child) => foundryLiteActionConditionMatches(child, values));
-  }
-  if (Array.isArray(condition.any)) {
-    return condition.any.some((child) => foundryLiteActionConditionMatches(child, values));
-  }
-  if (condition.not !== undefined) return !foundryLiteActionConditionMatches(condition.not, values);
-  const left = foundryLiteActionConditionValue(condition.left, values);
-  const right = foundryLiteActionConditionValue(condition.right, values);
-  if (left === undefined || (condition.op !== "exists" && right === undefined)) return false;
-  if (condition.op === "eq") return Object.is(left, right);
-  if (condition.op === "neq") return !Object.is(left, right);
-  if (condition.op === "exists") return left !== null;
-  if (condition.op === "in" && Array.isArray(right)) return right.includes(left);
-  if (condition.op === "notIn" && Array.isArray(right)) return !right.includes(left);
-  if (condition.op === "contains" && Array.isArray(left)) return left.includes(right);
-  if (condition.op === "contains" && typeof left === "string") return left.includes(String(right));
-  if (condition.op === "startsWith" && typeof left === "string") return left.startsWith(String(right));
-  return foundryLiteOrderedActionCondition(condition.op, left, right);
-}
-
-function foundryLiteActionConditionValue(
-  raw: unknown,
-  values: Record<string, unknown>,
-): unknown {
-  const value = isFoundryLiteRecord(raw) ? raw : {};
-  if (value.kind === "literal") return value.value;
-  if (value.kind === "parameter" && typeof value.parameter === "string") {
-    return values[value.parameter];
-  }
-  return undefined;
-}
-
-function foundryLiteOrderedActionCondition(op: unknown, left: unknown, right: unknown): boolean {
-  if (typeof left !== "number" || typeof right !== "number") return false;
-  if (op === "lt") return left < right;
-  if (op === "lte") return left <= right;
-  if (op === "gt") return left > right;
-  if (op === "gte") return left >= right;
-  return false;
-}
-
 function foundryLiteActionParameterDefaultValue(
   defaultValue: Record<string, unknown> | null,
   values: Record<string, unknown>,
+  context: Omit<FoundryLiteActionConditionContext, "parameters">,
 ): unknown {
   if (defaultValue?.kind === "literal") return defaultValue.value;
   if (defaultValue?.kind === "parameter" && typeof defaultValue.parameter === "string") {
     return values[defaultValue.parameter];
+  }
+  if (defaultValue?.kind === "objectProperty" && typeof defaultValue.property === "string") {
+    return context.objectProperties?.[defaultValue.property];
+  }
+  if (defaultValue?.kind === "currentUser") {
+    const attribute = typeof defaultValue.attribute === "string" ? defaultValue.attribute : "id";
+    if (attribute === "id") return context.currentUser?.id;
+    if (["group", "groups", "roles"].includes(attribute)) return context.currentUser?.groups;
+    return context.currentUser?.attributes?.[attribute];
   }
   return undefined;
 }
@@ -7221,6 +7247,16 @@ function foundryLiteActionSchemaProperties(
   if (isFoundryLiteRecord(schema.properties)) return schema.properties;
   const reservedKeys = new Set(["type", "required", "title", "description", "additionalProperties"]);
   return Object.fromEntries(Object.entries(schema).filter(([key]) => !reservedKeys.has(key)));
+}
+
+function foundryLiteActionParameterTypes(properties: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.entries(properties).map(([name, raw]) => {
+    const schema = isFoundryLiteRecord(raw) ? raw : {};
+    const config = isFoundryLiteRecord(schema["x-foundry-parameter-config"])
+      ? schema["x-foundry-parameter-config"]
+      : {};
+    return [name, foundryLiteActionParameterDataType(schema, config)];
+  }));
 }
 
 function foundryLiteActionSchemaRequiredNames(schema: Record<string, unknown>): Set<string> {
@@ -7292,6 +7328,24 @@ function readFoundryLiteActionTargetObjectType(
 ): string | null {
   const objectType = targetObject?.objectType;
   return typeof objectType === "string" && objectType.length > 0 ? objectType : null;
+}
+
+function readFoundryLiteActionTargetObjectProperties(
+  targetObject: FoundryLiteActionTargetLike | FoundryLiteObject<string, object> | null,
+): Readonly<Record<string, unknown>> {
+  const properties = targetObject?.properties;
+  return isFoundryLiteRecord(properties) ? properties : {};
+}
+
+function foundryLiteActionCurrentUserFromRequestContext(
+  context: FoundryLiteOsdkClient["requestContext"],
+): FoundryLiteActionConditionCurrentUser | null {
+  if (!context.userId && !context.roles?.length && !context.userAttributes) return null;
+  return {
+    id: context.userId ?? null,
+    groups: context.roles ?? [],
+    attributes: context.userAttributes ?? {},
+  };
 }
 
 function foundryLiteActionFormMissingFields(

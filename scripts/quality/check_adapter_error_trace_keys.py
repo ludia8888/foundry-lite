@@ -115,28 +115,31 @@ def _run_probe(storage_root: Path) -> tuple[Mapping[str, object] | None, dict[st
     data_dependencies = dataclass_replace(dependencies.data, compute_adapter=ExplodingCsvComputeAdapter())
     dependencies = dataclass_replace(dependencies, data=data_dependencies)
     foundry = FoundryLite(dependencies=dependencies)
-    ctx = RequestContext(
-        tenant_id="tenant-adapter-trace",
-        actor_user_id="actor-adapter-trace",
-        request_id="request-adapter-trace",
-        roles=DEMO_ADMIN_ROLES,
-    )
-    foundry.datasets.ensure("raw.adapter_trace", ctx=ctx, primary_key=["id"])
-    csv_path = storage_root / "adapter-trace.csv"
-    csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
     try:
-        foundry.datasets.upload_csv("raw.adapter_trace", csv_path, ctx=ctx)
-    except ValidationFailed:
-        pass
-    else:
-        raise AssertionError("exploding adapter unexpectedly let upload_csv succeed")
-    expected_trace = {
-        "tenant_id": ctx.tenant_id,
-        "actor_user_id": ctx.actor_user_id,
-        "request_id": ctx.request_id,
-        "adapter": "compute_adapter.csv_to_parquet",
-    }
-    return _failed_sync_run(foundry.operations.list_runs(ctx=ctx)["syncRuns"]), expected_trace
+        ctx = RequestContext(
+            tenant_id="tenant-adapter-trace",
+            actor_user_id="actor-adapter-trace",
+            request_id="request-adapter-trace",
+            roles=DEMO_ADMIN_ROLES,
+        )
+        foundry.datasets.ensure("raw.adapter_trace", ctx=ctx, primary_key=["id"])
+        csv_path = storage_root / "adapter-trace.csv"
+        csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
+        try:
+            foundry.datasets.upload_csv("raw.adapter_trace", csv_path, ctx=ctx)
+        except ValidationFailed:
+            pass
+        else:
+            raise AssertionError("exploding adapter unexpectedly let upload_csv succeed")
+        expected_trace = {
+            "tenant_id": ctx.tenant_id,
+            "actor_user_id": ctx.actor_user_id,
+            "request_id": ctx.request_id,
+            "adapter": "compute_adapter.csv_to_parquet",
+        }
+        return _failed_sync_run(foundry.operations.list_runs(ctx=ctx)["syncRuns"]), expected_trace
+    finally:
+        foundry.close()
 
 
 def run_gate(storage_root: Path) -> list[AdapterTraceFinding]:

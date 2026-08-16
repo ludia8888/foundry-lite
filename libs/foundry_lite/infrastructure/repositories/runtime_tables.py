@@ -95,6 +95,7 @@ def _rows_timestamp_column(table: RuntimeRowsTable) -> Any:
 
 def _rows_table(table: RuntimeRowsTable) -> Any:
     return {
+        "source_exploration_runs": db.source_exploration_runs,
         "sync_runs": db.sync_runs,
         "transform_runs": db.transform_runs,
         "index_runs": db.index_runs,
@@ -113,6 +114,7 @@ def _rows_table(table: RuntimeRowsTable) -> Any:
 
 def _run_table(run_type: RuntimeRunType) -> Any:
     return {
+        "source_exploration": db.source_exploration_runs,
         "sync": db.sync_runs,
         "transform": db.transform_runs,
         "index": db.index_runs,

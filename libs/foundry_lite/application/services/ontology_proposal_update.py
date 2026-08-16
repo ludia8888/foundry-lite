@@ -32,6 +32,7 @@ from foundry_lite.application.services.ontology_proposal_payloads import (
 from foundry_lite.application.services.ontology_protocols import OntologyRuntimeBoundary
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.ontology_yaml import require_yaml_text_within_limit
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -120,12 +121,14 @@ def decision_time_plan(
     try:
         validation = service.ontology_service.validate_yaml_text(proposal_yaml_text(row), ctx=ctx)
     except FoundryLiteError as exc:
+        safe_message = scrub_error_text(exc.message)
+        safe_details = scrub_error_mapping(exc.details)
         if decision == "approved":
             raise ValidationFailed(
                 "ontology proposal no longer validates against the current active ontology",
-                details={"proposal_id": row["id"], "error": exc.message, "errorDetails": dict(exc.details)},
+                details={"proposal_id": row["id"], "error": safe_message, "errorDetails": safe_details},
             ) from exc
-        return {"status": "validation_failed", "error": exc.message}
+        return {"status": "validation_failed", "error": safe_message}
     plan = dict(validation["migration_plan"])
     if decision == "approved" and plan.get("blockedChanges"):
         raise ValidationFailed(

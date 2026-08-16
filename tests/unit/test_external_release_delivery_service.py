@@ -651,6 +651,7 @@ def _publication_receipt(
         expected_base_ref=request.expected_base_ref,
         expected_head_ref=request.expected_head_ref,
         expected_base_sha=request.expected_base_sha,
+        manifest_artifact_path=request.manifest.artifact_path,
         manifest_fingerprint=request.manifest.manifest_fingerprint,
         idempotency_key=request.idempotency_key,
         head_sha=_sha("a"),

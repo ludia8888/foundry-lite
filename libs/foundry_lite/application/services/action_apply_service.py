@@ -1,5 +1,3 @@
-"""Action apply use case service."""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -53,10 +51,7 @@ from foundry_lite.application.services.action_apply_support import (
 from foundry_lite.application.services.action_external_apply import ExternalActionApply
 from foundry_lite.application.services.action_media_runtime_service import ActionMediaRuntimeService
 from foundry_lite.application.services.action_plan_authorization import resolve_authorized_action_edit_plan
-from foundry_lite.application.services.action_v2_commit import (
-    ActionV2Committer,
-    uses_action_rules_v2,
-)
+from foundry_lite.application.services.action_v2_commit import ActionV2Committer, uses_action_rules_v2
 from foundry_lite.application.services.action_workflow import (
     ActionMutationUnitOfWork,
     ActionObjectIndexer,
@@ -201,7 +196,12 @@ class ActionApplyService(CoreService):
     ) -> ObjectRecordRow | None:
         record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
         target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
-        record = visible_record(record, target_type, ctx.roles)
+        record = visible_record(
+            record,
+            target_type,
+            ctx.roles,
+            self.ontology_service._properties_for_object_type(conn, target_type["id"]),
+        )
         if record is None:
             contract = canonical_action_contract(action_type["definition"])
             record = interface_create_target_record(

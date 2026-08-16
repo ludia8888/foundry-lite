@@ -16,7 +16,7 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
-from foundry_lite.application.query_filters import FILTER_OPERATIONS
+from foundry_lite.application.query_filters import FILTER_OPERATIONS, validate_filter_ast
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.row_policies import row_policy_scope
 from foundry_lite.application.services.object_store.set_members import (
@@ -31,6 +31,7 @@ from foundry_lite.application.services.object_store.set_protocols import (
 from foundry_lite.application.services.object_store.set_semantics import (
     NormalizedObjectSetDefinition,
     ObjectSetMembers,
+    can_read_object_set,
     object_set_access_scope,
     object_set_definition_from_inputs,
     object_set_expires_at,
@@ -47,11 +48,7 @@ OBJECT_SET_TYPES = {"static", "dynamic"}
 
 class ObjectSetsService(CoreService):
     required_dependencies = ("engine", "policy", "object_set_repository")
-    required_collaborators = (
-        "object_query_service",
-        "ontology_service",
-        "runtime_service",
-    )
+    required_collaborators = ("object_query_service", "ontology_service", "runtime_service")
     object_query_service: SetObjectQuery
     ontology_service: SetOntologyLookup
     runtime_service: SetRuntimeBoundary
@@ -316,7 +313,13 @@ class ObjectSetsService(CoreService):
             object_type_id=object_type["id"],
         )
         masked_property_names = self.policy.masked_property_names(ctx, object_type["api_name"])
-        self._validate_filter_ast(cast(Mapping[str, object], filter_ast), property_names, masked_property_names)
+        typed_filter = cast(Mapping[str, object], filter_ast)
+        self._validate_filter_ast(typed_filter, property_names, masked_property_names)
+        property_data_types = {
+            row["api_name"]: row["data_type"]
+            for row in self.ontology_service._properties_for_object_type(conn, object_type["id"])
+        }
+        validate_filter_ast(typed_filter, property_data_types=property_data_types)
 
     def _validate_filter_ast(
         self, filter_ast: Mapping[str, object], property_names: set[str], masked_property_names: set[str]
@@ -409,7 +412,12 @@ class ObjectSetsService(CoreService):
     ) -> ObjectSetMembers:
         object_ids = list(cast(Sequence[str], row["definition"]["ids"]))
         # Restricted callers load records even for id-only reads: hidden ids never surface.
-        scope = row_policy_scope(self.ontology_service._active_object_type(conn, ctx, object_type_api_name), ctx.roles)
+        object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+        scope = row_policy_scope(
+            object_type,
+            ctx.roles,
+            self.ontology_service._properties_for_object_type(conn, object_type["id"]),
+        )
         if scope.is_unrestricted and not include_items:
             return object_ids, []
         records = {
@@ -457,7 +465,7 @@ class ObjectSetsService(CoreService):
             tenant_id=ctx.tenant_id,
             set_id=set_id,
         )
-        if normalized is None or object_set_is_expired(normalized) or not self._can_read_object_set(ctx, normalized):
+        if normalized is None or object_set_is_expired(normalized) or not can_read_object_set(ctx, normalized):
             return None
         return normalized
 
@@ -477,14 +485,7 @@ class ObjectSetsService(CoreService):
             tenant_id=ctx.tenant_id,
             object_type_id=object_type_id,
         )
-        return [row for row in rows if not object_set_is_expired(row) and self._can_read_object_set(ctx, row)]
-
-    def _can_read_object_set(self, ctx: RequestContext, row: ObjectSetRow) -> bool:
-        if object_set_access_scope(row["visibility"]) == "public":
-            return True
-        if row["owner_user_id"] == ctx.actor_user_id:
-            return True
-        return ctx.has_role("admin")
+        return [row for row in rows if not object_set_is_expired(row) and can_read_object_set(ctx, row)]
 
     def _object_type_by_id(
         self, conn: TransactionContext, ctx: RequestContext, object_type_id: str

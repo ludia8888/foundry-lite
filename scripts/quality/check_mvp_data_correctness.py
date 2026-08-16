@@ -216,10 +216,9 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
     with tempfile.TemporaryDirectory() as tmp:
         clone_root = Path(tmp) / "mvp-data-correctness"
         _clone_local_store_for_replay(storage_root, clone_root)
+        foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=clone_root))
         try:
-            result = FoundryLite(dependencies=create_local_core_dependencies(storage_root=clone_root)).objects.reindex(
-                "Order", ctx=demo_admin_context()
-            )
+            result = foundry.objects.reindex("Order", ctx=demo_admin_context())
         except Exception as exc:
             return [
                 _finding(
@@ -229,6 +228,8 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
                     {"errorType": type(exc).__name__, "message": str(exc)},
                 )
             ]
+        finally:
+            foundry.close()
         after = _object_source_fingerprint(_database_path(clone_root), tenant_id, "Order")
         rows_skipped = _index_run_rows_skipped(_database_path(clone_root), tenant_id, str(result["index_run_id"]))
     findings: list[DataCorrectnessFinding] = []

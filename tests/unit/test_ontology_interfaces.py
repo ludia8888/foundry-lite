@@ -49,6 +49,26 @@ def _asset_interface(
     }
 
 
+def test_interface_allows_temporal_properties_when_implementers_match() -> None:
+    interface = {
+        "apiName": "ScheduledAsset",
+        "properties": [
+            {"apiName": "serviceDate", "type": "date", "nullable": True},
+            {"apiName": "scheduledAt", "type": "timestamp", "nullable": True},
+        ],
+    }
+    implementation = {
+        "apiName": "Machine",
+        "implements": ["ScheduledAsset"],
+        "properties": [
+            {"apiName": "serviceDate", "type": "date", "nullable": True},
+            {"apiName": "scheduledAt", "type": "timestamp", "nullable": True},
+        ],
+    }
+
+    validate_ontology_interfaces({"interfaces": [interface], "objectTypes": [implementation]})
+
+
 def _order_type(
     *,
     implements: list[str] | None = None,
@@ -411,10 +431,10 @@ def test_query_by_interface_masks_classified_properties_per_type(foundry: Foundr
 
     result = foundry.objects.query_by_interface("Asset", ctx=ops)
 
-    risk_by_key = {
-        (item["objectType"], item["objectId"]): item["properties"]["riskScore"]
-        for item in cast(list[dict[str, object]], result["items"])
-    }
+    risk_by_key = {}
+    for item in cast(list[dict[str, object]], result["items"]):
+        properties = cast(dict[str, object], item["properties"])
+        risk_by_key[(item["objectType"], item["objectId"])] = properties["riskScore"]
     assert risk_by_key[("Order", "O-1")] == "***MASKED***"
     assert risk_by_key[("Customer", "C-100")] == 0.8
     # Ordering on a property masked for one implementing type follows that

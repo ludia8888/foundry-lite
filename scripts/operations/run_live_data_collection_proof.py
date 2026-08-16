@@ -174,15 +174,24 @@ def main(argv: list[str] | None = None) -> int:
 def run_live_data_collection_proof(config: LiveProofConfig) -> dict[str, object]:
     dependencies = create_local_core_dependencies(storage_root=config.storage_root)
     foundry = FoundryLite(dependencies=_with_connector_adapter(dependencies, RestPullConnectorAdapter()))
+    try:
+        return _run_live_proof(foundry, dependencies, config)
+    finally:
+        foundry.close()
+
+
+def _run_live_proof(
+    foundry: FoundryLite,
+    dependencies: CoreDependencies,
+    config: LiveProofConfig,
+) -> dict[str, object]:
     ctx = _context()
     _ensure_datasets(foundry, ctx)
-
     hn = _sync_hn_stories(foundry, ctx, config.limit)
     wiki_changes = _sync_wikipedia_recent_changes(foundry, ctx, dependencies, config.limit)
     titles = _titles_for_extracts(foundry.datasets.preview("raw.live_wikipedia_changes", ctx=ctx), config.limit)
     wiki_extracts = _sync_wikipedia_extracts(foundry, ctx, dependencies, titles)
     github_events = _sync_github_events(foundry, ctx, dependencies, config.limit)
-
     clean = _normalize_live_signals(foundry, ctx, config.storage_root)
     foundry.ontology.apply(str(_live_signal_ontology(config.storage_root)), ctx=ctx)
     index = foundry.objects.reindex("LiveSignal", ctx=ctx)
@@ -199,28 +208,45 @@ def run_live_data_collection_proof(config: LiveProofConfig) -> dict[str, object]
         raise ValidationFailed("live data proof AIP run failed", details={"error": agent.error})
     ai_detail = foundry.operations.run_detail("ai", str(agent.ai_run_id), ctx=ctx)
     published = foundry.operations.publish_pending_outbox(ctx=ctx, limit=100)
+    return _live_proof_summary(
+        hn=hn,
+        wiki_changes=wiki_changes,
+        wiki_extracts=wiki_extracts,
+        github_events=github_events,
+        clean=clean,
+        index=index,
+        search_index=search_index,
+        search=search,
+        sample=sample,
+        agent=agent,
+        ai_detail=ai_detail,
+        published=published,
+    )
 
+
+def _live_proof_summary(**values: Any) -> dict[str, object]:
+    agent = values["agent"]
     return {
         "status": "passed",
         "sources": {
-            "hnAlgolia": _commit_summary(hn, HN_BASE_URL),
-            "wikipediaRecentChanges": _commit_summary(wiki_changes, WIKIMEDIA_EVENTSTREAM_URL),
-            "wikipediaExtracts": _commit_summary(wiki_extracts, WIKI_BASE_URL),
-            "githubEvents": _commit_summary(github_events, GITHUB_EVENTS_URL),
+            "hnAlgolia": _commit_summary(values["hn"], HN_BASE_URL),
+            "wikipediaRecentChanges": _commit_summary(values["wiki_changes"], WIKIMEDIA_EVENTSTREAM_URL),
+            "wikipediaExtracts": _commit_summary(values["wiki_extracts"], WIKI_BASE_URL),
+            "githubEvents": _commit_summary(values["github_events"], GITHUB_EVENTS_URL),
         },
-        "cleanLiveSignals": _commit_summary(clean, "transform:live_signals"),
-        "objectIndex": index,
-        "searchIndex": search_index,
-        "searchHitIds": [item["objectId"] for item in search["items"]],
-        "sampleSignal": sample,
+        "cleanLiveSignals": _commit_summary(values["clean"], "transform:live_signals"),
+        "objectIndex": values["index"],
+        "searchIndex": values["search_index"],
+        "searchHitIds": [item["objectId"] for item in values["search"]["items"]],
+        "sampleSignal": values["sample"],
         "aip": {
             "runStatus": agent.run_status,
             "aiRunId": agent.ai_run_id,
             "contextIds": list(agent.context_ids),
             "citationCount": len(agent.citations),
-            "sourceResourceTypes": _ai_source_resource_types(ai_detail),
+            "sourceResourceTypes": _ai_source_resource_types(values["ai_detail"]),
         },
-        "outboxPublish": published,
+        "outboxPublish": values["published"],
     }
 
 
@@ -265,14 +291,20 @@ def _sync_wikipedia_recent_changes(
         dependencies=_with_connector_adapter(
             dependencies,
             WikimediaRecentChangeStreamConnectorAdapter(limit=limit),
+        ),
+        is_stream_adapter_owned=False,
+        is_engine_owned=False,
+        is_orchestrator_owned=False,
+    )
+    try:
+        return stream_foundry.datasets.sync_connector_snapshot(
+            "raw.live_wikipedia_changes",
+            connector_name="live_wikimedia_stream",
+            resource_name="recentchange",
+            ctx=ctx,
         )
-    )
-    return stream_foundry.datasets.sync_connector_snapshot(
-        "raw.live_wikipedia_changes",
-        connector_name="live_wikimedia_stream",
-        resource_name="recentchange",
-        ctx=ctx,
-    )
+    finally:
+        stream_foundry.close()
 
 
 def _sync_wikipedia_extracts(
@@ -282,14 +314,20 @@ def _sync_wikipedia_extracts(
     titles: Sequence[str],
 ) -> Any:
     extract_foundry = FoundryLite(
-        dependencies=_with_connector_adapter(dependencies, WikipediaExtractConnectorAdapter(titles=titles))
+        dependencies=_with_connector_adapter(dependencies, WikipediaExtractConnectorAdapter(titles=titles)),
+        is_stream_adapter_owned=False,
+        is_engine_owned=False,
+        is_orchestrator_owned=False,
     )
-    return extract_foundry.datasets.sync_connector_snapshot(
-        "raw.live_wikipedia_extracts",
-        connector_name="live_wikipedia",
-        resource_name="extracts",
-        ctx=ctx,
-    )
+    try:
+        return extract_foundry.datasets.sync_connector_snapshot(
+            "raw.live_wikipedia_extracts",
+            connector_name="live_wikipedia",
+            resource_name="extracts",
+            ctx=ctx,
+        )
+    finally:
+        extract_foundry.close()
 
 
 def _sync_github_events(
@@ -302,14 +340,20 @@ def _sync_github_events(
         dependencies=_with_connector_adapter(
             dependencies,
             GitHubEventsConnectorAdapter(limit=limit),
+        ),
+        is_stream_adapter_owned=False,
+        is_engine_owned=False,
+        is_orchestrator_owned=False,
+    )
+    try:
+        return github_foundry.datasets.sync_connector_snapshot(
+            "raw.live_github_events",
+            connector_name="live_github",
+            resource_name="public_events",
+            ctx=ctx,
         )
-    )
-    return github_foundry.datasets.sync_connector_snapshot(
-        "raw.live_github_events",
-        connector_name="live_github",
-        resource_name="public_events",
-        ctx=ctx,
-    )
+    finally:
+        github_foundry.close()
 
 
 def _normalize_live_signals(foundry: FoundryLite, ctx: RequestContext, storage_root: Path) -> Any:

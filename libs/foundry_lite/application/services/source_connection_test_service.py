@@ -20,6 +20,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.connector_onboarding_service import ConnectorOnboardingService
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.application.services.source_connection_test_views import (
     SourceProbeOutcome,
     connection_checks,
@@ -447,8 +448,8 @@ def _require_replay_fingerprint(row: SourceConnectionTestRow, expected: str) -> 
 def _error_payload(error: FoundryLiteError, request_id: str) -> dict[str, object]:
     return {
         "type": error.code,
-        "message": error.message,
-        "details": dict(error.details),
+        "message": scrub_error_text(error.message),
+        "details": scrub_error_mapping(error.details),
         "requestId": request_id,
         "retryable": error.code in {"ADAPTER_TIMEOUT", "ADAPTER_UNAVAILABLE", "RATE_LIMITED"},
     }

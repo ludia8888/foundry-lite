@@ -64,6 +64,7 @@ from foundry_lite.application.services.aip.fde_mcp_widget_confirmation import (
     FdeMcpWidgetConfirmationLedger,
 )
 from foundry_lite.application.services.mcp_tool_results import tool_error_structured
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
 from foundry_lite.security.policy import PolicyService
@@ -443,7 +444,7 @@ class FdeMcpSecurityLedger:
 
 
 def _execution_error(ctx: RequestContext, exc: Exception) -> dict[str, object]:
-    error: dict[str, object] = {"type": type(exc).__name__, "detail": str(exc)[:512]}
+    error: dict[str, object] = {"type": type(exc).__name__, "detail": scrub_error_text(str(exc))[:512]}
     if isinstance(exc, FoundryLiteError):
         error["mcpToolResult"] = tool_error_structured(exc, request_id=ctx.request_id)
     return error

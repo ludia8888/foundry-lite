@@ -43,21 +43,21 @@ from foundry_lite.application.services.object_store.query_protocols import (
     ObjectRecordLookup,
     ObjectSearchQueryPlanner,
 )
-from foundry_lite.application.services.object_store.query_validation import validate_query_properties
+from foundry_lite.application.services.object_store.query_validation import (
+    query_limit,
+    require_visible_query_record,
+    validate_query_properties,
+)
 from foundry_lite.application.services.object_store.row_policies import (
     row_policy_scope,
-    row_visible,
     scoped_filter_ast,
 )
 from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
-    NotFound,
     ValidationFailed,
 )
 from foundry_lite.domain.ontology.datasources import split_source_dataset_version_id
-
-OBJECT_QUERY_MAX_LIMIT = 500
 
 
 class _OsdkScopeBoundary(Protocol):
@@ -108,11 +108,12 @@ class ObjectQueryService(CoreService):
             )
             # Rows hidden by row policies 404 exactly like missing rows so a
             # restricted caller cannot probe for their existence.
-            if record is None or not row_visible(row_policy_scope(object_type, ctx.roles), record["properties"]):
-                raise NotFound(
-                    "object not found",
-                    details={"object_type": object_type_api_name, "object_id": object_id},
-                )
+            scope = row_policy_scope(
+                object_type,
+                ctx.roles,
+                self.ontology_service._properties_for_object_type(conn, object_type["id"]),
+            )
+            record = require_visible_query_record(record, scope, object_type_api_name, object_id)
             properties = self.policy.mask_properties(
                 ctx,
                 object_type_api_name,
@@ -212,9 +213,9 @@ class ObjectQueryService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         self._require_object_read_scope(ctx, object_type_api_name)
-        query_limit = _query_limit(limit)
+        query_limit_value = query_limit(limit)
         routed = self._search_route(
-            object_type_api_name, ctx, search_text, semantic_text, query_limit, filter_ast, order_by, cursor
+            object_type_api_name, ctx, search_text, semantic_text, query_limit_value, filter_ast, order_by, cursor
         )
         if routed is not None:
             return routed
@@ -227,9 +228,9 @@ class ObjectQueryService(CoreService):
             filter_ast,
             normalized_order_by,
             cursor,
-            query_limit,
+            query_limit_value,
         )
-        page = records[:query_limit]
+        page = records[:query_limit_value]
         return {
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
             "nextCursor": _next_cursor(records, page, normalized_order_by, effective_filter, active_index_version, ctx),
@@ -275,7 +276,11 @@ class ObjectQueryService(CoreService):
         plan: ObjectAggregationPlan,
     ) -> list[ObjectAggregationGroup]:
         """Row policies inject here so aggregates cannot reconstruct hidden rows."""
-        scope = row_policy_scope(object_type, ctx.roles)
+        scope = row_policy_scope(
+            object_type,
+            ctx.roles,
+            self.ontology_service._properties_for_object_type(conn, object_type["id"]),
+        )
         if scope.hides_all_rows:
             return []
         return aggregate_group_rows(
@@ -356,7 +361,11 @@ class ObjectQueryService(CoreService):
             self._validate_query_shape(conn, ctx, object_type_api_name, object_type["id"], filter_ast, order_by)
             # Row policies are ANDed in AFTER shape validation: callers cannot
             # reference masked properties, but server-injected policy filters may.
-            scope = row_policy_scope(object_type, ctx.roles)
+            scope = row_policy_scope(
+                object_type,
+                ctx.roles,
+                self.ontology_service._properties_for_object_type(conn, object_type["id"]),
+            )
             if scope.hides_all_rows:
                 return [], active_index_version, filter_ast
             effective_filter = scoped_filter_ast(scope, filter_ast)
@@ -405,9 +414,16 @@ class ObjectQueryService(CoreService):
         filter_ast: Mapping[str, object] | None,
         order_by: Sequence[ObjectOrderBy],
     ) -> None:
-        property_names = self._query_property_names(conn, object_type_id)
+        properties = self.ontology_service._properties_for_object_type(conn, object_type_id)
+        data_types = property_data_types(properties)
         masked = self.policy.masked_property_names(ctx, object_type_api_name)
-        validate_query_properties(filter_ast, order_by, property_names, masked)
+        validate_query_properties(
+            filter_ast,
+            order_by,
+            set(data_types),
+            masked,
+            property_data_types=data_types,
+        )
 
     def _object_query_item(
         self,
@@ -421,27 +437,6 @@ class ObjectQueryService(CoreService):
             "objectVersion": row["object_version"],
             "properties": self.policy.mask_properties(ctx, object_type_api_name, dict(row["properties"])),
         }
-
-    def _query_property_names(
-        self,
-        conn: TransactionContext,
-        object_type_id: str,
-    ) -> set[str]:
-        return {
-            property_type["api_name"]
-            for property_type in self.ontology_service._properties_for_object_type(conn, object_type_id)
-        }
-
-
-def _query_limit(limit: int) -> int:
-    if limit < 1:
-        raise ValidationFailed("object query limit must be positive", details={"limit": limit})
-    if limit > OBJECT_QUERY_MAX_LIMIT:
-        raise ValidationFailed(
-            "object query limit exceeds maximum",
-            details={"limit": limit, "max_limit": OBJECT_QUERY_MAX_LIMIT},
-        )
-    return limit
 
 
 def _validate_search_planner_shape(

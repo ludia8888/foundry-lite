@@ -22,8 +22,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from foundry_lite.application.ports import ObjectRecordRow, ObjectTypeRow
-from foundry_lite.application.query_filters import matches_filter
+from foundry_lite.application.ports import ObjectRecordRow, ObjectTypeRow, PropertyTypeRow
+from foundry_lite.application.query_filters import matches_filter, validate_filter_ast
 from foundry_lite.domain.errors import ValidationFailed
 
 #: Config JSON key holding the persisted ``rowPolicies`` declarations.
@@ -45,6 +45,7 @@ class RowPolicyScope:
 
     is_unrestricted: bool
     filter_ast: Mapping[str, object] | None
+    property_data_types: Mapping[str, str] | None = None
 
     @property
     def hides_all_rows(self) -> bool:
@@ -55,17 +56,32 @@ UNRESTRICTED_ROWS = RowPolicyScope(is_unrestricted=True, filter_ast=None)
 ZERO_ROWS = RowPolicyScope(is_unrestricted=False, filter_ast=None)
 
 
-def row_policy_scope(object_type: ObjectTypeRow, roles: Sequence[str]) -> RowPolicyScope:
+def row_policy_scope(
+    object_type: ObjectTypeRow,
+    roles: Sequence[str],
+    property_types: Sequence[PropertyTypeRow] | None = None,
+) -> RowPolicyScope:
     """Resolve the caller's row visibility from the persisted declarations."""
     policies = persisted_row_policies(object_type["config"])
-    if not policies or ROW_POLICY_ADMIN_ROLE in roles:
+    if not policies:
+        return UNRESTRICTED_ROWS
+    property_data_types = _property_data_types(property_types)
+    for _role, policy_filter in policies:
+        validate_filter_ast(policy_filter, property_data_types=property_data_types)
+    if ROW_POLICY_ADMIN_ROLE in roles:
         return UNRESTRICTED_ROWS
     filters = [policy_filter for role, policy_filter in policies if role in roles]
     if not filters:
         return ZERO_ROWS
     if len(filters) == 1:
-        return RowPolicyScope(is_unrestricted=False, filter_ast=filters[0])
-    return RowPolicyScope(is_unrestricted=False, filter_ast={"or": filters})
+        return RowPolicyScope(False, filters[0], property_data_types)
+    return RowPolicyScope(False, {"or": filters}, property_data_types)
+
+
+def _property_data_types(property_types: Sequence[PropertyTypeRow] | None) -> dict[str, str]:
+    if property_types is None:
+        raise ValidationFailed("row policy property metadata is unavailable")
+    return {row["api_name"]: row["data_type"] for row in property_types}
 
 
 def persisted_row_policies(config: Mapping[str, object]) -> list[tuple[str, Mapping[str, object]]]:
@@ -90,6 +106,7 @@ def _persisted_row_policy(policy: object) -> tuple[str, Mapping[str, object]]:
     policy_filter = policy.get("filter")
     if not isinstance(role, str) or not role or not isinstance(policy_filter, Mapping):
         raise ValidationFailed("object type row policy requires a role and a filter")
+    validate_filter_ast(policy_filter)
     return role, policy_filter
 
 
@@ -115,13 +132,16 @@ def row_visible(scope: RowPolicyScope, properties: Mapping[str, object]) -> bool
         return True
     if scope.filter_ast is None:
         return False
-    return matches_filter(properties, scope.filter_ast)
+    if scope.property_data_types is None:
+        raise ValidationFailed("row policy property metadata is unavailable")
+    return matches_filter(properties, scope.filter_ast, property_data_types=scope.property_data_types)
 
 
 def visible_record(
     record: ObjectRecordRow | None,
     object_type: ObjectTypeRow,
     roles: Sequence[str],
+    property_types: Sequence[PropertyTypeRow] | None = None,
 ) -> ObjectRecordRow | None:
     """Drop a row the caller must not see, indistinguishably from a missing row.
 
@@ -130,4 +150,4 @@ def visible_record(
     """
     if record is None:
         return None
-    return record if row_visible(row_policy_scope(object_type, roles), record["properties"]) else None
+    return record if row_visible(row_policy_scope(object_type, roles, property_types), record["properties"]) else None

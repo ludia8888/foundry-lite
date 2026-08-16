@@ -26,6 +26,7 @@ from foundry_lite.domain.action_runtime.action_contract import (
     compile_action_contract,
 )
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.scalar_values import matches_scalar_type
 
 
 def validate_yaml_action_definitions(
@@ -393,7 +394,9 @@ def _require_literal_assignment_type(
     raw_value: Mapping[object, object],
 ) -> None:
     property_type = required_str(property_definition, "type")
-    if not _literal_matches(property_type, raw_value.get("value")):
+    value = raw_value.get("value")
+    is_nullable = optional_bool(property_definition, "nullable", True)
+    if not _literal_matches(property_type, value, is_nullable=is_nullable):
         raise ValidationFailed(
             "action assignment literal type does not match property",
             details={"property": property_name, "propertyType": property_type},
@@ -464,8 +467,10 @@ def _require_media_assignment(
 def _compatible_types(property_type: str, parameter_type: str) -> bool:
     aliases = {
         "integer": {"integer", "long"},
-        "float": {"integer", "long", "float", "decimal"},
-        "string": {"string", "date", "timestamp", "object", "interface", "media", "attachment"},
+        "float": {"integer", "long", "float"},
+        "string": {"string", "date", "timestamp"},
+        "date": {"date"},
+        "timestamp": {"timestamp"},
         "media_reference": {"media"},
         "attachment": {"attachment"},
         "boolean": {"boolean"},
@@ -473,16 +478,10 @@ def _compatible_types(property_type: str, parameter_type: str) -> bool:
     return parameter_type in aliases.get(property_type, {property_type})
 
 
-def _literal_matches(property_type: str, value: object) -> bool:
+def _literal_matches(property_type: str, value: object, *, is_nullable: bool) -> bool:
     if value is None:
-        return True
-    if property_type == "boolean":
-        return isinstance(value, bool)
-    if property_type == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if property_type == "float":
-        return isinstance(value, int | float) and not isinstance(value, bool)
-    return isinstance(value, str)
+        return is_nullable
+    return matches_scalar_type(property_type, value)
 
 
 def _is_sensitive(prop: YamlObject) -> bool:

@@ -2,8 +2,8 @@
 
 Proves semantic / hybrid search REALLY works with a real embedding model. The
 ``LocalEmbeddingAdapter`` is wired with the real ``_fastembed_embedding_engine``
-(BAAI/bge-small-en-v1.5, 384-dim ONNX, no torch — the model fastembed downloads to
-~/.cache/huggingface, pre-fetched/cached in CI), exactly as ``local_runtime`` composes
+(BAAI/bge-small-en-v1.5, 384-dim ONNX, no torch — the model FastEmbed downloads to
+``FASTEMBED_CACHE_PATH`` or its system-temp default, pre-fetched/cached in CI), exactly as ``local_runtime`` composes
 it. Three content docs are committed and projected through the real
 ``MediaIndexingService``; a query with NO lexical overlap with the target doc ranks that
 doc first through ``DefaultContentRetrievalService`` — only the dense path can do this, so

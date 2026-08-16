@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
+from foundry_lite.domain.action_runtime.action_conditions import (
+    COMPARISON_OPERATORS,
+    validate_action_condition,
+)
+from foundry_lite.domain.error_redaction import scrub_error_text
+from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.scalar_values import matches_scalar_type
 
 JsonObject = Mapping[str, object]
 _MAX_ACTIONS = 20
 _MAX_FIELDS = 23
 _MAX_POLICIES = 20
 _ENFORCEMENT = frozenset({"blocking", "warning", "manual_review"})
-_OPERATORS = frozenset({"eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte"})
+_COLLECTION_ONLY_OPERATORS = frozenset({"containsAny", "eachIs", "eachIsNot"})
+_OPERATORS = COMPARISON_OPERATORS - _COLLECTION_ONLY_OPERATORS
+_TEXT_OPERATORS = frozenset({"contains", "startsWith", "matches"})
 
 
 def compile_domain_policies(
@@ -81,36 +89,66 @@ def _policy_condition(value: JsonObject, fields: Mapping[str, str]) -> dict[str,
     operator = _required_text(value, "operator", 16)
     if operator not in _OPERATORS:
         raise FdePlatformToolError("schema_invalid", f"지원하지 않는 규칙 비교 방식입니다: {operator}")
+    _validate_value_presence(value, operator)
     condition_value = value.get("value")
     _validate_condition_value(fields[property_name], operator, condition_value)
+    _validate_runtime_condition(property_name, operator, condition_value)
     return {"propertyApiName": property_name, "operator": operator, "value": condition_value}
 
 
+def _validate_value_presence(value: JsonObject, operator: str) -> None:
+    has_value = "value" in value
+    if operator == "exists" and has_value:
+        raise FdePlatformToolError("schema_invalid", "exists 규칙에는 value 항목을 입력하지 않습니다.")
+    if operator != "exists" and not has_value:
+        raise FdePlatformToolError("schema_invalid", f"{operator} 규칙에는 비교할 값이 필요합니다.")
+
+
 def _validate_condition_value(field_type: str, operator: str, value: object) -> None:
-    if operator in {"in", "notIn"}:
-        if not isinstance(value, list) or not value or len(value) > 50:
-            raise FdePlatformToolError("schema_invalid", f"{operator} 규칙 값은 비어 있지 않은 목록이어야 합니다.")
-        values = value
-    else:
-        if isinstance(value, list):
-            raise FdePlatformToolError("schema_invalid", f"{operator} 규칙 값은 목록일 수 없습니다.")
-        values = [value]
-    if operator in {"lt", "lte", "gt", "gte"} and field_type not in {"integer", "float", "date", "timestamp"}:
-        raise FdePlatformToolError("schema_invalid", f"{field_type} 업무 정보에는 크기 비교 규칙을 사용할 수 없습니다.")
+    if operator == "exists":
+        return
+    values = _condition_values(operator, value)
+    _validate_condition_operator(field_type, operator)
     if not all(_matches_field_type(item, field_type) for item in values):
         raise FdePlatformToolError("schema_invalid", f"규칙 값이 {field_type} 업무 정보 형식과 맞지 않습니다.")
 
 
+def _condition_values(operator: str, value: object) -> Sequence[object]:
+    if operator in {"in", "notIn"}:
+        if not isinstance(value, list) or not value or len(value) > 50:
+            raise FdePlatformToolError("schema_invalid", f"{operator} 규칙 값은 비어 있지 않은 목록이어야 합니다.")
+        return value
+    if isinstance(value, list):
+        raise FdePlatformToolError("schema_invalid", f"{operator} 규칙 값은 목록일 수 없습니다.")
+    return (value,)
+
+
+def _validate_condition_operator(field_type: str, operator: str) -> None:
+    if operator in {"lt", "lte", "gt", "gte"} and field_type not in {"integer", "float", "date", "timestamp"}:
+        raise FdePlatformToolError("schema_invalid", f"{field_type} 업무 정보에는 크기 비교 규칙을 사용할 수 없습니다.")
+    if operator in _TEXT_OPERATORS and field_type != "string":
+        raise FdePlatformToolError(
+            "schema_invalid", f"{field_type} 업무 정보에는 텍스트 비교 규칙을 사용할 수 없습니다."
+        )
+
+
+def _validate_runtime_condition(property_name: str, operator: str, value: object) -> None:
+    condition: dict[str, object] = {
+        "op": operator,
+        "left": {"kind": "objectProperty", "property": property_name},
+    }
+    if operator != "exists":
+        condition["right"] = {"kind": "literal", "value": value}
+    try:
+        validate_action_condition(condition)
+    except ValidationFailed as exc:
+        raise FdePlatformToolError(
+            "schema_invalid", f"실행할 수 없는 규칙입니다: {scrub_error_text(str(exc))}"
+        ) from exc
+
+
 def _matches_field_type(value: object, field_type: str) -> bool:
-    if field_type == "boolean":
-        return isinstance(value, bool)
-    if field_type == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if field_type == "float":
-        if isinstance(value, int) and not isinstance(value, bool):
-            return True
-        return isinstance(value, float) and math.isfinite(value)
-    return isinstance(value, str)
+    return matches_scalar_type(field_type, value)
 
 
 def _record_fields(record: JsonObject | None) -> dict[str, str]:
@@ -135,13 +173,15 @@ def _conditions(policy: JsonObject) -> list[dict[str, object]]:
 
 
 def _condition_precondition(condition: JsonObject, policy: JsonObject) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "op": condition["operator"],
         "left": {"kind": "objectProperty", "property": condition["propertyApiName"]},
-        "right": {"kind": "literal", "value": condition["value"]},
         "message": policy["statement"],
         "policyName": policy["name"],
     }
+    if condition["operator"] != "exists":
+        result["right"] = {"kind": "literal", "value": condition["value"]}
+    return result
 
 
 def _mapping_items(value: object, field: str, limit: int) -> list[dict[str, object]]:

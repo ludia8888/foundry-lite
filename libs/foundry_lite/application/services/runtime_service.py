@@ -46,6 +46,7 @@ from foundry_lite.application.services.runtime_run_paging import (
     OPERATIONS_RUN_MAX_LIMIT,
     query_runtime_run_page,
 )
+from foundry_lite.application.services.runtime_run_projection import operator_safe_run_row
 from foundry_lite.application.services.runtime_run_queries import (
     downstream_impact_graph,
     object_late_data_badge,
@@ -136,6 +137,9 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:summary")
         snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id, limit=OPERATIONS_RUN_MAX_LIMIT)
+        snapshot["sourceExplorationRuns"] = [
+            operator_safe_run_row(row, "source_exploration") for row in snapshot["sourceExplorationRuns"]
+        ]
         return cast(RuntimeRunSnapshot, redact_sensitive(snapshot, self.policy.sensitive_column_names(ctx)))
 
     def list_release_audit_events(

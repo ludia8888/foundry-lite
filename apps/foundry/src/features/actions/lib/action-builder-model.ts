@@ -226,6 +226,9 @@ export function emptyActionBuilderDraft(target = ""): ActionBuilderDraft {
 }
 
 export function actionBuilderDefinition(draft: ActionBuilderDraft): Record<string, unknown> {
+  const parameterTypes = Object.fromEntries(
+    draft.parameters.map((parameter) => [parameter.apiName.trim(), parameter.dataType]),
+  );
   return removeUndefined({
     contractVersion: 3,
     apiName: draft.apiName.trim(),
@@ -241,9 +244,9 @@ export function actionBuilderDefinition(draft: ActionBuilderDraft): Record<strin
       editRoles: commaSeparatedValues(draft.editRoles),
       applyRoles: commaSeparatedValues(draft.applyRoles),
     },
-    parameters: draft.parameters.map(parameterDefinition),
-    submissionCriteria: submissionCriteriaDefinition(draft),
-    formLayout: formLayoutDefinition(draft),
+    parameters: draft.parameters.map((parameter) => parameterDefinition(parameter, parameterTypes)),
+    submissionCriteria: submissionCriteriaDefinition(draft, parameterTypes),
+    formLayout: formLayoutDefinition(draft, parameterTypes),
     rules: draft.executionMode === "rules" ? draft.rules.map(actionBuilderRuleDefinition) : undefined,
     function: draft.executionMode === "function" ? {
       apiName: draft.functionApiName.trim(),
@@ -448,15 +451,20 @@ function functionBatchSizeValue(functionDefinition: Record<string, unknown>): nu
   return typeof value === "number" && Number.isInteger(value) ? value : mode === "batched" ? 10_000 : 20;
 }
 
-function parameterDefinition(parameter: ActionBuilderParameter): Record<string, unknown> {
+function parameterDefinition(
+  parameter: ActionBuilderParameter,
+  parameterTypes: Readonly<Record<string, string>>,
+): Record<string, unknown> {
   const definition: Record<string, unknown> = {
     apiName: parameter.apiName.trim(),
     type: parameter.dataType,
     required: parameter.isRequired,
     description: parameter.description.trim() || undefined,
     constraints: actionBuilderConstraintsDefinition(parameter.constraints, parameter.dataType),
-    default: defaultDefinition(parameter.defaultValue),
-    overrides: parameter.overrides.map((override) => overrideDefinition(override, parameter.dataType)),
+    default: defaultDefinition(parameter.defaultValue, parameter.dataType),
+    overrides: parameter.overrides.map(
+      (override) => overrideDefinition(override, parameter.dataType, parameterTypes),
+    ),
   };
   if (parameter.dataType === "object") definition.objectType = parameter.referenceType;
   if (parameter.dataType === "interface") definition.interfaceType = parameter.referenceType;
@@ -468,15 +476,21 @@ function parameterDefinition(parameter: ActionBuilderParameter): Record<string, 
   return removeUndefined(definition);
 }
 
-function submissionCriteriaDefinition(draft: ActionBuilderDraft): Record<string, unknown> | undefined {
+function submissionCriteriaDefinition(
+  draft: ActionBuilderDraft,
+  parameterTypes: Readonly<Record<string, string>>,
+): Record<string, unknown> | undefined {
   if (!draft.submissionCriteria) return undefined;
   return {
-    ...conditionDefinition(draft.submissionCriteria),
+    ...conditionDefinition(draft.submissionCriteria, parameterTypes),
     ...(draft.submissionMessage.trim() ? { message: draft.submissionMessage.trim() } : {}),
   };
 }
 
-function formLayoutDefinition(draft: ActionBuilderDraft): Record<string, unknown> {
+function formLayoutDefinition(
+  draft: ActionBuilderDraft,
+  parameterTypes: Readonly<Record<string, string>>,
+): Record<string, unknown> {
   const nameByKey = new Map(draft.parameters.map((parameter) => [parameter.key, parameter.apiName.trim()]));
   return {
     sections: draft.sections.map((section) => removeUndefined({
@@ -487,7 +501,9 @@ function formLayoutDefinition(draft: ActionBuilderDraft): Record<string, unknown
       isCollapsible: section.isCollapsible,
       isInitiallyCollapsed: section.isCollapsible && section.isInitiallyCollapsed,
       parameterNames: section.parameterKeys.map((key) => nameByKey.get(key)).filter(isString),
-      visibleWhen: section.visibleWhen ? conditionDefinition(section.visibleWhen) : undefined,
+      visibleWhen: section.visibleWhen
+        ? conditionDefinition(section.visibleWhen, parameterTypes)
+        : undefined,
     })),
   };
 }

@@ -14,6 +14,7 @@ import {
   Settings2,
   ShieldCheck,
   Star,
+  TestTube2,
   Undo2,
   Users,
   X,
@@ -64,6 +65,8 @@ interface BuilderToolbarProps {
   isDirty: boolean;
   isSaving: boolean;
   isProposing: boolean;
+  isTesting: boolean;
+  testState: "missing" | "passed" | "failed" | "stale";
   canPropose: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -77,6 +80,7 @@ interface BuilderToolbarProps {
   onCreateBranch: () => void;
   onRebase: () => void;
   onSave: () => void;
+  onRunTests: () => void;
   onPropose: () => void;
 }
 
@@ -97,6 +101,8 @@ export function BuilderToolbar({
   isDirty,
   isSaving,
   isProposing,
+  isTesting,
+  testState,
   canPropose,
   canUndo,
   canRedo,
@@ -110,6 +116,7 @@ export function BuilderToolbar({
   onCreateBranch,
   onRebase,
   onSave,
+  onRunTests,
   onPropose,
 }: BuilderToolbarProps) {
   const [isStarred, setIsStarred] = useState(false);
@@ -325,9 +332,44 @@ export function BuilderToolbar({
         </Button>
         <Button
           size="sm"
+          variant="outline"
+          className={cn(
+            "h-7 rounded-[2px] px-2 text-[11px]",
+            testState === "passed"
+              ? "border-[#238551] bg-[#F1FAF5] text-[#1C6B42]"
+              : testState === "failed"
+                ? "border-destructive/50 text-destructive"
+                : "border-[#AEB6C1]",
+          )}
+          disabled={isDirty || isTesting || !branchId}
+          title={
+            isDirty
+              ? "먼저 변경 사항을 저장하세요"
+              : "저장된 작업의 구조와 출력 설정을 검사합니다"
+          }
+          onClick={onRunTests}
+        >
+          <TestTube2 className="size-3.5" />
+          {isTesting
+            ? "작업 테스트 중..."
+            : testState === "passed"
+              ? "작업 테스트 통과"
+              : testState === "failed"
+                ? "작업 테스트 실패"
+                : testState === "stale"
+                  ? "작업 다시 테스트"
+                  : "작업 테스트"}
+        </Button>
+        <Button
+          size="sm"
           variant="ghost"
           className="h-7 rounded-[2px] border border-transparent px-2 text-[12px] text-muted-foreground hover:border-[#AEB6C1]"
           disabled={!canPropose || isProposing}
+          title={
+            canPropose
+              ? "통과한 작업 테스트와 함께 리뷰를 요청합니다"
+              : "변경을 저장하고 작업 테스트를 통과해야 제안할 수 있습니다"
+          }
           onClick={onPropose}
         >
           <GitPullRequestArrow className="size-3.5" />

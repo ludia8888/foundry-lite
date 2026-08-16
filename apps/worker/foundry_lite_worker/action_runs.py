@@ -57,9 +57,12 @@ def run_activity() -> None:
         ),
         should_initialize_schema=False,
     )
-    request = action_run_dispatch_request_from_payload(payload)
-    result = foundry._services.action.distributed.drive(request, worker_id=worker_id)
-    sys.stdout.buffer.write(ACTION_RUN_RESULT_PREFIX + json.dumps(result, sort_keys=True).encode() + b"\n")
+    try:
+        request = action_run_dispatch_request_from_payload(payload)
+        result = foundry._services.action.distributed.drive(request, worker_id=worker_id)
+        sys.stdout.buffer.write(ACTION_RUN_RESULT_PREFIX + json.dumps(result, sort_keys=True).encode() + b"\n")
+    finally:
+        foundry.close()
 
 
 def main() -> None:

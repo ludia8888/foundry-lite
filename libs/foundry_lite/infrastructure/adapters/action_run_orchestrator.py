@@ -20,6 +20,7 @@ from foundry_lite.application.ports.action_run_orchestrator import (
 
 ACTION_RUN_WORKFLOW_NAME = "ActionRunWorkflow"
 ACTION_RUN_TASK_QUEUE = "foundry-lite-action-runs"
+_LOCAL_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,13 +35,16 @@ class LocalActionRunOrchestrator:
     profile_name = "local-action-runs"
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[ActionRunDispatchRequest] = queue.Queue()
+        self._queue: queue.Queue[ActionRunDispatchRequest | None] = queue.Queue()
         self._known: set[str] = set()
         self._cancelled: set[str] = set()
         self._driver: Callable[[ActionRunDispatchRequest], None] | None = None
         self._failures: dict[str, Exception] = {}
         self._lock = threading.Lock()
         self._is_started = False
+        self._is_closed = False
+        self._worker: threading.Thread | None = None
+        self._retry_timers: set[threading.Timer] = set()
 
     def register_driver(self, driver: Callable[[ActionRunDispatchRequest], None]) -> None:
         self._driver = driver
@@ -48,6 +52,8 @@ class LocalActionRunOrchestrator:
     def dispatch(self, request: ActionRunDispatchRequest) -> ActionRunDispatchResult:
         workflow_id = action_run_workflow_id(request.tenant_id, request.run_id)
         with self._lock:
+            if self._is_closed:
+                return ActionRunDispatchResult(workflow_id, "unknown", ACTION_RUN_TASK_QUEUE)
             if workflow_id in self._known:
                 return ActionRunDispatchResult(workflow_id, "already_dispatched", ACTION_RUN_TASK_QUEUE)
             self._known.add(workflow_id)
@@ -69,20 +75,63 @@ class LocalActionRunOrchestrator:
         if self._is_started:
             return
         self._is_started = True
-        threading.Thread(target=self._work_loop, name="action-run-local-worker", daemon=True).start()
+        self._worker = threading.Thread(target=self._work_loop, name="action-run-local-worker", daemon=True)
+        self._worker.start()
+
+    def close(self) -> None:
+        """Cancel deferred retries, drain accepted work, and stop the local daemon."""
+        with self._lock:
+            if not self._is_closed:
+                self._is_closed = True
+                timers = tuple(self._retry_timers)
+                self._retry_timers.clear()
+                if self._worker is not None:
+                    self._queue.put(None)
+            else:
+                timers = ()
+            worker = self._worker
+        for timer in timers:
+            timer.cancel()
+        if worker is None:
+            return
+        if worker is threading.current_thread():
+            raise RuntimeError("action orchestrator cannot close from its own worker")
+        worker.join(timeout=_LOCAL_WORKER_SHUTDOWN_TIMEOUT_SECONDS)
+        if worker.is_alive():
+            raise RuntimeError("action orchestrator did not stop before shutdown timeout")
+
+    def _schedule_retry(self, request: ActionRunDispatchRequest) -> None:
+        timer: threading.Timer
+
+        def enqueue() -> None:
+            with self._lock:
+                self._retry_timers.discard(timer)
+                if not self._is_closed:
+                    self._queue.put(request)
+
+        timer = threading.Timer(1.0, enqueue)
+        timer.daemon = True
+        with self._lock:
+            if self._is_closed:
+                return
+            self._retry_timers.add(timer)
+        timer.start()
 
     def _work_loop(self) -> None:
         while True:
             request = self._queue.get()
-            workflow_id = action_run_workflow_id(request.tenant_id, request.run_id)
+            if request is None:
+                self._queue.task_done()
+                return
             try:
+                workflow_id = action_run_workflow_id(request.tenant_id, request.run_id)
                 # The DB cancellation marker is the source of truth.  Even a queued
                 # local run must reach the driver once so it can durably transition
                 # ``cancelling`` to ``cancelled`` instead of being silently dropped.
                 if self._driver is not None:
                     self._driver(request)
             except ActionRunRetryableFailure:
-                threading.Timer(1.0, self._queue.put, args=(request,)).start()
+                self._schedule_retry(request)
             except Exception as exc:
                 with self._lock:
                     self._failures[workflow_id] = exc
@@ -126,6 +175,9 @@ class TemporalActionRunOrchestrator:
     def cancel(self, tenant_id: str, workflow_run_id: str, *, reason: str | None = None) -> bool:
         del reason
         return asyncio.run(self.cancel_async(tenant_id, workflow_run_id))
+
+    def close(self) -> None:
+        return None
 
     async def cancel_async(self, tenant_id: str, workflow_run_id: str) -> bool:
         if not action_run_workflow_id_matches_tenant(tenant_id, workflow_run_id):

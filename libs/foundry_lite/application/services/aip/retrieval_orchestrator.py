@@ -28,6 +28,7 @@ from foundry_lite.application.services.media.document_context_evidence import (
     document_context_hash,
     document_context_text,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, NotFound
 
@@ -271,7 +272,7 @@ def _state_string(state_json: Mapping[str, object], key: str) -> str | None:
 
 
 def _retrieval_failure(reason: str, exc: FoundryLiteError) -> ContextRetrievalError:
-    return ContextRetrievalError(reason, exc.message)
+    return ContextRetrievalError(reason, scrub_error_text(exc.message))
 
 
 def _normalized_query(value: str) -> str:

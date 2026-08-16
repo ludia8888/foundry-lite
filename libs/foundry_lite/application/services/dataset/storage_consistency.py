@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     DatasetTransactionRow,
     DatasetVersionRow,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
 
@@ -47,9 +48,13 @@ def committed_version_file_paths(
     try:
         return storage.data_file_paths(version["manifest_uri"], partition_filter=partition_filter)
     except FileNotFoundError as exc:
-        raise version_storage_error(storage, version, "committed_version_storage_missing", str(exc)) from exc
+        raise version_storage_error(
+            storage, version, "committed_version_storage_missing", scrub_error_text(str(exc))
+        ) from exc
     except (IndexError, KeyError, ValueError) as exc:
-        raise version_storage_error(storage, version, "committed_version_storage_corrupt", str(exc)) from exc
+        raise version_storage_error(
+            storage, version, "committed_version_storage_corrupt", scrub_error_text(str(exc))
+        ) from exc
 
 
 def committed_version_preview_file_paths(
@@ -61,18 +66,26 @@ def committed_version_preview_file_paths(
     try:
         return storage.preview_file_paths(version["manifest_uri"], partition_filter=partition_filter)
     except FileNotFoundError as exc:
-        raise version_storage_error(storage, version, "committed_version_storage_missing", str(exc)) from exc
+        raise version_storage_error(
+            storage, version, "committed_version_storage_missing", scrub_error_text(str(exc))
+        ) from exc
     except (IndexError, KeyError, ValueError) as exc:
-        raise version_storage_error(storage, version, "committed_version_storage_corrupt", str(exc)) from exc
+        raise version_storage_error(
+            storage, version, "committed_version_storage_corrupt", scrub_error_text(str(exc))
+        ) from exc
 
 
 def committed_manifest(storage: DatasetStorageAdapter, manifest_uri: str) -> DatasetManifest:
     try:
         return storage.load_manifest(manifest_uri)
     except FileNotFoundError as exc:
-        raise manifest_storage_error(storage, manifest_uri, "committed_version_storage_missing", str(exc)) from exc
+        raise manifest_storage_error(
+            storage, manifest_uri, "committed_version_storage_missing", scrub_error_text(str(exc))
+        ) from exc
     except (IndexError, KeyError, ValueError) as exc:
-        raise manifest_storage_error(storage, manifest_uri, "committed_version_storage_corrupt", str(exc)) from exc
+        raise manifest_storage_error(
+            storage, manifest_uri, "committed_version_storage_corrupt", scrub_error_text(str(exc))
+        ) from exc
 
 
 def version_storage_error(

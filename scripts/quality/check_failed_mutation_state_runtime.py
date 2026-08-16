@@ -368,30 +368,33 @@ def _run_failure_probe(storage_root: Path) -> tuple[str, dict[str, str]]:
     data_dependencies = dataclass_replace(dependencies.data, compute_adapter=ExplodingCsvComputeAdapter())
     dependencies = dataclass_replace(dependencies, data=data_dependencies)
     foundry = FoundryLite(dependencies=dependencies)
-    ctx = RequestContext(
-        tenant_id=TENANT_ID,
-        actor_user_id="actor-failure-state",
-        request_id="request-failure-state",
-        roles=DEMO_ADMIN_ROLES,
-    )
-    foundry.datasets.ensure("raw.failure_state", ctx=ctx, primary_key=["id"])
-    csv_path = storage_root / "failure-state.csv"
-    csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
     try:
-        foundry.datasets.upload_csv("raw.failure_state", csv_path, ctx=ctx)
-    except ValidationFailed:
-        pass
-    else:
-        raise AssertionError("exploding adapter unexpectedly let upload_csv succeed")
-    return (
-        f"sqlite:///{storage_root / 'foundry-lite.db'}",
-        {
-            "tenant_id": ctx.tenant_id,
-            "actor_user_id": ctx.actor_user_id,
-            "request_id": ctx.request_id,
-            "adapter": "compute_adapter.csv_to_parquet",
-        },
-    )
+        ctx = RequestContext(
+            tenant_id=TENANT_ID,
+            actor_user_id="actor-failure-state",
+            request_id="request-failure-state",
+            roles=DEMO_ADMIN_ROLES,
+        )
+        foundry.datasets.ensure("raw.failure_state", ctx=ctx, primary_key=["id"])
+        csv_path = storage_root / "failure-state.csv"
+        csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
+        try:
+            foundry.datasets.upload_csv("raw.failure_state", csv_path, ctx=ctx)
+        except ValidationFailed:
+            pass
+        else:
+            raise AssertionError("exploding adapter unexpectedly let upload_csv succeed")
+        return (
+            f"sqlite:///{storage_root / 'foundry-lite.db'}",
+            {
+                "tenant_id": ctx.tenant_id,
+                "actor_user_id": ctx.actor_user_id,
+                "request_id": ctx.request_id,
+                "adapter": "compute_adapter.csv_to_parquet",
+            },
+        )
+    finally:
+        foundry.close()
 
 
 def write_report(

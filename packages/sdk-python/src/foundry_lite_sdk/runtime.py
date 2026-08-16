@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from math import isfinite
 from typing import BinaryIO, Literal, NotRequired, TypedDict, cast
 
 from foundry_lite.application.action_types import (
@@ -343,4 +346,71 @@ class GeneratedActionClient[ParamsT]:
 def _parameter_mapping(params: object) -> Mapping[str, object]:
     if not isinstance(params, Mapping):
         raise ValidationFailed("Generated Python OSDK Action params must be a mapping")
-    return cast(Mapping[str, object], params)
+    normalized = _wire_json_value(params, depth=0, active=set())
+    if not isinstance(normalized, Mapping):
+        raise ValidationFailed("Generated Python OSDK Action params must be wire-safe JSON")
+    return cast(Mapping[str, object], normalized)
+
+
+def _wire_json_value(value: object, *, depth: int, active: set[int]) -> object:
+    if depth > 64:
+        raise ValidationFailed("Generated Python OSDK Action params exceed the wire-safe JSON nesting limit")
+    if value is None or isinstance(value, bool | str | int):
+        return value
+    if isinstance(value, float):
+        return _finite_float(value)
+    if isinstance(value, Decimal):
+        return _decimal_text(value)
+    if isinstance(value, datetime):
+        return _timestamp_text(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return _wire_mapping(value, depth=depth, active=active)
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return _wire_sequence(value, depth=depth, active=active)
+    raise ValidationFailed("Generated Python OSDK Action params must be wire-safe JSON")
+
+
+def _finite_float(value: float) -> float:
+    if not isfinite(value):
+        raise ValidationFailed("Generated Python OSDK Action params must be wire-safe JSON")
+    return value
+
+
+def _decimal_text(value: Decimal) -> str:
+    if not value.is_finite():
+        raise ValidationFailed("Generated Python OSDK Action params must be wire-safe JSON")
+    return str(value)
+
+
+def _timestamp_text(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValidationFailed("Generated Python OSDK Action params must be wire-safe JSON")
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _wire_mapping(value: Mapping[object, object], *, depth: int, active: set[int]) -> dict[str, object]:
+    marker = _enter_container(value, active)
+    try:
+        if not all(isinstance(key, str) for key in value):
+            raise ValidationFailed("Generated Python OSDK Action params must be wire-safe JSON")
+        return {str(key): _wire_json_value(item, depth=depth + 1, active=active) for key, item in value.items()}
+    finally:
+        active.remove(marker)
+
+
+def _wire_sequence(value: Sequence[object], *, depth: int, active: set[int]) -> list[object]:
+    marker = _enter_container(value, active)
+    try:
+        return [_wire_json_value(item, depth=depth + 1, active=active) for item in value]
+    finally:
+        active.remove(marker)
+
+
+def _enter_container(value: object, active: set[int]) -> int:
+    marker = id(value)
+    if marker in active:
+        raise ValidationFailed("Generated Python OSDK Action params contain a cyclic wire-safe JSON container")
+    active.add(marker)
+    return marker

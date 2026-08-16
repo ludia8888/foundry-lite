@@ -12,10 +12,12 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import type { ExploreTable } from "../explore-model";
+import { SourceExplorationEvidenceLink } from "./SourceExplorationEvidenceLink";
 
 interface ExploreSourcePanelProps {
   tables: ExploreTable[];
   explorationRunId: string | null;
+  operationsPath: string | null;
   activeTable: string | null;
   selectedTables: readonly string[];
   onPreviewTable: (tableName: string) => void;
@@ -30,6 +32,7 @@ interface ExploreSourcePanelProps {
 export function ExploreSourcePanel({
   tables,
   explorationRunId,
+  operationsPath,
   activeTable,
   selectedTables,
   onPreviewTable,
@@ -113,9 +116,11 @@ export function ExploreSourcePanel({
       </div>
       {explorationRunId ? (
         <div className="border-t px-3 py-1.5">
-          <div className="truncate font-mono text-[10px] text-muted-foreground">
-            run={explorationRunId}
-          </div>
+          <SourceExplorationEvidenceLink
+            result={{ explorationRunId, operationsPath }}
+            className="block truncate text-[10px]"
+            label="운영 증거 보기"
+          />
         </div>
       ) : null}
     </div>

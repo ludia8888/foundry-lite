@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from foundry_lite.domain.action_runtime.action_effects import ActionEffectV3
+from foundry_lite.domain.errors import InvariantViolation
+from foundry_lite.domain.json_values import is_bounded_json_value
 
 ActionEffectOutcome = Literal["delivered", "ambiguous"]
 
@@ -33,6 +35,28 @@ class ActionEffectExecutionResult:
     external_execution_id: str | None
     response: Mapping[str, object]
     network_evidence: Mapping[str, object]
+
+
+def require_action_effect_execution_result(value: object) -> ActionEffectExecutionResult:
+    """Fail closed when a custom adapter violates its runtime result contract."""
+
+    if not isinstance(value, ActionEffectExecutionResult):
+        raise InvariantViolation("Action effect adapter returned an invalid result")
+    if value.outcome not in {"delivered", "ambiguous"}:
+        raise InvariantViolation("Action effect adapter returned an unknown outcome")
+    if not _is_valid_external_execution_id(value.external_execution_id):
+        raise InvariantViolation("Action effect adapter returned an invalid external execution id")
+    if not _is_bounded_mapping(value.response) or not _is_bounded_mapping(value.network_evidence):
+        raise InvariantViolation("Action effect adapter returned invalid evidence")
+    return value
+
+
+def _is_valid_external_execution_id(value: object) -> bool:
+    return value is None or (isinstance(value, str) and bool(value))
+
+
+def _is_bounded_mapping(value: object) -> bool:
+    return isinstance(value, Mapping) and is_bounded_json_value(cast(Mapping[object, object], value))
 
 
 class ActionEffectTransientError(RuntimeError):

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import TypedDict
 
 from foundry_lite.application.ports import ObjectQueryItem, ObjectSetDefinition, ObjectSetRow
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 OBJECT_SET_VISIBILITIES = {"private", "public", "temporary", "permanent"}
@@ -87,6 +88,14 @@ def object_set_access_scope(visibility: str) -> str:
     if visibility in PRIVATE_OBJECT_SET_VISIBILITIES:
         return "private"
     raise ValidationFailed("unsupported object set visibility", details={"visibility": visibility})
+
+
+def can_read_object_set(ctx: RequestContext, row: ObjectSetRow) -> bool:
+    if object_set_access_scope(row["visibility"]) == "public":
+        return True
+    if row["owner_user_id"] == ctx.actor_user_id:
+        return True
+    return ctx.has_role("admin")
 
 
 def object_set_lifecycle(row: ObjectSetRow) -> str:

@@ -18,6 +18,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
     TransformDatasetTransactions,
@@ -156,7 +157,7 @@ class TransformRunService(CoreService):
             self.abort_transform_run(ctx, plan, exc)
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
                 raise
-            raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc
+            raise ValidationFailed("transform failed", details={"error": scrub_error_text(str(exc))}) from exc
 
     def execute_transform_plan(self, plan: TransformRunPlan, staged: Path) -> TransformExecutionResult:
         if plan.language == "python":

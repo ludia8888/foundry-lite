@@ -398,7 +398,7 @@ def test_simple_trial_failure_carries_scrubbed_evidence_in_the_preview_error() -
     assert isinstance(row_snapshot, dict)
     assert pins["promptVersionId"] == "contract-layout@3"
     assert pins["promptHash"] == f"sha256:{'a' * 64}"
-    assert row_snapshot["password"] == "***MASKED***"
+    assert row_snapshot["password"] == "***REDACTED***"
     assert "do-not-store-this-password" not in json.dumps(payload)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
@@ -47,6 +48,23 @@ def test_ontology_definition_validation_uses_dataset_schema() -> None:
             "objectReindexPlan": [],
         },
     }
+
+
+@pytest.mark.parametrize(("data_type", "column"), [("date", "service_date"), ("timestamp", "scheduled_at")])
+def test_ontology_definition_accepts_temporal_object_properties(data_type: str, column: str) -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    cast(list[dict[str, object]], _first_object_type(definition)["properties"]).append(
+        {"apiName": column, "column": column, "type": data_type, "indexed": True}
+    )
+
+    def columns(
+        _conn: TransactionContext,
+        _ctx: RequestContext,
+        _dataset_ref: str,
+    ) -> Mapping[str, Mapping[str, object]]:
+        return {**_dataset_columns(_conn, _ctx, _dataset_ref), column: {"nullable": True}}
+
+    validate_ontology_definition(FakeTransaction(), RequestContext(), definition, columns)
 
 
 def test_ontology_definition_validation_rejects_missing_primary_key_column() -> None:

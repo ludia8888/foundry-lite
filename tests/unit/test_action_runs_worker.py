@@ -41,6 +41,10 @@ class _StubFoundry:
 
         _Action.distributed = distributed  # type: ignore[assignment]
         self._services = _Services()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 @pytest.fixture

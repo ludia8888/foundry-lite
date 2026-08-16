@@ -25,6 +25,7 @@ from foundry_lite.application.ports.source_stream_adapter import (
     SourceStreamTopic,
 )
 from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.application.services.source_management_helpers import (
     int_value,
     mapping,
@@ -436,7 +437,11 @@ def _read_lag(
     except FoundryLiteError as exc:
         return StreamLagObservation(
             lag=None,
-            error={"code": exc.code, "message": exc.message, "details": dict(exc.details)},
+            error={
+                "code": exc.code,
+                "message": scrub_error_text(exc.message),
+                "details": scrub_error_mapping(exc.details),
+            },
         )
 
 

@@ -8,7 +8,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from foundry_lite.application.services import mcp_rate_limit_service as rate_limit_module
 from foundry_lite.application.services.mcp_rate_limit_service import (
     McpRateLimitConfig,
     McpRateLimitService,
@@ -29,7 +28,6 @@ def test_two_service_instances_share_one_postgres_atomic_tool_limit(
     postgres_fixture: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(rate_limit_module.time, "time", lambda: 121.25)
     attempted_ids: list[str] = []
     candidate_lock = Lock()
 
@@ -78,9 +76,7 @@ def test_two_service_instances_share_one_postgres_atomic_tool_limit(
 
 def test_postgres_rls_hides_rate_windows_and_denial_evidence_between_tenants(
     postgres_fixture: Any,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(rate_limit_module.time, "time", lambda: 121.25)
     engine = postgres_fixture.engine
     with engine.begin() as conn:
         conn.execute(
@@ -120,6 +116,7 @@ def _service(engine: Engine, *, limit: int) -> McpRateLimitService:
         mcp_rate_limiter=SqlAlchemyMcpRateLimiter(),
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         config=McpRateLimitConfig(endpoint_limit=limit, tool_limit=limit, window_seconds=60),
+        clock=lambda: 121.25,
     )
 
 

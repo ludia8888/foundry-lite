@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.application.services.runtime_late_data_impact import (
     downstream_impact_graph as _downstream_impact_graph,
 )
@@ -29,6 +30,7 @@ downstream_impact_graph = _downstream_impact_graph
 object_late_data_badge = _object_late_data_badge
 
 RUN_GROUPS: Mapping[RuntimeRunType, str] = {
+    "source_exploration": "sourceExplorationRuns",
     "sync": "syncRuns",
     "transform": "transformRuns",
     "index": "indexRuns",
@@ -65,6 +67,9 @@ def filtered_snapshot(
     until: str | None,
 ) -> RuntimeRunSnapshot:
     return {
+        "sourceExplorationRuns": _filtered_rows(
+            snapshot["sourceExplorationRuns"], run_type, "source_exploration", status, since, until
+        ),
         "syncRuns": _filtered_rows(snapshot["syncRuns"], run_type, "sync", status, since, until),
         "transformRuns": _filtered_rows(snapshot["transformRuns"], run_type, "transform", status, since, until),
         "indexRuns": _filtered_rows(snapshot["indexRuns"], run_type, "index", status, since, until),
@@ -156,10 +161,10 @@ def _transaction_metadata(dataset_transaction: RuntimeRow | None) -> Mapping[str
 def error_message(error: object) -> str | None:
     if isinstance(error, Mapping):
         message = error.get("message")
-        return str(message) if message else str(error)
+        return scrub_error_text(str(message) if message else str(error))
     if error is None:
         return None
-    return str(error)
+    return scrub_error_text(str(error))
 
 
 def row_error(row: RuntimeRow) -> object | None:
@@ -318,6 +323,11 @@ def _suggested_actions(run_type: RuntimeRunType, run_id: str, status: str) -> li
         return [f"GET /api/operations/workflows/{run_id}", f"GET /api/operations/runs/workflow/{run_id}"]
     if run_type == "sync":
         return ["fix the source input, then rerun the dataset upload"]
+    if run_type == "source_exploration":
+        return [
+            "review the redacted error and source network policy, then retry Source Explorer",
+            f"GET /api/operations/runs/source_exploration/{run_id}",
+        ]
     return ["inspect errorMessage, references, and related audit/outbox evidence"]
 
 

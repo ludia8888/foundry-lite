@@ -13,6 +13,7 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
     lines = [
         "export type FoundryLiteGeneratedClient = {",
         "  request<T = unknown>(path: string, init?: FoundryLiteRequestInit): Promise<T>;",
+        "  readonly requestContext: Readonly<FoundryLiteRequestContext>;",
         "  system: {",
         "    health(): Promise<SystemHealth>;",
         "  };",
@@ -1032,10 +1033,24 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         '  if (context.tenantId) headers["X-Tenant-ID"] = context.tenantId;',
         '  if (context.userId) headers["X-User-ID"] = context.userId;',
         '  if (context.roles?.length) headers["X-Roles"] = context.roles.join(",");',
+        '  if (context.userAttributes) headers["X-User-Attributes"] = JSON.stringify(context.userAttributes);',
         '  if (context.applicationId) headers["X-Foundry-Lite-App-ID"] = context.applicationId;',
         '  if (context.clientId) headers["X-Foundry-Lite-Client-ID"] = context.clientId;',
         '  if (context.scopes?.length) headers["X-Foundry-Lite-Scopes"] = context.scopes.join(" ");',
         "  return headers;",
+        "}",
+        "",
+        "function snapshotRequestContext(",
+        "  context: FoundryLiteRequestContext = {},",
+        "): Readonly<FoundryLiteRequestContext> {",
+        "  return Object.freeze({",
+        "    ...context,",
+        "    ...(context.roles ? { roles: Object.freeze([...context.roles]) } : {}),",
+        "    ...(context.scopes ? { scopes: Object.freeze([...context.scopes]) } : {}),",
+        "    ...(context.userAttributes",
+        "      ? { userAttributes: Object.freeze({ ...context.userAttributes }) }",
+        "      : {}),",
+        "  });",
         "}",
         "",
         "export function createSessionTokenProvider(",
@@ -1991,6 +2006,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             "export function createFoundryLiteClient"
             "(clientOptions: FoundryLiteClientOptions): FoundryLiteGeneratedClient {"
         ),
+        "  const requestContext = snapshotRequestContext(clientOptions.context);",
         (
             "  async function fetchWithContext(path: string, init?: FoundryLiteRequestInit): "
             "Promise<{ response: Response; requestId: string }> {"
@@ -2001,7 +2017,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "    const response = await fetcher(`${clientOptions.baseUrl}${path}`, {",
         "      ...requestInit,",
         "      headers: {",
-        "        ...requestContextHeaders(clientOptions.context ?? {}),",
+        "        ...requestContextHeaders(requestContext),",
         '        "X-Request-ID": requestId,',
         "        ...(await authorizationHeader(clientOptions)),",
         "        ...(clientOptions.headers ?? {}),",
@@ -2044,6 +2060,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "",
         "  return {",
         "    request,",
+        "    requestContext,",
         "    system: {",
         "      health: () => request<SystemHealth>(`/healthz`),",
         "    },",

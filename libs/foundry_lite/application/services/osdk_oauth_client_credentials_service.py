@@ -89,7 +89,7 @@ class OsdkOAuthClientCredentialsService(CoreService):
         )
         resolved = self._resolved_secret(row)
         if row is None or resolved is None or not secrets.compare_digest(resolved.value, client_secret):
-            raise PermissionDenied("OSDK OAuth client credentials are invalid")
+            raise PermissionDenied("OSDK OAuth client authentication is invalid")
         return row, resolved
 
     def _resolved_secret(self, secret_row: Mapping[str, object] | None) -> SecretValue | None:
@@ -110,12 +110,12 @@ class OsdkOAuthClientCredentialsService(CoreService):
             transaction=conn, tenant_id=ctx.tenant_id, client_id=client_id
         )
         if client is None or _string_sequence(client.get("redirect_uris")):
-            raise PermissionDenied("OSDK OAuth client credentials are invalid")
+            raise PermissionDenied("OSDK OAuth client authentication is invalid")
         app = self.osdk_application_repository.application_by_id(
             transaction=conn, tenant_id=ctx.tenant_id, app_id=client["app_id"]
         )
         if app is None or app["status"] != "active":
-            raise PermissionDenied("OSDK OAuth client credentials are invalid")
+            raise PermissionDenied("OSDK OAuth client authentication is invalid")
         return client
 
     def _authorized_scopes(

@@ -20,6 +20,8 @@ from foundry_lite.application.services import source_onboarding_config as onboar
 from foundry_lite.application.services import source_onboarding_helpers as onboarding_helpers
 from foundry_lite.application.services.aip import eval_coercion
 from foundry_lite.application.services.aip.eval_types import AiEvalError
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
+from foundry_lite.application.services.source_management_run_helpers import finish_rest_workflow
 from foundry_lite.application.services.source_management_service import SourceManagementService
 from foundry_lite.application.services.source_onboarding_config import SourceUpload
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
@@ -808,6 +810,14 @@ def test_connector_and_eval_config_helpers_reject_invalid_edges() -> None:
         connector_config._connection_config(
             "erp", " ", "https://api.example.test", {"mode": "none"}, 1, False, "active"
         )
+    for unsafe_base_url in (
+        "https://user:password@api.example.test",
+        "https://api.example.test?token=secret",
+        "https://api.example.test#fragment",
+        "https:\\\\api.example.test",
+    ):
+        with pytest.raises(ValidationFailed, match="baseUrl"):
+            connector_config._connection_config("erp", "ERP", unsafe_base_url, {"mode": "none"}, 1, False, "active")
     with pytest.raises(ValidationFailed):
         connector_config._connection_config(
             "erp", "ERP", "https://api.example.test", {"mode": "none"}, -1, False, "active"
@@ -820,12 +830,20 @@ def test_connector_and_eval_config_helpers_reject_invalid_edges() -> None:
         connector_config._auth_payload({"mode": "none", "token": "raw"})
     with pytest.raises(ValidationFailed):
         connector_config._auth_payload({"mode": "bearer"})
+    for unsafe_header in ("Host", "Content-Length", "Transfer-Encoding", "Idempotency-Key", "X-Bad\nInjected"):
+        with pytest.raises(ValidationFailed, match="headerName"):
+            connector_config._auth_payload(
+                {"mode": "header", "headerName": unsafe_header, "headerValueSecretRef": "secretRef:key"}
+            )
     with pytest.raises(ValidationFailed):
         connector_config._pagination_payload({"strategy": "offset"})
     with pytest.raises(ValidationFailed):
         connector_config._resource_config("erp", "bad-name", "raw.orders", "/orders", {}, ("id",), ("id",))
     with pytest.raises(ValidationFailed):
         connector_config._resource_config("erp", "orders", "raw.orders", " ", {}, ("id",), ("id",))
+    for unsafe_path in ("https://evil.example/orders", "//evil.example/orders", "\\\\evil.example\\orders"):
+        with pytest.raises(ValidationFailed, match="relative HTTP path"):
+            connector_config._resource_config("erp", "orders", "raw.orders", unsafe_path, {}, ("id",), ("id",))
     with pytest.raises(ValidationFailed):
         connector_config._resource_config("erp", "orders", "raw.orders", "/orders", {}, ("",), ("id",))
     with pytest.raises(ValidationFailed):
@@ -1409,7 +1427,15 @@ def test_outbox_worker_failure_and_empty_batch_edges(monkeypatch, tmp_path) -> N
         def publish_pending_outbox(self, **_kwargs):
             return batches.pop(0)
 
-    monkeypatch.setattr(outbox_publisher, "_build_foundry", lambda _config: SimpleNamespace(operations=Operations()))
+    close_calls: list[str] = []
+    monkeypatch.setattr(
+        outbox_publisher,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(
+            operations=Operations(),
+            close=lambda: close_calls.append("close"),
+        ),
+    )
     result = outbox_publisher.publish_outbox_batches(
         outbox_publisher.OutboxPublisherWorkerConfig(
             storage_root=tmp_path,
@@ -1421,6 +1447,7 @@ def test_outbox_worker_failure_and_empty_batch_edges(monkeypatch, tmp_path) -> N
     assert result.stop_reason == "max_batches"
     assert result.empty_batches == 0
     assert result.event_ids == ("event-1",)
+    assert close_calls == ["close"]
 
     config = outbox_publisher.OutboxPublisherWorkerConfig(storage_root=tmp_path, request_id="req-worker")
     value_payload = outbox_publisher._failure_payload(ValueError("bad config"), config)
@@ -1691,8 +1718,34 @@ def test_source_management_service_covers_query_explore_and_run_branches() -> No
     )
     assert tables["resultSummary"]["tables"][0]["name"] == "orders"
     assert rows["resultSummary"]["sample"][0]["order_id"] == "O-1"
-    with pytest.raises(ValidationFailed):
-        service.explore_source(source_name="unknown", source_type="unsupported", request={}, ctx=ctx)
+    with pytest.raises(ValidationFailed) as captured_exploration:
+        service.explore_source(
+            source_name="unknown",
+            source_type="unsupported",
+            request={"password": "must-not-persist"},
+            ctx=ctx,
+        )
+    failed_exploration = service.source_management_repository.explorations[-1]
+    assert failed_exploration.status == "failed"
+    assert failed_exploration.request == {"password": "***MASKED***"}
+    assert failed_exploration.error is not None
+    assert failed_exploration.error["type"] == "VALIDATION_FAILED"
+    assert runtime_error_payload(captured_exploration.value)["details"]["operationsEvidence"] == {
+        "runType": "source_exploration",
+        "runId": failed_exploration.id,
+        "operationsPath": f"/api/operations/runs/source_exploration/{failed_exploration.id}",
+    }
+    assert service.runtime_service.audits[-1]["event_type"] == "source.exploration.failed"
+    assert service.runtime_service.audits[-1]["decision"] == "deny"
+    assert service.runtime_service.audits[-1]["after_ref"] == {
+        "explorationRunId": failed_exploration.id,
+        "sourceName": "unknown",
+        "sourceType": "unsupported",
+        "status": "failed",
+        "operationsPath": f"/api/operations/runs/source_exploration/{failed_exploration.id}",
+        "createdAt": failed_exploration.created_at,
+        "hasError": True,
+    }
 
     run = _sync_run_row(
         "run-rest",
@@ -1702,6 +1755,7 @@ def test_source_management_service_covers_query_explore_and_run_branches() -> No
     )
     rest_run = service._execute_run(ctx, service.source_management_repository.syncs["rest_sync"], run)
     assert rest_run["status"] == "running"
+    assert rest_run["completedAt"] is None
 
     db_sync = _sync_row(
         "db_sync",
@@ -1720,6 +1774,93 @@ def test_source_management_service_covers_query_explore_and_run_branches() -> No
 
     failed = service._execute_run(ctx, {"sync_name": "bad_sync", "source_type": "unsupported"}, db_run)
     assert failed["status"] == "failed"
+
+
+def test_source_exploration_evidence_failure_preserves_primary_error() -> None:
+    service = _source_management_service()
+
+    def fail_evidence_write(**_kwargs: object) -> None:
+        raise RuntimeError("password=secondary-secret")
+
+    service.source_management_repository.create_exploration_run = fail_evidence_write
+    with pytest.raises(ValidationFailed) as captured:
+        service.explore_source(
+            source_name="unknown",
+            source_type="unsupported",
+            request={},
+            ctx=RequestContext(tenant_id="tenant-demo"),
+        )
+
+    payload = runtime_error_payload(captured.value)
+    assert payload["type"] == "VALIDATION_FAILED"
+    assert payload["details"]["cleanupFailures"] == [
+        {
+            "operation": "sourceExplorationFailureEvidence",
+            "status": "FAILED",
+            "exceptionType": "RuntimeError",
+        }
+    ]
+    assert "secondary-secret" not in json.dumps(payload)
+
+
+def test_rest_managed_sync_preserves_cancellation_and_rejects_incomplete_success() -> None:
+    service = _source_management_service()
+    ctx = RequestContext(tenant_id="tenant-demo", request_id="req-rest-terminal")
+    sync = _sync_row("rest_sync", "rest_api", target_dataset_ref="raw.orders")
+
+    cancelled = finish_rest_workflow(
+        service,
+        ctx,
+        sync,
+        _sync_run_row("run-cancelled", "rest_sync", "rest_api"),
+        {
+            "workflowRunId": "workflow-cancelled",
+            "status": "cancelled",
+            "output": {"cleanup": {"status": "adapter_confirmed"}},
+            "error": {"message": "must-not-be-presented-as-failure"},
+        },
+    )
+    incomplete = finish_rest_workflow(
+        service,
+        ctx,
+        sync,
+        _sync_run_row("run-incomplete", "rest_sync", "rest_api"),
+        {"workflowRunId": "workflow-incomplete", "status": "succeeded", "output": {}},
+    )
+
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["error"] is None
+    assert incomplete["status"] == "failed"
+    assert incomplete["error"] == {
+        "type": "WORKFLOW_OUTPUT_INVALID",
+        "message": "successful workflow omitted committedVersionId",
+    }
+
+    redacted_failure = finish_rest_workflow(
+        service,
+        ctx,
+        sync,
+        _sync_run_row("run-failed", "rest_sync", "rest_api"),
+        {
+            "workflowRunId": "workflow-failed",
+            "status": "failed",
+            "output": {"providerResponse": "raw-secret-response"},
+            "error": {"message": "password=remote-secret"},
+        },
+    )
+    assert redacted_failure["error"] == {"message": "***MASKED***"}
+    assert redacted_failure["resultSummary"]["workflowRun"]["output"] == {"providerResponse": "***MASKED***"}
+    assert "raw-secret-response" not in json.dumps(redacted_failure)
+
+    unknown = finish_rest_workflow(
+        service,
+        ctx,
+        sync,
+        _sync_run_row("run-unknown", "rest_sync", "rest_api"),
+        {"workflowRunId": "workflow-unknown", "status": "mystery", "output": {}},
+    )
+    assert unknown["status"] == "failed"
+    assert unknown["error"]["type"] == "WORKFLOW_STATUS_INVALID"
 
 
 class _Tx:
@@ -1741,11 +1882,14 @@ class _AllowPolicy:
 
 
 class _RuntimeAudit:
+    def __init__(self) -> None:
+        self.audits: list[dict[str, object]] = []
+
     def _require_write_traffic_open(self, *_args, **_kwargs) -> None:
         return None
 
-    def _audit(self, *_args, **_kwargs) -> None:
-        return None
+    def _audit(self, *_args, **kwargs) -> None:
+        self.audits.append(dict(kwargs))
 
     def _outbox(self, *_args, **_kwargs) -> str:
         return "outbox-1"
@@ -2062,6 +2206,7 @@ class _SourceManagementRepository:
         self.policies = {"direct": _network_policy_row()}
         self.syncs: dict[str, dict[str, object]] = {}
         self.runs: dict[str, dict[str, object]] = {}
+        self.explorations: list[object] = []
 
     def list_credentials(self, *, tenant_id):
         return list(self.credentials.values())
@@ -2124,7 +2269,7 @@ class _SourceManagementRepository:
             sync["updated_at"] = updated_at
 
     def create_exploration_run(self, *, transaction, record):
-        return None
+        self.explorations.append(record)
 
 
 def _source_management_service() -> SourceManagementService:

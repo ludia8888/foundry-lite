@@ -12,6 +12,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -102,7 +103,7 @@ def _validate_github_repository_config(config: GitHubReleaseConfig) -> None:
         raise ValueError("GitHub release config requires provider='github'")
     if not _is_safe_coordinate(config.repository.owner) or not _is_safe_coordinate(config.repository.name):
         raise ValueError("GitHub repository owner and name contain unsupported characters")
-    if not config.installation_token_secret_ref.strip():
+    if not isinstance(config.installation_token_secret_ref, str) or not config.installation_token_secret_ref.strip():
         raise ValueError("installation_token_secret_ref is required")
 
 
@@ -129,11 +130,14 @@ def _validate_github_merge_config(config: GitHubReleaseConfig) -> None:
 def _validate_github_config_bounds(config: GitHubReleaseConfig) -> None:
     """Keep reviewer, pagination, timeout, and approval counts bounded."""
 
+    numeric_bounds = (config.minimum_approvals, config.timeout_seconds, config.max_pages, config.max_reviewers)
     has_valid_bounds = (
-        config.minimum_approvals >= 0
+        all(isinstance(value, int) and not isinstance(value, bool) for value in numeric_bounds)
+        and config.minimum_approvals >= 0
         and config.timeout_seconds >= 1
         and 1 <= config.max_pages <= 100
         and 1 <= config.max_reviewers <= 1000
+        and isinstance(config.is_bypass_policy_verified, bool)
     )
     if not has_valid_bounds:
         raise ValueError("approval must be non-negative and timeout, pagination, and reviewer bounds must be positive")
@@ -153,6 +157,15 @@ class GitHubHttpRequest:
         parsed = urlsplit(self.url)
         if parsed.scheme != "https" or parsed.netloc != "api.github.com":
             raise ValueError("GitHub transport URL must use fixed https://api.github.com")
+        if self.method not in {"GET", "POST", "PUT"}:
+            raise ValueError("GitHub transport method is unsupported")
+        if (
+            not isinstance(self.timeout_seconds, int | float)
+            or isinstance(self.timeout_seconds, bool)
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("GitHub transport timeout must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -162,6 +175,17 @@ class GitHubHttpResponse:
     status_code: int
     headers: Mapping[str, str]
     body: object
+
+    def __post_init__(self) -> None:
+        has_valid_status = (
+            not isinstance(self.status_code, bool)
+            and isinstance(self.status_code, int)
+            and 100 <= self.status_code <= 599
+        )
+        if not has_valid_status:
+            raise ValueError("GitHub response status_code must be an HTTP status")
+        if not isinstance(self.headers, Mapping):
+            raise ValueError("GitHub response headers must be a mapping")
 
 
 class GitHubTransportFailure(Exception):
@@ -1135,8 +1159,15 @@ def _response_json(response: object) -> object:
     if not isinstance(raw, bytes) or len(raw) > _MAX_RESPONSE_BYTES:
         raise GitHubTransportFailure("validation")
     try:
-        return json.loads(raw.decode("utf-8")) if raw else {}
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return (
+            json.loads(
+                raw.decode("utf-8"),
+                parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"invalid JSON constant {value}")),
+            )
+            if raw
+            else {}
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise GitHubTransportFailure("validation") from exc
 
 
@@ -1220,6 +1251,7 @@ def _candidate_receipt(
         expected_base_ref=request.expected_base_ref,
         expected_head_ref=request.expected_head_ref,
         expected_base_sha=request.expected_base_sha,
+        manifest_artifact_path=request.manifest.artifact_path,
         manifest_fingerprint=request.manifest.manifest_fingerprint,
         idempotency_key=request.idempotency_key,
         head_sha=head_sha,
@@ -1625,9 +1657,9 @@ def _current_reviews(rows: tuple[object, ...], author_id: int) -> tuple[PullRequ
             continue
         evidence = PullRequestReviewEvidence(
             reviewer_id=reviewer_id,
-            reviewer_login=_text(user.get("login")),
+            reviewer_login=_require_text(user.get("login"), "reviewer_login"),
             state=state,
-            commit_sha=_text(row.get("commit_id")),
+            commit_sha=_require_sha(row.get("commit_id"), "review_commit_sha"),
             submitted_at=_optional_text(row.get("submitted_at")),
         )
         if reviewer_id not in current or review_id > current[reviewer_id][0]:
@@ -1927,7 +1959,10 @@ def _fingerprint(value: object) -> str:
 
 
 def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise _adapter_error("decode_response", "validation", False, "github_json_value_invalid") from exc
 
 
 def _search_side_matches(side: Mapping[str, object], expected_ref: str, repository_id: int) -> bool:
@@ -2029,22 +2064,23 @@ def _retry_after(headers: Mapping[str, str]) -> float | None:
         delay = float(value)
     except ValueError:
         return None
-    return delay if delay >= 0 else None
+    return delay if math.isfinite(delay) and delay >= 0 else None
 
 
 def _is_safe_coordinate(value: str) -> bool:
-    return bool(value) and _SAFE_COORDINATE.fullmatch(value) is not None
+    return isinstance(value, str) and bool(value) and _SAFE_COORDINATE.fullmatch(value) is not None
 
 
 def _is_safe_ref_prefix(value: str) -> bool:
-    return value.endswith("/") and _is_safe_git_ref(f"{value}candidate")
+    return isinstance(value, str) and value.endswith("/") and _is_safe_git_ref(f"{value}candidate")
 
 
 def _is_safe_git_ref(value: str) -> bool:
     forbidden = ("..", "@{", "//", "\\")
     invalid_characters = set(" ~^:?*[]")
     return (
-        0 < len(value) <= 255
+        isinstance(value, str)
+        and 0 < len(value) <= 255
         and not value.startswith(("/", "."))
         and not value.endswith(("/", ".", ".lock"))
         and not any(token in value for token in forbidden)
