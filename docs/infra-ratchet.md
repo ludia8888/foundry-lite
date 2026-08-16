@@ -642,7 +642,7 @@ missing proof surfaces into evidence, so the media families can finally be promo
   injectable embedding-engine seam now has a real implementation — `_fastembed_embedding_engine`
   builds a fastembed `TextEmbedding("BAAI/bge-small-en-v1.5")` ONNX model once (module-level
   cache, onnxruntime — **no torch**) and returns one 384-dim `EmbeddingVector` per text. fastembed
-  downloads the model to `~/.cache/huggingface` on first use (cached/pre-fetched in CI like the
+  downloads the model to `FASTEMBED_CACHE_PATH` (or its system-temp default) on first use (cached/pre-fetched in CI like the
   Whisper model), so the in-process default still raises `embedding_model_unavailable`, keeping
   the M8 deterministic fake-injected unit tests covered. `local_runtime` now wires
   `LocalEmbeddingAdapter(embedding_engine=_fastembed_embedding_engine, model_version="bge-small-en-v1.5")`
@@ -857,7 +857,7 @@ quality:media-live-video-frames`, system `ffmpeg` + `tesseract-ocr` installed in
   fails closed as a typed timeout, both recording FAILED evidence with no derivative.
   `tests/integration/test_media_video_vision_live.py` (scenario `media-video-vision`,
   `pnpm quality:media-live-video-vision`, system `ffmpeg` in CI + the CLIP model pre-fetched/cached on
-  `~/.cache/huggingface`) proves the normal video→scene-frames→CLIP-image→`video_scene_vision`→visual-kNN
+  `FASTEMBED_CACHE_PATH`) proves the normal video→scene-frames→CLIP-image→`video_scene_vision`→visual-kNN
   path on the committed `video_scenes.mp4` (a car / a tree / a dog scene at 0/1/2s): a real CLIP-text
   query "a photo of a car" ranks the CAR frame first and "a photo of a dog" ranks the DOG frame first
   (real cross-modal visual understanding, not labels), plus the operator-evidence FAILED-run path. No new

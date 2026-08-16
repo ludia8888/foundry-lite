@@ -101,6 +101,7 @@
 | --- | --------------------------- | ------------------------------------------- | ---------------------------------------- | ---- |
 | 28  | `Any` boundary 외 금지      | `check_application_any_budget.py` + pyright | application/API/CLI/worker broad `Any` 0 | ✅   |
 | 29  | `dict[str, Any]` 대신 model | `check_dict_any_budget.py`                  | signature baseline 0 + no growth         | ✅   |
+| 29.1 | composition root runtime 소유권·종료 | `check_foundry_runtime_lifecycle.py` | unclosed/untransferred `FoundryLite` 0 | ✅   |
 
 ### §6 API
 
@@ -124,7 +125,7 @@
 | --- | -------------------------------- | ----------------------------- | ------ | ---- |
 | 35  | broad `except Exception` 금지    | ruff `BLE001` (부분)          | 정적   | △    |
 | 36  | `raise X from exc`               | ruff `B904`                   | 정적   | ✅   |
-| 37  | secret/SQL/stack trace 노출 금지 | Bandit (부분)                 | 정적   | △    |
+| 37  | secret/SQL/stack trace 노출 금지 | Bandit + `check_exception_string_redaction.py` | raw exception string 0 | ✅   |
 | 38  | 로그에 request_id 포함           | `check_log_has_trace_keys.py` | static | ✅   |
 
 ### §10 보안
@@ -170,7 +171,7 @@
 | #   | 조항                                  | 게이트                                                                   | 정량                                         | 상태 |
 | --- | ------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------- | ---- |
 | 58  | 증상 제거 패치 금지                   | `check_regression_test_per_bugfix.py` + `check_pr_root_cause_section.py` | bugfix missing test 0 + PR section missing 0 | ✅   |
-| 59  | `except Exception: pass` 금지         | ruff `E722`+`BLE001` (부분)                                              | 정적                                         | △    |
+| 59  | `except Exception: pass` 금지         | `check_silent_broad_exceptions.py`                                       | broad silent fallback 0                      | ✅   |
 | 60  | `sleep`/magic으로 race condition 덮기 | `check_no_test_sleep`                                                    | tests 0                                      | ✅   |
 | 61  | `dict[str, Any]` 우회                 | `check_dict_any_budget.py`                                               | signature baseline 0 + no growth             | ✅   |
 | 62  | migration 없이 DB 모양 가정           | `check_schema_revision_guard.py`                                         | schema fingerprint mismatch 0                | ✅   |
@@ -618,7 +619,8 @@ Temporal을 사용하고 같은 task queue를 듣는 worker 프로세스 2개를
 
 Python 격리는 static 계약만으로 완료라고 부르지 않는다.
 `quality:code-execution-image`가 runner와 transforms SDK를 포함한 non-root 이미지를 만들고,
-`quality:pipeline-python-isolation-live`가 실제 컨테이너에서 UID/GID, 환경 allowlist,
+`quality:pipeline-python-isolation-live`는 기본 Python·Node 실행 이미지가 없으면 먼저 다시 만들고,
+실제 컨테이너에서 UID/GID, 환경 allowlist,
 network deny, read-only root filesystem, capability drop, no-new-privileges, timeout과
 typed/redacted failure를 검증한다. 이 live ratchet은 Docker가 준비되는 `runtime-full`
 lane에서 실행되며, coverage/flaky/impact lane도 Python transform 회귀 테스트 전에 같은
@@ -662,8 +664,8 @@ Palantir 공식 Foundry 문서를 설계 근거로 갖는지 확인한다. 비�
 현재 proof는 Python/TypeScript v2 networkless sandbox, lazy ObjectSet descriptor, 기존
 permission-scoped Object Query로 재진입하는 bounded page/aggregation bridge, strict range
 operator, 공식 Python import/expression shape, TypeScript default export, 그리고 Domain OS의
-bounded aggregation Function + app-owned OSDK 생성이다. 실제 Docker image를 다시 만든 뒤
-`quality:pipeline-python-isolation-live`가 두 언어의 ObjectSet 왕복을 실행한다.
+bounded aggregation Function + app-owned OSDK 생성이다. `quality:pipeline-python-isolation-live`가
+누락된 실제 Docker image를 먼저 만든 뒤 두 언어의 ObjectSet 왕복을 실행한다.
 
 Phrase/fuzzy/geo/link 필터, Search Around, KNN, union/intersect/subtract, 전체 bucket/limit,
 Searchable render hint, repository package/version lifecycle, 전체 registry type은 partial/planned다.
@@ -1188,6 +1190,56 @@ Self-test: `tests/unit/test_quality_error_response_request_id.py`가 request_id 
 `HTTPException` 실패, request_id 포함 detail 허용, request 없는 `_handle_error`
 호출 실패, request 포함 `_handle_error` 허용, JSON report 생성을 검증한다.
 
+### Tier G9 — exception string redaction (✅ baseline 0 완료 2026-08-13 G9)
+
+`scripts/quality/check_exception_string_redaction.py`는 application/API/worker의 Python AST를
+검사해 외부 DB, SDK, connector, model provider, filesystem 예외 문자열이 응답·로그·DB 증거에
+그대로 들어가는 것을 막는다. 비개발자 관점으로 말하면, 오류 문장 안에 섞여 들어온 토큰이나
+비밀번호가 사용자 화면이나 운영 이력에 남지 않게 하는 게이트다.
+
+검사 기준:
+
+- `exc`, `error`, `exception`, `failure`를 `str(...)`로 바꿀 때는 반드시
+  `scrub_error_text(...)` 또는 표준 `runtime_error_payload(...)` 경계를 통과해야 한다.
+- 검사 범위는 `apps`와 `libs/foundry_lite/application`의 Python 파일이며 baseline은 0이다.
+- HTTP/WebSocket 공통 오류, MCP structured/content 오류, AIP 실행 원장, Ontology proposal
+  실패 DB/audit, Dataset/Transform/Action/Pipeline/backup/observability/worker 증거가 같은
+  `runtime_error_payloads.py` 정책을 사용한다.
+- 결과는 `artifacts/quality/exception_string_redaction.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_exception_string_redaction.py`가 raw `str(exc)` 실패,
+공통 redaction boundary 허용, 일반 값 `str(value)` 오탐 방지, JSON report 생성을 검증한다.
+
+### Tier G23 — silent broad exception (✅ baseline 0 완료 2026-08-13 G23)
+
+`scripts/quality/check_silent_broad_exceptions.py`는 application/API/worker Python AST에서
+`Exception`, `BaseException`, bare `except`가 실패를 정상 반환처럼 지우는 패턴을 차단한다.
+비개발자 관점으로 말하면, 백엔드가 실제로 실패했는데 `None`, `False`, 빈 목록, loop skip으로
+속여서 “아무 일도 없었다”고 보이게 하지 못하도록 한다.
+
+검사 기준:
+
+- 광범위 handler 안의 `pass`, `continue`, `break`, 인자 없는 `return`, `None`/boolean/상수/
+  빈 collection 반환은 baseline 0으로 차단한다.
+- 계속 실행해야 하는 handler는 잡힌 예외 객체를 explicit failure, DLQ, incident,
+  reconciliation-deferred, cleanup, reconnect 증거 경계에 전달해야 한다.
+- `except ValueError: return None`처럼 입력 parsing의 좁은 typed fallback은 이 게이트 범위가 아니다.
+- 결과는 `artifacts/quality/silent_broad_exceptions.json`에 남긴다.
+
+이 게이트를 만들게 한 실제 결함은 Pipeline unknown-commit recovery였다. 내부 상태 조회가 실패해
+실제로 terminal CAS를 하나도 저장하지 못해도 `PipelineRunService`가 단순히 unknown output이
+존재했다는 이유만으로 `True`를 반환했고, Control Worker가 이를 복구 완료로 거짓 집계했다.
+현재는 실제 `reconcile_unknown_commit_outputs(...)` 결과를 그대로 반환하며, status read,
+open-transaction abort, committed-output load 실패는 stage별 deferred audit에 남고 audit DB까지
+불가하면 secret-free 구조화 ERROR log로 남는다. 원래 `partial + COMMIT_OUTCOME_UNKNOWN` 상태는
+유지되어 다음 tick에서 안전하게 재시도된다.
+
+Self-test: `tests/unit/test_quality_silent_broad_exceptions.py`가 silent sentinel/loop skip/nested
+empty fallback 차단, explicit failure payload/incident/cleanup evidence 허용, typed parse fallback
+허용, unrelated metric-call 우회 차단, JSON report 생성을 검증한다. Runtime regression은
+`tests/unit/test_pipeline_run_unknown_commit_recovery.py`가 거짓 완료 집계와 세 deferred stage,
+audit 실패 structured-log fallback을 검증한다.
+
 ### Tier G8 — layer coverage floor (✅ 완료 2026-06-11 G8)
 
 `scripts/quality/check_tier_coverage_by_layer.py`는 `coverage json` 산출물을
@@ -1208,9 +1260,9 @@ coverage가 95% 이상인지 검증한다. `ci_gate.sh`는 이제 coverage 수�
 95는 목표치로 남고, 부채를 진 계층은 `LAYER_FLOORS`에 측정값 바로 아래로 고정된다.
 갚는 동안 늘지 못하게 막는 것이 목적이지 95를 포기하는 것이 아니다.
 
-| 계층 | floor | 측정값 (cf601f75) |
+| 계층 | floor | 기준 또는 최신 ratchet 측정값 |
 | --- | --- | --- |
-| domain | 92 | 92.38 |
+| domain | 93 | 93.50 (2026-08-13 전체 6,190개 coverage 실행) |
 | application | 93 | 93.14 |
 | infrastructure | 93 | 93.59 |
 | api | 91 | 91.97 |

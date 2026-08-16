@@ -176,6 +176,8 @@ jobs:
     name: quality-coverage
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    env:
+      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
     # Coverage runs the full backend suite sharded across xdist workers, one file per worker.
     # This lane was serial until the claim behind that choice was measured: sharding was said to
     # misattribute import-time lines and weaken the per-layer signal, but pytest-cov combines one
@@ -225,11 +227,13 @@ jobs:
       - name: Install Tesseract OCR, Poppler, and FFmpeg
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
 
-      - name: Cache faster-whisper tiny model
+      - name: Cache faster-whisper and fastembed models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
+          path: |
+            ~/.cache/huggingface
+            ${{ env.FASTEMBED_CACHE_PATH }}
+          key: hf-fastembed-models-whisper-tiny-bge-small-clip-vit-b32-v2
 
       - name: Pre-fetch faster-whisper tiny model
         run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
@@ -255,6 +259,8 @@ jobs:
     name: quality-runtime
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    env:
+      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -291,11 +297,13 @@ jobs:
       - name: Install Tesseract OCR, Poppler, and FFmpeg
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr poppler-utils ffmpeg
 
-      - name: Cache faster-whisper tiny model
+      - name: Cache faster-whisper and fastembed models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
+          path: |
+            ~/.cache/huggingface
+            ${{ env.FASTEMBED_CACHE_PATH }}
+          key: hf-fastembed-models-whisper-tiny-bge-small-clip-vit-b32-v2
 
       - name: Pre-fetch faster-whisper tiny model
         run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
@@ -321,6 +329,8 @@ jobs:
     name: quality-e2e
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    env:
+      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -369,8 +379,10 @@ jobs:
       - name: Cache faster-whisper and fastembed models
         uses: actions/cache@v4
         with:
-          path: ~/.cache/huggingface
-          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
+          path: |
+            ~/.cache/huggingface
+            ${{ env.FASTEMBED_CACHE_PATH }}
+          key: hf-fastembed-models-whisper-tiny-bge-small-clip-vit-b32-v2
 
       - name: Pre-fetch faster-whisper tiny model
         run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
