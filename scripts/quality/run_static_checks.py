@@ -238,6 +238,7 @@ PYTHON_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("metrics-exposed", ["scripts/quality/check_metrics_exposed.py"]),
     ("adapter-failure-taxonomy", ["scripts/quality/check_adapter_failure_taxonomy.py"]),
     ("infra-ratchet", ["scripts/quality/check_infra_ratchet.py"]),
+    ("infrastructure-swapability", ["scripts/quality/check_infrastructure_swapability.py"]),
     ("no-test-bypasses", ["scripts/quality/check_no_test_bypasses.py"]),
     ("no-test-sleep", ["scripts/quality/check_no_test_sleep.py"]),
     ("pragma-no-cover-budget", ["scripts/quality/check_pragma_no_cover_budget.py", "--baseline", "0"]),

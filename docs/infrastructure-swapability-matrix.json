@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "scope": "runtime infrastructure families that must remain replaceable behind application contracts",
+  "statefulCutoverRequirements": [
+    "migration",
+    "reconciliation",
+    "write_fencing",
+    "rollback",
+    "rpo_rto"
+  ],
+  "families": [
+    {
+      "id": "metadata-database",
+      "boundary": "libs/foundry_lite/application/ports/metadata_repository.py",
+      "compositionRoot": "apps/api/foundry_lite_api/runtime.py",
+      "selector": "FOUNDRY_LITE_DB_URL",
+      "implementations": [
+        {"name": "sqlite", "path": "libs/foundry_lite/infrastructure/repositories/metadata_repository.py"},
+        {"name": "postgresql", "path": "libs/foundry_lite/infrastructure/repositories/metadata_repository.py"}
+      ],
+      "contractTests": ["tests/contracts/test_metadata_repository_contract.py"],
+      "isStateful": true,
+      "swapLevel": "contract",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "dataset-storage",
+      "boundary": "libs/foundry_lite/application/ports/dataset_storage.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/local_runtime.py",
+      "selector": "adapter_profile",
+      "implementations": [
+        {"name": "local", "path": "libs/foundry_lite/infrastructure/adapters/dataset_storage.py"},
+        {"name": "s3", "path": "libs/foundry_lite/infrastructure/adapters/s3_dataset_storage.py"},
+        {"name": "iceberg", "path": "libs/foundry_lite/infrastructure/adapters/iceberg_dataset_storage.py"}
+      ],
+      "contractTests": ["tests/contracts/test_dataset_storage_adapter_contract.py"],
+      "isStateful": true,
+      "swapLevel": "ratcheted",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "compute",
+      "boundary": "libs/foundry_lite/application/ports/compute_adapter.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/local_runtime.py",
+      "selector": "FOUNDRY_LITE_COMPUTE_PROFILE",
+      "implementations": [
+        {"name": "duckdb", "path": "libs/foundry_lite/infrastructure/adapters/compute.py"},
+        {"name": "spark", "path": "libs/foundry_lite/infrastructure/adapters/spark_compute.py"}
+      ],
+      "contractTests": ["tests/contracts/test_compute_adapter_contract.py"],
+      "isStateful": false,
+      "swapLevel": "ratcheted",
+      "cutoverStatus": "not-applicable"
+    },
+    {
+      "id": "event-stream",
+      "boundary": "libs/foundry_lite/application/ports/stream_adapter.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/local_runtime.py",
+      "selector": "FOUNDRY_LITE_STREAM_PROFILE",
+      "implementations": [
+        {"name": "local", "path": "libs/foundry_lite/infrastructure/adapters/scale_foundation.py"},
+        {"name": "kafka", "path": "libs/foundry_lite/infrastructure/adapters/kafka_stream.py"}
+      ],
+      "contractTests": [
+        "tests/contracts/test_stream_adapter_contract.py",
+        "tests/contracts/test_kafka_stream_adapter_contract.py"
+      ],
+      "isStateful": true,
+      "swapLevel": "ratcheted",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "workflow",
+      "boundary": "libs/foundry_lite/application/ports/workflow_adapter.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/local_runtime.py",
+      "selector": "FOUNDRY_LITE_WORKFLOW_PROFILE",
+      "implementations": [
+        {"name": "local", "path": "libs/foundry_lite/infrastructure/adapters/scale_foundation.py"},
+        {"name": "temporal", "path": "libs/foundry_lite/infrastructure/adapters/temporal_workflow.py"}
+      ],
+      "contractTests": ["tests/contracts/test_workflow_adapter_contract.py"],
+      "isStateful": true,
+      "swapLevel": "ratcheted",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "search",
+      "boundary": "libs/foundry_lite/application/ports/search_adapter.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/local_runtime.py",
+      "selector": "FOUNDRY_LITE_SEARCH_PROFILE",
+      "implementations": [
+        {"name": "local", "path": "libs/foundry_lite/infrastructure/adapters/scale_foundation.py"},
+        {"name": "elasticsearch", "path": "libs/foundry_lite/infrastructure/adapters/elasticsearch_search.py"}
+      ],
+      "contractTests": ["tests/contracts/test_search_adapter_contract.py"],
+      "isStateful": true,
+      "swapLevel": "ratcheted",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "media-storage",
+      "boundary": "libs/foundry_lite/application/ports/media_storage.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/local_runtime.py",
+      "selector": "FOUNDRY_LITE_MEDIA_STORAGE_PROFILE",
+      "implementations": [
+        {"name": "local", "path": "libs/foundry_lite/infrastructure/adapters/local_media_storage.py"},
+        {"name": "s3", "path": "libs/foundry_lite/infrastructure/adapters/s3_media_storage.py"}
+      ],
+      "contractTests": ["tests/contracts/test_media_storage_contract.py"],
+      "isStateful": true,
+      "swapLevel": "ratcheted",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "authentication",
+      "boundary": "libs/foundry_lite/application/ports/auth_provider.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/auth/profiles.py",
+      "selector": "FOUNDRY_LITE_AUTH_PROFILE",
+      "implementations": [
+        {"name": "local", "path": "libs/foundry_lite/infrastructure/auth/local.py"},
+        {"name": "oidc", "path": "libs/foundry_lite/infrastructure/auth/oidc.py"}
+      ],
+      "contractTests": ["tests/contracts/test_auth_provider_contract.py"],
+      "isStateful": false,
+      "swapLevel": "contract",
+      "cutoverStatus": "not-applicable"
+    },
+    {
+      "id": "secret-provider",
+      "boundary": "libs/foundry_lite/application/ports/secret_provider.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/secrets/__init__.py",
+      "selector": "secret_provider",
+      "implementations": [
+        {"name": "environment", "path": "libs/foundry_lite/infrastructure/secrets/env.py"},
+        {"name": "local-vault", "path": "libs/foundry_lite/infrastructure/secrets/local_vault.py"}
+      ],
+      "contractTests": ["tests/contracts/test_secret_provider_contract.py"],
+      "isStateful": true,
+      "swapLevel": "contract",
+      "cutoverStatus": "not-proven"
+    },
+    {
+      "id": "release-source-control",
+      "boundary": "libs/foundry_lite/application/ports/source_control_release.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/release_dependencies.py",
+      "selector": "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER",
+      "implementations": [
+        {"name": "github", "path": "libs/foundry_lite/infrastructure/adapters/github_release.py"},
+        {"name": "gitlab-contract-probe", "path": "tests/unit/test_release_dependencies.py"}
+      ],
+      "contractTests": ["tests/contracts/test_source_control_release_contract.py"],
+      "isStateful": false,
+      "swapLevel": "contract",
+      "cutoverStatus": "not-applicable"
+    },
+    {
+      "id": "release-deployment",
+      "boundary": "libs/foundry_lite/application/ports/infrastructure_deployment_adapter.py",
+      "compositionRoot": "libs/foundry_lite/infrastructure/release_dependencies.py",
+      "selector": "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER",
+      "implementations": [
+        {"name": "render", "path": "libs/foundry_lite/infrastructure/adapters/render_deployment.py"},
+        {"name": "kubernetes-contract-probe", "path": "tests/unit/test_release_dependencies.py"}
+      ],
+      "contractTests": ["tests/contracts/test_infrastructure_deployment_adapter_contract.py"],
+      "isStateful": false,
+      "swapLevel": "contract",
+      "cutoverStatus": "not-applicable"
+    }
+  ]
+}

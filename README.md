@@ -125,6 +125,8 @@ Governed Release와 Ontology/Pipeline proposal은 **검토 담당 배정과 사�
 
 외부 source-control adapter가 구성된 작성자 경로도 실제 hosted ChatGPT에서 별도로 확인했다. 의도적으로 인증에 실패하는 non-secret QA token을 사용해 provider 쓰기가 성공할 수 없게 한 상태에서 작성자 `user-demo`의 pending Ontology 후보를 조회하자 `GitHub 후보 PR 게시`만 활성화되고 claim·승인·반려·병합·활성화·배포·rollback은 계속 비활성화됐다. 게시 버튼과 `prepare_release_action`은 호출하지 않았다. 같은 대화를 reload하면 5초 skeleton 뒤 약 30초 안에 동일 권한 상태와 exact proposal 제출 timeline으로 복구됐고, durable tool quota는 read-only 1회, proposal 상태·delivery·protected-action audit와 GitHub 열린 PR 수는 모두 그대로였다. 이는 author-only publication UI/권한 경로의 hosted 증거이지 실제 GitHub publication 증거는 아니다.
 
+인프라 교체 가능성은 이제 별도 품질 계약입니다. `docs/infrastructure-swapability-matrix.json`은 DB·Dataset Storage·Compute·Event Stream·Workflow·Search·Media Storage·Auth·Secret·Release Source·Release Deployment 11개 핵심 인프라군의 port, 선택 지점, 대체 구현, contract test, cutover 상태를 고정합니다. 배포 application 계층은 특정 공급자 이름이나 Render의 `autoDeploy` DTO를 알지 않고, `releaseMode`, `triggerMode`, `sourceBinding`, `workloadKind`만 사용합니다. composition root는 `FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER`·`FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER`와 각 adapter factory registry로 소스 제어와 배포 구현을 따로 고르며, 공급자 신원이 registry key와 다르면 시작을 거부합니다. `quality:infrastructure-swapability`는 전체 matrix와 GitLab/Kubernetes-shaped 대체 adapter 회귀를 함께 고정합니다. 현재 기본 내장 공급자는 GitHub와 Render이고, 실제 GitLab/Kubernetes adapter와 상태형 데이터의 cutover/RPO/RTO 리허설은 아직 완료되지 않았습니다.
+
 ## 아직 아닌 것
 
 아래 항목은 README에서 current 기능처럼 주장하지 않습니다.
@@ -388,6 +390,7 @@ pnpm worker:pipeline-control
 | `quality:source-of-truth` | serving source of truth가 코드, 테스트, 운영 증거, 문서 사이에서 갈라지는 문제를 차단합니다. |
 | `quality:operator-evidence` | 실패 원인이 로그 한 줄에만 남고 audit, run detail, transaction, error payload로 다시 추적되지 않는 문제를 차단합니다. |
 | `check_infra_ratchet.py` / `quality:infra-ratchet` | Infra Ratchet 원칙처럼 새 인프라가 self proof와 active composition proof 없이 README나 운영 문서에서 current처럼 보이는 문제를 차단합니다. |
+| `check_infrastructure_swapability.py` / `quality:infrastructure-swapability` | 핵심 인프라군의 port, composition selector, 대체 구현, contract test가 사라지거나 provider 전용 필드가 application 계층으로 새는 문제를 차단합니다. |
 | `check_infra_tricky_matrix.py` / `quality:infra-tricky-matrix` | tricky infra matrix가 active infra, source-of-truth rule, operator evidence, checked failure-mode evidence와 어긋나는 문제를 차단합니다. |
 | `check_pipeline_parity_matrix.py` / `quality:pipeline-parity-matrix` | Graph v2 타입이나 DB 테이블만 생긴 상태를 완성형 멀티모달 Builder처럼 과장하거나, 공식 공개 기능과 구현·테스트·rollout gap의 연결이 끊기는 문제를 차단합니다. |
 | `check_palantir_design_authority.py` / `quality:palantir-design-authority` | 주요 설계 결정이나 parity registry가 공식 Palantir Foundry 근거 없이 제품 사실로 올라가거나 private 구현 동일성을 과장하는 문제를 차단합니다. |
@@ -408,6 +411,7 @@ pnpm worker:pipeline-control
 | [docs/commit-point-risk-register.md](docs/commit-point-risk-register.md) | commit point, retry, idempotency, partial failure, cleanup 위험을 추적하는 위험 장부입니다. |
 | [docs/infra-ratchet.md](docs/infra-ratchet.md) | 새 인프라 profile을 추가할 때 self proof와 active composition proof를 어떻게 쌓는지 설명합니다. |
 | [docs/infra-tricky-matrix.json](docs/infra-tricky-matrix.json) | 인프라별 tricky failure, proof class, source-of-truth rule, operator evidence를 CI가 읽는 registry입니다. |
+| [docs/infrastructure-swapability-matrix.json](docs/infrastructure-swapability-matrix.json) | 11개 핵심 인프라군의 port, 선택 지점, 대체 구현, contract test, stateful cutover 증명 여부를 CI가 읽는 registry입니다. |
 | [docs/data-engineering-pattern-matrix.json](docs/data-engineering-pattern-matrix.json) | 데이터 엔지니어링 pattern별 current, partial, deferred 상태와 proof level을 잠그는 registry입니다. |
 | [docs/frontend-api-sdk-surface-matrix.json](docs/frontend-api-sdk-surface-matrix.json) | FastAPI route와 frontend SDK method/helper, proof test, operator evidence 매핑을 잠그는 registry입니다. |
 | [docs/pipeline-builder-parity-matrix.json](docs/pipeline-builder-parity-matrix.json) | Palantir MMDP/Pipeline Builder의 공식 공개 동작과 Foundry-lite의 current, foundation, planned 상태를 코드·테스트·완료 기준에 연결하는 registry입니다. |
