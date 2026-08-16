@@ -50,6 +50,7 @@ REQUIRED_PATHS = (
     Path("scripts/operations/bootstrap_keycloak_qa_user.py"),
     Path("scripts/operations/bootstrap_macmini_qa_secrets.py"),
     Path("scripts/operations/deploy_macmini_qa.py"),
+    Path("scripts/operations/install_macmini_qa_tool.py"),
     Path("apps/worker/foundry_lite_worker/outbox_publisher.py"),
     Path("apps/worker/foundry_lite_worker/source_scheduler.py"),
 )
@@ -293,6 +294,11 @@ def _operation_findings(root: Path) -> list[KubernetesPackagingFinding]:
     ):
         if term not in secret_text:
             findings.append(_finding("protected_secret_contract_missing", secret_path, term))
+    installer_path = Path("scripts/operations/install_macmini_qa_tool.py")
+    installer_text = (root / installer_path).read_text(encoding="utf-8")
+    for term in ('"age-keygen"', '"uv"'):
+        if term not in installer_text:
+            findings.append(_finding("macmini_bootstrap_tool_missing", installer_path, term))
     for term in ("--atomic", "--wait-for-jobs", '"migrations": {"enabled": False}', "_IMAGE_REPOSITORIES"):
         if term not in deploy_text:
             findings.append(_finding("macmini_deploy_contract_missing", deploy_path, term))

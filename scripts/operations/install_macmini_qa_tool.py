@@ -15,7 +15,7 @@ from pathlib import Path
 
 from scripts.operations.macmini_qa_guard import QA_ROOT, ensure_qa_directories
 
-_ALLOWED_TOOLS = frozenset({"age", "cosign", "crane", "helm", "kubeconform", "kubectl"})
+_ALLOWED_TOOLS = frozenset({"age", "age-keygen", "cosign", "crane", "helm", "kubeconform", "kubectl", "uv"})
 _MAX_DOWNLOAD_BYTES = 250 * 1024 * 1024
 
 

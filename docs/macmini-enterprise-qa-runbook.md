@@ -36,7 +36,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/prepare_
   --run-id "$RUN_ID" --profile foundry-qa --restart
 ```
 
-합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. kubectl, Helm, age, cosign, kubeconform 같은 도구는 `/Users/sean1234/foundry-qa/bin`에 digest/hash 검증 후 설치한다.
+합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. `uv`, kubectl, Helm, age, age-keygen, cosign, kubeconform 같은 도구는 `/Users/sean1234/foundry-qa/bin`에 digest/hash 검증 후 설치한다.
 
 ## 4. 최초 설치
 
