@@ -35,6 +35,10 @@ def validate_yaml_row_policies(
         policy_filter = yaml_object(policy["filter"], "rowPolicies[].filter")
         validate_filter_ast(policy_filter)
         _validate_row_policy_filter_properties(policy_filter, property_defs, details)
+        validate_filter_ast(
+            policy_filter,
+            property_data_types={name: required_str(prop, "type") for name, prop in property_defs.items()},
+        )
 
 
 def _validate_row_policy_filter_properties(

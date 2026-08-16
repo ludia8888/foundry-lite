@@ -23,8 +23,11 @@ def main() -> None:
             storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT"),
         )
     )
-    result = _drive(foundry, payload)
-    sys.stdout.write(f"{_RESULT_PREFIX}{json.dumps(result, separators=(',', ':'))}\n")
+    try:
+        result = _drive(foundry, payload)
+        sys.stdout.write(f"{_RESULT_PREFIX}{json.dumps(result, separators=(',', ':'))}\n")
+    finally:
+        foundry.close()
 
 
 def _drive(foundry: FoundryLite, payload: dict[str, object]) -> dict[str, object]:

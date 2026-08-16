@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
 import pytest
 from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
@@ -12,6 +13,14 @@ from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     seed_plan,
 )
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import consumer_osdk_plan, react_files
+from foundry_lite.application.services.ontology_branch_diff import (
+    ResourceKind,
+    ResourceMap,
+    parse_resource_map,
+    serialize_resource_map,
+)
+from foundry_lite.application.services.ontology_validation import validate_ontology_definition
+from foundry_lite.domain.context import demo_admin_context
 
 
 def _record(name: str, api_name: str, *fields: tuple[str, str, str]) -> dict[str, object]:
@@ -389,6 +398,25 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
     assert len(seeds) == len(records)
     assert len({seed["datasetRef"] for seed in seeds}) == len(records)
     assert len(application_resources(blueprint)) == len(records) + len(actions)
+    resource_map: ResourceMap = {}
+    for resource in resources:
+        definition_row = cast(dict[str, object], resource["definition"])
+        resource_map[(cast(ResourceKind, resource["kind"]), str(definition_row["apiName"]))] = definition_row
+    definition = parse_resource_map(serialize_resource_map(resource_map))
+    columns_by_dataset = {
+        str(seed["datasetRef"]): {
+            str(column): {"name": str(column), "nullable": column not in seed["primaryKey"]}
+            for column in cast(list[dict[str, object]], seed["rows"])[0]
+        }
+        for seed in seeds
+    }
+
+    validate_ontology_definition(
+        object(),
+        demo_admin_context(),
+        _definition_from_resource_map(definition),
+        lambda _conn, _ctx, dataset_ref: columns_by_dataset[dataset_ref],
+    )
 
     slug = str(spec["id"])
     plan = {
@@ -406,3 +434,16 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
     assert "JSON.stringify(item.properties" not in files["src/App.tsx"]
     assert "createBrowserFoundryLiteOsdkClient" in files["packages/application-osdk/src/react.ts"]
     assert all("@foundry-lite/sdk" not in content for name, content in files.items() if name.endswith((".ts", ".tsx")))
+
+
+def _definition_from_resource_map(
+    resources: Mapping[tuple[str, str], Mapping[str, object]],
+) -> dict[str, object]:
+    return {
+        "objectTypes": [dict(resource) for (kind, _), resource in sorted(resources.items()) if kind == "objectType"],
+        "linkTypes": [dict(resource) for (kind, _), resource in sorted(resources.items()) if kind == "linkType"],
+        "actionTypes": [dict(resource) for (kind, _), resource in sorted(resources.items()) if kind == "actionType"],
+        "functionTypes": [
+            dict(resource) for (kind, _), resource in sorted(resources.items()) if kind == "functionType"
+        ],
+    }

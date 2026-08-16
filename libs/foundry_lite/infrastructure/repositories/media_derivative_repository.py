@@ -101,7 +101,12 @@ class SqlAlchemyMediaDerivativeRepository:
         failure_kind: str | None = None,
         failure_reason: str | None = None,
     ) -> MediaProcessingRunRecord | None:
-        transition = MEDIA_RUN_SUCCEEDED if status == "SUCCEEDED" else MEDIA_RUN_FAILED
+        if status == "SUCCEEDED":
+            transition = MEDIA_RUN_SUCCEEDED
+        elif status == "FAILED":
+            transition = MEDIA_RUN_FAILED
+        else:
+            raise ValueError("media processing run status must be SUCCEEDED or FAILED")
         cas_status_update(
             transaction,
             db.media_processing_runs,

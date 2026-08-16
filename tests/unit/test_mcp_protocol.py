@@ -6,7 +6,9 @@ import pytest
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite_api.mcp_envelope import JsonRpcEnvelope
 from foundry_lite_api.mcp_protocol import (
+    MAX_MCP_EVENT_SEQUENCE,
     SUPPORTED_PROTOCOL_VERSION,
+    mcp_last_event_sequence,
     require_mcp_protocol_version,
     require_mcp_session_id,
     validate_mcp_message,
@@ -55,6 +57,37 @@ def test_session_id_requires_bounded_visible_ascii(session_id: bytes) -> None:
         require_mcp_session_id(request, "Builder")
 
 
+def test_last_event_sequence_accepts_only_canonical_positive_database_integer() -> None:
+    session_id = "mcp-release-session"
+
+    assert mcp_last_event_sequence(_last_event_request(None), session_id, "Release") == 0
+    assert (
+        mcp_last_event_sequence(
+            _last_event_request(f"{session_id}:{MAX_MCP_EVENT_SEQUENCE}"),
+            session_id,
+            "Release",
+        )
+        == MAX_MCP_EVENT_SEQUENCE
+    )
+
+
+@pytest.mark.parametrize(
+    "last_event_id",
+    [
+        "other-session:1",
+        "mcp-release-session:0",
+        "mcp-release-session:01",
+        "mcp-release-session:+1",
+        "mcp-release-session:1_0",
+        f"mcp-release-session:{MAX_MCP_EVENT_SEQUENCE + 1}",
+        f"mcp-release-session:{'9' * 4_300}",
+    ],
+)
+def test_last_event_sequence_rejects_foreign_noncanonical_or_out_of_range_cursor(last_event_id: str) -> None:
+    with pytest.raises(ValidationFailed, match="Last-Event-ID"):
+        mcp_last_event_sequence(_last_event_request(last_event_id), "mcp-release-session", "Release")
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("parse_body", [parse_builder_body, parse_ontology_body])
 async def test_invalid_utf8_body_is_a_sanitized_validation_error(
@@ -90,3 +123,8 @@ def _initialize(protocol_version: str) -> JsonRpcEnvelope:
             },
         }
     )
+
+
+def _last_event_request(last_event_id: str | None) -> Request:
+    headers = [] if last_event_id is None else [(b"last-event-id", last_event_id.encode("ascii"))]
+    return Request({"type": "http", "headers": headers})

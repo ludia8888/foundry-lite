@@ -44,6 +44,7 @@ from foundry_lite.application.services.ontology_proposal_update import decision_
 from foundry_lite.application.services.ontology_protocols import OntologyRuntimeBoundary
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.ontology_yaml import require_yaml_text_within_limit
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
@@ -421,12 +422,13 @@ class OntologyProposalService(CoreService):
         )
 
     def _record_execution_failure(self, ctx: RequestContext, proposal_id: str, exc: Exception) -> None:
+        safe_error = scrub_error_text(str(exc))
         with self.engine.begin() as conn:
             self.insight_review_repository.mark_execution_failed(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 review_id=proposal_id,
-                error={"message": str(exc), "type": exc.__class__.__name__},
+                error={"message": safe_error, "type": exc.__class__.__name__},
                 updated_at=_now(),
             )
             self.runtime_service._audit(
@@ -436,7 +438,7 @@ class OntologyProposalService(CoreService):
                 resource_type=_RESOURCE_TYPE,
                 resource_id=proposal_id,
                 action="ontology:activate",
-                after_ref={"error": str(exc), "errorType": exc.__class__.__name__},
+                after_ref={"error": safe_error, "errorType": exc.__class__.__name__},
             )
 
     def _require_submitter(self, conn: TransactionContext, ctx: RequestContext, row: InsightReviewRow) -> None:

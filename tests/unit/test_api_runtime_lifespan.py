@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from foundry_lite.application.services.runtime_error_payloads import record_runtime_cleanup_failure
 from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider
 from foundry_lite_api import main, runtime
+from starlette.requests import Request
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +89,35 @@ def test_initialize_api_runtime_passes_its_oauth_environment_to_the_token_issuer
     assert captured["oauth_audience"] == "foundry-test-audience"
 
 
+def test_initialize_api_runtime_closes_foundry_when_runtime_container_creation_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    closures: list[str] = []
+
+    class _Foundry:
+        engine = object()
+
+        def __init__(self, *, dependencies: object) -> None:
+            del dependencies
+
+        @staticmethod
+        def close() -> None:
+            closures.append("foundry")
+
+    monkeypatch.setattr(runtime, "FoundryLite", _Foundry)
+    monkeypatch.setattr(runtime, "create_runtime_core_dependencies", lambda **kwargs: SimpleNamespace(kwargs=kwargs))
+    monkeypatch.setattr(runtime, "auth_provider_from_env", lambda source=None: SimpleNamespace(name="auth"))
+    monkeypatch.setattr(
+        runtime,
+        "ApiRuntime",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("container failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="container failed"):
+        runtime.initialize_api_runtime({})
+
+    assert closures == ["foundry"]
+    assert not runtime.is_api_runtime_initialized()
+
+
 def test_reset_disposes_the_engine_before_clearing_the_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Dropping the runtime without disposing the engine leaks its connection pool.
 
@@ -122,6 +153,52 @@ def test_reset_disposes_the_engine_before_clearing_the_runtime(monkeypatch) -> N
     assert not runtime.is_api_runtime_initialized()
 
 
+def test_reset_prefers_foundry_lifecycle_close(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    closures: list[str] = []
+
+    class _Foundry:
+        engine = object()
+
+        def __init__(self, *, dependencies: object) -> None:
+            del dependencies
+
+        @staticmethod
+        def close() -> None:
+            closures.append("foundry")
+
+    monkeypatch.setattr(runtime, "FoundryLite", _Foundry)
+    monkeypatch.setattr(runtime, "create_runtime_core_dependencies", lambda **kwargs: SimpleNamespace(kwargs=kwargs))
+    monkeypatch.setattr(runtime, "auth_provider_from_env", lambda source=None: SimpleNamespace(name="auth"))
+
+    runtime.initialize_api_runtime({})
+    runtime.shutdown_api_runtime()
+
+    assert closures == ["foundry"]
+    assert not runtime.is_api_runtime_initialized()
+
+
+def test_reset_clears_runtime_even_when_resource_shutdown_fails(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    class _Foundry:
+        engine = object()
+
+        def __init__(self, *, dependencies: object) -> None:
+            del dependencies
+
+        @staticmethod
+        def close() -> None:
+            raise RuntimeError("shutdown failed")
+
+    monkeypatch.setattr(runtime, "FoundryLite", _Foundry)
+    monkeypatch.setattr(runtime, "create_runtime_core_dependencies", lambda **kwargs: SimpleNamespace(kwargs=kwargs))
+    monkeypatch.setattr(runtime, "auth_provider_from_env", lambda source=None: SimpleNamespace(name="auth"))
+
+    runtime.initialize_api_runtime({})
+    with pytest.raises(RuntimeError, match="shutdown failed"):
+        runtime.shutdown_api_runtime()
+
+    assert not runtime.is_api_runtime_initialized()
+
+
 def test_fastapi_lifespan_initializes_and_instruments(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     fake_engine = object()
     pipelines = SimpleNamespace(recover_preview_runs=lambda: {"processed": 0})
@@ -130,14 +207,17 @@ def test_fastapi_lifespan_initializes_and_instruments(monkeypatch) -> None:  # t
         auth_provider=object(),
     )
     engines: list[object] = []
+    shutdowns: list[str] = []
 
     monkeypatch.setattr(main.runtime, "initialize_api_runtime", lambda: initialized)
+    monkeypatch.setattr(main.runtime, "shutdown_api_runtime", lambda: shutdowns.append("closed"))
     monkeypatch.setattr(main, "instrument_sqlalchemy_engine", engines.append)
 
     with TestClient(main.app) as client:
         assert client.get("/healthz").json() == {"status": "ok"}
 
     assert engines == [fake_engine]
+    assert shutdowns == ["closed"]
 
 
 def test_preview_recovery_loop_dispatches_durable_work(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -208,3 +288,66 @@ def test_preview_recovery_loop_propagates_task_cancellation(monkeypatch) -> None
                 SimpleNamespace(pipelines=SimpleNamespace(recover_preview_runs=lambda: None))
             )
         )
+
+
+def test_unhandled_exception_logs_request_trace_and_redacted_cleanup_failure(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    events: list[tuple[str, dict[str, object]]] = []
+    try:
+        raise RuntimeError("Authorization: Bearer primary-secret")
+    except RuntimeError as exc:
+        primary = exc
+    record_runtime_cleanup_failure(
+        primary,
+        operation="mediaProcessingRunFailureRecord",
+        cleanup_error=RuntimeError("password=secondary-secret"),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/media/process",
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "client": ("testclient", 123),
+            "scheme": "http",
+        }
+    )
+    request.state.request_id = "req-unhandled-1"
+
+    def capture(_logger, event, **fields):  # type: ignore[no-untyped-def]
+        events.append((event, fields))
+
+    monkeypatch.setattr(main, "log_event", capture)
+
+    response = asyncio.run(main.unhandled_exception_handler(request, primary))
+
+    assert response.status_code == 500
+    assert events == [
+        (
+            "api.request.unhandled_exception",
+            {
+                "level": main.logging.ERROR,
+                "request_id": "req-unhandled-1",
+                "method": "POST",
+                "route": "__unmatched__",
+                "error_type": "RuntimeError",
+                "stack": [
+                    {
+                        "file": "test_api_runtime_lifespan.py",
+                        "function": "test_unhandled_exception_logs_request_trace_and_redacted_cleanup_failure",
+                        "line": primary.__traceback__.tb_lineno,
+                    }
+                ],
+                "cleanup_failures": [
+                    {
+                        "operation": "mediaProcessingRunFailureRecord",
+                        "status": "FAILED",
+                        "exceptionType": "RuntimeError",
+                    }
+                ],
+            },
+        )
+    ]
+    assert "primary-secret" not in str(events)
+    assert "secondary-secret" not in str(events)

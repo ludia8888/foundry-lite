@@ -8,10 +8,13 @@ from foundry_lite.application.ports.adapter_failure import AdapterError, Adapter
 from foundry_lite.application.services.runtime_error_payloads import (
     dead_letter_retry_plan,
     record_runtime_cleanup_failure,
+    record_runtime_operations_evidence,
     runtime_error_payload,
+    runtime_operations_evidence,
 )
 from foundry_lite.application.services.runtime_redaction import redact_sensitive
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.error_redaction import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
 
@@ -19,6 +22,18 @@ def test_runtime_error_payload_handles_generic_error_without_trace() -> None:
     payload = runtime_error_payload(ValueError("bad value"))
 
     assert payload == {"type": "ValueError", "message": "bad value", "details": {}}
+
+
+def test_error_redaction_preserves_safe_diagnostics_that_name_security_concepts() -> None:
+    assert scrub_error_text("citation navigation signature is invalid") == ("citation navigation signature is invalid")
+    assert scrub_error_text("providerRequestId_text_required") == "providerRequestId_text_required"
+    assert scrub_error_text("database password authentication failed") == "database password authentication failed"
+    assert scrub_error_text("prompt artifact store unavailable") == "***MASKED***"
+    assert scrub_error_text("database password=raw-secret") == "***MASKED***"
+    assert scrub_error_mapping({"signature": "raw", "status": "failed"}) == {
+        "signature": "***MASKED***",
+        "status": "failed",
+    }
 
 
 def test_runtime_error_payload_preserves_redacted_secondary_cleanup_evidence() -> None:
@@ -44,6 +59,29 @@ def test_runtime_error_payload_preserves_redacted_secondary_cleanup_evidence() -
         ]
     }
     assert "private cleanup failure" not in str(payload)
+
+
+def test_runtime_error_payload_exposes_only_safe_operations_coordinates() -> None:
+    primary = RuntimeError("postgresql://alice:secret@db.internal/private")
+    record_runtime_operations_evidence(
+        primary,
+        run_type="source_exploration",
+        run_id="source_explore_1",
+    )
+
+    payload = runtime_error_payload(primary)
+
+    assert runtime_operations_evidence(primary) == {
+        "runType": "source_exploration",
+        "runId": "source_explore_1",
+        "operationsPath": "/api/operations/runs/source_exploration/source_explore_1",
+    }
+    assert payload["details"] == {"operationsEvidence": runtime_operations_evidence(primary)}
+    assert "alice" not in str(payload)
+
+    unsafe = RuntimeError("primary")
+    record_runtime_operations_evidence(unsafe, run_type="source/exploration", run_id="../../private")
+    assert runtime_operations_evidence(unsafe) is None
 
 
 def test_runtime_error_payload_uses_request_context_when_run_is_missing() -> None:
@@ -246,6 +284,56 @@ def test_runtime_error_payload_scrubs_connection_and_credential_fields() -> None
     assert "raw-private-key" not in str(payload)
     assert "raw-password" not in str(payload)
     assert "postgres://user:pass@db/orders" not in str(payload)
+
+
+def test_runtime_error_payload_preserves_safe_request_ids_and_existing_redaction_markers() -> None:
+    payload = runtime_error_payload(
+        ValidationFailed(
+            "OSDK OAuth client authentication is invalid",
+            details={
+                "requestId": "ontology-mcp-reduced-token",
+                "secretValue": "***REDACTED***",
+                "password": "***MASKED***",
+            },
+        )
+    )
+
+    assert payload["message"] == "OSDK OAuth client authentication is invalid"
+    assert payload["details"] == {
+        "requestId": "ontology-mcp-reduced-token",
+        "secretValue": "***REDACTED***",
+        "password": "***MASKED***",
+    }
+
+
+def test_runtime_error_payload_scrubs_url_userinfo_without_secret_key_names() -> None:
+    payload = runtime_error_payload(
+        RuntimeError(
+            "connection failed for postgresql+psycopg://alice:p%40ss@db.internal/orders "
+            "and redis://:cache-pass@cache.internal/0"
+        )
+    )
+    unsafe_identifier = runtime_error_payload(
+        ValidationFailed(
+            "provider failed",
+            details={"requestId": "https://operator:private@example.test/request"},
+        )
+    )
+    malformed_raw_at = runtime_error_payload(
+        RuntimeError("connection failed for postgresql://alice:p@ss@db.internal/orders")
+    )
+
+    assert payload["message"] == (
+        "connection failed for postgresql+psycopg://***MASKED***@db.internal/orders "
+        "and redis://***MASKED***@cache.internal/0"
+    )
+    assert unsafe_identifier["details"] == {"requestId": "https://***MASKED***@example.test/request"}
+    assert malformed_raw_at["message"] == ("connection failed for postgresql://***MASKED***@db.internal/orders")
+    assert "alice" not in str(payload)
+    assert "cache-pass" not in str(payload)
+    assert "operator" not in str(unsafe_identifier)
+    assert "alice" not in str(malformed_raw_at)
+    assert "p@ss" not in str(malformed_raw_at)
 
 
 class _DeadLetterPlanRepository:

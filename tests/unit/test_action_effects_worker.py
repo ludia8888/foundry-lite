@@ -8,6 +8,7 @@ an operator cannot exceed by typo. Both are asserted here rather than left to a 
 
 from __future__ import annotations
 
+import logging
 import signal
 from threading import Event
 from typing import Any
@@ -33,6 +34,10 @@ class _StubFoundry:
             action_effects = effects
 
         self._services = _Services()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class _StopAfter(Event):
@@ -84,20 +89,31 @@ def test_each_tick_delivers_with_the_worker_identity_and_bounded_batch(effects: 
     assert effects.calls[0]["limit"] == 100
 
 
-def test_a_provider_outage_in_one_tick_does_not_end_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_provider_outage_in_one_tick_does_not_end_the_loop(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A durable worker that dies on the first provider error stops delivering everything else."""
     recorded = _RecordingEffects(failures=1)
-    reported: list[str] = []
+    recorded.failures = 1
+    original_deliver = recorded.deliver_all
+
+    def secret_failure(**kwargs: Any) -> None:
+        if not recorded.calls:
+            recorded.calls.append(kwargs)
+            raise RuntimeError("provider password=must-not-leak")
+        original_deliver(**kwargs)
+
+    recorded.deliver_all = secret_failure  # type: ignore[method-assign]
     monkeypatch.setattr(action_effects, "create_runtime_core_dependencies", lambda **_: object())
     monkeypatch.setattr(action_effects, "FoundryLite", lambda **_: _StubFoundry(recorded))
-    # Assert on the logger call rather than captured output: the worker's reporting contract is
-    # that it logs the failure, and that must hold regardless of how the run configures handlers.
-    monkeypatch.setattr(action_effects._LOGGER, "exception", lambda message, *args: reported.append(message % args))
 
-    action_effects.run_effect_loop(_StopAfter(3))
+    with caplog.at_level(logging.ERROR):
+        action_effects.run_effect_loop(_StopAfter(3))
 
     assert len(recorded.calls) == 3, "the loop must keep ticking after a failed delivery"
-    assert reported and "action.effects.tick_failed" in reported[0], "a swallowed error must still be reported"
+    assert "action.effects.tick_failed" in caplog.text, "a swallowed error must still be reported"
+    assert "RuntimeError" in caplog.text
+    assert "must-not-leak" not in caplog.text
 
 
 @pytest.mark.parametrize(

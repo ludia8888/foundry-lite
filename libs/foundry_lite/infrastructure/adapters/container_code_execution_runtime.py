@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import os
+import signal
 import subprocess  # nosec B404
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,12 +48,22 @@ NODE_SANDBOX_ENVIRONMENT: Mapping[str, str] = {
     "NODE_PATH": "/usr/local/lib/node_modules",
 }
 _DOCKER_CLIENT_ENV_KEYS = ("DOCKER_CONTEXT", "DOCKER_HOST", "HOME", "PATH")
+_COMMAND_POLL_SECONDS = 0.1
+_CONTAINER_PROBE_INTERVAL_SECONDS = 0.5
+_CONTAINER_PROBE_TIMEOUT_SECONDS = 2.0
+_EXIT_EVENT_GRACE_SECONDS = 2.0
+_STDERR_READER_GRACE_SECONDS = 1.0
+_RESULT_MOUNT_TARGETS = {
+    "/model-output/result.json",
+    "/sandbox-output/execution-result.json",
+}
 
 
 @dataclass(frozen=True)
 class ContainerCommandResult:
     return_code: int
     stderr: bytes = b""
+    is_exit_event_recovered: bool = False
 
 
 ContainerCommandRunner = Callable[[Sequence[str], float, Mapping[str, str]], ContainerCommandResult]
@@ -120,13 +133,32 @@ class SandboxWorkspace:
 
 
 def validate_config(config: ContainerCodeExecutionConfig) -> None:
-    policy = config.policy
+    _validate_runtime_coordinates(config)
+    _validate_resource_limits(config)
+    _validate_protected_image(config)
+    _validate_security_controls(config.policy)
+
+
+def _validate_runtime_coordinates(config: ContainerCodeExecutionConfig) -> None:
     if not config.image_reference.strip() or not config.runtime_binary.strip():
         raise ValueError("container code execution requires a runtime binary and image reference")
     if config.max_output_bytes <= 0 or config.max_result_bytes <= 0:
         raise ValueError("container code execution output bounds must be positive")
+
+
+def _validate_resource_limits(config: ContainerCodeExecutionConfig) -> None:
+    if not math.isfinite(config.cleanup_timeout_seconds) or config.cleanup_timeout_seconds <= 0:
+        raise ValueError("container code execution cleanup timeout must be finite and positive")
+    if not math.isfinite(config.policy.cpu_count) or config.policy.cpu_count <= 0:
+        raise ValueError("container code execution CPU count must be finite and positive")
+
+
+def _validate_protected_image(config: ContainerCodeExecutionConfig) -> None:
     if config.is_image_digest_required and not _is_digest_pinned_image(config.image_reference):
         raise ValueError("protected code execution requires an image reference pinned by sha256 digest")
+
+
+def _validate_security_controls(policy: CodeExecutionSandboxPolicy) -> None:
     required_controls = (
         policy.is_network_disabled,
         policy.is_root_filesystem_read_only,
@@ -152,7 +184,6 @@ def container_command(
     command = [
         config.runtime_binary,
         "run",
-        "--rm",
         "--name",
         container_name,
         "--pull=never",
@@ -201,6 +232,7 @@ def run_command(
         env=dict(environment),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
     )
     captured = bytearray()
     reader = threading.Thread(
@@ -210,18 +242,177 @@ def run_command(
     )
     reader.start()
     try:
-        return_code = process.wait(timeout=timeout_seconds)
+        return_code, was_recovered = _wait_for_command(process, command, timeout_seconds, environment)
     except subprocess.TimeoutExpired as exc:
-        process.kill()
-        process.wait()
-        reader.join(timeout=1)
+        _kill_process_tree(process)
+        # The child is reaped and its pipe is closed, so this bounded reader now
+        # has a deterministic EOF. Waiting for it avoids losing the final stderr
+        # bytes merely because a heavily loaded host scheduled the reader late.
+        _finish_stderr_reader(process, reader)
         raise subprocess.TimeoutExpired(
             command,
             timeout_seconds,
             stderr=bytes(captured),
         ) from exc
-    reader.join(timeout=1)
-    return ContainerCommandResult(return_code=return_code, stderr=bytes(captured))
+    if was_recovered:
+        _kill_process_tree(process)
+        _finish_stderr_reader(process, reader)
+    else:
+        _join_reader_or_kill_descendants(process, reader)
+    return ContainerCommandResult(
+        return_code=return_code,
+        stderr=bytes(captured),
+        is_exit_event_recovered=was_recovered,
+    )
+
+
+def _wait_for_command(
+    process: subprocess.Popen[bytes],
+    command: Sequence[str],
+    timeout_seconds: float,
+    environment: Mapping[str, str],
+) -> tuple[int, bool]:
+    deadline = time.monotonic() + timeout_seconds
+    result_path = _result_mount_source(command)
+    next_probe_at = 0.0
+    result_completed_at: float | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout_seconds)
+        try:
+            return process.wait(timeout=min(_COMMAND_POLL_SECONDS, remaining)), False
+        except subprocess.TimeoutExpired:
+            now = time.monotonic()
+            if result_path is None or not _has_completed_result(result_path):
+                result_completed_at = None
+                continue
+            if result_completed_at is None:
+                result_completed_at = now
+            if now - result_completed_at < _EXIT_EVENT_GRACE_SECONDS or now < next_probe_at:
+                continue
+            next_probe_at = now + _CONTAINER_PROBE_INTERVAL_SECONDS
+            recovered_exit_code = _container_exit_code_if_gone(command, environment)
+            if recovered_exit_code is not None:
+                return recovered_exit_code, True
+
+
+def _result_mount_source(command: Sequence[str]) -> Path | None:
+    for index, argument in enumerate(command[:-1]):
+        if argument != "--mount":
+            continue
+        parts = command[index + 1].split(",")
+        fields = dict(part.split("=", 1) for part in parts if "=" in part)
+        if fields.get("target") in _RESULT_MOUNT_TARGETS and "readonly" not in parts:
+            source = fields.get("source")
+            return Path(source) if source else None
+    return None
+
+
+def _has_completed_result(result_path: Path) -> bool:
+    try:
+        return result_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _container_exit_code_if_gone(command: Sequence[str], environment: Mapping[str, str]) -> int | None:
+    identity = _container_identity(command)
+    if identity is None:
+        return None
+    runtime_binary, container_name = identity
+    try:
+        probe = subprocess.run(  # nosec B603 - fixed runtime argv, no shell.
+            [runtime_binary, "exec", container_name, "/usr/bin/env", "true"],
+            env=dict(environment),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=_CONTAINER_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if probe.returncode == 0 or not _is_explicit_stopped_error(probe.stderr):
+        return None
+    return _inspect_container_exit_code(runtime_binary, container_name, environment)
+
+
+def _is_explicit_stopped_error(stderr: bytes) -> bool:
+    normalized = stderr.lower()
+    return b"is not running" in normalized or b"is stopped" in normalized
+
+
+def _inspect_container_exit_code(
+    runtime_binary: str,
+    container_name: str,
+    environment: Mapping[str, str],
+) -> int | None:
+    try:
+        result = subprocess.run(  # nosec B603 - fixed runtime argv, no shell.
+            [runtime_binary, "inspect", "--format={{.State.ExitCode}}", container_name],
+            env=dict(environment),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=_CONTAINER_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        return int(result.stdout.strip()) if result.returncode == 0 else None
+    except ValueError:
+        return None
+
+
+def _container_identity(command: Sequence[str]) -> tuple[str, str] | None:
+    if len(command) < 4 or command[1] != "run":
+        return None
+    try:
+        name_index = command.index("--name")
+    except ValueError:
+        return None
+    if name_index + 1 >= len(command):
+        return None
+    return command[0], command[name_index + 1]
+
+
+def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Stop the fixed-argv client and descendants that may retain stderr."""
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if process.poll() is None:
+                process.kill()
+    elif process.poll() is None:
+        process.kill()
+    process.wait()
+
+
+def _join_reader_or_kill_descendants(
+    process: subprocess.Popen[bytes],
+    reader: threading.Thread,
+) -> None:
+    reader.join(timeout=_STDERR_READER_GRACE_SECONDS)
+    if not reader.is_alive():
+        return
+    _kill_process_tree(process)
+    _finish_stderr_reader(process, reader)
+
+
+def _finish_stderr_reader(
+    process: subprocess.Popen[bytes],
+    reader: threading.Thread,
+) -> None:
+    reader.join(timeout=_STDERR_READER_GRACE_SECONDS)
+    if not reader.is_alive():
+        return
+    stream = process.stderr
+    if stream is not None:
+        stream.close()
+    reader.join(timeout=_STDERR_READER_GRACE_SECONDS)
 
 
 def _policy_from_env(environ: Mapping[str, str]) -> CodeExecutionSandboxPolicy:
@@ -280,10 +471,15 @@ def _drain_stderr(
     stream = process.stderr
     if stream is None:
         return
-    while chunk := stream.read(64 * 1024):
-        remaining = MAX_STDERR_CAPTURE_BYTES - len(captured)
-        if remaining > 0:
-            captured.extend(chunk[:remaining])
+    try:
+        while chunk := stream.read(64 * 1024):
+            remaining = MAX_STDERR_CAPTURE_BYTES - len(captured)
+            if remaining > 0:
+                captured.extend(chunk[:remaining])
+    except (OSError, ValueError):
+        pass
+    finally:
+        stream.close()
 
 
 def _positive_int(environ: Mapping[str, str], key: str, default: int) -> int:
@@ -295,8 +491,8 @@ def _positive_int(environ: Mapping[str, str], key: str, default: int) -> int:
 
 def _positive_float(environ: Mapping[str, str], key: str, default: float) -> float:
     value = float(environ.get(key, str(default)))
-    if value <= 0:
-        raise ValueError(f"{key} must be positive")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{key} must be finite and positive")
     return value
 
 

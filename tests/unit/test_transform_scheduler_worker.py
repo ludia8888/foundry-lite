@@ -89,10 +89,11 @@ def test_transform_scheduler_worker_once_summarizes_started_runs_and_evidence(mo
             }
         ]
     )
+    close_calls: list[str] = []
     monkeypatch.setattr(
         transform_scheduler,
         "_build_foundry",
-        lambda _config: SimpleNamespace(transforms=fake_transforms),
+        lambda _config: SimpleNamespace(transforms=fake_transforms, close=lambda: close_calls.append("close")),
     )
 
     result = run_transform_scheduler_once(
@@ -118,6 +119,7 @@ def test_transform_scheduler_worker_once_summarizes_started_runs_and_evidence(mo
         "trun-orders",
         "legacy-run-id",
     ]
+    assert close_calls == ["close"]
 
 
 def test_transform_scheduler_worker_daemon_honors_max_ticks_and_sleep(monkeypatch, tmp_path) -> None:
@@ -128,10 +130,11 @@ def test_transform_scheduler_worker_daemon_honors_max_ticks_and_sleep(monkeypatc
         ]
     )
     sleeps: list[float] = []
+    close_calls: list[str] = []
     monkeypatch.setattr(
         transform_scheduler,
         "_build_foundry",
-        lambda _config: SimpleNamespace(transforms=fake_transforms),
+        lambda _config: SimpleNamespace(transforms=fake_transforms, close=lambda: close_calls.append("close")),
     )
     monkeypatch.setattr(transform_scheduler.time, "sleep", sleeps.append)
 
@@ -152,6 +155,25 @@ def test_transform_scheduler_worker_daemon_honors_max_ticks_and_sleep(monkeypatc
     assert result.due == 0
     assert result.run_ids == ("trun-1",)
     assert sleeps == [0.25]
+    assert close_calls == ["close"]
+
+
+def test_transform_scheduler_worker_closes_runtime_when_first_tick_raises(monkeypatch, tmp_path) -> None:
+    class FailingTransforms:
+        def run_due(self, **_kwargs: object) -> dict[str, object]:
+            raise RuntimeError("injected scheduler failure")
+
+    close_calls: list[str] = []
+    monkeypatch.setattr(
+        transform_scheduler,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(transforms=FailingTransforms(), close=lambda: close_calls.append("close")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected scheduler failure"):
+        run_transform_scheduler_once(TransformSchedulerWorkerConfig(storage_root=tmp_path))
+
+    assert close_calls == ["close"]
 
 
 def test_transform_scheduler_worker_config_from_env_and_cli_success(monkeypatch, capsys, tmp_path) -> None:

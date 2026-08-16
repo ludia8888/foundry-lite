@@ -27,7 +27,7 @@ def configure_logging(level: int = logging.INFO) -> None:
     logging.basicConfig(level=level, format="%(message)s")
 
 
-def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
+def log_event(logger: logging.Logger, event: str, *, level: int = logging.INFO, **fields: Any) -> None:
     if not any(fields.get(name) for name in TRACE_FIELD_NAMES):
         raise ValueError("log_event requires request_id, tenant_id, or a run_id-family field")
-    logger.info(json.dumps({"event": event, **fields}, sort_keys=True, default=str))
+    logger.log(level, json.dumps({"event": event, **fields}, sort_keys=True, default=str))

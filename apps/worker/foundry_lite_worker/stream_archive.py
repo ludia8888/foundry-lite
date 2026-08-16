@@ -24,7 +24,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.primitives import CommitResult
-from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError
 from foundry_lite.infrastructure.adapters import (
@@ -147,12 +147,15 @@ def run_stream_archive_once(
     assignment_is_current: Callable[[], bool] | None = None,
 ) -> CommitResult | None:
     runtime = build_stream_archive_runtime(config, stream_adapter=stream_adapter)
-    return _run_stream_archive_once(
-        config,
-        runtime,
-        ctx=config.request_context(),
-        assignment_is_current=assignment_is_current,
-    )
+    try:
+        return _run_stream_archive_once(
+            config,
+            runtime,
+            ctx=config.request_context(),
+            assignment_is_current=assignment_is_current,
+        )
+    finally:
+        runtime.foundry.close(should_close_stream=stream_adapter is None)
 
 
 def build_stream_archive_runtime(
@@ -167,10 +170,17 @@ def build_stream_archive_runtime(
     )
     adapter = stream_adapter or config.stream_adapter()
     runtime_dependencies = replace(dependencies.runtime, stream_adapter=adapter)
-    foundry = FoundryLite(dependencies=replace(dependencies, runtime=runtime_dependencies))
-    ctx = config.request_context()
-    foundry.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
-    return StreamArchiveWorkerRuntime(foundry=foundry)
+    foundry = FoundryLite(
+        dependencies=replace(dependencies, runtime=runtime_dependencies),
+        is_stream_adapter_owned=stream_adapter is None,
+    )
+    try:
+        ctx = config.request_context()
+        foundry.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
+        return StreamArchiveWorkerRuntime(foundry=foundry)
+    except Exception:
+        foundry.close(should_close_stream=stream_adapter is None)
+        raise
 
 
 def _run_stream_archive_once(
@@ -198,6 +208,24 @@ def run_stream_archive_continuously(
 ) -> ContinuousStreamArchiveResult:
     stop_requested = should_stop or _never_stop
     runtime = build_stream_archive_runtime(config, stream_adapter=stream_adapter)
+    try:
+        return _run_stream_archive_loop(
+            config,
+            runtime,
+            stop_requested=stop_requested,
+            assignment_is_current=assignment_is_current,
+        )
+    finally:
+        runtime.foundry.close(should_close_stream=stream_adapter is None)
+
+
+def _run_stream_archive_loop(
+    config: StreamArchiveWorkerConfig,
+    runtime: StreamArchiveWorkerRuntime,
+    *,
+    stop_requested: Callable[[], bool],
+    assignment_is_current: Callable[[], bool] | None,
+) -> ContinuousStreamArchiveResult:
     lease = _claim_worker_lease(config, runtime, ctx=config.request_context())
     iterations = 0
     archived_batches = 0
@@ -383,7 +411,11 @@ def _failure_json(exc: Exception, config: StreamArchiveWorkerConfig | None) -> s
 
 def _failure_payload(exc: Exception, config: StreamArchiveWorkerConfig | None) -> Mapping[str, object]:
     if isinstance(exc, ValueError):
-        payload: dict[str, object] = {"type": "CONFIGURATION_ERROR", "message": str(exc), "details": {}}
+        payload: dict[str, object] = {
+            "type": "CONFIGURATION_ERROR",
+            "message": scrub_error_text(str(exc)),
+            "details": {},
+        }
         if trace := _failure_trace(config):
             payload["trace"] = trace
         return payload

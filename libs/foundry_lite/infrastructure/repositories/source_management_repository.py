@@ -26,6 +26,7 @@ from foundry_lite.application.ports.source_management_repository import (
 from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.application.state_transitions import (
     SOURCE_AGENT_HEARTBEAT,
+    SOURCE_SYNC_RUN_CANCELLED,
     SOURCE_SYNC_RUN_FAILED,
     SOURCE_SYNC_RUN_RUNNING,
     SOURCE_SYNC_RUN_SUCCEEDED,
@@ -218,7 +219,7 @@ class SqlAlchemySourceManagementRepository:
         checkpoint_end: Mapping[str, object],
         result_summary: Mapping[str, object],
         error: Mapping[str, object] | None,
-        completed_at: str,
+        completed_at: str | None,
         workflow_run_id: str | None = None,
     ) -> SourceSyncRunRow | None:
         result_values: dict[str, object | None] = {
@@ -272,6 +273,7 @@ def _source_sync_run_transition(status: str) -> StatusTransition:
         "running": SOURCE_SYNC_RUN_RUNNING,
         "succeeded": SOURCE_SYNC_RUN_SUCCEEDED,
         "failed": SOURCE_SYNC_RUN_FAILED,
+        "cancelled": SOURCE_SYNC_RUN_CANCELLED,
     }
     return transitions[status]
 

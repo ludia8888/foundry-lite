@@ -51,6 +51,7 @@ from foundry_lite.application.services.ontology_yaml import (
     required_str,
     string_sequence,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.domain.ontology.function_types import (
@@ -267,7 +268,7 @@ def validate_function_inputs(function: FunctionTypeDefinition, inputs: Mapping[s
     if error is not None:
         details = dict(getattr(error, "details", None) or {})
         details["functionType"] = function["apiName"]
-        details["reason"] = str(error)
+        details["reason"] = scrub_error_text(str(error))
         raise ValidationFailed("function inputs do not match the declared schema", details=details)
 
 

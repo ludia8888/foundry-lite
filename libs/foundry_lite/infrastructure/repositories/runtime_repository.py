@@ -162,6 +162,7 @@ class SqlAlchemyRuntimeRepository:
                 return self._rows_window(transaction=transaction, table=table, tenant_id=tenant_id, limit=limit)
 
             return {
+                "sourceExplorationRuns": window("source_exploration_runs"),
                 "syncRuns": window("sync_runs"),
                 "transformRuns": window("transform_runs"),
                 "indexRuns": window("index_runs"),
@@ -260,6 +261,7 @@ class SqlAlchemyRuntimeRepository:
         runids = list(run_ids)
         with self.engine.begin() as transaction:
             return {
+                "sourceExplorationRuns": [],
                 "syncRuns": self._scoped_rows(
                     transaction,
                     db.sync_runs,

@@ -53,6 +53,7 @@ from foundry_lite.application.services.dataset.transaction_payloads import (
     build_dataset_file_records,
     commit_staged_dataset_files,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
@@ -374,7 +375,11 @@ class BackupRestoreArtifactExecutionService(CoreService):
         except (AdapterError, FileNotFoundError, OSError, ValueError, KeyError, TypeError) as exc:
             raise ConflictDetected(
                 "backup artifact source version storage is not restorable",
-                details={"version_id": source["id"], "manifest_uri": source["manifest_uri"], "reason": str(exc)},
+                details={
+                    "version_id": source["id"],
+                    "manifest_uri": source["manifest_uri"],
+                    "reason": scrub_error_text(str(exc)),
+                },
             ) from exc
 
     def _cleanup_restored_storage(self, ctx: RequestContext, cleanup_specs: Sequence[CleanupSpec]) -> None:

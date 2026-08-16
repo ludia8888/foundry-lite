@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from threading import Event, Thread
 from typing import Protocol
 
+from foundry_lite.domain.error_redaction import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
 
 from foundry_lite_worker.kraken_kafka_bridge import KrakenBridgeSnapshot
@@ -84,7 +85,11 @@ def bridge_payload(bridge: KrakenBridgeSnapshot) -> dict[str, object]:
 
 def worker_error_payload(exc: Exception) -> Mapping[str, object]:
     if isinstance(exc, FoundryLiteError):
-        return {"code": exc.code, "message": exc.message, "details": dict(exc.details)}
+        return {
+            "code": exc.code,
+            "message": scrub_error_text(exc.message),
+            "details": scrub_error_mapping(exc.details),
+        }
     return {"code": "WORKER_FAILURE", "message": f"source streaming worker failed with {type(exc).__name__}"}
 
 

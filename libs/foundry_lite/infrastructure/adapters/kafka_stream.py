@@ -154,6 +154,13 @@ class KafkaStreamAdapter:
                     False,
                     "Kafka archive worker expects external producers.",
                 ),
+                AdapterFailureMode(
+                    "close",
+                    "timeout",
+                    True,
+                    "Kafka producer shutdown could not flush every pending message.",
+                    timeout_seconds=30,
+                ),
             ),
         )
 
@@ -194,6 +201,16 @@ class KafkaStreamAdapter:
             key=request.key,
             payload=dict(request.payload),
         )
+
+    def close(self) -> None:
+        """Flush and release only the producer created by this adapter."""
+        producer = self._owned_producer
+        if producer is None:
+            return
+        pending = producer.flush(self.config.producer_flush_timeout_seconds)
+        if pending:
+            raise self._error("close", "timeout", "Kafka producer shutdown left pending messages.")
+        self._owned_producer = None
 
     def _publish_producer(self) -> KafkaProducerLike:
         if self._producer is not None:

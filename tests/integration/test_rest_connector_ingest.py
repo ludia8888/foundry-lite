@@ -98,7 +98,7 @@ def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
             ctx=ctx,
             rest=rest,
         )
-        with pytest.raises(ValidationFailed, match="connector snapshot sync failed"):
+        with pytest.raises(ValidationFailed, match="connector snapshot sync failed") as exc_info:
             failing_foundry.datasets.sync_connector_snapshot(
                 "raw.rest_orders",
                 connector_name="rest",
@@ -106,6 +106,8 @@ def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
                 ctx=ctx,
                 rest=rest,
             )
+        assert exc_info.value.details == {"error": "***MASKED***"}
+        assert "raw-connector" not in str(exc_info.value.details)
         retry = foundry.datasets.sync_connector_snapshot(
             "raw.rest_orders",
             connector_name="rest",
@@ -163,4 +165,4 @@ def _transaction_metadata(foundry: FoundryLite, transaction_id: str) -> dict[str
 
 class _ExplodingRowsComputeAdapter(DuckDBComputeAdapter):
     def rows_to_parquet(self, *_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("connector snapshot parquet write failed")
+        raise RuntimeError("Authorization: Bearer raw-connector-token password=raw-connector-password")

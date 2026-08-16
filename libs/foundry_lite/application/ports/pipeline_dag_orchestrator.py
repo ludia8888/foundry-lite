@@ -49,6 +49,10 @@ class PipelineDagOrchestrator(Protocol):
         reason: str | None = None,
     ) -> bool: ...
 
+    def close(self) -> None:
+        """Drain and stop any process-local orchestration resources."""
+        ...
+
 
 class UnavailablePipelineDagOrchestrator:
     """Compatibility null object for hand-built dependency bundles."""
@@ -71,3 +75,6 @@ class UnavailablePipelineDagOrchestrator:
     ) -> bool:
         del tenant_id, workflow_run_id, reason
         return False
+
+    def close(self) -> None:
+        return None

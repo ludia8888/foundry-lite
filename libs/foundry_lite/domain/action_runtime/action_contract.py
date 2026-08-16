@@ -17,12 +17,19 @@ from foundry_lite.domain.action_runtime.action_conditions import (
     referenced_condition_parameters,
     referenced_condition_value_kinds,
     validate_action_condition,
+    validate_action_condition_parameter_literals,
 )
 from foundry_lite.domain.action_runtime.action_effects import (
     ActionEffectV3,
     action_effect_payload,
     compile_action_effects,
 )
+from foundry_lite.domain.action_runtime.action_parameter_constraints import (
+    action_parameter_schema_constraints,
+    validate_action_parameter_constraints,
+    validate_action_parameter_constraints_for_value,
+)
+from foundry_lite.domain.action_runtime.action_parameter_types import matches_action_parameter_type
 from foundry_lite.domain.action_runtime.action_permissions import compile_action_permissions
 from foundry_lite.domain.action_runtime.action_presentation import (
     ActionFormLayoutV3,
@@ -31,6 +38,8 @@ from foundry_lite.domain.action_runtime.action_presentation import (
     compile_action_form_layout,
 )
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.json_values import is_bounded_json_value
+from foundry_lite.domain.scalar_values import DECIMAL_NUMBER_SQL_PATTERN
 
 ACTION_PARAMETER_TYPES = frozenset(
     {
@@ -129,6 +138,10 @@ def compile_action_contract(definition: Mapping[str, object]) -> ActionDefinitio
     if criteria is not None:
         validate_action_condition(criteria)
         _validate_submission_criteria_references(criteria, parameters)
+        validate_action_condition_parameter_literals(
+            criteria,
+            {parameter.api_name: parameter.data_type for parameter in parameters},
+        )
     risk_level = _enum(definition.get("riskLevel"), ACTION_RISK_LEVELS, "high", "riskLevel")
     agent_policy = _enum(
         definition.get("agentExecutionPolicy"), AGENT_EXECUTION_POLICIES, "approval_required", "agentExecutionPolicy"
@@ -341,9 +354,11 @@ def _parameter(raw: Mapping[str, object]) -> ActionParameterV3:
         default=_optional_mapping(raw.get("default")),
         constraints=_mapping_or_empty(raw.get("constraints")),
         metadata={key: value for key, value in raw.items() if key not in known},
-        overrides=_overrides(raw.get("overrides", ())),
+        overrides=_overrides(raw.get("overrides", ()), data_type),
     )
+    validate_action_parameter_constraints(parameter.data_type, parameter.constraints)
     _validate_parameter_shape(parameter)
+    _validate_enum_parameter_types(parameter)
     return parameter
 
 
@@ -354,6 +369,13 @@ def _validate_parameter_shape(parameter: ActionParameterV3) -> None:
         _struct_fields(parameter)
     if _media_parameter_kind(parameter) is not None:
         _validate_media_parameter_shape(parameter)
+
+
+def _validate_enum_parameter_types(parameter: ActionParameterV3) -> None:
+    values = parameter.constraints.get("enum")
+    if isinstance(values, Sequence) and not isinstance(values, str | bytes):
+        if not all(matches_action_parameter_type(parameter, value) for value in cast(Sequence[object], values)):
+            raise ValidationFailed("action parameter enum constraint has a value of the wrong type")
 
 
 def _media_parameter_kind(parameter: ActionParameterV3) -> str | None:
@@ -420,20 +442,38 @@ def _is_non_empty_text_sequence(value: object) -> bool:
     return all(isinstance(item, str) and bool(item) for item in cast(Sequence[object], value))
 
 
-def _overrides(raw: object) -> tuple[ActionParameterOverrideV3, ...]:
+def _overrides(raw: object, data_type: str) -> tuple[ActionParameterOverrideV3, ...]:
     result: list[ActionParameterOverrideV3] = []
     for item in _sequence(raw, "overrides"):
         payload = _mapping(item, "parameter override")
         when = _mapping(payload.get("when"), "parameter override condition")
         validate_action_condition(when)
-        result.append(ActionParameterOverrideV3(when=when, config=_mapping(payload.get("config"), "override config")))
+        config = _mapping(payload.get("config"), "override config")
+        _validate_override_config(config, data_type)
+        result.append(ActionParameterOverrideV3(when=when, config=config))
     return tuple(result)
+
+
+def _validate_override_config(config: Mapping[str, object], data_type: str) -> None:
+    allowed = {"required", "visible", "editable", "constraints", "default"}
+    if unexpected := sorted(set(config) - allowed):
+        raise ValidationFailed("unsupported parameter override config", details={"fields": unexpected})
+    for field in ("required", "visible", "editable"):
+        if field in config and not isinstance(config[field], bool):
+            raise ValidationFailed("parameter override flag must be boolean", details={"field": field})
+    if "constraints" in config:
+        constraints = _mapping(config["constraints"], "override constraints")
+        validate_action_parameter_constraints(data_type, constraints)
+    if "default" in config:
+        _mapping(config["default"], "override default")
 
 
 def _validate_parameter_order(parameters: tuple[ActionParameterV3, ...]) -> None:
     available: set[str] = set()
+    available_types: dict[str, str] = {}
     for parameter in parameters:
         for override in parameter.overrides:
+            validate_action_condition_parameter_literals(override.when, available_types)
             if "linkedObjectProperty" in referenced_condition_value_kinds(override.when):
                 raise ValidationFailed(
                     "parameter overrides cannot read linked objects",
@@ -445,8 +485,18 @@ def _validate_parameter_order(parameters: tuple[ActionParameterV3, ...]) -> None
                     "parameter override may reference earlier parameters only",
                     details={"parameter": parameter.api_name, "invalidReferences": sorted(invalid)},
                 )
+            override_default = override.config.get("default")
+            if override_default is not None:
+                override_constraints = override.config.get("constraints", parameter.constraints)
+                _validate_default(
+                    parameter,
+                    _mapping(override_default, "override default"),
+                    available,
+                    _mapping(override_constraints, "override constraints"),
+                )
         _validate_default_order(parameter, available)
         available.add(parameter.api_name)
+        available_types[parameter.api_name] = parameter.data_type
 
 
 def _validate_submission_criteria_references(
@@ -465,25 +515,111 @@ def _validate_default_order(parameter: ActionParameterV3, available: set[str]) -
     default = parameter.default
     if default is None:
         return
+    _validate_default(parameter, default, available, parameter.constraints)
+
+
+def _validate_default(
+    parameter: ActionParameterV3,
+    default: Mapping[str, object],
+    available: set[str],
+    constraints: Mapping[str, object],
+) -> None:
     kind = default.get("kind")
-    if kind not in {"literal", "parameter", "objectProperty", "currentUser", "currentTime", "generatedId"}:
+    allowed_fields = _default_fields(kind)
+    if unexpected := sorted(set(default) - allowed_fields):
+        raise ValidationFailed("unsupported action parameter default fields", details={"fields": unexpected})
+    if kind in {"literal", "currentTime", "currentUser"}:
+        _validate_standard_default(parameter, default, constraints, kind)
+        return
+    _validate_reference_default(parameter, default, available, kind)
+
+
+def _validate_standard_default(
+    parameter: ActionParameterV3,
+    default: Mapping[str, object],
+    constraints: Mapping[str, object],
+    kind: object,
+) -> None:
+    if kind == "literal":
+        _validate_literal_default(parameter, default.get("value"), constraints)
+        return
+    if kind == "currentTime":
+        _validate_current_time_default(parameter, default)
+        return
+    _validate_current_user_default(parameter, default)
+
+
+def _validate_reference_default(
+    parameter: ActionParameterV3,
+    default: Mapping[str, object],
+    available: set[str],
+    kind: object,
+) -> None:
+    if kind == "generatedId":
+        _validate_generated_id_default(parameter, default)
+        return
+    if kind not in {"parameter", "objectProperty"}:
         raise ValidationFailed("unsupported action parameter default", details={"kind": kind})
     if kind == "objectProperty":
         _required_text(default, "property")
         return
-    if kind in {"currentUser", "currentTime"}:
-        return
-    if kind == "generatedId":
-        _required_text(default, "strategy")
-        return
-    if kind != "parameter":
-        return
+    _validate_parameter_reference_default(parameter, default, available)
+
+
+def _validate_generated_id_default(parameter: ActionParameterV3, default: Mapping[str, object]) -> None:
+    _required_text(default, "strategy")
+    if parameter.data_type != "string":
+        raise ValidationFailed("generated-id default requires a string parameter")
+
+
+def _validate_parameter_reference_default(
+    parameter: ActionParameterV3, default: Mapping[str, object], available: set[str]
+) -> None:
     referenced = default.get("parameter")
     if not isinstance(referenced, str) or referenced not in available:
         raise ValidationFailed(
             "parameter default may reference earlier parameters only",
             details={"parameter": parameter.api_name, "reference": referenced},
         )
+
+
+def _default_fields(kind: object) -> frozenset[str]:
+    fields = {
+        "literal": frozenset({"kind", "value"}),
+        "parameter": frozenset({"kind", "parameter"}),
+        "objectProperty": frozenset({"kind", "property"}),
+        "currentUser": frozenset({"kind", "attribute"}),
+        "currentTime": frozenset({"kind", "unit"}),
+        "generatedId": frozenset({"kind", "strategy"}),
+    }
+    return fields.get(kind, frozenset({"kind"})) if isinstance(kind, str) else frozenset({"kind"})
+
+
+def _validate_literal_default(parameter: ActionParameterV3, value: object, constraints: Mapping[str, object]) -> None:
+    if not is_bounded_json_value(value):
+        raise ValidationFailed("literal action parameter default must be bounded JSON")
+    if not matches_action_parameter_type(parameter, value):
+        raise ValidationFailed("literal action parameter default has the wrong type")
+    validate_action_parameter_constraints_for_value(parameter.api_name, parameter.data_type, value, constraints)
+
+
+def _validate_current_time_default(parameter: ActionParameterV3, default: Mapping[str, object]) -> None:
+    unit = _required_text(default, "unit")
+    if parameter.data_type == "string" and unit in {"date", "timestamp"}:
+        return
+    if (parameter.data_type, unit) not in {("date", "date"), ("timestamp", "timestamp")}:
+        raise ValidationFailed("current-time default unit does not match the parameter type")
+
+
+def _validate_current_user_default(parameter: ActionParameterV3, default: Mapping[str, object]) -> None:
+    attribute = default.get("attribute", "id")
+    if not isinstance(attribute, str) or not attribute.strip():
+        raise ValidationFailed("current-user default attribute must be non-empty text")
+    if attribute == "id" and parameter.data_type != "string":
+        raise ValidationFailed("current-user id default requires a string parameter")
+    if attribute in {"group", "groups", "roles"}:
+        if parameter.data_type not in {"array", "objectSet"} or parameter.metadata.get("itemType") != "string":
+            raise ValidationFailed("current-user groups default requires a string collection parameter")
 
 
 def _rules(definition: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -551,45 +687,61 @@ def _parameter_schema(parameter: ActionParameterV3) -> dict[str, object]:
     schema = _base_parameter_schema(parameter)
     if parameter.description:
         schema["description"] = parameter.description
-    schema.update(parameter.constraints)
+    schema.update(action_parameter_schema_constraints(parameter.data_type, parameter.constraints))
     schema["x-foundry-parameter-config"] = _parameter_payload(parameter)
     return schema
 
 
 def _base_parameter_schema(parameter: ActionParameterV3) -> dict[str, object]:
     data_type = parameter.data_type
-    if data_type in {"string"}:
-        return {"type": "string"}
-    if data_type in {"integer", "long"}:
-        return {"type": "integer"}
-    if data_type in {"float", "decimal"}:
-        return {"type": "number"}
-    if data_type == "boolean":
-        return {"type": "boolean"}
-    if data_type in {"date", "timestamp"}:
-        return {"type": "string", "format": "date" if data_type == "date" else "date-time"}
+    primitive = _primitive_parameter_schema(data_type)
+    if primitive is not None:
+        return primitive
     if data_type in {"object", "interface"}:
-        return {
-            "oneOf": [
-                {"type": "string", "format": f"foundry-{data_type}"},
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"objectType": {"type": "string"}, "objectId": {"type": "string"}},
-                    "required": ["objectType", "objectId"],
-                },
-            ]
-        }
+        return _object_reference_parameter_schema(data_type)
     if data_type in ACTION_MEDIA_PARAMETER_TYPES:
-        return {
-            "oneOf": [
-                {"type": "string", "format": f"foundry-{data_type}-version-id"},
-                _immutable_media_reference_schema(data_type),
-            ]
-        }
+        return _media_reference_parameter_schema(data_type)
     if data_type in {"objectSet", "array"}:
         return {"type": "array", "items": _array_item_schema(parameter), "uniqueItems": data_type == "objectSet"}
     return _struct_schema(parameter)
+
+
+def _primitive_parameter_schema(data_type: str) -> dict[str, object] | None:
+    schemas: dict[str, dict[str, object]] = {
+        "string": {"type": "string"},
+        "integer": {"type": "integer"},
+        "long": {"type": "integer"},
+        "float": {"type": "number"},
+        "decimal": {"type": "string", "format": "decimal", "pattern": DECIMAL_NUMBER_SQL_PATTERN},
+        "boolean": {"type": "boolean"},
+        "date": {"type": "string", "format": "date"},
+        "timestamp": {"type": "string", "format": "date-time"},
+    }
+    schema = schemas.get(data_type)
+    return dict(schema) if schema is not None else None
+
+
+def _object_reference_parameter_schema(data_type: str) -> dict[str, object]:
+    return {
+        "oneOf": [
+            {"type": "string", "format": f"foundry-{data_type}"},
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"objectType": {"type": "string"}, "objectId": {"type": "string"}},
+                "required": ["objectType", "objectId"],
+            },
+        ]
+    }
+
+
+def _media_reference_parameter_schema(data_type: str) -> dict[str, object]:
+    return {
+        "oneOf": [
+            {"type": "string", "format": f"foundry-{data_type}-version-id"},
+            _immutable_media_reference_schema(data_type),
+        ]
+    }
 
 
 def _array_item_schema(parameter: ActionParameterV3) -> dict[str, object]:

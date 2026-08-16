@@ -296,6 +296,7 @@ def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
     result = service.query_runs(ctx=RequestContext(roles=("ops_manager",)), limit=1)
 
     assert [row["id"] for row in result["syncRuns"]] == ["sync_b"]
+    assert [row["id"] for row in result["sourceExplorationRuns"]] == ["source_exploration_b"]
     assert [row["id"] for row in result["transformRuns"]] == ["transform_b"]
     assert [row["id"] for row in result["indexRuns"]] == ["index_b"]
     assert [row["id"] for row in result["actionRuns"]] == ["action_b"]
@@ -506,6 +507,7 @@ def test_retry_dead_letter_event_records_run_relation() -> None:
 
 def _empty_snapshot() -> RuntimeRunSnapshot:
     return {
+        "sourceExplorationRuns": [],
         "syncRuns": [],
         "transformRuns": [],
         "indexRuns": [],

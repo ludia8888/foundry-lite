@@ -21,10 +21,10 @@ from foundry_lite.infrastructure.adapters import LocalEmbeddingAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 ORDERS_CSV = (
-    "order_id,customer_id,region,status,amount\n"
-    "O-1,C-100,NA,PENDING,100.0\n"
-    "O-2,C-100,EU,PENDING,200.0\n"
-    "O-3,C-101,NA,REVIEW,300.0\n"
+    "order_id,customer_id,region,status,amount,scheduled_at\n"
+    "O-1,C-100,NA,PENDING,100.0,2026-01-01T01:00:00+02:00\n"
+    "O-2,C-100,EU,PENDING,200.0,2025-12-31T23:30:00Z\n"
+    "O-3,C-101,NA,REVIEW,300.0,2026-01-01T00:00:00Z\n"
 )
 CUSTOMERS_CSV = "customer_id,name\nC-100,Acme\nC-101,Globex\n"
 
@@ -51,6 +51,7 @@ def _order_type(row_policies: list[dict[str, object]] | None) -> dict[str, objec
             {"apiName": "region", "column": "region", "type": "string", "indexed": True},
             {"apiName": "status", "column": "status", "type": "string", "searchable": True, "editable": True},
             {"apiName": "amount", "column": "amount", "type": "float"},
+            {"apiName": "scheduledAt", "column": "scheduled_at", "type": "timestamp"},
             {"apiName": "note", "type": "string", "source": "edit_layer", "editable": True},
         ],
     }
@@ -194,6 +195,28 @@ def test_get_object_hides_policy_filtered_rows_as_not_found(foundry: FoundryLite
         foundry.objects.get("Order", "O-404", ctx=_ops_ctx())
     # Hidden rows are indistinguishable from missing rows (no existence leak).
     assert str(hidden.value) == str(missing.value)
+
+
+def test_timestamp_row_policy_matches_query_and_single_object_visibility(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    policy = [
+        {
+            "role": "ops_manager",
+            "filter": {
+                "property": "scheduledAt",
+                "op": "gte",
+                "value": "2025-12-31T23:30:00Z",
+            },
+        }
+    ]
+    _prepare_row_policy_demo(foundry, tmp_path, row_policies=policy)
+
+    assert _order_ids(foundry, _ops_ctx()) == ["O-2", "O-3"]
+    assert foundry.objects.get("Order", "O-2", ctx=_ops_ctx())["objectId"] == "O-2"
+    with pytest.raises(NotFound):
+        foundry.objects.get("Order", "O-1", ctx=_ops_ctx())
 
 
 def test_links_filter_hidden_targets_and_hidden_sources(foundry: FoundryLite, tmp_path: Path) -> None:

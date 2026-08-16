@@ -21,6 +21,7 @@ from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.application.services.mcp_json_rpc import JsonRpcRequestId, internal_mcp_request_id
 from foundry_lite.application.services.mcp_json_schema import McpJsonSchemaError, validate_mcp_json_schema
 from foundry_lite.application.services.mcp_tool_results import serialized_text_content, tool_error_result
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, PermissionDenied, ValidationFailed
 from foundry_lite.domain.platform.scopes import is_scope_allowed as is_scope_allowed
@@ -224,8 +225,8 @@ def guard_external_tool(spec: ToolSpec) -> None:
 
 def tool_domain_error(exc: FdePlatformToolError | FdeOntologyToolError) -> PermissionDenied | ValidationFailed:
     if exc.reason in {"approval_required", "tool_approval_required"}:
-        return PermissionDenied(exc.detail, details={"reason": exc.reason})
-    return ValidationFailed(exc.detail, details={"reason": exc.reason})
+        return PermissionDenied(scrub_error_text(exc.detail), details={"reason": scrub_error_text(exc.reason)})
+    return ValidationFailed(scrub_error_text(exc.detail), details={"reason": scrub_error_text(exc.reason)})
 
 
 def mcp_run_id(ctx: RequestContext, request: FdeMcpCallLike) -> str:

@@ -8,6 +8,9 @@
 FROM node:22-bookworm-slim@sha256:2fa754a9ba4d7adbd2a51d182eaabbe355c82b673624035a38c0d42b08724854
 
 ARG TYPESCRIPT_VERSION=5.9.2
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+
+LABEL dev.foundry-lite.runtime-source-sha="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}"
 
 # typescript is the only dependency: the runner transpiles in the sandbox so that source in and
 # built output executed stays one step, with no host round trip and no network fetch.

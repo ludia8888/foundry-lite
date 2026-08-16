@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -31,8 +32,10 @@ from foundry_lite.application.state_transitions import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, InvariantViolation
+from foundry_lite.observability.logging import log_event
 
 JsonObject = dict[str, object]
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,9 @@ def _load_resolution(
         transaction_manager,
         media_repository,
         media_transaction_service,
+        runtime_service,
         ctx,
+        row,
         transaction_ids,
     )
     if statuses is None:
@@ -125,21 +130,28 @@ def _resolved_transaction_statuses(
     transaction_manager: TransactionManager,
     media_repository: MediaRepository,
     media_transaction_service: MediaTransactionService,
+    runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
+    row: PipelineRunRow,
     transaction_ids: tuple[str, ...],
 ) -> dict[str, str] | None:
-    statuses = _transaction_statuses(transaction_manager, media_repository, ctx, transaction_ids)
+    statuses = _transaction_statuses(transaction_manager, media_repository, runtime_service, ctx, row, transaction_ids)
     if statuses is None:
         return None
     for transaction_id, status in statuses.items():
-        if status == "OPEN" and not _abort_open_transaction(media_transaction_service, ctx, transaction_id):
+        if status == "OPEN" and not _abort_open_transaction(
+            transaction_manager, media_transaction_service, runtime_service, ctx, row, transaction_id
+        ):
             return None
-    return _transaction_statuses(transaction_manager, media_repository, ctx, transaction_ids)
+    return _transaction_statuses(transaction_manager, media_repository, runtime_service, ctx, row, transaction_ids)
 
 
 def _abort_open_transaction(
+    transaction_manager: TransactionManager,
     service: MediaTransactionService,
+    runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
+    row: PipelineRunRow,
     transaction_id: str,
 ) -> bool:
     try:
@@ -150,7 +162,16 @@ def _abort_open_transaction(
         )
     except ConflictDetected:
         return True
-    except Exception:
+    except Exception as exc:
+        _record_reconciliation_deferred(
+            transaction_manager,
+            runtime_service,
+            ctx,
+            row,
+            "abort_open_transaction",
+            exc,
+            transaction_id=transaction_id,
+        )
         return False
     return True
 
@@ -158,7 +179,9 @@ def _abort_open_transaction(
 def _transaction_statuses(
     transaction_manager: TransactionManager,
     repository: MediaRepository,
+    runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
+    row: PipelineRunRow,
     transaction_ids: tuple[str, ...],
 ) -> dict[str, str] | None:
     try:
@@ -178,7 +201,10 @@ def _transaction_statuses(
                 )
                 for transaction_id in transaction_ids
             }
-    except Exception:
+    except Exception as exc:
+        _record_reconciliation_deferred(
+            transaction_manager, runtime_service, ctx, row, "load_transaction_statuses", exc
+        )
         return None
 
 
@@ -197,8 +223,10 @@ def _resolution(
         execution_repository,
         dataset_transaction_repository,
         media_repository,
+        runtime_service,
         ctx,
         str(row["id"]),
+        row,
     )
     if recovered is None:
         return None
@@ -224,8 +252,10 @@ def _recovered_outputs(
     execution_repository: PipelineExecutionRepository,
     dataset_transaction_repository: DatasetTransactionRepository,
     media_repository: MediaRepository,
+    runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     run_id: str,
+    row: PipelineRunRow,
 ) -> list[RecoveredPipelineOutput] | None:
     try:
         with transaction_manager.begin() as transaction:
@@ -237,8 +267,49 @@ def _recovered_outputs(
                 ctx,
                 run_id,
             )
-    except Exception:
+    except Exception as exc:
+        _record_reconciliation_deferred(transaction_manager, runtime_service, ctx, row, "load_committed_outputs", exc)
         return None
+
+
+def _record_reconciliation_deferred(
+    transaction_manager: TransactionManager,
+    runtime_service: RuntimeEvidenceBoundary,
+    ctx: RequestContext,
+    row: PipelineRunRow,
+    stage: str,
+    exc: Exception,
+    *,
+    transaction_id: str | None = None,
+) -> None:
+    error = dict(runtime_service._error_payload(exc, ctx, run_id=str(row["id"])))
+    evidence: JsonObject = {"stage": stage, "error": error}
+    if transaction_id is not None:
+        evidence["mediaTransactionId"] = transaction_id
+    try:
+        with transaction_manager.begin() as transaction:
+            runtime_service._audit(
+                transaction,
+                ctx,
+                event_type="pipeline.commit_outcome_reconciliation_deferred",
+                resource_type="pipeline_run",
+                resource_id=str(row["id"]),
+                action="commit_outcome_reconciliation",
+                decision="deny",
+                after_ref=evidence,
+            )
+    except Exception as audit_exc:
+        log_event(
+            _LOGGER,
+            "pipeline.commit_outcome_reconciliation_evidence_failed",
+            level=logging.ERROR,
+            tenant_id=ctx.tenant_id,
+            request_id=ctx.request_id,
+            run_id=str(row["id"]),
+            stage=stage,
+            exception_type=type(exc).__name__,
+            audit_exception_type=type(audit_exc).__name__,
+        )
 
 
 def _successful_resolution(

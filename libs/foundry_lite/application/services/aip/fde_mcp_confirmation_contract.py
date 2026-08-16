@@ -203,6 +203,8 @@ def challenge_binding(
     binding = _binding_from_budget(budget)
     if binding.application_id != application_id:
         raise confirmation_conflict("challenge_application_mismatch")
+    if not binding_matches(run, binding):
+        raise confirmation_conflict("challenge_binding_invalid")
     return binding
 
 
@@ -217,7 +219,8 @@ def challenge_replay_conflict_reason(
     budget = run.get("budget_json")
     if not isinstance(budget, Mapping) or budget.get("kind") != _CHALLENGE_KIND:
         return "challenge_invalid"
-    if budget.get("requestBindingHash") != binding.as_recorded_session(budget).fingerprint:
+    comparable = binding.as_recorded_session(budget)
+    if budget.get("requestBindingHash") != comparable.fingerprint or not binding_matches(run, comparable):
         return "challenge_binding_mismatch"
     if run.get("status") not in {"started", "succeeded"}:
         return "challenge_invalid"
@@ -257,7 +260,8 @@ def receipt_conflict_reason(
     if is_expired(budget.get("expiresAt"), now):
         return "receipt_expired"
     comparable = binding.as_recorded_session(budget)
-    return None if budget.get("requestBindingHash") == comparable.fingerprint else "receipt_binding_mismatch"
+    is_bound = budget.get("requestBindingHash") == comparable.fingerprint and binding_matches(run, comparable)
+    return None if is_bound else "receipt_binding_mismatch"
 
 
 def _binding_from_budget(budget: Mapping[str, object]) -> FdeMcpRequestBinding:
@@ -265,22 +269,28 @@ def _binding_from_budget(budget: Mapping[str, object]) -> FdeMcpRequestBinding:
     if not isinstance(payload, Mapping):
         raise confirmation_conflict("challenge_binding_missing")
     try:
-        return FdeMcpRequestBinding(
-            tenant_id=str(payload["tenantId"]),
-            actor_user_id=str(payload["actorUserId"]),
-            application_id=str(payload["applicationId"]),
-            client_id=str(payload["clientId"]),
-            oauth_session_id=str(payload.get("oauthSessionId", "")),
-            session_id=str(payload["sessionId"]),
-            tool_id=str(payload["toolId"]),
-            mode=str(payload["mode"]),
-            workspace_ref=str(payload["workspaceRef"]),
-            arguments_hash=str(payload["argumentsHash"]),
-            required_permission=str(payload["requiredPermission"]),
-            origin=str(payload.get("origin", "no-origin")),
-        )
+        values = {
+            "tenant_id": payload["tenantId"],
+            "actor_user_id": payload["actorUserId"],
+            "application_id": payload["applicationId"],
+            "client_id": payload["clientId"],
+            "oauth_session_id": payload.get("oauthSessionId", ""),
+            "session_id": payload["sessionId"],
+            "tool_id": payload["toolId"],
+            "mode": payload["mode"],
+            "workspace_ref": payload["workspaceRef"],
+            "arguments_hash": payload["argumentsHash"],
+            "required_permission": payload["requiredPermission"],
+            "origin": payload.get("origin", "no-origin"),
+        }
     except KeyError as exc:
         raise confirmation_conflict("challenge_binding_invalid") from exc
+    if not all(isinstance(value, str) for value in values.values()):
+        raise confirmation_conflict("challenge_binding_invalid")
+    required = values.keys() - {"client_id", "oauth_session_id"}
+    if any(not values[name] for name in required):
+        raise confirmation_conflict("challenge_binding_invalid")
+    return FdeMcpRequestBinding(**values)
 
 
 def binding_matches(run: Mapping[str, object], binding: FdeMcpRequestBinding) -> bool:
@@ -297,9 +307,10 @@ def terminal_replay(calls: list[Mapping[str, object]]) -> FdeMcpReplay | None:
     if not calls:
         return None
     output = calls[0].get("result_json")
-    if not isinstance(output, Mapping):
+    tool_call_id = calls[0].get("id")
+    if not isinstance(output, Mapping) or not isinstance(tool_call_id, str):
         return None
-    return FdeMcpReplay(tool_call_id=str(calls[0]["id"]), output=output)
+    return FdeMcpReplay(tool_call_id=tool_call_id, output=output)
 
 
 def failed_replay(run: Mapping[str, object]) -> FdeMcpReplay | None:
@@ -354,7 +365,12 @@ def expires_at(now: str) -> str:
 
 
 def is_expired(value: object, now: str) -> bool:
-    return not isinstance(value, str) or _parse_time(value) <= _parse_time(now)
+    if not isinstance(value, str):
+        return True
+    try:
+        return _parse_time(value) <= _parse_time(now)
+    except ValueError:
+        return True
 
 
 def _parse_time(value: str) -> datetime:

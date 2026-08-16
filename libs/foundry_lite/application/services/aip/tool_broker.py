@@ -10,27 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from foundry_lite.application.ports.ai_run_repository import AiToolCallRecord
 from foundry_lite.application.ports.tool_executor import ConfirmationPolicy, ToolEffect, ToolExecutionRequest
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.mcp_json_schema import McpJsonSchemaError, validate_mcp_json_schema
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.security.policy import PolicyService
 
 JsonObject = Mapping[str, object]
-JsonTypeChecker = Callable[[object], bool]
-
-_JSON_TYPE_CHECKS: dict[str, JsonTypeChecker] = {
-    "string": lambda value: isinstance(value, str),
-    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
-    "number": lambda value: isinstance(value, int | float) and not isinstance(value, bool),
-    "boolean": lambda value: isinstance(value, bool),
-    "object": lambda value: isinstance(value, Mapping),
-    "array": lambda value: isinstance(value, list),
-}
 _DIRECT_VENDOR_TOOL_IDS = frozenset(
     {
         "arbitrary_http_request",
@@ -221,46 +212,10 @@ def published_tool_spec(request: ToolBrokerRequest) -> ToolSpec:
 def _validate_json_object(schema: JsonObject, value: JsonObject) -> None:
     if schema.get("type") not in (None, "object"):
         raise ToolBrokerError("schema_invalid", "tool input schema must describe an object")
-    _validate_required(schema, value)
-    _validate_properties(schema, value)
-
-
-def _validate_required(schema: JsonObject, value: JsonObject) -> None:
-    required = schema.get("required", ())
-    if not isinstance(required, list | tuple):
-        raise ToolBrokerError("schema_invalid", "schema required must be a list")
-    for key in required:
-        if isinstance(key, str) and key not in value:
-            raise ToolBrokerError("schema_invalid", f"missing required argument {key}")
-
-
-def _validate_properties(schema: JsonObject, value: JsonObject) -> None:
-    properties = schema.get("properties", {})
-    if not isinstance(properties, Mapping):
-        raise ToolBrokerError("schema_invalid", "schema properties must be an object")
-    if schema.get("additionalProperties") is False:
-        _reject_extra_keys(value, properties)
-    for key, property_schema in properties.items():
-        if key in value and isinstance(key, str) and isinstance(property_schema, Mapping):
-            _validate_value_type(key, value[key], property_schema.get("type"))
-
-
-def _reject_extra_keys(value: JsonObject, properties: Mapping[object, object]) -> None:
-    allowed = {key for key in properties if isinstance(key, str)}
-    extra = sorted(set(value) - allowed)
-    if extra:
-        raise ToolBrokerError("schema_invalid", f"unexpected argument {extra[0]}")
-
-
-def _validate_value_type(key: str, value: object, expected: object) -> None:
-    if expected is None or _matches_json_type(value, expected):
-        return
-    raise ToolBrokerError("schema_invalid", f"argument {key} does not match type {expected}")
-
-
-def _matches_json_type(value: object, expected: object) -> bool:
-    checker = _JSON_TYPE_CHECKS.get(expected) if isinstance(expected, str) else None
-    return checker(value) if checker else False
+    try:
+        validate_mcp_json_schema(value, schema)
+    except McpJsonSchemaError as exc:
+        raise ToolBrokerError("schema_invalid", f"tool arguments {exc.path}: {exc.reason}") from exc
 
 
 def _require_policy(ctx: RequestContext, policy: PolicyService, permission: str) -> None:

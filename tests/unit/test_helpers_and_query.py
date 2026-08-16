@@ -58,7 +58,7 @@ DEMO_ROOT = _demo_root()
 
 class ExplodingCsvComputeAdapter(DuckDBComputeAdapter):
     def csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
-        raise RuntimeError("duckdb exploded")
+        raise RuntimeError("Authorization: Bearer raw-csv-token password=raw-csv-password")
 
 
 def test_json_ready_carries_a_uuid_as_its_canonical_string() -> None:
@@ -144,6 +144,10 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(foundry: FoundryLite) -
 
     with pytest.raises(ValidationFailed):
         foundry.objects.query("Order", filter_ast={"property": "status", "op": "bad", "value": "PENDING"})
+    with pytest.raises(ValidationFailed, match="contains filter requires a string property"):
+        foundry.objects.query("Order", filter_ast={"property": "amount", "op": "contains", "value": "7"})
+    with pytest.raises(ValidationFailed, match="filter value does not match property type"):
+        foundry.objects.query("Order", filter_ast={"property": "amount", "op": "gte", "value": "not-a-number"})
 
 
 def _tampered_cursor(cursor: str) -> str:
@@ -238,8 +242,11 @@ def test_csv_upload_wraps_unexpected_internal_error(
     csv_path = tmp_path / "rows.csv"
     csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
 
-    with pytest.raises(ValidationFailed, match="csv upload failed"):
+    with pytest.raises(ValidationFailed, match="csv upload failed") as exc_info:
         exploding_foundry.datasets.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+
+    assert exc_info.value.details == {"error": "***MASKED***"}
+    assert "raw-csv" not in str(exc_info.value.details)
 
     normal_foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "normal-foundry"))
     normal_foundry.datasets.ensure("raw.wraps_error", ctx=ctx, primary_key=["id"])
@@ -606,3 +613,16 @@ def test_transforms_sdk_decorator_and_logging(caplog) -> None:
         log_event(logging.getLogger("foundry-lite-test"), "missing_trace_key")
     assert compute._foundry_lite_transform_bindings["orders"].dataset_ref == "raw.erp_orders"
     assert "demo" in caplog.text
+
+
+def test_structured_log_event_supports_error_level_without_changing_default(caplog) -> None:
+    logger = logging.getLogger("foundry-lite-log-level-test")
+    with caplog.at_level(logging.INFO):
+        log_event(logger, "default", request_id="req-default")
+        log_event(logger, "failure", level=logging.ERROR, request_id="req-error")
+
+    records = {record.getMessage(): record.levelno for record in caplog.records}
+    default = next(level for message, level in records.items() if '"event": "default"' in message)
+    failure = next(level for message, level in records.items() if '"event": "failure"' in message)
+    assert default == logging.INFO
+    assert failure == logging.ERROR

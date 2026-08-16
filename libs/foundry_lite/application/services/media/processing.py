@@ -37,6 +37,7 @@ from foundry_lite.application.services.media.processing_records import (
     _canonical_spec_hash,
     _content_unit_records,
     _derivative_record,
+    record_processing_failure_evidence_error,
 )
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
 from foundry_lite.application.services.media.read_access import (
@@ -409,8 +410,8 @@ class MediaProcessingService(CoreService):
                     failure_kind="unknown",
                     failure_reason=f"processing failed after run opened: {exc.__class__.__name__}",
                 )
-        except Exception:
-            return
+        except Exception as cleanup_error:
+            record_processing_failure_evidence_error(exc, cleanup_error)
 
     def _emit_events(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 
@@ -111,12 +112,49 @@ def _filters(value: JsonObject, record: JsonObject) -> list[dict[str, object]]:
     compiled: list[dict[str, object]] = []
     for item in values:
         property_name = _required_text(item, "propertyApiName", 64)
-        _field(record, property_name)
         operator = _required_enum(item, "operator", _FILTER_OPERATORS)
         if "value" not in item:
             raise FdePlatformToolError("schema_invalid", "업무 계산 필터에는 비교할 값이 필요합니다.")
+        field = _field(record, property_name)
+        _validate_filter_value(str(field.get("type")), operator, item["value"])
         compiled.append({"propertyApiName": property_name, "operator": operator, "value": item["value"]})
     return compiled
+
+
+def _validate_filter_value(field_type: str, operator: str, value: object) -> None:
+    values = _filter_values(operator, value)
+    _validate_filter_operator(field_type, operator)
+    if not all(_matches_field_type(item, field_type) for item in values):
+        raise FdePlatformToolError("schema_invalid", f"계산 필터 값이 {field_type} 업무 정보 형식과 맞지 않습니다.")
+
+
+def _filter_values(operator: str, value: object) -> list[object]:
+    if operator == "in":
+        if not isinstance(value, list) or not value or len(value) > 50:
+            raise FdePlatformToolError("schema_invalid", "in 계산 필터 값은 비어 있지 않은 목록이어야 합니다.")
+        return value
+    if isinstance(value, list):
+        raise FdePlatformToolError("schema_invalid", f"{operator} 계산 필터 값은 목록일 수 없습니다.")
+    return [value]
+
+
+def _validate_filter_operator(field_type: str, operator: str) -> None:
+    if operator in {"gt", "gte", "lt", "lte"} and field_type not in {"integer", "float", "date", "timestamp"}:
+        raise FdePlatformToolError("schema_invalid", f"{field_type} 업무 정보에는 크기 비교 필터를 사용할 수 없습니다.")
+    if operator == "contains" and field_type != "string":
+        raise FdePlatformToolError("schema_invalid", f"{field_type} 업무 정보에는 포함 필터를 사용할 수 없습니다.")
+
+
+def _matches_field_type(value: object, field_type: str) -> bool:
+    if field_type == "boolean":
+        return isinstance(value, bool)
+    if field_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if field_type == "float":
+        return (isinstance(value, int) and not isinstance(value, bool)) or (
+            isinstance(value, float) and math.isfinite(value)
+        )
+    return isinstance(value, str)
 
 
 def _allowed_roles(
@@ -147,12 +185,22 @@ def _python_source(function: JsonObject) -> str:
     ]
     for item in _mapping_items(function.get("filters"), "domainOsBlueprint.functions.filters", 12):
         operator = str(item["operator"])
-        value = json.dumps(item["value"], ensure_ascii=False)
+        value = _python_literal(item["value"])
         lines.append(f"    records = records.where({item['propertyApiName']}={{'${operator}': {value}}})")
     property_name = function.get("propertyApiName")
     metric = {"name": "value", "function": function["aggregation"], "property": property_name}
     lines.append(f"    return records.aggregate(select={[metric]!r})")
     return "\n".join(lines) + "\n"
+
+
+def _python_literal(value: object) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, str | int | float) and not isinstance(value, bool):
+        return json.dumps(value, ensure_ascii=False, allow_nan=False)
+    if isinstance(value, list):
+        return "[" + ", ".join(_python_literal(item) for item in value) + "]"
+    raise FdePlatformToolError("schema_invalid", "계산 필터 값을 안전한 Python 값으로 만들 수 없습니다.")
 
 
 def _field(record: JsonObject, property_name: str) -> JsonObject:

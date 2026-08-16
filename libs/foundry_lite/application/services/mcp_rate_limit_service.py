@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -58,6 +59,7 @@ class McpRateLimitService(CoreService):
     config: McpRateLimitConfig
     mcp_rate_limiter: McpRateLimiter
     runtime_repository: RuntimeRepository
+    _clock: Callable[[], float]
 
     def __init__(
         self,
@@ -66,6 +68,7 @@ class McpRateLimitService(CoreService):
         mcp_rate_limiter: McpRateLimiter,
         runtime_repository: RuntimeRepository,
         config: McpRateLimitConfig | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         super().__init__(
             engine=engine,
@@ -73,6 +76,7 @@ class McpRateLimitService(CoreService):
             runtime_repository=runtime_repository,
         )
         self.config = config or McpRateLimitConfig()
+        self._clock = clock or time.time
 
     def consume_endpoint(
         self,
@@ -100,7 +104,7 @@ class McpRateLimitService(CoreService):
         application_id: str,
         limit_scope: McpRateLimitScope,
     ) -> McpRateLimitDecision:
-        observed_at_epoch = time.time()
+        observed_at_epoch = self._clock()
         request = _request(
             ctx,
             plane=plane,

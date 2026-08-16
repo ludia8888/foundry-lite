@@ -27,6 +27,7 @@ from foundry_lite.application.services.ai_operations_payload import (
 from foundry_lite.application.services.ai_operations_payload import safe_ai_run_row as safe_ai_run_row
 from foundry_lite.application.services.runtime_quality_report import quality_report_for_transaction
 from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_MAX_LIMIT
+from foundry_lite.application.services.runtime_run_projection import operator_safe_run_row
 from foundry_lite.application.services.runtime_run_queries import (
     correlation_id,
     error_message,
@@ -64,11 +65,12 @@ def runtime_run_detail_payload(
     quality_check_results: list[DatasetCheckResultRow],
     quality_failed_row_samples: list[RuntimeRow],
 ) -> RuntimeRunDetail:
-    payload = _detail_base_payload(parsed_type, run_id, row)
+    safe_row = operator_safe_run_row(row, parsed_type)
+    payload = _detail_base_payload(parsed_type, run_id, safe_row)
     payload.update(_detail_related_payload(outbox_events, audit_events, object_edits, action_writebacks))
-    payload.update(_detail_dataset_payload(parsed_type, row, dataset_transaction, downstream_impact))
+    payload.update(_detail_dataset_payload(parsed_type, safe_row, dataset_transaction, downstream_impact))
     payload["investigation"] = _detail_investigation(
-        parsed_type, row, outbox_events, audit_events, object_edits, action_writebacks, lineage_edges
+        parsed_type, safe_row, outbox_events, audit_events, object_edits, action_writebacks, lineage_edges
     )
     payload["runRelations"] = run_relations
     payload["lineageEdges"] = lineage_edges
@@ -81,7 +83,7 @@ def _detail_base_payload(parsed_type: RuntimeRunType, run_id: str, row: RuntimeR
         "runType": parsed_type,
         "runId": run_id,
         "row": row,
-        "status": row_status(row),
+        "status": row_status(row, parsed_type),
         "errorMessage": error_message(row_error(row)),
         "error": row_error(row),
         "correlationId": correlation_id(row),
@@ -209,6 +211,15 @@ def _detail_source_evidence(
     row: RuntimeRow,
     dataset_transaction: RuntimeRow | None,
 ) -> RuntimeJsonObject | None:
+    if parsed_type == "source_exploration":
+        return {
+            "operationPath": f"/api/operations/runs/source_exploration/{row['id']}",
+            "explorationRunId": row.get("id"),
+            "sourceName": row.get("source_name"),
+            "sourceType": row.get("source_type"),
+            "status": row_status(row, parsed_type),
+            "createdAt": row.get("created_at"),
+        }
     if parsed_type != "sync":
         return None
     transaction = dataset_transaction if isinstance(dataset_transaction, Mapping) else {}

@@ -27,6 +27,7 @@ from foundry_lite.application.services.observability_time import (
     seconds_between,
     skewed_measurement,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.application.services.runtime_run_queries import RUN_GROUPS, row_references, row_status
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -304,7 +305,7 @@ def _detector_failure_incident(
         incident_config,
         observed_at,
         "detector evaluation failed without mutating source-of-truth",
-        {"errorType": exc.__class__.__name__, "errorMessage": str(exc)},
+        {"errorType": exc.__class__.__name__, "errorMessage": scrub_error_text(str(exc))},
         [],
     )
 

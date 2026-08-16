@@ -138,6 +138,52 @@ def test_structured_property_rule_reaches_inside_logical_groups() -> None:
         validate_log_filter({"and": [{"op": "eq", "property": "result", "value": "x"}]})
 
 
+def test_structured_contains_matches_json_values_case_insensitively() -> None:
+    items = [
+        _item("a", parameters={"status": "APPROVED"}, result={"note": "done"}),
+        _item("b", parameters={"status": "REJECTED"}, result={"note": "done"}),
+    ]
+
+    found = filtered_sorted_logs(
+        items,
+        {"op": "contains", "property": "parameters", "value": "approved"},
+        [_order("actionRunId")],
+        None,
+    )
+
+    assert [item["objectId"] for item in found] == ["a"]
+
+
+def test_edited_object_contains_matches_only_provider_indexed_fields() -> None:
+    items = [
+        _item(
+            "a",
+            editedObjects=[{"objectType": "Order", "objectId": "O-1", "editType": "set_property", "note": "secret"}],
+        )
+    ]
+
+    found = filtered_sorted_logs(
+        items,
+        {"op": "contains", "property": "editedObjects", "value": "o-1"},
+        [_order("actionRunId")],
+        None,
+    )
+    hidden_note = filtered_sorted_logs(
+        items,
+        {"op": "contains", "property": "editedObjects", "value": "secret"},
+        [_order("actionRunId")],
+        None,
+    )
+
+    assert [item["objectId"] for item in found] == ["a"]
+    assert hidden_note == []
+
+
+def test_contains_filter_rejects_non_string_needles() -> None:
+    with pytest.raises(ValidationFailed, match="must be a string"):
+        validate_log_filter({"op": "contains", "property": "parameters", "value": 1})
+
+
 def test_group_by_a_structured_property_is_refused() -> None:
     with pytest.raises(ValidationFailed, match="cannot group by structured properties"):
         validate_log_group_by(["result"])

@@ -241,6 +241,7 @@ async def _all_infra_body(
     assert _has_relation(action_detail, target_type="outbox", relation="emitted")
     assert _has_relation(materialization_detail, target_type="outbox", relation="emitted")
     assert _int(_mapping(_ai_payload(ai_detail), "summary"), "modelCallCount") == 1
+    foundry.close()
 
 
 @asynccontextmanager

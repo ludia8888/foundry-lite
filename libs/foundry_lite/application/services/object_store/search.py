@@ -290,7 +290,11 @@ class ObjectSearchService(CoreService):
             object_type_id = record_scope_object_type_id(object_type)
             # Search hits re-read source rows, so row policies filter here: a
             # projection hit must never surface a row the caller cannot query.
-            scope = row_policy_scope(object_type, ctx.roles)
+            scope = row_policy_scope(
+                object_type,
+                ctx.roles,
+                self.ontology_service._properties_for_object_type(conn, object_type["id"]),
+            )
             rows = [
                 (hit, self._record_if_active(conn, ctx, object_type_api_name, hit.document_id, object_type_id))
                 for hit in hits

@@ -11,14 +11,17 @@ import asyncio
 import logging
 import os
 import time
+import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, runtime_operations_evidence
 from foundry_lite.observability.logging import log_event
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import instrument_fastapi_app, instrument_sqlalchemy_engine
@@ -254,6 +257,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         preview_recovery.cancel()
         with suppress(asyncio.CancelledError):
             await preview_recovery
+        runtime.shutdown_api_runtime()
 
 
 app = FastAPI(title="Foundry-lite API", version="0.1.0", lifespan=lifespan)
@@ -319,18 +323,56 @@ def _cors_headers_for_request(request: Request) -> dict[str, str]:
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     request_id = _request_id(request, f"api-{time.time_ns()}")
+    log_event(
+        _LOGGER,
+        "api.request.unhandled_exception",
+        level=logging.ERROR,
+        request_id=request_id,
+        method=request.method,
+        route=_metrics_route_path(request),
+        error_type=type(exc).__name__,
+        stack=_exception_stack_summary(exc),
+        cleanup_failures=_cleanup_failure_summary(exc),
+    )
     return JSONResponse(
         status_code=500,
         content={
             "detail": {
                 "code": "INTERNAL",
                 "message": "internal server error",
-                "details": {},
+                "details": _unhandled_error_details(exc),
                 "request_id": request_id,
             }
         },
         headers={"X-Request-ID": request_id, **_cors_headers_for_request(request)},
     )
+
+
+def _unhandled_error_details(exc: Exception) -> dict[str, object]:
+    evidence = runtime_operations_evidence(exc)
+    return {"operationsEvidence": evidence} if evidence is not None else {}
+
+
+def _cleanup_failure_summary(exc: Exception) -> list[dict[str, object]]:
+    details = runtime_error_payload(exc).get("details")
+    if not isinstance(details, dict):
+        return []
+    failures = details.get("cleanupFailures")
+    if not isinstance(failures, list):
+        return []
+    return [dict(item) for item in failures if isinstance(item, dict)]
+
+
+def _exception_stack_summary(exc: Exception) -> list[dict[str, object]]:
+    frames = traceback.extract_tb(exc.__traceback__)[-8:]
+    return [
+        {
+            "file": Path(frame.filename).name,
+            "function": frame.name,
+            "line": frame.lineno,
+        }
+        for frame in frames
+    ]
 
 
 def _metrics_route_path(request: Request) -> str:

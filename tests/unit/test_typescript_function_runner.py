@@ -147,6 +147,46 @@ def test_failures_carry_the_same_categories_as_the_python_runner(
     assert result["failureType"] == expected
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "export function compute(): number { return Number.NaN }",
+        "export function compute(): number { return Number.POSITIVE_INFINITY }",
+    ],
+)
+def test_non_finite_typescript_numbers_never_cross_the_json_boundary(source: str, tmp_path: Path) -> None:
+    assert _run(source, output_type="float", tmp_path=tmp_path)["failureType"] == "output_validation_error"
+
+
+def test_typescript_object_set_rejects_malformed_filters_orders_and_descriptors(tmp_path: Path) -> None:
+    malformed_filter = _run(
+        "export function compute(tables: any) { return tables.where({ status: {} }) }",
+        inputs={"tables": {"$foundryObjectSet": {"objectType": "DiningTable", "filter": None, "orderBy": []}}},
+        argument_order=["tables"],
+        output_type="objectSet",
+        tmp_path=tmp_path,
+    )
+    assert malformed_filter["failureType"] == "user_code_error"
+
+    malformed_order = _run(
+        "export function compute(tables: any) { return tables.orderBy({ seats: 'sideways' }) }",
+        inputs={"tables": {"$foundryObjectSet": {"objectType": "DiningTable", "filter": None, "orderBy": []}}},
+        argument_order=["tables"],
+        output_type="objectSet",
+        tmp_path=tmp_path,
+    )
+    assert malformed_order["failureType"] == "user_code_error"
+
+    malformed_descriptor = _run(
+        "export function compute(tables: any) { return tables }",
+        inputs={"tables": {"$foundryObjectSet": {"objectType": "", "filter": None, "orderBy": []}}},
+        argument_order=["tables"],
+        output_type="objectSet",
+        tmp_path=tmp_path,
+    )
+    assert malformed_descriptor["failureType"] == "runner_contract_error"
+
+
 def test_an_ontology_edit_batch_is_accepted(tmp_path: Path) -> None:
     source = "export function compute() { return { edits: [{ kind: 'modifyObject', objectId: 'T-2' }] } }"
 

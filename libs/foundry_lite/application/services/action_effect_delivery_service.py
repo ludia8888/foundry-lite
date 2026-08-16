@@ -14,6 +14,7 @@ from foundry_lite.application.ports.action_effect_executor import (
     ActionEffectExecutor,
     ActionEffectPermanentError,
     ActionEffectTransientError,
+    require_action_effect_execution_result,
 )
 from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.services.action_distributed_run_support import stored_action_contract
@@ -95,7 +96,7 @@ class ActionEffectDeliveryService(CoreService):
             raise ActionBeforeEffectOutcomeUnknown("before-commit Action effect lost its dispatch fence")
         request = effect_request(dispatched, ctx.request_id)
         try:
-            result = self.action_effect_executor.execute(request)
+            result = require_action_effect_execution_result(self.action_effect_executor.execute(request))
         except (ActionEffectTransientError, ActionEffectPermanentError) as exc:
             self._fail_before(ctx, dispatched, exc, "dead_letter")
             raise ActionBeforeEffectFailed("before-commit Action effect failed") from exc
@@ -238,12 +239,17 @@ class ActionEffectDeliveryService(CoreService):
             )
         try:
             authorized = self._authorized_request(ctx, claimed)
-            if authorized.is_delivery_suppressed:
-                return self._record_suppressed(ctx, claimed, authorized)
+        except ActionEffectPermanentError as exc:
+            return self._record_failure(ctx, claimed, exc, is_retryable=False)
+        except Exception as exc:  # noqa: BLE001 - no external dispatch has started, so retry is safe.
+            return self._record_failure(ctx, claimed, exc, is_retryable=True)
+        if authorized.is_delivery_suppressed:
+            return self._record_suppressed(ctx, claimed, authorized)
+        try:
             dispatched = self._start_dispatch(ctx, claimed)
             if dispatched is None:
                 return self._status_after_dispatch_denial(ctx, claimed)
-            result = self.action_effect_executor.execute(authorized.request)
+            result = require_action_effect_execution_result(self.action_effect_executor.execute(authorized.request))
         except ActionEffectTransientError as exc:
             return self._record_failure(ctx, claimed, exc, is_retryable=True)
         except ActionEffectPermanentError as exc:

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from foundry_lite.application.ports import ConnectorNetworkRoute, SourceConnectionRow
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.errors import FoundryLiteError
 
 
@@ -117,7 +118,9 @@ def _network_detail(evidence: Mapping[str, object], error: FoundryLiteError | No
             return "Foundry worker가 Agent CONNECT 터널을 통해 destination TCP endpoint까지 도달했습니다."
         return "Foundry worker가 destination TCP endpoint까지 직접 도달했습니다."
     flag = evidence.get("responseFlags")
-    return f"네트워크 경로 실패 · {flag}" if flag else (error.message if error else "네트워크 경로 실패")
+    return (
+        f"네트워크 경로 실패 · {flag}" if flag else (scrub_error_text(error.message) if error else "네트워크 경로 실패")
+    )
 
 
 def _worker_detail(evidence: Mapping[str, object]) -> str:
@@ -154,7 +157,7 @@ def _preview_detail(outcome: SourceProbeOutcome | None, error: FoundryLiteError 
             return f"{rows}개 row를 읽었고 Dataset commit은 만들지 않았습니다."
         if isinstance(resources, int):
             return f"{resources}개 resource를 볼 수 있고 Dataset commit은 만들지 않았습니다."
-    return error.message if error is not None else "Source preview를 완료하지 못했습니다."
+    return scrub_error_text(error.message) if error is not None else "Source preview를 완료하지 못했습니다."
 
 
 def _check(key: str, label: str, status: str, detail: str) -> dict[str, object]:

@@ -42,6 +42,28 @@ def run_source_streaming_supervisor(
     runner: SourceStreamingRunner = run_source_streaming_service,
 ) -> SourceStreamingSupervisorResult:
     runtime = foundry or build_source_streaming_foundry(config)
+    is_runtime_owned = foundry is None
+    try:
+        return _run_supervisor_loop(
+            config,
+            runtime=runtime,
+            stop_event=stop_event,
+            poll_interval_seconds=poll_interval_seconds,
+            runner=runner,
+        )
+    finally:
+        if is_runtime_owned:
+            runtime.close()
+
+
+def _run_supervisor_loop(
+    config: SourceStreamingServiceConfig,
+    *,
+    runtime: FoundryLite,
+    stop_event: Event | None,
+    poll_interval_seconds: float,
+    runner: SourceStreamingRunner,
+) -> SourceStreamingSupervisorResult:
     requested_stop = stop_event or Event()
     lifecycle_runs = 0
     last_result: SourceStreamingServiceResult | None = None

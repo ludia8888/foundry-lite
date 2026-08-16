@@ -24,7 +24,7 @@ from foundry_lite.application.ports import (
     workflow_request_fingerprint,
     workflow_run_id,
 )
-from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, ValidationFailed
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -101,20 +101,23 @@ class _WorkerLease:
 def run_cdc_object_indexer_once(config: CdcObjectIndexerWorkerConfig) -> CdcObjectIndexBatchResult | None:
     _validate_worker_config(config)
     runtime = build_cdc_object_indexer_runtime(config)
-    lease = _claim_worker_lease(config, runtime, ctx=config.request_context())
     try:
-        result = _run_cdc_object_indexer_once(
-            config,
-            runtime,
-            cursor=lease.cursor,
-            ctx=config.request_context(batch_number=1),
-        )
-    except Exception as exc:
-        _release_worker_lease(config, runtime, lease, _single_output(None, lease.cursor), "failed", exc)
-        raise
-    cursor = _cursor_after_result(result, lease.cursor)
-    _release_worker_lease(config, runtime, lease, _single_output(result, cursor), "succeeded", None)
-    return result
+        lease = _claim_worker_lease(config, runtime, ctx=config.request_context())
+        try:
+            result = _run_cdc_object_indexer_once(
+                config,
+                runtime,
+                cursor=lease.cursor,
+                ctx=config.request_context(batch_number=1),
+            )
+        except Exception as exc:
+            _release_worker_lease(config, runtime, lease, _single_output(None, lease.cursor), "failed", exc)
+            raise
+        cursor = _cursor_after_result(result, lease.cursor)
+        _release_worker_lease(config, runtime, lease, _single_output(result, cursor), "succeeded", None)
+        return result
+    finally:
+        runtime.foundry.close()
 
 
 def run_cdc_object_indexer_continuously(
@@ -125,6 +128,18 @@ def run_cdc_object_indexer_continuously(
     _validate_worker_config(config)
     stop_requested = should_stop or _never_stop
     runtime = build_cdc_object_indexer_runtime(config)
+    try:
+        return _run_continuous(config, runtime, stop_requested=stop_requested)
+    finally:
+        runtime.foundry.close()
+
+
+def _run_continuous(
+    config: CdcObjectIndexerWorkerConfig,
+    runtime: CdcObjectIndexerWorkerRuntime,
+    *,
+    stop_requested: Callable[[], bool],
+) -> ContinuousCdcObjectIndexerResult:
     lease = _claim_worker_lease(config, runtime, ctx=config.request_context())
     state = _LoopState()
     while True:
@@ -170,9 +185,13 @@ def build_cdc_object_indexer_runtime(config: CdcObjectIndexerWorkerConfig) -> Cd
         adapter_profile=config.adapter_profile,
     )
     foundry = FoundryLite(dependencies=dependencies)
-    ctx = config.request_context()
-    foundry.datasets.get(config.source_dataset_ref, ctx=ctx)
-    return CdcObjectIndexerWorkerRuntime(foundry=foundry)
+    try:
+        ctx = config.request_context()
+        foundry.datasets.get(config.source_dataset_ref, ctx=ctx)
+        return CdcObjectIndexerWorkerRuntime(foundry=foundry)
+    except Exception:
+        foundry.close()
+        raise
 
 
 def _run_cdc_object_indexer_once(
@@ -609,7 +628,11 @@ def _failure_json(exc: Exception, config: CdcObjectIndexerWorkerConfig | None) -
 
 def _failure_payload(exc: Exception, config: CdcObjectIndexerWorkerConfig | None) -> Mapping[str, object]:
     if isinstance(exc, ValueError):
-        return {"type": "CONFIGURATION_ERROR", "message": str(exc), "details": _failure_trace(config)}
+        return {
+            "type": "CONFIGURATION_ERROR",
+            "message": scrub_error_text(str(exc)),
+            "details": _failure_trace(config),
+        }
     return runtime_error_payload(exc, _failure_context(config), adapter="cdc_object_indexer_worker")
 
 

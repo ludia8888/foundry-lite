@@ -143,7 +143,6 @@ def model_container_command(
     command = [
         config.runtime_binary,
         "run",
-        "--rm",
         "--name",
         container_name,
         "--pull=never",

@@ -2,7 +2,8 @@
 
 Proves OPEN-VOCABULARY "is there a car in this video?" REALLY works against real ffmpeg + the
 real fastembed CLIP pair (``Qdrant/clip-ViT-B-32-vision`` + ``-text``, ONNX, no torch — the model
-fastembed downloads to ~/.cache/huggingface, pre-fetched/cached in CI). A committed video with
+FastEmbed downloads to ``FASTEMBED_CACHE_PATH`` or its system-temp default, pre-fetched/cached in
+CI). A committed video with
 three distinct scenes (a car / a tree / a dog, distinct background colors) is processed by the
 real ``video-scene-vision`` profile: real ffmpeg extracts the three scene frames, real CLIP
 embeds each frame image, and a ``video_scene_vision`` derivative + ordered ``video_frame_visual``

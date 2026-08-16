@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     ObjectQueryResult,
     ObjectRecordRow,
     ObjectTypeRow,
+    PropertyTypeRow,
     TransactionContext,
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
@@ -43,6 +44,12 @@ class SetOntologyLookup(Protocol):
         ctx: RequestContext,
         api_name: str,
     ) -> ObjectTypeRow: ...
+
+    def _properties_for_object_type(
+        self,
+        conn: TransactionContext,
+        object_type_id: str,
+    ) -> Sequence[PropertyTypeRow]: ...
 
 
 class SetRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):

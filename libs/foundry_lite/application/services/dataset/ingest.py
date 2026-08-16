@@ -44,6 +44,7 @@ from foundry_lite.application.services.dataset.stream_archive_commit import (
     stream_cursor_offset,
 )
 from foundry_lite.application.services.dataset.webhook_signature_context import webhook_signature_context
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -308,7 +309,7 @@ class DatasetIngestService(CoreService):
             )
             if isinstance(exc, FoundryLiteError):
                 raise
-            raise ValidationFailed("stream archive read failed", details={"error": str(exc)}) from exc
+            raise ValidationFailed("stream archive read failed", details={"error": scrub_error_text(str(exc))}) from exc
 
     def _run_stream_pre_commit_check(
         self,
@@ -419,7 +420,7 @@ class DatasetIngestService(CoreService):
         )
         if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
             raise exc
-        raise ValidationFailed("csv upload failed", details={"error": str(exc)}) from exc
+        raise ValidationFailed("csv upload failed", details={"error": scrub_error_text(str(exc))}) from exc
 
     def _abort_connector_after_error(
         self,
@@ -438,7 +439,7 @@ class DatasetIngestService(CoreService):
         )
         if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
             raise exc
-        raise ValidationFailed("connector snapshot sync failed", details={"error": str(exc)}) from exc
+        raise ValidationFailed("connector snapshot sync failed", details={"error": scrub_error_text(str(exc))}) from exc
 
     def _abort_stream_after_error(
         self,
@@ -457,7 +458,7 @@ class DatasetIngestService(CoreService):
         )
         if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
             raise exc
-        raise ValidationFailed("stream archive failed", details={"error": str(exc)}) from exc
+        raise ValidationFailed("stream archive failed", details={"error": scrub_error_text(str(exc))}) from exc
 
     def _mark_sync_run_committed(
         self,

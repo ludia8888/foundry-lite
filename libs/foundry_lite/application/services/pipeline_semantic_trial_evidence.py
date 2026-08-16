@@ -132,7 +132,7 @@ def semantic_trial_error(
     if trial is None:
         return error
     return SemanticOutputError(
-        str(error),
+        scrub_error_text(str(error)),
         details={**dict(error.details), "trialEvidence": dict(trial)},
     )
 

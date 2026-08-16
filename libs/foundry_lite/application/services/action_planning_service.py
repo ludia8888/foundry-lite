@@ -384,7 +384,12 @@ class ActionPlanningService(CoreService):
     ) -> ObjectRecordRow:
         record = object_lookup._object_record(conn, ctx, object_type, object_id)
         target_type = self.ontology_lookup_service._active_object_type(conn, ctx, object_type)
-        record = visible_record(record, target_type, ctx.roles)
+        record = visible_record(
+            record,
+            target_type,
+            ctx.roles,
+            self.ontology_lookup_service._properties_for_object_type(conn, target_type["id"]),
+        )
         if record is None:
             record = interface_create_target_record(
                 contract,

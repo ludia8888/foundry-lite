@@ -3,6 +3,43 @@
 from __future__ import annotations
 
 _TEXT_LIST_20 = {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 20}
+_POLICY_PROPERTY = {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$"}
+_POLICY_VALUE_OPERATORS = [
+    "eq",
+    "neq",
+    "in",
+    "notIn",
+    "lt",
+    "lte",
+    "gt",
+    "gte",
+    "contains",
+    "startsWith",
+    "matches",
+]
+_POLICY_CONDITION_SCHEMA = {
+    "oneOf": [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["propertyApiName", "operator", "value"],
+            "properties": {
+                "propertyApiName": _POLICY_PROPERTY,
+                "operator": {"type": "string", "enum": _POLICY_VALUE_OPERATORS},
+                "value": {},
+            },
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["propertyApiName", "operator"],
+            "properties": {
+                "propertyApiName": _POLICY_PROPERTY,
+                "operator": {"type": "string", "const": "exists"},
+            },
+        },
+    ]
+}
 
 DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
     "type": "object",
@@ -133,22 +170,7 @@ DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
                     "conditions": {
                         "type": "array",
                         "maxItems": 12,
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["propertyApiName", "operator", "value"],
-                            "properties": {
-                                "propertyApiName": {
-                                    "type": "string",
-                                    "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$",
-                                },
-                                "operator": {
-                                    "type": "string",
-                                    "enum": ["eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte"],
-                                },
-                                "value": {},
-                            },
-                        },
+                        "items": _POLICY_CONDITION_SCHEMA,
                     },
                 },
             },

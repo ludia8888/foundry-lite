@@ -46,14 +46,14 @@ def test_filter_sql_value_by_type() -> None:
     assert _filter_sql_value(True, "boolean") is True
     assert _filter_sql_value("yes", "boolean") is INVALID_SQL_VALUE
     assert _filter_sql_value("text", "string") == "text"
-    assert _filter_sql_value(None, "string") == ""
+    assert _filter_sql_value(None, "string") is INVALID_SQL_VALUE
 
 
 def test_cursor_sql_value_by_type() -> None:
     assert _cursor_sql_value(7, "number") == 7.0
     assert _cursor_sql_value("bad", "number") == -1e308
-    assert _cursor_sql_value(True, "boolean") is True
-    assert _cursor_sql_value("nope", "boolean") is False
+    assert _cursor_sql_value(True, "boolean") == 1
+    assert _cursor_sql_value("nope", "boolean") == 0
     assert _cursor_sql_value(None, "string") == ""
     assert _cursor_sql_value("k", "string") == "k"
 

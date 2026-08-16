@@ -24,7 +24,13 @@ def explain_action_condition(
         return _group_explanation(condition, context, path, "any")
     if "not" in condition:
         child = explain_action_condition(_mapping(condition["not"]), context, path=f"{path}.not")
-        return _node_payload(condition, path, "not", not bool(child["isSatisfied"]), children=[child])
+        return _node_payload(
+            condition,
+            path,
+            "not",
+            evaluate_action_condition(condition, context),
+            children=[child],
+        )
     return _comparison_explanation(condition, context, path)
 
 
@@ -38,9 +44,13 @@ def _group_explanation(
         explain_action_condition(child, context, path=f"{path}.{kind}[{index}]")
         for index, child in enumerate(_condition_list(condition[kind]))
     ]
-    results = [bool(child["isSatisfied"]) for child in children]
-    is_satisfied = all(results) if kind == "all" else any(results)
-    return _node_payload(condition, path, kind, is_satisfied, children=children)
+    return _node_payload(
+        condition,
+        path,
+        kind,
+        evaluate_action_condition(condition, context),
+        children=children,
+    )
 
 
 def _comparison_explanation(

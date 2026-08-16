@@ -27,6 +27,7 @@ from foundry_lite.application.services.aip.agent_runtime_contracts import (
     error_payload,
     failed_result,
     model_request,
+    record_agent_failure_evidence_error,
     retrieve_runtime_context,
     success_result,
     usage_payload,
@@ -474,8 +475,8 @@ class AgentRuntimeService(CoreService):
                     error_json=error_payload(exc),
                     completed_at=ledger_timestamp(),
                 )
-        except Exception:
-            return
+        except Exception as cleanup_error:
+            record_agent_failure_evidence_error(exc, cleanup_error)
 
     def _record_charged_usage(
         self,

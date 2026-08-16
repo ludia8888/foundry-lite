@@ -371,6 +371,7 @@ def _snapshot(
     audit_events: list[RuntimeRow] | None = None,
 ) -> RuntimeRunSnapshot:
     return {
+        "sourceExplorationRuns": [],
         "syncRuns": sync_runs or [],
         "transformRuns": transform_runs or [],
         "indexRuns": index_runs or [],

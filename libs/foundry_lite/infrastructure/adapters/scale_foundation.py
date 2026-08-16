@@ -188,6 +188,9 @@ class LocalStreamAdapter:
         start = -1 if after_offset is None else after_offset
         return [event for event in events if event.offset > start][:limit]
 
+    def close(self) -> None:
+        """Local streams own no external resources."""
+
 
 class FakeStreamAdapter(LocalStreamAdapter):
     """Fake stream profile that preserves the local contract surface."""

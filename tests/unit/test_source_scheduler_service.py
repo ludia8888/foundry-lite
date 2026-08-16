@@ -197,3 +197,48 @@ def test_source_scheduler_service_records_failed_workflow_error_and_validates_ma
         service.preview_due_managed_syncs(ctx=RequestContext(), max_runs=0)
     with pytest.raises(ValidationFailed, match="between 1 and 500"):
         service.run_due_managed_syncs(ctx=RequestContext(), max_runs=501)
+
+
+def test_source_scheduler_service_preserves_cancelled_workflow_semantics() -> None:
+    repo = _SourceRepo([{"id": "run-old", "status": "running", "workflow_run_id": "workflow-1"}])
+    runtime_repo = _RuntimeRepo(
+        {
+            "status": "cancelled",
+            "output": {"cleanup": {"status": "adapter_confirmed"}},
+            "error": {"code": "must-not-be-presented-as-failure"},
+        }
+    )
+    service = _service(repo, runtime_repo, _Management(), _Policy())
+
+    service.run_due_managed_syncs(
+        ctx=RequestContext(tenant_id="tenant-a"),
+        now=datetime(2026, 1, 1, 1, 0, tzinfo=UTC),
+        max_runs=1,
+    )
+
+    assert repo.updated[0]["status"] == "cancelled"
+    assert repo.updated[0]["error"] is None
+    assert repo.updated[0]["result_summary"] == {"workflowOutput": {"cleanup": {"status": "adapter_confirmed"}}}
+    assert isinstance(service.runtime_service, _RuntimeService)
+    assert service.runtime_service.audits[0]["after_ref"] == {
+        "status": "cancelled",
+        "workflowRunId": "workflow-1",
+    }
+
+
+def test_source_scheduler_service_rejects_incomplete_successful_workflow() -> None:
+    repo = _SourceRepo([{"id": "run-old", "status": "running", "workflow_run_id": "workflow-1"}])
+    service = _service(repo, _RuntimeRepo({"status": "succeeded", "output": {}}), _Management(), _Policy())
+
+    service.run_due_managed_syncs(
+        ctx=RequestContext(tenant_id="tenant-a"),
+        now=datetime(2026, 1, 1, 1, 0, tzinfo=UTC),
+        max_runs=1,
+    )
+
+    assert repo.updated[0]["status"] == "failed"
+    assert repo.updated[0]["dataset_version_id"] is None
+    assert repo.updated[0]["error"] == {
+        "type": "WORKFLOW_OUTPUT_INVALID",
+        "message": "successful workflow omitted committedVersionId",
+    }

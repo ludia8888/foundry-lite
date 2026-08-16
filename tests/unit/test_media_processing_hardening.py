@@ -31,6 +31,7 @@ from foundry_lite.application.services.media.catalog import MediaCatalogService,
 from foundry_lite.application.services.media.processing import MediaProcessingService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
@@ -187,3 +188,34 @@ def test_commit_path_crash_marks_run_failed_not_running(env: _Env) -> None:
     assert runs[0].status == "FAILED"
     assert runs[0].finished_at is not None
     assert runs[0].failure_reason is not None
+
+
+def test_failure_record_write_error_is_attached_to_primary_exception_without_secret(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.processor._fail_times = 0
+    env.runtime.fail_outbox = True
+    repository = env.processing.media_derivative_repository
+    original = repository.complete_media_run
+
+    def fail_terminal_record(**kwargs: object) -> object:
+        if kwargs.get("status") == "FAILED":
+            raise RuntimeError("password=secondary-secret")
+        return original(**kwargs)
+
+    monkeypatch.setattr(repository, "complete_media_run", fail_terminal_record)
+
+    with pytest.raises(RuntimeError, match="injected outbox failure") as captured:
+        env.processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+
+    payload = runtime_error_payload(captured.value)
+    assert payload["details"] == {
+        "cleanupFailures": [
+            {
+                "operation": "mediaProcessingRunFailureRecord",
+                "status": "FAILED",
+                "exceptionType": "RuntimeError",
+            }
+        ]
+    }
+    assert "secondary-secret" not in str(payload)

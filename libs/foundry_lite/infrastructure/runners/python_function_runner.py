@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -46,8 +47,13 @@ _OUTPUT_VALIDATORS: Mapping[str, Callable[[object], bool]] = {
     "string": lambda value: isinstance(value, str),
     "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
     "long": lambda value: isinstance(value, int) and not isinstance(value, bool),
-    "float": lambda value: isinstance(value, int | float) and not isinstance(value, bool),
-    "decimal": lambda value: isinstance(value, int | float | str) and not isinstance(value, bool),
+    "float": lambda value: isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value),
+    "decimal": lambda value: (
+        isinstance(value, str)
+        or isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ),
     "date": lambda value: isinstance(value, str),
     "timestamp": lambda value: isinstance(value, str),
     "struct": lambda value: isinstance(value, dict),
@@ -93,20 +99,28 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def execute_manifest(manifest: Mapping[str, object]) -> dict[str, object]:
-    configure(manifest)
+    inputs = _configured_inputs(manifest)
     install_import_compatibility()
     entrypoint = _text(manifest, "entrypoint")
     function = _loaded_entrypoint(Path(_text(manifest, "sourcePath")), entrypoint)
-    inputs = manifest.get("inputs")
-    if not isinstance(inputs, Mapping):
-        raise _runner_failure("runner_contract_error", ValueError("manifest inputs must be an object"))
-    output = serialize_output(_invoked(function, wrap_inputs(inputs)))
+    output = serialize_output(_invoked(function, inputs))
     _require_output_type(output, _text(manifest, "outputType"))
     return {
         "schemaVersion": _RESULT_SCHEMA_VERSION,
         "status": "succeeded",
         "output": output,
     }
+
+
+def _configured_inputs(manifest: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        configure(manifest)
+        inputs = manifest.get("inputs")
+        if not isinstance(inputs, Mapping):
+            raise ValueError("manifest inputs must be an object")
+        return wrap_inputs(inputs)
+    except (TypeError, ValueError) as exc:
+        raise _runner_failure("runner_contract_error", exc) from exc
 
 
 def _loaded_entrypoint(source_path: Path, entrypoint: str) -> Callable[..., object]:
@@ -153,7 +167,7 @@ def _require_output_type(output: object, output_type: str) -> None:
             ValueError(f"function returned {type(output).__name__}, declared output type is {output_type!r}"),
         )
     try:
-        json.dumps(output)
+        json.dumps(output, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise _runner_failure("output_validation_error", exc) from exc
 

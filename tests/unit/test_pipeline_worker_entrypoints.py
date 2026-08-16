@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 from threading import Event
 from types import SimpleNamespace
 
@@ -53,10 +54,12 @@ def test_pipeline_control_loop_ticks_both_recovery_paths(
     control = _FakeControl()
     preview = _FakePreview()
     stop_event = Event()
+    close_calls: list[str] = []
     foundry = SimpleNamespace(
         _services=SimpleNamespace(
             pipelines=SimpleNamespace(control=control, preview=preview),
-        )
+        ),
+        close=lambda: close_calls.append("close"),
     )
     monkeypatch.setattr(pipeline_control, "create_runtime_core_dependencies", lambda **_kwargs: object())
     monkeypatch.setattr(pipeline_control, "FoundryLite", lambda **_kwargs: foundry)
@@ -73,6 +76,7 @@ def test_pipeline_control_loop_ticks_both_recovery_paths(
 
     assert control.limits == [100]
     assert preview.recovery_limits == [100]
+    assert close_calls == ["close"]
 
     called: list[object] = []
     monkeypatch.setattr(pipeline_control, "run_control_loop", lambda stop_event=None: called.append(stop_event))
@@ -80,13 +84,17 @@ def test_pipeline_control_loop_ticks_both_recovery_paths(
     assert len(called) == 1
 
 
-def test_pipeline_control_loop_survives_a_failing_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pipeline_control_loop_survives_a_failing_tick(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A single failing tick must not kill the durable recovery loop."""
     control = _FakeControl()
     preview = _FakePreview()
     stop_event = Event()
+    close_calls: list[str] = []
     foundry = SimpleNamespace(
         _services=SimpleNamespace(pipelines=SimpleNamespace(control=control, preview=preview)),
+        close=lambda: close_calls.append("close"),
     )
     monkeypatch.setattr(pipeline_control, "create_runtime_core_dependencies", lambda **_kwargs: object())
     monkeypatch.setattr(pipeline_control, "FoundryLite", lambda **_kwargs: foundry)
@@ -97,28 +105,35 @@ def test_pipeline_control_loop_survives_a_failing_tick(monkeypatch: pytest.Monke
     def tick(*, limit: int) -> None:
         ticks.append(limit)
         if len(ticks) == 1:
-            raise RuntimeError("transient tick failure")
+            raise RuntimeError("database password=must-not-leak")
         stop_event.set()
 
     monkeypatch.setattr(control, "tick", tick)
 
-    pipeline_control.run_control_loop(stop_event)
+    with caplog.at_level(logging.ERROR):
+        pipeline_control.run_control_loop(stop_event)
 
     # The first tick raised; the loop continued to a second successful tick.
     assert len(ticks) == 2
+    assert "pipeline.control.tick_failed" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "must-not-leak" not in caplog.text
+    assert close_calls == ["close"]
 
 
 def test_pipeline_dag_worker_registers_control_and_capability_queues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     preview = _FakePreview()
+    close_calls: list[str] = []
     foundry = SimpleNamespace(
         _services=SimpleNamespace(
             pipelines=SimpleNamespace(
                 distributed_node=SimpleNamespace(drive=lambda payload: payload),
                 preview=preview,
             )
-        )
+        ),
+        close=lambda: close_calls.append("close"),
     )
     client = object()
     connection_calls: list[tuple[str, str]] = []
@@ -152,6 +167,7 @@ def test_pipeline_dag_worker_registers_control_and_capability_queues(
     ]
     assert all(worker.did_run for worker in _FakeWorker.instances)
     assert _FakeWorker.instances[0].kwargs["workflow_runner"] == "sandbox"
+    assert close_calls == ["close"]
 
 
 def test_pipeline_dag_preview_routes_and_capability_validation(
@@ -190,6 +206,7 @@ def test_pipeline_node_subprocess_main_and_preview_routing(
 ) -> None:
     driven: list[dict[str, object]] = []
     preview = _FakePreview()
+    close_calls: list[str] = []
     foundry = SimpleNamespace(
         _services=SimpleNamespace(
             pipelines=SimpleNamespace(
@@ -198,7 +215,8 @@ def test_pipeline_node_subprocess_main_and_preview_routing(
                 ),
                 preview=preview,
             )
-        )
+        ),
+        close=lambda: close_calls.append("close"),
     )
     payload = {
         "run_id": "run-a",
@@ -221,6 +239,7 @@ def test_pipeline_node_subprocess_main_and_preview_routing(
     monkeypatch.setattr(pipeline_node_subprocess.sys, "stdout", output)
     pipeline_node_subprocess.main()
     assert output.getvalue().startswith("FOUNDRY_LITE_PIPELINE_RESULT=")
+    assert close_calls == ["close"]
 
 
 def test_pipeline_node_subprocess_rejects_non_object_payload(

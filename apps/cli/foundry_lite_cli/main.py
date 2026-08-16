@@ -400,13 +400,11 @@ def _dispatch(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespac
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    _print(
-        _dispatch(
-            _foundry(args.adapter_profile, storage_root=_storage_root_for_args(args)),
-            demo_admin_context(),
-            args,
-        )
-    )
+    foundry = _foundry(args.adapter_profile, storage_root=_storage_root_for_args(args))
+    try:
+        _print(_dispatch(foundry, demo_admin_context(), args))
+    finally:
+        foundry.close()
 
 
 if __name__ == "__main__":

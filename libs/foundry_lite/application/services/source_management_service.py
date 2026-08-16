@@ -26,7 +26,6 @@ from foundry_lite.application.services.source_management_config import (
     SOURCE_TEMPLATES,
     agent_record,
     credential_record,
-    exploration_run_record,
     network_policy_record,
     require_idempotency_key,
     source_sync_run_record,
@@ -34,7 +33,6 @@ from foundry_lite.application.services.source_management_config import (
 from foundry_lite.application.services.source_management_helpers import (
     SourceRuntimeBoundary,
     agent_row,
-    audit,
     create_credential_row,
     create_network_policy_row,
     create_sync_row,
@@ -52,14 +50,13 @@ from foundry_lite.application.services.source_management_run_helpers import (
     complete_database_run,
     complete_rest_run,
     complete_stream_run,
-    explore_source_payload,
+    execute_source_exploration,
     fail_run,
     finish_run,
 )
 from foundry_lite.application.services.source_management_views import (
     agent_view,
     credential_view,
-    exploration_view,
     network_policy_view,
     sync_run_list_view,
     sync_run_view,
@@ -250,33 +247,15 @@ class SourceManagementService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         require_write(self.policy, self.runtime_service, ctx, "explore_source", source_name)
-        result = explore_source_payload(
+        return execute_source_exploration(
+            self,
+            self.runtime_service,
             self._exploration_dependencies(),
             ctx,
-            source_name,
-            source_type,
-            request,
+            source_name=source_name,
+            source_type=source_type,
+            request=request,
         )
-        with self.engine.begin() as conn:
-            record = exploration_run_record(
-                ctx,
-                source_name=source_name,
-                source_type=source_type,
-                request=request,
-                result_summary=result,
-                status="succeeded",
-            )
-            self.source_management_repository.create_exploration_run(transaction=conn, record=record)
-            audit(
-                self.runtime_service,
-                conn,
-                ctx,
-                "source.explored",
-                "source",
-                source_name,
-                exploration_view(record.__dict__),
-            )
-        return exploration_view(record.__dict__)
 
     def _exploration_dependencies(self) -> SourceExplorationDependencies:
         return SourceExplorationDependencies(

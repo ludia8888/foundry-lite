@@ -84,10 +84,11 @@ def test_source_scheduler_worker_once_summarizes_started_runs_and_evidence(monke
             }
         ]
     )
+    close_calls: list[str] = []
     monkeypatch.setattr(
         source_scheduler,
         "_build_foundry",
-        lambda _config: SimpleNamespace(sources=fake_sources),
+        lambda _config: SimpleNamespace(sources=fake_sources, close=lambda: close_calls.append("close")),
     )
 
     result = run_source_scheduler_once(
@@ -110,6 +111,7 @@ def test_source_scheduler_worker_once_summarizes_started_runs_and_evidence(monke
     assert fake_sources.max_runs == [7]
     assert fake_sources.contexts[0].request_id == "req-a:tick-1"
     assert json.loads(evidence_path.read_text(encoding="utf-8"))["runIds"] == ["run-orders", "run-customers"]
+    assert close_calls == ["close"]
 
 
 def test_source_scheduler_worker_daemon_honors_max_ticks_and_sleep(monkeypatch, tmp_path) -> None:
@@ -120,7 +122,12 @@ def test_source_scheduler_worker_daemon_honors_max_ticks_and_sleep(monkeypatch, 
         ]
     )
     sleeps: list[float] = []
-    monkeypatch.setattr(source_scheduler, "_build_foundry", lambda _config: SimpleNamespace(sources=fake_sources))
+    close_calls: list[str] = []
+    monkeypatch.setattr(
+        source_scheduler,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(sources=fake_sources, close=lambda: close_calls.append("close")),
+    )
     monkeypatch.setattr(source_scheduler.time, "sleep", sleeps.append)
 
     result = run_source_scheduler_daemon(
@@ -140,6 +147,25 @@ def test_source_scheduler_worker_daemon_honors_max_ticks_and_sleep(monkeypatch, 
     assert result.due == 0
     assert result.run_ids == ("run-1",)
     assert sleeps == [0.25]
+    assert close_calls == ["close"]
+
+
+def test_source_scheduler_worker_closes_runtime_when_first_tick_raises(monkeypatch, tmp_path) -> None:
+    class FailingSources:
+        def run_due_managed_syncs(self, **_kwargs: object) -> dict[str, object]:
+            raise RuntimeError("injected scheduler failure")
+
+    close_calls: list[str] = []
+    monkeypatch.setattr(
+        source_scheduler,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(sources=FailingSources(), close=lambda: close_calls.append("close")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected scheduler failure"):
+        run_source_scheduler_once(SourceSchedulerWorkerConfig(storage_root=tmp_path))
+
+    assert close_calls == ["close"]
 
 
 def test_source_scheduler_worker_config_from_env_and_cli_success(monkeypatch, capsys, tmp_path) -> None:

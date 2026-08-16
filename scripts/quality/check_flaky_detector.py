@@ -9,22 +9,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
+import signal
 
 # Release gate must spawn pytest with shell=False.
 import subprocess  # nosec B404
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "flaky_detector.json"
-DEFAULT_COMMAND = "uv run pytest tests -n auto --no-header -q"
+DEFAULT_COMMAND = "uv run pytest tests -n 4 --dist loadfile --no-header -q"
 DEFAULT_ITERATIONS = 3
+DEFAULT_ITERATION_TIMEOUT_SECONDS = 900.0
+TERMINATION_GRACE_SECONDS = 5.0
 PYTEST_RANDOMLY_SEED_MAX = 2**32 - 1
 STDIO_TAIL_LINES = 120
 SUMMARY_TOKEN = re.compile(r"\d+\s+(?:passed|failed|error|errors|skipped|xfailed|xpassed|warnings?|deselected)")
@@ -44,6 +48,7 @@ class FlakyRun:
     duration_seconds: float
     command: list[str]
     randomly_seed: int | None
+    is_timed_out: bool
     stdout_tail: list[str]
     stderr_tail: list[str]
 
@@ -115,46 +120,123 @@ def _command_for_iteration(
     return [*command, f"--randomly-seed={seed}"], seed
 
 
-def _run_once(command: Sequence[str], *, cwd: Path, iteration: int, seed_base: int | None) -> FlakyRun:
+def _run_once(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    iteration: int,
+    seed_base: int | None,
+    timeout_seconds: float,
+) -> FlakyRun:
     iteration_command, randomly_seed = _command_for_iteration(command, iteration=iteration, seed_base=seed_base)
     started_at = time.monotonic()
     # The command is CI-controlled and never uses shell=True.
-    result = subprocess.run(  # nosec B603
+    process = subprocess.Popen(  # nosec B603
         iteration_command,
         cwd=cwd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        start_new_session=os.name == "posix",
     )
+    is_timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        is_timed_out = True
+        _terminate_process_tree(process)
+        stdout, stderr = process.communicate()
     duration = time.monotonic() - started_at
     return FlakyRun(
         iteration=iteration,
-        returncode=result.returncode,
-        summary=_pytest_summary(result.stdout, result.stderr),
+        returncode=124 if is_timed_out else process.returncode,
+        summary="<timeout>" if is_timed_out else _pytest_summary(stdout, stderr),
         duration_seconds=round(duration, 3),
         command=iteration_command,
         randomly_seed=randomly_seed,
-        stdout_tail=_tail_lines(result.stdout),
-        stderr_tail=_tail_lines(result.stderr),
+        is_timed_out=is_timed_out,
+        stdout_tail=_tail_lines(stdout),
+        stderr_tail=_tail_lines(stderr),
     )
 
 
-def run_gate(command: Sequence[str], *, iterations: int, cwd: Path) -> FlakyReport:
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    is_parent_running = process.poll() is None
+    if os.name == "posix":
+        # communicate() can time out after the group leader has already exited
+        # when one of its descendants inherited and still holds stdout/stderr.
+        # The process group must therefore be signalled even if poll() says the
+        # direct child is done.
+        _signal_process_group(process.pid, signal.SIGTERM)
+    elif is_parent_running:
+        process.terminate()
+    if is_parent_running:
+        try:
+            process.wait(timeout=TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+    if os.name == "posix":
+        # A parent can exit on SIGTERM while a descendant ignores it and keeps
+        # stdout/stderr open. Always issue the final group kill before
+        # communicate() so the gate cannot hang while collecting its report.
+        _signal_process_group(process.pid, signal.SIGKILL)
+    elif process.poll() is None:
+        process.kill()
+    if process.poll() is None:
+        process.wait()
+
+
+def _signal_process_group(process_group_id: int, signal_number: int) -> None:
+    try:
+        os.killpg(process_group_id, signal_number)
+    except ProcessLookupError:
+        return
+
+
+def _report(command: Sequence[str], iterations: int, runs: list[FlakyRun]) -> FlakyReport:
+    outcomes = {(run.returncode, run.summary) for run in runs}
+    is_stable_outcome = len(runs) == iterations and len(outcomes) == 1
+    gate_pass = is_stable_outcome and all(run.returncode == 0 for run in runs)
+    return FlakyReport(list(command), iterations, gate_pass, is_stable_outcome, list(runs))
+
+
+def run_gate(
+    command: Sequence[str],
+    *,
+    iterations: int,
+    cwd: Path,
+    timeout_seconds: float = DEFAULT_ITERATION_TIMEOUT_SECONDS,
+    progress: Callable[[FlakyReport], None] | None = None,
+) -> FlakyReport:
     if iterations < 2:
         raise ValueError("flaky detection needs at least two iterations")
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("iteration timeout must be finite and positive")
     seed_base = time.time_ns() % PYTEST_RANDOMLY_SEED_MAX if _should_manage_randomly_seed(command) else None
-    runs = [_run_once(command, cwd=cwd, iteration=index, seed_base=seed_base) for index in range(1, iterations + 1)]
-    outcomes = {(run.returncode, run.summary) for run in runs}
-    is_stable_outcome = len(outcomes) == 1
-    gate_pass = is_stable_outcome and all(run.returncode == 0 for run in runs)
-    return FlakyReport(
-        command=list(command),
-        iterations=iterations,
-        gate_pass=gate_pass,
-        is_stable_outcome=is_stable_outcome,
-        runs=runs,
-    )
+    runs: list[FlakyRun] = []
+    for index in range(1, iterations + 1):
+        seed = _seed_for_iteration(seed_base, index) if seed_base is not None else None
+        print(f"Flaky iteration {index}/{iterations} started (seed={seed}, timeout={timeout_seconds:g}s).", flush=True)
+        run = _run_once(
+            command,
+            cwd=cwd,
+            iteration=index,
+            seed_base=seed_base,
+            timeout_seconds=timeout_seconds,
+        )
+        runs.append(run)
+        partial = _report(command, iterations, runs)
+        if progress is not None:
+            progress(partial)
+        print(
+            f"Flaky iteration {index}/{iterations} finished: rc={run.returncode}, "
+            f"summary={run.summary}, duration={run.duration_seconds}s.",
+            flush=True,
+        )
+        if run.is_timed_out:
+            break
+    return _report(command, iterations, runs)
 
 
 def write_report(output: Path, report: FlakyReport) -> None:
@@ -184,13 +266,24 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--command", default=DEFAULT_COMMAND)
     parser.add_argument("--cwd", type=Path, default=ROOT)
+    parser.add_argument(
+        "--iteration-timeout-seconds",
+        type=float,
+        default=DEFAULT_ITERATION_TIMEOUT_SECONDS,
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv or sys.argv[1:])
     command = shlex.split(args.command)
-    report = run_gate(command, iterations=args.iterations, cwd=args.cwd)
+    report = run_gate(
+        command,
+        iterations=args.iterations,
+        cwd=args.cwd,
+        timeout_seconds=args.iteration_timeout_seconds,
+        progress=lambda partial: write_report(args.output, partial),
+    )
     write_report(args.output, report)
     if not report.gate_pass:
         _print_failure(report, args.output)

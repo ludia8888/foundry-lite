@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories import SqlAlchemyAiRunRepository
 from sqlalchemy import func, select
 
 from tests.conftest import prepare_indexed_demo
@@ -53,6 +55,37 @@ def test_builder_runtime_blocked_validation_does_not_seed_ai_run(foundry: Any) -
     assert result.logic_result is None
     assert {issue.code for issue in result.validation.blocking_issues} == {"tenant_partition_mismatch"}
     assert _table_count(foundry.engine, db.ai_execution_runs) == 0
+
+
+def test_builder_runtime_rejects_unknown_terminal_status_instead_of_marking_success(foundry: Any) -> None:
+    with pytest.raises(ValueError, match="must be failed or succeeded"):
+        foundry.aip._builder_runtime._finish_run(_CTX, "aip-missing", "suceeded", None)
+
+
+def test_builder_runtime_scrubs_secret_from_public_result_and_durable_run(
+    foundry: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    def fail_logic(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("Authorization: Bearer raw-builder-token password=raw-builder-password")
+
+    monkeypatch.setattr(foundry.aip._builder_runtime.logic_runtime_service, "run", fail_logic)
+
+    result = foundry.aip.run_builder_payload(payload=_run_payload(order), ctx=_CTX)
+
+    assert result.run_status == "failed"
+    assert result.error == {"reason": "RuntimeError", "detail": "***MASKED***"}
+    with foundry.engine.begin() as transaction:
+        ledger = SqlAlchemyAiRunRepository(foundry.engine).ledger_for_run(
+            transaction=transaction,
+            tenant_id=_CTX.tenant_id,
+            ai_run_id=result.ai_run_id or "",
+        )
+    assert ledger is not None
+    assert ledger["run"]["error_json"] == result.error
+    assert "raw-builder" not in str(ledger)
 
 
 def _run_payload(order: Mapping[str, object]) -> dict[str, object]:

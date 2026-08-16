@@ -68,10 +68,22 @@ def run_writeback_reconciliation_batches(
     runtime: WritebackReconciliationWorkerRuntime | None = None,
 ) -> WritebackReconciliationWorkerResult:
     active_runtime = runtime or build_writeback_reconciliation_runtime(config)
+    is_runtime_owned = runtime is None
+    try:
+        return _run_reconciliation_batches(config, active_runtime)
+    finally:
+        if is_runtime_owned:
+            active_runtime.foundry.close()
+
+
+def _run_reconciliation_batches(
+    config: WritebackReconciliationWorkerConfig,
+    runtime: WritebackReconciliationWorkerRuntime,
+) -> WritebackReconciliationWorkerResult:
     accumulator = _RecoveryAccumulator()
     empty_batches = 0
     for batch_number in range(1, _positive(config.max_batches, "max_batches") + 1):
-        result = active_runtime.foundry.operations.recover_action_writebacks(
+        result = runtime.foundry.operations.recover_action_writebacks(
             ctx=config.request_context(batch_number=batch_number),
             limit=_positive(config.limit, "limit"),
         )
@@ -91,9 +103,13 @@ def build_writeback_reconciliation_runtime(
         adapter_profile=config.adapter_profile,
     )
     foundry = FoundryLite(dependencies=dependencies)
-    if adapter := _external_writeback_adapter(config):
-        foundry.actions._action.set_external_writeback_adapter(adapter)
-    return WritebackReconciliationWorkerRuntime(foundry=foundry)
+    try:
+        if adapter := _external_writeback_adapter(config):
+            foundry.actions._action.set_external_writeback_adapter(adapter)
+        return WritebackReconciliationWorkerRuntime(foundry=foundry)
+    except Exception:
+        foundry.close()
+        raise
 
 
 def config_from_env(env: Mapping[str, str] | None = None) -> WritebackReconciliationWorkerConfig:

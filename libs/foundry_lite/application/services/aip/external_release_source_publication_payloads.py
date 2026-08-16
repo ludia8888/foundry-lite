@@ -160,6 +160,7 @@ def source_publication_receipt_ref(receipt: SourceCandidatePublicationReceipt) -
         "baseRef": receipt.expected_base_ref,
         "headRef": receipt.expected_head_ref,
         "baseSha": receipt.expected_base_sha,
+        "artifactPath": receipt.manifest_artifact_path,
         "manifestFingerprint": receipt.manifest_fingerprint,
         "headSha": receipt.head_sha,
         "pullNumber": receipt.pull_number,
@@ -178,6 +179,7 @@ def publication_receipt_matches(
         and receipt.expected_base_ref == row.target_ref.get("baseRef")
         and receipt.expected_head_ref == row.target_ref.get("headRef")
         and receipt.expected_base_sha == row.target_ref.get("baseSha")
+        and receipt.manifest_artifact_path == _candidate_value(row, "artifactPath")
         and receipt.manifest_fingerprint == _candidate_value(row, "manifestFingerprint")
         and receipt.idempotency_key == row.idempotency_key
     )

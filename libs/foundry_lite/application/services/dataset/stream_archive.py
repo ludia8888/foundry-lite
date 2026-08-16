@@ -27,6 +27,7 @@ from foundry_lite.application.services.dataset.stream_archive_time import (
     stream_watermark_key,
     validate_late_data_policy,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.observability.metrics import set_stream_archive_lag
@@ -380,7 +381,7 @@ def _dead_letter_stream_event(
         source_event_id=source_event_id,
         payload_hash=_json_hash(dict(event.payload)),
         error_kind=_dead_letter_error_kind(exc),
-        error_message=exc.message,
+        error_message=scrub_error_text(exc.message),
         event_time=_payload_event_time(event.payload, stream),
     )
 

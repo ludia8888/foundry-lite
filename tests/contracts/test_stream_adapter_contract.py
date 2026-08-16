@@ -53,3 +53,8 @@ def test_stream_adapter_contract_isolated_streams(adapter: StreamAdapter) -> Non
 
     assert adapter.read_events("missing") == []
     assert adapter.read_events("audit-events")[0].offset == 0
+
+
+def test_stream_adapter_contract_close_is_idempotent(adapter: StreamAdapter) -> None:
+    adapter.close()
+    adapter.close()

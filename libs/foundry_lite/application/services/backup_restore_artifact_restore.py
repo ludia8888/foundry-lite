@@ -27,6 +27,7 @@ from foundry_lite.application.services.backup_restore_validation import (
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.backup_restore.artifact_restore import (
     artifact_restore_findings as _domain_artifact_restore_findings,
 )
@@ -193,7 +194,7 @@ class BackupRestoreArtifactRestoreService(CoreService):
                 resource_id=artifact_ref,
                 action="operations:retry",
                 decision="deny",
-                after_ref={"reason": reason, "error": str(exc)},
+                after_ref={"reason": reason, "error": scrub_error_text(str(exc))},
                 correlation_id=ctx.request_id,
             )
 

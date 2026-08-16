@@ -2,6 +2,16 @@
 set -euo pipefail
 
 export PYTHONPATH=".:libs:apps/cli:apps/api:apps/worker"
+
+# Docker Desktop keeps its credential helper inside the application bundle on
+# macOS. The Docker CLI can still reach the daemon when that directory is not
+# on PATH, but the Python Docker SDK fails only when Testcontainers later needs
+# to pull a missing image. Normalize the shell before the fail-fast preflight.
+if [[ -x "/Applications/Docker.app/Contents/Resources/bin/docker-credential-desktop" ]] \
+  && ! command -v docker-credential-desktop > /dev/null 2>&1; then
+  export PATH="/Applications/Docker.app/Contents/Resources/bin:${PATH}"
+fi
+
 mkdir -p artifacts/coverage artifacts/demo artifacts/test-results artifacts/quality
 
 # CodeQL P7 is intentionally not run from this local/release shell gate.
@@ -60,18 +70,10 @@ ensure_code_execution_image() {
     return
   fi
 
-  local configured_image="${FOUNDRY_LITE_CODE_EXECUTION_IMAGE:-}"
-  if [[ -n "${configured_image}" ]]; then
-    echo "== Preflight: isolated Python image ${configured_image} =="
-    if ! docker image inspect "${configured_image}" > /dev/null 2>&1; then
-      echo "ERROR: configured FOUNDRY_LITE_CODE_EXECUTION_IMAGE is not available locally." >&2
-      exit 1
-    fi
-  else
-    echo "== Preflight: build isolated Python execution image =="
-    pnpm --silent quality:code-execution-image
-  fi
+  echo "== Preflight: verify isolated Python and Node runtime images =="
+  bash scripts/quality/ensure_live_runtime_images.sh code-execution
   CODE_EXECUTION_IMAGE_READY=1
+  NODE_CODE_EXECUTION_IMAGE_READY=1
 }
 
 ensure_node_code_execution_image() {
@@ -79,20 +81,11 @@ ensure_node_code_execution_image() {
     return
   fi
 
-  # A second image, not a second policy: TypeScript functions need a Node toolchain the pinned
-  # python:slim image does not carry, and adding one would widen the attack surface of every
-  # Python transform for a runtime they never use. Confinement flags come from one place.
-  local configured_image="${FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE:-}"
-  if [[ -n "${configured_image}" ]]; then
-    echo "== Preflight: isolated Node image ${configured_image} =="
-    if ! docker image inspect "${configured_image}" > /dev/null 2>&1; then
-      echo "ERROR: configured FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE is not available locally." >&2
-      exit 1
-    fi
-  else
-    echo "== Preflight: build isolated Node execution image =="
-    pnpm --silent quality:node-code-execution-image
-  fi
+  # This is reached only if a future lane requests Node without first requesting Python.
+  # The shared preflight deliberately validates both runtimes so their confinement policy and
+  # source fingerprints cannot drift.
+  bash scripts/quality/ensure_live_runtime_images.sh code-execution
+  CODE_EXECUTION_IMAGE_READY=1
   NODE_CODE_EXECUTION_IMAGE_READY=1
 }
 
@@ -101,17 +94,8 @@ ensure_trained_model_image() {
     return
   fi
 
-  local configured_image="${FOUNDRY_LITE_TRAINED_MODEL_IMAGE:-}"
-  if [[ -n "${configured_image}" ]]; then
-    echo "== Preflight: trained-model sidecar image ${configured_image} =="
-    if ! docker image inspect "${configured_image}" > /dev/null 2>&1; then
-      echo "ERROR: configured FOUNDRY_LITE_TRAINED_MODEL_IMAGE is not available locally." >&2
-      exit 1
-    fi
-  else
-    echo "== Preflight: build trained-model sidecar image =="
-    pnpm --silent quality:trained-model-sidecar-image
-  fi
+  echo "== Preflight: verify trained-model sidecar image =="
+  bash scripts/quality/ensure_live_runtime_images.sh trained-model
   TRAINED_MODEL_IMAGE_READY=1
 }
 
@@ -163,6 +147,7 @@ run_coverage_gate() {
   ensure_node_code_execution_image
 
   echo "== Dynamic: pytest with branch coverage =="
+  local pytest_workers="${FOUNDRY_LITE_PYTEST_WORKERS:-4}"
   # pytest-randomly is auto-loaded and shuffles test order per run, exposing
   # hidden inter-test dependencies (state leaks across fixtures, shared module
   # globals, etc.). A consistent --randomly-seed is logged so failures can be
@@ -191,7 +176,7 @@ run_coverage_gate() {
   # recovers rather than treating 93 as the standard. The per-layer and public-API gates below
   # still hold their own thresholds.
   uv run pytest tests \
-    -n auto \
+    -n "${pytest_workers}" \
     --dist loadfile \
     --cov=libs/foundry_lite \
     --cov=apps/api \
@@ -213,6 +198,8 @@ run_flaky_gate() {
   ensure_node_code_execution_image
 
   local iterations="${FOUNDRY_LITE_FLAKY_ITERATIONS:-3}"
+  local pytest_workers="${FOUNDRY_LITE_PYTEST_WORKERS:-4}"
+  local iteration_timeout_seconds="${FOUNDRY_LITE_FLAKY_ITERATION_TIMEOUT_SECONDS:-900}"
   echo "== Dynamic: flaky pytest detector (${iterations} repeated random + parallel runs) =="
   # Re-run the suite without coverage instrumentation under pytest-xdist. The
   # detector injects a fresh pytest-randomly seed per iteration and shares that
@@ -223,7 +210,8 @@ run_flaky_gate() {
   # rerun could afford (default remains --iterations 3 for release rehearsal).
   uv run python scripts/quality/check_flaky_detector.py \
     --iterations "${iterations}" \
-    --command "uv run pytest tests -n auto --no-header -q"
+    --iteration-timeout-seconds "${iteration_timeout_seconds}" \
+    --command "uv run pytest tests -n ${pytest_workers} --dist loadfile --no-header -q"
 }
 
 run_impact_gate() {
@@ -260,7 +248,7 @@ run_runtime_gate() {
 
   run_runtime_step "ratchet manifest inventory" uv run python scripts/quality/check_ratchet_manifest.py
 
-  run_runtime_step "SDK request contract" node --experimental-strip-types tests/sdk/request_contract.mjs
+  run_runtime_step "SDK request contract" node --disable-warning=ExperimentalWarning --experimental-strip-types tests/sdk/request_contract.mjs
 
   run_runtime_dynamic_steps
   trap - ERR

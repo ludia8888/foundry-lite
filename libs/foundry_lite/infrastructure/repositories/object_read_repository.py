@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
-from sqlalchemy import Float, String, and_, asc, desc, func, literal, or_, select
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    and_,
+    asc,
+    case,
+    desc,
+    extract,
+    func,
+    literal,
+    or_,
+    select,
+)
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.engine import Engine
 
@@ -16,6 +31,16 @@ from foundry_lite.application.ports import (
     ObjectOrderBy,
     ObjectQueryCursor,
     ObjectRecordRow,
+)
+from foundry_lite.domain.scalar_values import (
+    DECIMAL_NUMBER_SQL_PATTERN,
+    INTEGER_MIN_VALUE,
+    INTEGER_SQL_PATTERN,
+    finite_number_value,
+    integer_value,
+    is_iso_date,
+    timestamp_from_microseconds,
+    timestamp_microseconds,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -123,10 +148,12 @@ class SqlAlchemyObjectReadRepository:
             object_type_api_name,
             property_object_type_id or object_type_id,
         )
-        sort_columns = _sort_columns(order_by, property_data_types)
+        dialect_name = self.engine.dialect.name
+        _ensure_sqlite_timestamp_function(transaction, dialect_name)
+        sort_columns = _sort_columns(order_by, property_data_types, dialect_name)
         conditions = _active_object_conditions(tenant_id, object_type_api_name, object_type_id)
         if filter_ast:
-            conditions.append(_filter_condition(filter_ast, property_data_types))
+            conditions.append(_filter_condition(filter_ast, property_data_types, dialect_name))
         cursor_condition = _cursor_condition(sort_columns, cursor)
         if cursor_condition is not None:
             conditions.append(cursor_condition)
@@ -159,14 +186,16 @@ class SqlAlchemyObjectReadRepository:
             object_type_api_name,
             property_object_type_id or object_type_id,
         )
+        dialect_name = self.engine.dialect.name
+        _ensure_sqlite_timestamp_function(transaction, dialect_name)
         conditions = _active_object_conditions(tenant_id, object_type_api_name, object_type_id)
         if filter_ast:
-            conditions.append(_filter_condition(filter_ast, property_data_types))
+            conditions.append(_filter_condition(filter_ast, property_data_types, dialect_name))
         key_columns = [
-            _property_value_expression(name, _require_property_data_type(property_data_types, name))
+            _property_value_expression(name, _require_property_data_type(property_data_types, name), dialect_name)
             for name in group_by
         ]
-        metric_columns = [_metric_expression(metric) for metric in metrics]
+        metric_columns = [_metric_expression(metric, property_data_types, dialect_name) for metric in metrics]
         query = select(*key_columns, *metric_columns).where(and_(*conditions)).limit(group_limit)
         if key_columns:
             query = query.group_by(*key_columns)
@@ -305,31 +334,71 @@ def _active_object_conditions(
 def _sort_columns(
     order_by: Sequence[ObjectOrderBy],
     property_data_types: Mapping[str, str],
+    dialect_name: str = "sqlite",
 ) -> list[tuple[Any, str, str]]:
-    return [_sort_column(order, property_data_types) for order in order_by]
+    return [_sort_column(order, property_data_types, dialect_name) for order in order_by]
 
 
-def _sort_column(order: ObjectOrderBy, property_data_types: Mapping[str, str]) -> tuple[Any, str, str]:
+def _sort_column(
+    order: ObjectOrderBy,
+    property_data_types: Mapping[str, str],
+    dialect_name: str,
+) -> tuple[Any, str, str]:
     property_name = order["property"]
-    prop = db.object_records.c.properties[property_name]
     data_type = _require_property_data_type(property_data_types, property_name)
+    if data_type == "integer":
+        return (
+            func.coalesce(_number_expression(property_name, data_type, dialect_name), INTEGER_MIN_VALUE - 1),
+            order["direction"],
+            data_type,
+        )
     if _is_number_type(data_type):
-        return func.coalesce(sa_cast(prop.as_float(), Float), -1e308), order["direction"], "number"
+        return (
+            func.coalesce(_number_expression(property_name, data_type, dialect_name), -1e308),
+            order["direction"],
+            data_type,
+        )
     if data_type == "boolean":
-        return func.coalesce(prop.as_boolean(), False), order["direction"], "boolean"
-    return func.coalesce(prop.as_string(), ""), order["direction"], "string"
+        boolean_value = _property_value_expression(property_name, data_type, dialect_name)
+        return case((boolean_value.is_(True), 1), else_=0), order["direction"], "boolean"
+    if data_type == "timestamp":
+        return (
+            func.coalesce(_timestamp_epoch_expression(property_name, dialect_name), -1e308),
+            order["direction"],
+            "timestamp",
+        )
+    if data_type == "date":
+        return (
+            func.coalesce(_property_value_expression(property_name, data_type, dialect_name), ""),
+            order["direction"],
+            "date",
+        )
+    return (
+        func.coalesce(_property_value_expression(property_name, data_type, dialect_name), ""),
+        order["direction"],
+        "string",
+    )
 
 
-def _filter_condition(filter_ast: Mapping[str, object], property_data_types: Mapping[str, str]) -> Any:
+def _filter_condition(
+    filter_ast: Mapping[str, object],
+    property_data_types: Mapping[str, str],
+    dialect_name: str,
+) -> Any:
     if "and" in filter_ast:
-        return and_(*[_filter_condition(item, property_data_types) for item in _filter_group(filter_ast["and"])])
+        return and_(
+            *[_filter_condition(item, property_data_types, dialect_name) for item in _filter_group(filter_ast["and"])]
+        )
     if "or" in filter_ast:
-        return or_(*[_filter_condition(item, property_data_types) for item in _filter_group(filter_ast["or"])])
+        return or_(
+            *[_filter_condition(item, property_data_types, dialect_name) for item in _filter_group(filter_ast["or"])]
+        )
     return _property_filter_condition(
         str(filter_ast["property"]),
         str(filter_ast["op"]),
         filter_ast["value"],
         property_data_types,
+        dialect_name,
     )
 
 
@@ -342,45 +411,86 @@ def _property_filter_condition(
     op: str,
     value: object,
     property_data_types: Mapping[str, str],
+    dialect_name: str,
 ) -> Any:
     data_type = _require_property_data_type(property_data_types, property_name)
     if op == "eq":
-        return _property_eq_condition(property_name, data_type, value)
+        return _property_eq_condition(property_name, data_type, value, dialect_name)
     if op == "in":
-        return _property_in_condition(property_name, data_type, value)
+        return _property_in_condition(property_name, data_type, value, dialect_name)
     if op == "gte":
-        return _property_range_condition(property_name, data_type, value, is_lower_bound=True)
+        return _property_range_condition(property_name, data_type, value, dialect_name, is_lower_bound=True)
     if op == "gt":
-        return _property_strict_range_condition(property_name, data_type, value, is_lower_bound=True)
+        return _property_strict_range_condition(property_name, data_type, value, dialect_name, is_lower_bound=True)
     if op == "lte":
-        return _property_range_condition(property_name, data_type, value, is_lower_bound=False)
+        return _property_range_condition(property_name, data_type, value, dialect_name, is_lower_bound=False)
     if op == "lt":
-        return _property_strict_range_condition(property_name, data_type, value, is_lower_bound=False)
-    return _property_contains_condition(property_name, value)
+        return _property_strict_range_condition(property_name, data_type, value, dialect_name, is_lower_bound=False)
+    if op == "contains":
+        return _property_contains_condition(property_name, data_type, value, dialect_name)
+    return literal(False)
 
 
-def _property_eq_condition(property_name: str, data_type: str, value: object) -> Any:
+def _property_eq_condition(
+    property_name: str,
+    data_type: str,
+    value: object,
+    dialect_name: str = "sqlite",
+) -> Any:
+    if value is None:
+        return _property_is_null_condition(property_name, dialect_name)
     sql_value = _filter_sql_value(value, data_type)
     if sql_value is INVALID_SQL_VALUE:
         return literal(False)
-    return _property_value_expression(property_name, data_type) == sql_value
+    return _property_value_expression(property_name, data_type, dialect_name) == sql_value
 
 
-def _property_in_condition(property_name: str, data_type: str, value: object) -> Any:
-    if not isinstance(value, Collection) or isinstance(value, str):
+def _property_in_condition(
+    property_name: str,
+    data_type: str,
+    value: object,
+    dialect_name: str = "sqlite",
+) -> Any:
+    items = _filter_sequence(value)
+    if items is None:
         return literal(False)
-    values = [_filter_sql_value(item, data_type) for item in value]
-    values = [item for item in values if item is not INVALID_SQL_VALUE]
-    if not values:
+    expr = _property_value_expression(property_name, data_type, dialect_name)
+    conditions = _null_in_conditions(property_name, dialect_name, items)
+    conditions.extend(expr == item for item in _valid_sql_values(items, data_type))
+    if not conditions:
         return literal(False)
-    return or_(*[_property_value_expression(property_name, data_type) == item for item in values])
+    return or_(*conditions)
 
 
-def _property_range_condition(property_name: str, data_type: str, value: object, *, is_lower_bound: bool) -> Any:
+def _filter_sequence(value: object) -> Sequence[object] | None:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return None
+    return value
+
+
+def _null_in_conditions(property_name: str, dialect_name: str, items: Sequence[object]) -> list[Any]:
+    if not any(item is None for item in items):
+        return []
+    return [_property_is_null_condition(property_name, dialect_name)]
+
+
+def _valid_sql_values(items: Sequence[object], data_type: str) -> list[object]:
+    values = (_filter_sql_value(item, data_type) for item in items if item is not None)
+    return [item for item in values if item is not INVALID_SQL_VALUE]
+
+
+def _property_range_condition(
+    property_name: str,
+    data_type: str,
+    value: object,
+    dialect_name: str = "sqlite",
+    *,
+    is_lower_bound: bool,
+) -> Any:
     sql_value = _filter_sql_value(value, data_type)
     if sql_value is INVALID_SQL_VALUE or data_type == "boolean":
         return literal(False)
-    expr = _property_value_expression(property_name, data_type)
+    expr = _property_value_expression(property_name, data_type, dialect_name)
     return expr >= sql_value if is_lower_bound else expr <= sql_value
 
 
@@ -388,49 +498,178 @@ def _property_strict_range_condition(
     property_name: str,
     data_type: str,
     value: object,
+    dialect_name: str,
     *,
     is_lower_bound: bool,
 ) -> Any:
     sql_value = _filter_sql_value(value, data_type)
     if sql_value is INVALID_SQL_VALUE or data_type == "boolean":
         return literal(False)
-    expr = _property_value_expression(property_name, data_type)
+    expr = _property_value_expression(property_name, data_type, dialect_name)
     return expr > sql_value if is_lower_bound else expr < sql_value
 
 
-def _property_contains_condition(property_name: str, value: object) -> Any:
-    expr = func.lower(sa_cast(db.object_records.c.properties[property_name].as_string(), String))
-    return expr.like(f"%{str(value).lower()}%")
+def _property_contains_condition(property_name: str, data_type: str, value: object, dialect_name: str) -> Any:
+    if data_type != "string" or not isinstance(value, str):
+        return literal(False)
+    expr = func.lower(sa_cast(_property_value_expression(property_name, data_type, dialect_name), String))
+    escaped = value.lower().replace("/", "//").replace("%", "/%").replace("_", "/_")
+    return expr.like(f"%{escaped}%", escape="/")
 
 
-def _property_value_expression(property_name: str, data_type: str) -> Any:
+def _property_value_expression(
+    property_name: str,
+    data_type: str,
+    dialect_name: str = "sqlite",
+) -> Any:
     prop = db.object_records.c.properties[property_name]
     if data_type == "boolean":
-        return prop.as_boolean()
+        return case(
+            (_json_type_expression(property_name, dialect_name) == "boolean", prop.as_boolean()),
+            else_=None,
+        )
     if _is_number_type(data_type):
-        return sa_cast(prop.as_float(), Float)
-    return prop.as_string()
+        return _number_expression(property_name, data_type, dialect_name)
+    if data_type == "date":
+        return _date_expression(property_name, dialect_name)
+    if data_type == "timestamp":
+        return _timestamp_epoch_expression(property_name, dialect_name)
+    if data_type == "string":
+        return case(
+            (_json_type_expression(property_name, dialect_name) == "string", prop.as_string()),
+            else_=None,
+        )
+    return literal(None)
+
+
+def _property_is_null_condition(property_name: str, dialect_name: str) -> Any:
+    json_type = _json_type_expression(property_name, dialect_name)
+    return or_(json_type.is_(None), json_type == "null")
+
+
+def _json_type_expression(property_name: str, dialect_name: str) -> Any:
+    if dialect_name == "postgresql":
+        return func.json_typeof(db.object_records.c.properties[property_name])
+    escaped_name = property_name.replace('"', '\\"')
+    raw_type = func.json_type(db.object_records.c.properties, f'$."{escaped_name}"')
+    return case(
+        (raw_type == "text", "string"),
+        (raw_type.in_(("integer", "real")), "number"),
+        (raw_type.in_(("true", "false")), "boolean"),
+        (raw_type == "null", "null"),
+        else_=None,
+    )
+
+
+def _number_expression(property_name: str, data_type: str, dialect_name: str) -> Any:
+    prop = db.object_records.c.properties[property_name]
+    value = prop.as_string()
+    if dialect_name == "sqlite":
+        json_type = _json_type_expression(property_name, dialect_name)
+        converter = func.foundry_integer_number(value) if data_type == "integer" else func.foundry_finite_number(value)
+        return case(
+            (json_type.in_(("number", "string")), converter),
+            else_=None,
+        )
+    json_type = _json_type_expression(property_name, dialect_name)
+    is_number_shape = json_type.in_(("number", "string"))
+    pattern = INTEGER_SQL_PATTERN if data_type == "integer" else DECIMAL_NUMBER_SQL_PATTERN
+    is_decimal_shape = value.op("~")(pattern)
+    sql_type_name = "integer" if data_type == "integer" else "double precision"
+    cast_type = Integer if data_type == "integer" else Float
+    is_valid = func.pg_input_is_valid(value, sql_type_name)
+    return case((and_(is_number_shape, is_decimal_shape, is_valid), sa_cast(value, cast_type)), else_=None)
+
+
+def _date_expression(property_name: str, dialect_name: str) -> Any:
+    prop = db.object_records.c.properties[property_name]
+    value = prop.as_string()
+    if dialect_name == "sqlite":
+        return func.foundry_iso_date(value)
+    is_string = _json_type_expression(property_name, dialect_name) == "string"
+    is_iso_shape = value.op("~")(r"^\d{4}-\d{2}-\d{2}$")
+    is_valid = func.pg_input_is_valid(value, "date")
+    return case((and_(is_string, is_iso_shape, is_valid), value), else_=None)
+
+
+def _timestamp_epoch_expression(property_name: str, dialect_name: str) -> Any:
+    prop = db.object_records.c.properties[property_name]
+    value = prop.as_string()
+    if dialect_name == "postgresql":
+        is_string = _json_type_expression(property_name, dialect_name) == "string"
+        is_iso_shape = value.op("~")(r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$")
+        is_valid = func.pg_input_is_valid(value, "timestamp with time zone")
+        parsed = sa_cast(value, DateTime(timezone=True))
+        epoch = sa_cast(extract("epoch", parsed) * 1_000_000, BigInteger)
+        return case((and_(is_string, is_iso_shape, is_valid), epoch), else_=None)
+    return func.foundry_timestamp_microseconds(value)
+
+
+def _ensure_sqlite_timestamp_function(transaction: Any, dialect_name: str) -> None:
+    if dialect_name != "sqlite":
+        return
+    transaction.connection.driver_connection.create_function(
+        "foundry_timestamp_microseconds",
+        1,
+        timestamp_microseconds,
+        deterministic=True,
+    )
+    transaction.connection.driver_connection.create_function(
+        "foundry_finite_number",
+        1,
+        _sqlite_finite_number,
+        deterministic=True,
+    )
+    transaction.connection.driver_connection.create_function(
+        "foundry_iso_date",
+        1,
+        _sqlite_iso_date,
+        deterministic=True,
+    )
+    transaction.connection.driver_connection.create_function(
+        "foundry_integer_number",
+        1,
+        _sqlite_integer_number,
+        deterministic=True,
+    )
+
+
+def _sqlite_finite_number(value: object) -> float | None:
+    parsed = _number_sql_value(value)
+    return None if parsed is INVALID_SQL_VALUE else cast(float, parsed)
+
+
+def _sqlite_iso_date(value: object) -> str | None:
+    return cast(str, value) if is_iso_date(value) else None
+
+
+def _sqlite_integer_number(value: object) -> int | None:
+    return integer_value(value)
 
 
 def _filter_sql_value(value: object, data_type: str) -> object:
+    if data_type == "integer":
+        return _integer_sql_value(value)
     if _is_number_type(data_type):
         return _number_sql_value(value)
     if data_type == "boolean":
         return value if isinstance(value, bool) else INVALID_SQL_VALUE
-    return str(value) if value is not None else ""
+    if data_type == "timestamp":
+        microseconds = timestamp_microseconds(value)
+        return microseconds if microseconds is not None else INVALID_SQL_VALUE
+    if data_type == "date":
+        return value if is_iso_date(value) else INVALID_SQL_VALUE
+    return value if isinstance(value, str) else INVALID_SQL_VALUE
 
 
 def _number_sql_value(value: object) -> object:
-    if isinstance(value, bool):
-        return INVALID_SQL_VALUE
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return INVALID_SQL_VALUE
-    return INVALID_SQL_VALUE
+    parsed = finite_number_value(value)
+    return parsed if parsed is not None else INVALID_SQL_VALUE
+
+
+def _integer_sql_value(value: object) -> object:
+    parsed = integer_value(value)
+    return parsed if parsed is not None else INVALID_SQL_VALUE
 
 
 _METRIC_AGGREGATES: dict[str, Callable[[Any], Any]] = {
@@ -441,12 +680,17 @@ _METRIC_AGGREGATES: dict[str, Callable[[Any], Any]] = {
 }
 
 
-def _metric_expression(metric: ObjectAggregationMetric) -> Any:
+def _metric_expression(
+    metric: ObjectAggregationMetric,
+    property_data_types: Mapping[str, str],
+    dialect_name: str,
+) -> Any:
     """Build the SQL aggregate for one metric over the JSON property extraction."""
     if metric["function"] == "count":
         return func.count()
-    prop = db.object_records.c.properties[str(metric["property"])]
-    return _METRIC_AGGREGATES[metric["function"]](sa_cast(prop.as_float(), Float))
+    property_name = str(metric["property"])
+    data_type = _require_property_data_type(property_data_types, property_name)
+    return _METRIC_AGGREGATES[metric["function"]](_number_expression(property_name, data_type, dialect_name))
 
 
 def _aggregation_group(
@@ -477,9 +721,11 @@ def _aggregation_key_value(value: object, data_type: str) -> object:
     if data_type == "boolean":
         return bool(value)
     if data_type == "integer":
-        return int(float(cast(str | int | float, value)))
+        return int(cast(str | int | float, value))
     if _is_number_type(data_type):
         return float(cast(str | int | float, value))
+    if data_type == "timestamp":
+        return timestamp_from_microseconds(value)
     return str(value)
 
 
@@ -512,12 +758,17 @@ def _cursor_disjunctions(sort_columns: Sequence[tuple[Any, str, str]], cursor: O
 
 
 def _cursor_sql_value(value: object, data_type: str) -> object:
-    if data_type == "number":
-        number = _number_sql_value(value)
+    if _is_number_type(data_type):
+        number = _filter_sql_value(value, data_type)
         return number if number is not INVALID_SQL_VALUE else -1e308
     if data_type == "boolean":
-        return bool(value) if isinstance(value, bool) else False
-    return str(value) if value is not None else ""
+        return 1 if value is True else 0
+    if data_type == "timestamp":
+        microseconds = timestamp_microseconds(value)
+        return microseconds if microseconds is not None else -1e308
+    if data_type == "date":
+        return value if is_iso_date(value) else ""
+    return value if isinstance(value, str) else ""
 
 
 def _order_terms(sort_columns: Sequence[tuple[Any, str, str]]) -> list[Any]:

@@ -464,7 +464,15 @@ def _commands(plan: PullRequestPlan, base: str, head: str) -> list[tuple[str, li
         )
     if plan.has_sdk_contract:
         commands.append(
-            ("sdk-request-contract", ["node", "--experimental-strip-types", "tests/sdk/request_contract.mjs"])
+            (
+                "sdk-request-contract",
+                [
+                    "node",
+                    "--disable-warning=ExperimentalWarning",
+                    "--experimental-strip-types",
+                    "tests/sdk/request_contract.mjs",
+                ],
+            )
         )
     return commands
 

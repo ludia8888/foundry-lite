@@ -39,6 +39,7 @@ from foundry_lite.application.services.dataset.serving_security import (
     require_dataset_serving_access,
 )
 from foundry_lite.application.services.resource_catalog_auto_registration import upsert_work_product_resource
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -403,7 +404,7 @@ class DatasetRegistryService(CoreService):
             return self.dataset_transaction_service._current_view_manifest(version_row)
         except InvariantViolation as exc:
             details = self._storage_error_details(dataset_ref, dataset, version_row, exc.details)
-            raise InvariantViolation(exc.message, details=details) from exc
+            raise InvariantViolation(scrub_error_text(exc.message), details=details) from exc
 
     def _require_version_security_contract(
         self,

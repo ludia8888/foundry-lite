@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+from foundry_lite.application.services.aip import fde_domain_os_policy
 from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     application_resources,
     build_domain_os_blueprint,
@@ -12,8 +13,11 @@ from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     require_ready_blueprint,
     seed_plan,
 )
+from foundry_lite.application.services.aip.fde_domain_os_tool_schema import DOMAIN_BRIEF_SCHEMA
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import consumer_osdk_plan, react_files
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
+from foundry_lite.application.services.mcp_json_schema import McpJsonSchemaError, validate_mcp_json_schema
+from foundry_lite.domain.errors import ValidationFailed
 
 
 def test_property_maintenance_brief_compiles_independent_objects_actions_and_seed_data() -> None:
@@ -251,6 +255,98 @@ def test_policy_condition_rejects_operator_and_value_type_mismatches(
 
     with pytest.raises(FdePlatformToolError, match=message):
         build_domain_os_blueprint(arguments)
+
+
+@pytest.mark.parametrize(
+    ("operator", "value"),
+    [
+        ("contains", "gent"),
+        ("startsWith", "urg"),
+        ("matches", "urgent|normal"),
+    ],
+)
+def test_scalar_text_policy_operators_compile_to_executable_action_preconditions(
+    operator: str,
+    value: str,
+) -> None:
+    arguments = property_maintenance_arguments()
+    condition = arguments["domainBrief"]["policies"][1]["conditions"][0]
+    condition.update({"operator": operator, "value": value})
+
+    blueprint = build_domain_os_blueprint(arguments)
+    precondition = ontology_resources(blueprint, "seed.property_maintenance")[2]["definition"]["preconditions"][1]
+
+    assert precondition["op"] == operator
+    assert precondition["right"] == {"kind": "literal", "value": value}
+
+
+def test_exists_policy_omits_value_from_input_schema_and_executable_precondition() -> None:
+    arguments = property_maintenance_arguments()
+    condition = arguments["domainBrief"]["policies"][1]["conditions"][0]
+    condition.clear()
+    condition.update({"propertyApiName": "severity", "operator": "exists"})
+
+    validate_mcp_json_schema(arguments["domainBrief"], DOMAIN_BRIEF_SCHEMA)
+    blueprint = build_domain_os_blueprint(arguments)
+    precondition = ontology_resources(blueprint, "seed.property_maintenance")[2]["definition"]["preconditions"][1]
+
+    assert precondition == {
+        "op": "exists",
+        "left": {"kind": "objectProperty", "property": "severity"},
+        "message": "분류 전에 심각도가 urgent 또는 normal로 기록되어야 합니다.",
+        "policyName": "심각도 필수",
+    }
+
+
+def test_policy_value_presence_contract_is_exact_for_exists_and_value_operators() -> None:
+    exists_with_value = property_maintenance_arguments()
+    condition = exists_with_value["domainBrief"]["policies"][1]["conditions"][0]
+    condition.update({"operator": "exists", "value": None})
+    with pytest.raises(McpJsonSchemaError, match="exactly one oneOf"):
+        validate_mcp_json_schema(exists_with_value["domainBrief"], DOMAIN_BRIEF_SCHEMA)
+    with pytest.raises(FdePlatformToolError, match="value 항목을 입력하지"):
+        build_domain_os_blueprint(exists_with_value)
+
+    equality_without_value = property_maintenance_arguments()
+    equality_without_value["domainBrief"]["policies"][1]["conditions"][0].pop("value")
+    with pytest.raises(McpJsonSchemaError, match="exactly one oneOf"):
+        validate_mcp_json_schema(equality_without_value["domainBrief"], DOMAIN_BRIEF_SCHEMA)
+    with pytest.raises(FdePlatformToolError, match="비교할 값이 필요"):
+        build_domain_os_blueprint(equality_without_value)
+
+
+@pytest.mark.parametrize(
+    ("operator", "value", "message"),
+    [
+        ("contains", 1, "업무 정보 형식과 맞지"),
+        ("matches", "(a+)+", "unsafe backtracking"),
+        ("containsAny", ["urgent"], "지원하지 않는 규칙 비교 방식"),
+    ],
+)
+def test_domain_policy_rejects_wrong_text_types_unsafe_regex_and_collection_only_operators(
+    operator: str,
+    value: object,
+    message: str,
+) -> None:
+    arguments = property_maintenance_arguments()
+    condition = arguments["domainBrief"]["policies"][1]["conditions"][0]
+    condition.update({"operator": operator, "value": value})
+
+    with pytest.raises(FdePlatformToolError, match=message):
+        build_domain_os_blueprint(arguments)
+
+
+def test_runtime_policy_validation_redacts_secret_bearing_condition_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_validation(_condition: object) -> None:
+        raise ValidationFailed("provider token=super-secret")
+
+    monkeypatch.setattr(fde_domain_os_policy, "validate_action_condition", fail_validation)
+
+    with pytest.raises(FdePlatformToolError) as caught:
+        fde_domain_os_policy._validate_runtime_condition("status", "eq", "APPROVED")
+
+    assert "super-secret" not in str(caught.value)
+    assert "***MASKED***" in str(caught.value)
 
 
 def property_maintenance_arguments() -> dict[str, object]:

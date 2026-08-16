@@ -235,6 +235,15 @@ async def websocket_object_subscription(websocket: WebSocket, object_type: str) 
     except FoundryLiteError as exc:
         await websocket.send_json({"event": "error", "error": _websocket_error(exc, ctx.request_id)})
         await websocket.close(code=1008)
-    except ValidationError as exc:
-        await websocket.send_json({"event": "error", "error": {"code": "VALIDATION_ERROR", "message": str(exc)}})
+    except ValidationError:
+        await websocket.send_json(
+            {
+                "event": "error",
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "object subscription request validation failed",
+                    "request_id": ctx.request_id,
+                },
+            }
+        )
         await websocket.close(code=1003)

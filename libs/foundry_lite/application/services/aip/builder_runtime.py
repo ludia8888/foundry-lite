@@ -34,6 +34,7 @@ from foundry_lite.application.services.aip.visual_builder import (
     VisualBuilderValidationResult,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 
 JsonObject = Mapping[str, object]
@@ -158,7 +159,12 @@ class BuilderRuntimeService(CoreService):
         error: JsonObject | None,
         logic_result: LogicRunResult | None = None,
     ) -> None:
-        transition = AI_RUN_FAILED if status == "failed" else AI_RUN_SUCCEEDED
+        if status == "failed":
+            transition = AI_RUN_FAILED
+        elif status == "succeeded":
+            transition = AI_RUN_SUCCEEDED
+        else:
+            raise ValueError("Builder AI run status must be failed or succeeded")
         usage = _usage_payload(logic_result)
         with self.engine.begin() as transaction:
             self.ai_run_repository.update_execution_run_status(
@@ -329,7 +335,7 @@ def _usage_payload(result: LogicRunResult | None) -> dict[str, object] | None:
 
 def _error_payload(exc: Exception) -> dict[str, object]:
     reason = exc.reason if isinstance(exc, LogicRuntimeError) else exc.__class__.__name__
-    return {"reason": reason, "detail": str(exc)[:240]}
+    return {"reason": reason, "detail": scrub_error_text(str(exc))[:240]}
 
 
 def _model_id(alias_version: str) -> str:

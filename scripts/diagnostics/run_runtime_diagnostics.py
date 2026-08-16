@@ -72,7 +72,10 @@ def main(argv: list[str] | None = None) -> int:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("default")
             foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
-            result = profiler.runcall(foundry.demo.run)
+            try:
+                result = profiler.runcall(foundry.demo.run)
+            finally:
+                foundry.close()
             captured_warnings.extend(caught)
         duration_seconds = time.perf_counter() - started_at
 

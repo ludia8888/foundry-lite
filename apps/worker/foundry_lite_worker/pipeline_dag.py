@@ -35,35 +35,38 @@ async def run_worker() -> None:
             storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT"),
         )
     )
-    worker_id = os.getenv("FOUNDRY_LITE_WORKER_ID", f"{socket.gethostname()}:{os.getpid()}")
-    activities = PipelineDagActivities(
-        foundry._services.pipelines.distributed_node.drive,
-        worker_id=worker_id,
-        preview_driver=lambda payload: _drive_preview(foundry, payload),
-        node_subprocess_argv=(sys.executable, "-m", "foundry_lite_worker.pipeline_node_subprocess"),
-    )
-    task_queue = os.getenv("FOUNDRY_LITE_PIPELINE_DAG_TASK_QUEUE", PIPELINE_DAG_TASK_QUEUE)
-    control_worker = Worker(
-        client,
-        task_queue=task_queue,
-        workflows=[PipelineDagWorkflow],
-        activities=[
-            activities.begin,
-            activities.execute_node,
-            activities.finalize,
-            activities.execute_preview,
-        ],
-        workflow_runner=foundry_sandbox_runner(),
-    )
-    capability_workers = [
-        Worker(
-            client,
-            task_queue=pipeline_capability_task_queue(task_queue, capability),
-            activities=[activities.execute_node],
+    try:
+        worker_id = os.getenv("FOUNDRY_LITE_WORKER_ID", f"{socket.gethostname()}:{os.getpid()}")
+        activities = PipelineDagActivities(
+            foundry._services.pipelines.distributed_node.drive,
+            worker_id=worker_id,
+            preview_driver=lambda payload: _drive_preview(foundry, payload),
+            node_subprocess_argv=(sys.executable, "-m", "foundry_lite_worker.pipeline_node_subprocess"),
         )
-        for capability in _worker_capabilities()
-    ]
-    await asyncio.gather(control_worker.run(), *(worker.run() for worker in capability_workers))
+        task_queue = os.getenv("FOUNDRY_LITE_PIPELINE_DAG_TASK_QUEUE", PIPELINE_DAG_TASK_QUEUE)
+        control_worker = Worker(
+            client,
+            task_queue=task_queue,
+            workflows=[PipelineDagWorkflow],
+            activities=[
+                activities.begin,
+                activities.execute_node,
+                activities.finalize,
+                activities.execute_preview,
+            ],
+            workflow_runner=foundry_sandbox_runner(),
+        )
+        capability_workers = [
+            Worker(
+                client,
+                task_queue=pipeline_capability_task_queue(task_queue, capability),
+                activities=[activities.execute_node],
+            )
+            for capability in _worker_capabilities()
+        ]
+        await asyncio.gather(control_worker.run(), *(worker.run() for worker in capability_workers))
+    finally:
+        foundry.close()
 
 
 def main() -> None:

@@ -18,6 +18,7 @@ from foundry_lite.application.services.media.content_chunking import (
 from foundry_lite.application.services.media.content_chunking_rules import ContentChunkSpec
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 from foundry_lite.infrastructure import schema as db
@@ -207,6 +208,35 @@ def test_outbox_failure_rolls_back_derivative_and_chunks_and_marks_run_failed(en
     retried = env.chunking.create_chunks(env.ctx, source=env.source, spec=ContentChunkSpec(3, 1))
     assert retried.status == "COMMITTED"
     assert retried.is_duplicate is False
+
+
+def test_chunk_failure_record_write_error_is_attached_to_primary_exception_without_secret(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.runtime.fail_chunk_outbox = True
+    original = env.derivative_repository.complete_media_run
+
+    def fail_terminal_record(**kwargs: object) -> object:
+        if kwargs.get("status") == "FAILED":
+            raise RuntimeError("token=secondary-secret")
+        return original(**kwargs)
+
+    monkeypatch.setattr(env.derivative_repository, "complete_media_run", fail_terminal_record)
+
+    with pytest.raises(RuntimeError, match="injected chunk outbox failure") as captured:
+        env.chunking.create_chunks(env.ctx, source=env.source, spec=ContentChunkSpec(3, 1))
+
+    payload = runtime_error_payload(captured.value)
+    assert payload["details"] == {
+        "cleanupFailures": [
+            {
+                "operation": "contentChunkRunFailureRecord",
+                "status": "FAILED",
+                "exceptionType": "RuntimeError",
+            }
+        ]
+    }
+    assert "secondary-secret" not in str(payload)
 
 
 def test_weakened_source_unit_security_fails_closed_without_creating_a_run(env: _Env) -> None:

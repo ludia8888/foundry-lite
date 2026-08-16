@@ -299,7 +299,10 @@ def _worker_config(
 
 def _ensure_dataset(config: FaultLabConfig, db_url: str, dataset_ref: str) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=config.storage_root, db_url=db_url))
-    foundry.datasets.ensure(dataset_ref, ctx=demo_admin_context(), primary_key=["event_id"])
+    try:
+        foundry.datasets.ensure(dataset_ref, ctx=demo_admin_context(), primary_key=["event_id"])
+    finally:
+        foundry.close()
 
 
 def _run_barrier_worker(
@@ -395,18 +398,28 @@ def _expected_batches(config: FaultLabConfig) -> int:
 
 def _versions(config: FaultLabConfig, db_url: str, dataset_ref: str) -> list[dict[str, object]]:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=config.storage_root, db_url=db_url))
-    return [dict(row) for row in foundry.datasets.list_versions(dataset_ref, ctx=demo_admin_context())]
+    try:
+        return [dict(row) for row in foundry.datasets.list_versions(dataset_ref, ctx=demo_admin_context())]
+    finally:
+        foundry.close()
 
 
 def _all_dataset_rows(config: FaultLabConfig, db_url: str, dataset_ref: str) -> list[dict[str, object]]:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=config.storage_root, db_url=db_url))
-    rows: list[dict[str, object]] = []
-    for version in foundry.datasets.list_versions(dataset_ref, ctx=demo_admin_context()):
-        rows.extend(
-            dict(row)
-            for row in foundry.datasets.preview(dataset_ref, ctx=demo_admin_context(), version=str(version["id"]))
-        )
-    return rows
+    try:
+        rows: list[dict[str, object]] = []
+        for version in foundry.datasets.list_versions(dataset_ref, ctx=demo_admin_context()):
+            rows.extend(
+                dict(row)
+                for row in foundry.datasets.preview(
+                    dataset_ref,
+                    ctx=demo_admin_context(),
+                    version=str(version["id"]),
+                )
+            )
+        return rows
+    finally:
+        foundry.close()
 
 
 def _postgres_url(container: object) -> str:

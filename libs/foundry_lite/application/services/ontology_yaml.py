@@ -20,6 +20,7 @@ from foundry_lite.application.ports.ontology_repository import (
     PropertyDerivation,
 )
 from foundry_lite.application.services.materialization_types import OBJECT_SNAPSHOT_MODE
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.errors import ValidationFailed
 
 type YamlObject = Mapping[str, object]
@@ -485,14 +486,14 @@ def yaml_parse_error_details(exc: yaml.YAMLError) -> dict[str, object]:
     details: dict[str, object] = {}
     problem = getattr(exc, "problem", None)
     if isinstance(problem, str) and problem:
-        details["problem"] = problem
+        details["problem"] = scrub_error_text(problem)
     mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
     if mark is not None:
         details["line"] = int(mark.line) + 1
         details["column"] = int(mark.column) + 1
     context = getattr(exc, "context", None)
     if isinstance(context, str) and context:
-        details["context"] = context
+        details["context"] = scrub_error_text(context)
     if not details:
-        details["problem"] = str(exc)
+        details["problem"] = scrub_error_text(str(exc))
     return details

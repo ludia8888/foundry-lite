@@ -29,6 +29,8 @@ from foundry_lite.application.primitives import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.http_headers import is_safe_custom_header_name
+from foundry_lite.domain.http_targets import is_relative_http_resource_path, is_safe_http_base_url
 
 
 @dataclass(frozen=True)
@@ -154,7 +156,7 @@ def _connection_config(
 ) -> dict[str, object]:
     _require_identifier(connector_name, "connectorName")
     _require_text(display_name, "displayName")
-    _require_text(base_url, "baseUrl")
+    _require_safe_base_url(base_url)
     _connection_status(status)
     _require_positive_rate_limit(rate_limit_per_minute)
     return {
@@ -181,7 +183,7 @@ def _resource_config(
     _require_identifier(connector_name, "connectorName")
     _require_identifier(resource_name, "resourceName")
     _dataset_ref_parts(dataset_ref)
-    _require_text(resource_path, "resourcePath")
+    _require_relative_resource_path(resource_path)
     return {
         "connectorName": connector_name,
         "resourceName": resource_name,
@@ -205,9 +207,12 @@ def _auth_payload(auth: Mapping[str, object]) -> dict[str, object]:
             "mode": "basic",
             "basicCredentialsSecretRef": _required_auth_text(auth, "basicCredentialsSecretRef"),
         }
+    header_name = _required_auth_text(auth, "headerName")
+    if not is_safe_custom_header_name(header_name):
+        raise ValidationFailed("connector auth headerName is unsafe or reserved", details={"field": "headerName"})
     return {
         "mode": "header",
-        "headerName": _required_auth_text(auth, "headerName"),
+        "headerName": header_name,
         "headerValueSecretRef": _required_auth_text(auth, "headerValueSecretRef"),
     }
 
@@ -347,6 +352,24 @@ def _require_text(value: str, field: str) -> None:
     if value.strip():
         return
     raise ValidationFailed(f"{field} is required", details={"field": field})
+
+
+def _require_relative_resource_path(value: str) -> None:
+    if is_relative_http_resource_path(value):
+        return
+    raise ValidationFailed(
+        "resourcePath must be a relative HTTP path under the registered connector origin",
+        details={"field": "resourcePath"},
+    )
+
+
+def _require_safe_base_url(value: str) -> None:
+    if is_safe_http_base_url(value):
+        return
+    raise ValidationFailed(
+        "baseUrl must be an absolute HTTP URL without inline credentials, query, or fragment",
+        details={"field": "baseUrl"},
+    )
 
 
 def _required_auth_text(auth: Mapping[str, object], field: str) -> str:

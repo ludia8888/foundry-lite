@@ -63,6 +63,8 @@ def test_container_sidecar_enforces_controls_and_returns_typed_rows(tmp_path: Pa
     captured: list[tuple[str, ...]] = []
 
     def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
         captured.append(tuple(command))
         _write_result(
             _mount_source(captured[-1], "/model-output/result.json"),
@@ -91,6 +93,8 @@ def test_container_sidecar_prefers_requested_branch_over_earlier_fallback_spec(t
     requested = replace(TRANSACTION_RISK_DEFINITION, branch="feature/model-api", revision="requested")
 
     def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
         commands.append(tuple(command))
         _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
         return ContainerCommandResult(0)
@@ -132,6 +136,8 @@ def test_container_sidecar_executes_deployment_digest_when_current_branch_image_
     commands: list[tuple[str, ...]] = []
 
     def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
         commands.append(tuple(command))
         _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
         return ContainerCommandResult(0)
@@ -182,6 +188,8 @@ def test_container_sidecar_executes_deployment_pin_after_current_registry_remova
     commands: list[tuple[str, ...]] = []
 
     def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
         commands.append(tuple(command))
         _write_result(_mount_source(commands[-1], "/model-output/result.json"), _success_payload())
         return ContainerCommandResult(0)
@@ -252,6 +260,8 @@ def test_container_sidecar_serializes_every_advertised_scalar_input_type(tmp_pat
     )
 
     def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
         request_path = _mount_source(tuple(command), "/model-input/request.json")
         captured.update(json.loads(request_path.read_text(encoding="utf-8")))
         _write_result(_mount_source(tuple(command), "/model-output/result.json"), _success_payload())
@@ -312,6 +322,8 @@ def test_container_sidecar_redacts_model_failure(tmp_path: Path) -> None:
     private_message = "private-model-customer-value"
 
     def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(0)
         _write_result(
             _mount_source(tuple(command), "/model-output/result.json"),
             {
@@ -404,6 +416,30 @@ def test_container_sidecar_timeout_cleanup_failure_is_redacted_and_not_retryable
     assert cleanup["exceptionType"] == "RuntimeError"
     assert cleanup["exceptionMessageSha256"] == hashlib.sha256(private_cleanup_error.encode()).hexdigest()
     assert private_cleanup_error not in str(captured.value.failure.details)
+
+
+def test_container_sidecar_success_requires_confirmed_container_removal(tmp_path: Path) -> None:
+    def runner(command: Sequence[str], _timeout: float, _environment: Mapping[str, str]) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(1, stderr=b"private cleanup detail")
+        _write_result(_mount_source(tuple(command), "/model-output/result.json"), _success_payload())
+        return ContainerCommandResult(0)
+
+    adapter = ContainerTrainedModelInferenceAdapter(
+        ContainerTrainedModelConfig(workspace_root=tmp_path),
+        command_runner=runner,
+        environ={},
+    )
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.infer(_container_invocation())
+
+    evidence = captured.value.failure.details["trainedModelSidecar"]
+    assert captured.value.failure.kind == "unavailable"
+    assert captured.value.failure.is_retryable is False
+    assert isinstance(evidence, dict)
+    assert evidence["failureType"] == "runtime_unavailable"
+    assert evidence["cleanup"]["status"] == "FAILED"
 
 
 def test_container_sidecar_requires_digest_in_protected_runtime() -> None:

@@ -25,6 +25,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 
 
@@ -80,11 +81,17 @@ class BackupRestorePreflightService(CoreService):
             manifest = self.dataset_storage.load_manifest(version["manifest_uri"])
             summary = self._manifest_summary(version, manifest)
         except FileNotFoundError as exc:
-            return self._blocked_version(dataset_ref, dataset, version, "committed_manifest_missing", str(exc))
+            return self._blocked_version(
+                dataset_ref, dataset, version, "committed_manifest_missing", scrub_error_text(str(exc))
+            )
         except AdapterError as exc:
-            return self._blocked_version(dataset_ref, dataset, version, _adapter_issue_code(exc), exc.message)
+            return self._blocked_version(
+                dataset_ref, dataset, version, _adapter_issue_code(exc), scrub_error_text(exc.message)
+            )
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            return self._blocked_version(dataset_ref, dataset, version, "committed_manifest_corrupt", str(exc))
+            return self._blocked_version(
+                dataset_ref, dataset, version, "committed_manifest_corrupt", scrub_error_text(str(exc))
+            )
         return _version_payload(dataset_ref, dataset, version, summary, issue=None)
 
     def _manifest_summary(

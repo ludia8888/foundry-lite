@@ -10,6 +10,7 @@ from foundry_lite.domain.action_runtime.action_notification_templates import (
     validate_notification_template_payload,
 )
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.scalar_values import matches_scalar_type
 
 ACTION_EFFECT_KINDS = frozenset({"webhook", "notification", "event", "schedule_build", "connector_command"})
 ACTION_EFFECT_PHASES = frozenset({"before_commit", "after_commit"})
@@ -73,13 +74,7 @@ def validate_action_effect_response(effect: ActionEffectV3, response: Mapping[st
 
 def _matches_response_type(value: object, data_type: str) -> bool:
     """Match a webhook response value against an allowed scalar type."""
-    if data_type == "boolean":
-        return isinstance(value, bool)
-    if data_type in {"integer", "long"}:
-        return isinstance(value, int) and not isinstance(value, bool)
-    if data_type in {"float", "decimal"}:
-        return isinstance(value, int | float) and not isinstance(value, bool)
-    return isinstance(value, str)
+    return matches_scalar_type(data_type, value)
 
 
 def _legacy_effects(definition: Mapping[str, object]) -> tuple[ActionEffectV3, ...]:

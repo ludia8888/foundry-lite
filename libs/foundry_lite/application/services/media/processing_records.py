@@ -12,6 +12,7 @@ from foundry_lite.application.ports.media_derivative_repository import (
 from foundry_lite.application.ports.media_processor import MediaProcessingResult, ProcessorSpec
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.media.content_unit_metadata import source_locator_payload
+from foundry_lite.application.services.runtime_error_payloads import record_runtime_cleanup_failure
 from foundry_lite.domain.context import RequestContext
 
 
@@ -97,3 +98,13 @@ def _content_unit_records(
         )
         for unit in result.units
     ]
+
+
+def record_processing_failure_evidence_error(primary: Exception, cleanup_error: Exception) -> None:
+    """Attach a secret-safe secondary run-write failure to the primary error."""
+
+    record_runtime_cleanup_failure(
+        primary,
+        operation="mediaProcessingRunFailureRecord",
+        cleanup_error=cleanup_error,
+    )

@@ -18,10 +18,21 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.safe_expression import validate_action_request
+from foundry_lite.domain.action_runtime.action_conditions import (
+    StaticActionConditionContext,
+    evaluate_action_condition,
+    validate_action_condition,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 _CTX = RequestContext(roles=("host",), actor_user_id="u-1")
+_CONDITION_CTX = StaticActionConditionContext(
+    parameters={},
+    object_properties={},
+    actor_user_id="u-1",
+    actor_groups=("host",),
+)
 
 
 def _action(preconditions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -74,6 +85,26 @@ def test_a_parameter_can_be_compared_against_an_object_property() -> None:
     _expect_ok(_validate(fits, partySize=4))
 
     _expect_failure(_validate(fits, partySize=5), "Party does not fit this table")
+
+
+def test_decimal_parameter_precondition_uses_exact_numeric_order() -> None:
+    action = _action(
+        [
+            {
+                "message": "amount must exceed the review floor",
+                "op": "gt",
+                "left": {"kind": "parameter", "parameter": "amount"},
+                "right": {"kind": "literal", "value": "2"},
+            }
+        ]
+    )
+    action["definition"]["parameters"] = [{"apiName": "amount", "type": "decimal"}]
+
+    _expect_ok(validate_action_request(action, _record(), {"amount": "10"}, ctx=_CTX))
+    _expect_failure(
+        validate_action_request(action, _record(), {"amount": "1.999999999999999999"}, ctx=_CTX),
+        "amount must exceed",
+    )
 
 
 def test_the_authored_message_is_what_the_caller_sees() -> None:
@@ -250,6 +281,155 @@ def test_every_accepted_operator_is_dispatchable() -> None:
     assert COMPARISON_OPERATORS == frozenset(_COMPARISONS) | {"exists"}
 
 
+# --- fail-closed type, shape, and missing-value boundaries ---------------------------
+
+
+def _literal_condition(operator: str, left: object, right: object) -> dict[str, object]:
+    return {
+        "op": operator,
+        "left": {"kind": "literal", "value": left},
+        "right": {"kind": "literal", "value": right},
+    }
+
+
+@pytest.mark.parametrize(
+    ("operator", "left", "right", "expected"),
+    [
+        ("eq", True, 1, False),
+        ("neq", False, 0, True),
+        ("in", True, [1], False),
+        ("contains", [1], True, False),
+        ("containsAny", [1], [True], False),
+        ("eachIs", [True], 1, False),
+        ("eachIsNot", [True], 1, True),
+        ("eq", {"items": [1, True]}, {"items": [1.0, True]}, True),
+        ("eq", {"items": [1, True]}, {"items": [1, 1]}, False),
+    ],
+)
+def test_comparisons_use_json_identity_without_boolean_number_coercion(
+    operator: str,
+    left: object,
+    right: object,
+    expected: bool,
+) -> None:
+    assert evaluate_action_condition(_literal_condition(operator, left, right), _CONDITION_CTX) is expected
+
+
+@pytest.mark.parametrize("operator", ["in", "notIn"])
+def test_membership_with_a_non_collection_right_side_fails_closed(operator: str) -> None:
+    condition = _literal_condition(operator, "host", None)
+
+    assert evaluate_action_condition(condition, _CONDITION_CTX) is False
+
+
+@pytest.mark.parametrize(
+    ("operator", "left", "right", "expected"),
+    [
+        ("lt", True, 2, False),
+        ("lt", 1, True, False),
+        ("lt", 1, "2", False),
+        ("lt", 1, 2.0, True),
+        ("gte", "2026-08-14", "2026-08-13", True),
+        ("lt", "2026-08-14T00:30:00+09:00", "2026-08-13T16:00:00Z", True),
+        ("lt", "2026-08-14T00:00:00.000001Z", "2026-08-14T00:00:00.000002Z", True),
+        ("gte", "2026-08-14T00:00:00.000001Z", "2026-08-14T00:00:00.000002Z", False),
+        ("eq", "2026-08-14T01:00:00+09:00", "2026-08-13T16:00:00Z", False),
+        ("lt", "2026-08-14T00:30:00", "2026-08-13T16:00:00Z", False),
+        ("lt", "2026-08-14T00:30:00", "2026-08-14T01:30:00", False),
+        ("lt", "2026-08-14T00:00:00.0000001Z", "2026-08-14T00:00:00.000002Z", False),
+        ("gt", float("inf"), 1, False),
+    ],
+)
+def test_ordering_only_compares_finite_numbers_or_two_strings(
+    operator: str,
+    left: object,
+    right: object,
+    expected: bool,
+) -> None:
+    assert evaluate_action_condition(_literal_condition(operator, left, right), _CONDITION_CTX) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, False),
+        ("", False),
+        ([], False),
+        ({}, False),
+        (0, True),
+        (False, True),
+        ("present", True),
+    ],
+)
+def test_exists_means_non_null_and_non_empty(value: object, expected: bool) -> None:
+    condition = {"op": "exists", "left": {"kind": "literal", "value": value}}
+
+    assert evaluate_action_condition(condition, _CONDITION_CTX) is expected
+
+
+def test_a_missing_runtime_value_cannot_be_inverted_into_permission() -> None:
+    missing_equals_expected = {
+        "op": "eq",
+        "left": {"kind": "objectProperty", "property": "missing"},
+        "right": {"kind": "literal", "value": "APPROVED"},
+    }
+
+    assert evaluate_action_condition({"not": missing_equals_expected}, _CONDITION_CTX) is False
+    assert (
+        evaluate_action_condition({"all": [_literal_condition("eq", 1, 1), missing_equals_expected]}, _CONDITION_CTX)
+        is False
+    )
+    assert (
+        evaluate_action_condition({"any": [_literal_condition("eq", 1, 1), missing_equals_expected]}, _CONDITION_CTX)
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {},
+        {"all": []},
+        {"all": [_literal_condition("eq", 1, 1)], "op": "eq"},
+        {**_literal_condition("eq", 1, 1), "typo": True},
+        {"op": "eq", "left": {"kind": "literal"}, "right": {"kind": "literal", "value": 1}},
+        {
+            "op": "eq",
+            "left": {"kind": "parameter", "parameter": "status", "paramter": "status"},
+            "right": {"kind": "literal", "value": "OPEN"},
+        },
+        {"op": "exists", "left": {"kind": "literal", "value": 1}, "right": {"kind": "literal", "value": 1}},
+    ],
+)
+def test_condition_ast_rejects_ambiguous_or_unknown_shapes(condition: dict[str, object]) -> None:
+    with pytest.raises(ValidationFailed):
+        validate_action_condition(condition)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "message"),
+    [
+        ("(a+)+$", "unsafe backtracking"),
+        ("(a?)+$", "unsafe backtracking"),
+        ("(a|aa)+$", "unsafe backtracking"),
+        (r"(a)\1", "unsafe backtracking"),
+        ("(?=a)a", "unsafe backtracking"),
+        ("a" * 257, "too long"),
+    ],
+)
+def test_regex_rejects_patterns_that_can_stall_action_evaluation(pattern: str, message: str) -> None:
+    with pytest.raises(ValidationFailed, match=message):
+        validate_action_condition(_literal_condition("matches", "aaaa", pattern))
+
+
+def test_regex_accepts_a_repeated_fixed_width_non_capturing_group() -> None:
+    condition = _literal_condition("matches", "abab", "(?:ab)+")
+
+    validate_action_condition(condition)
+
+    assert evaluate_action_condition(condition, _CONDITION_CTX) is True
+
+
 # --- legacy dialect stays readable ---------------------------------------------------
 
 
@@ -262,7 +442,7 @@ def test_a_definition_written_before_the_contract_still_evaluates() -> None:
 
 
 def test_structured_and_legacy_preconditions_can_coexist_on_one_action() -> None:
-    mixed = [
+    mixed: list[dict[str, Any]] = [
         {"safeExpression": "object.status == 'FREE'", "message": "must be free"},
         {
             "message": "Party does not fit this table",

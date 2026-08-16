@@ -16,6 +16,7 @@ from foundry_lite.application.dependency_release import (
 )
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.ports.source_control_candidate import (
+    SourceCandidateCommitBinding,
     SourceCandidateManifest,
     SourceCandidatePublicationReceipt,
     SourceCandidatePublicationRequest,
@@ -77,6 +78,8 @@ class ExternalReleaseSourcePublicationWorkflow:
         arguments: Mapping[str, object],
     ) -> dict[str, object]:
         idempotency_key = _required_text(arguments, "idempotencyKey")
+        consumer_osdk_application_id = _optional_text(arguments, "consumerOsdkApplicationId")
+        consumer_osdk_compliance = _optional_mapping(arguments, "consumerOsdkCompliance")
         replay = self._find_replay(ctx, idempotency_key)
         base_sha = _required_text(replay.target_ref, "baseSha") if replay is not None else self._fresh_base_sha()
         governed, manifest = source_publication_manifest(
@@ -84,8 +87,8 @@ class ExternalReleaseSourcePublicationWorkflow:
             release_kind,
             proposal,
             self._config,
-            consumer_osdk_application_id=_optional_text(arguments, "consumerOsdkApplicationId"),
-            consumer_osdk_compliance=_optional_mapping(arguments, "consumerOsdkCompliance"),
+            consumer_osdk_application_id=consumer_osdk_application_id,
+            consumer_osdk_compliance=consumer_osdk_compliance,
             expected_source_commit=base_sha,
         )
         request = self._request(proposal, release_kind, manifest, idempotency_key, base_sha)
@@ -265,6 +268,9 @@ class ExternalReleaseSourcePublicationCoordinator:
         self._require_receipt(row, receipt)
         if receipt.status is SourceCandidatePublicationStatus.PUBLISHED:
             return self._settle_published(ctx, row, receipt)
+        if receipt.status is SourceCandidatePublicationStatus.ABSENT:
+            completed = self._settle_absent(ctx, row, receipt)
+            raise ConflictDetected(f"source candidate {completed.delivery_id} was not published")
         if row.status == "dispatching":
             return self._finish_receipt(ctx, row, receipt)
         raise ExternalReleaseDeliveryOutcomeUnknown("source publication recovery remains incomplete")
@@ -295,6 +301,18 @@ class ExternalReleaseSourcePublicationCoordinator:
         if row.status == "dispatching":
             return self._complete(ctx, row, "landed", result, None, _resource_id(receipt))
         settled = self._ledger.settle_lookup(ctx, row, "landed", result, None, _resource_id(receipt))
+        if settled is None:
+            raise ExternalReleaseDeliveryOutcomeUnknown("source publication reconciliation lost its fence")
+        return settled
+
+    def _settle_absent(
+        self,
+        ctx: RequestContext,
+        row: ReleaseDeliveryRecord,
+        receipt: SourceCandidatePublicationReceipt,
+    ) -> ReleaseDeliveryRecord:
+        result = source_publication_receipt_ref(receipt)
+        settled = self._ledger.settle_lookup(ctx, row, "absent", result, None, None)
         if settled is None:
             raise ExternalReleaseDeliveryOutcomeUnknown("source publication reconciliation lost its fence")
         return settled
@@ -370,19 +388,41 @@ def _require_publication_snapshot(
     target: PullRequestTarget,
 ) -> None:
     binding = snapshot.target.candidate_binding
-    is_exact = (
+    if not _snapshot_coordinates_match(snapshot, request, target) or not _snapshot_binding_matches(binding, request):
+        raise ConflictDetected("source pull request no longer matches the published governed candidate")
+
+
+def _snapshot_coordinates_match(
+    snapshot: PullRequestSnapshot,
+    request: SourceCandidatePublicationRequest,
+    target: PullRequestTarget,
+) -> bool:
+    return (
         snapshot.target == target
         and snapshot.target.repository == request.repository
         and snapshot.target.expected_base_ref == request.expected_base_ref
         and snapshot.head_ref == request.expected_head_ref
         and snapshot.base_sha == request.expected_base_sha
-        and binding is not None
-        and binding.expected_base_sha == request.expected_base_sha
-        and binding.expected_head_ref == request.expected_head_ref
-        and binding.manifest.manifest_fingerprint == request.manifest.manifest_fingerprint
     )
-    if not is_exact:
-        raise ConflictDetected("source pull request no longer matches the published governed candidate")
+
+
+def _snapshot_binding_matches(
+    binding: SourceCandidateCommitBinding | None,
+    request: SourceCandidatePublicationRequest,
+) -> bool:
+    if binding is None:
+        return False
+    return (
+        binding.expected_base_sha,
+        binding.expected_head_ref,
+        binding.manifest.artifact_path,
+        binding.manifest.manifest_fingerprint,
+    ) == (
+        request.expected_base_sha,
+        request.expected_head_ref,
+        request.manifest.artifact_path,
+        request.manifest.manifest_fingerprint,
+    )
 
 
 __all__ = ["ExternalReleaseSourcePublicationCoordinator", "ExternalReleaseSourcePublicationWorkflow"]

@@ -44,6 +44,7 @@ from foundry_lite.application.services.action_distributed_run_evidence import (
 )
 from foundry_lite.application.services.action_edit_plan_committer import ActionEditPlanCommitter
 from foundry_lite.application.services.action_function_batch import stored_action_function_batch_items
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.application.state_transitions import ACTION_RUN_COMMIT_PENDING
 from foundry_lite.domain.action_runtime.action_execution_plan import (
     criteria_read_expectations_from_manifest as criteria_read_expectations_from_manifest,
@@ -65,6 +66,12 @@ class ActionWorkerLease:
 
 class ActionStepLeaseLost(ActionRunRetryableFailure):
     """Stop a stale worker before it can write a result."""
+
+
+def retryable_action_failure_message(exc: Exception) -> str:
+    """Return a retry signal that cannot expose the adapter exception message."""
+
+    return scrub_error_text(str(exc))
 
 
 def action_attempt_heartbeat(

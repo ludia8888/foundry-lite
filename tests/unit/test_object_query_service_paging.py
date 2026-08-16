@@ -45,7 +45,10 @@ class _OntologyLookup:
         return {"id": "ot_order", "config": {}, "api_name": "Order"}
 
     def _properties_for_object_type(self, *_args: object) -> list[dict[str, object]]:
-        return [{"api_name": "amount"}, {"api_name": "status"}]
+        return [
+            {"api_name": "amount", "data_type": "float"},
+            {"api_name": "status", "data_type": "string"},
+        ]
 
 
 class _ObjectIndexRepository:

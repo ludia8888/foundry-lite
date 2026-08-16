@@ -92,6 +92,10 @@ def test_every_floor_sits_below_the_target() -> None:
     assert all(floor < 95 for floor in gate.LAYER_FLOORS.values())
 
 
+def test_domain_floor_preserves_the_latest_full_suite_ratchet() -> None:
+    assert gate.LAYER_FLOORS["domain"] == 93.0
+
+
 def _api_is_ready_to_raise(*, covered_lines: int, statements: int) -> bool:
     coverage = _complete_coverage()
     coverage["files"]["apps/api/foundry_lite_api/main.py"] = _file_payload(

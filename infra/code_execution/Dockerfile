@@ -1,6 +1,9 @@
 FROM python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 
 ARG PYARROW_VERSION=24.0.0
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+
+LABEL dev.foundry-lite.runtime-source-sha="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}"
 
 RUN python -m pip install --no-cache-dir "pyarrow==${PYARROW_VERSION}" \
     && groupadd --gid 65532 sandbox \

@@ -8,6 +8,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -15,6 +16,7 @@ import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.compute_adapter import PythonTransformPlan
 from foundry_lite.infrastructure.adapters import container_code_execution as code_execution
+from foundry_lite.infrastructure.adapters import container_code_execution_runtime as execution_runtime
 from foundry_lite.infrastructure.adapters.container_code_execution import ContainerCodeExecutionAdapter
 from foundry_lite.infrastructure.adapters.container_code_execution_runtime import (
     MAX_STDERR_CAPTURE_BYTES,
@@ -42,6 +44,8 @@ class _SuccessRunner:
         timeout_seconds: float,
         environment: Mapping[str, str],
     ) -> ContainerCommandResult:
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(return_code=0)
         call = (tuple(command), timeout_seconds, dict(environment))
         self.calls.append(call)
         output_path = _mounted_source(command, "/sandbox-output/result.parquet")
@@ -175,6 +179,7 @@ def test_code_execution_contract_timeout_cleanup_failure_is_not_retryable(
 
     evidence = _code_execution_evidence(captured.value)
     cleanup = evidence["cleanup"]
+    cleanup = evidence["cleanup"]
     assert captured.value.failure.kind == "timeout"
     assert captured.value.failure.is_retryable is False
     assert isinstance(cleanup, dict)
@@ -184,13 +189,45 @@ def test_code_execution_contract_timeout_cleanup_failure_is_not_retryable(
     assert private_cleanup_error not in str(captured.value.details)
 
 
+def test_code_execution_contract_success_requires_confirmed_container_removal(tmp_path: Path) -> None:
+    def result_without_cleanup(
+        command: Sequence[str],
+        timeout_seconds: float,
+        environment: Mapping[str, str],
+    ) -> ContainerCommandResult:
+        del timeout_seconds, environment
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(return_code=1, stderr=b"runtime cleanup failed")
+        output_path = _mounted_source(command, "/sandbox-output/result.parquet")
+        result_path = _mounted_source(command, "/sandbox-output/execution-result.json")
+        pq.write_table(pa.Table.from_pylist([{"ok": True}]), output_path)
+        _write_result(result_path, {"schemaVersion": 1, "status": "succeeded", "deadLetters": []})
+        return ContainerCommandResult(return_code=0)
+
+    adapter = ContainerCodeExecutionAdapter(command_runner=result_without_cleanup, environ={})
+
+    with pytest.raises(AdapterError) as captured:
+        adapter.execute_python_transform(_plan(tmp_path))
+
+    evidence = _code_execution_evidence(captured.value)
+    cleanup = evidence["cleanup"]
+    assert captured.value.failure.kind == "unavailable"
+    assert captured.value.failure.is_retryable is False
+    assert evidence["failureType"] == "runtime_unavailable"
+    assert isinstance(cleanup, Mapping)
+    assert cleanup["status"] == "FAILED"
+    assert not (tmp_path / "target.parquet").exists()
+
+
 def test_code_execution_contract_resource_exit_is_typed_without_raw_stderr(tmp_path: Path) -> None:
     def resource_runner(
         command: Sequence[str],
         timeout_seconds: float,
         environment: Mapping[str, str],
     ) -> ContainerCommandResult:
-        del command, timeout_seconds, environment
+        del timeout_seconds, environment
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(return_code=0)
         return ContainerCommandResult(return_code=137, stderr=b"private row value")
 
     adapter = ContainerCodeExecutionAdapter(command_runner=resource_runner, environ={})
@@ -214,6 +251,8 @@ def test_code_execution_contract_rejects_output_above_host_bound(tmp_path: Path)
         environment: Mapping[str, str],
     ) -> ContainerCommandResult:
         del timeout_seconds, environment
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(return_code=0)
         output_path = _mounted_source(command, "/sandbox-output/result.parquet")
         result_path = _mounted_source(command, "/sandbox-output/execution-result.json")
         output_path.write_bytes(b"x" * 17)
@@ -250,6 +289,163 @@ def test_code_execution_runtime_discards_stderr_beyond_capture_bound() -> None:
     assert result.stderr == b"x" * MAX_STDERR_CAPTURE_BYTES
 
 
+def test_code_execution_runtime_closes_the_stderr_pipe_without_resource_warnings() -> None:
+    result = run_command(
+        (sys.executable, "-c", "import sys; sys.stderr.write('finished')"),
+        5,
+        os.environ,
+    )
+
+    assert result.return_code == 0
+    assert result.stderr == b"finished"
+
+
+def test_code_execution_runtime_timeout_kills_child_and_preserves_bounded_stderr() -> None:
+    with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+        run_command(
+            (
+                sys.executable,
+                "-c",
+                "import sys,time; sys.stderr.write('waiting'); sys.stderr.flush(); time.sleep(30)",
+            ),
+            1,
+            os.environ,
+        )
+
+    assert exc_info.value.stderr == b"waiting"
+
+
+def test_code_execution_runtime_recovers_stopped_container_exit_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "execution-result.json"
+    result_path.write_text('{"status": "succeeded"}', encoding="utf-8")
+    command = (
+        "docker",
+        "run",
+        "--name",
+        "bounded-runtime-probe",
+        "--mount",
+        f"type=bind,source={result_path},target=/sandbox-output/execution-result.json",
+    )
+
+    class AttachedClient:
+        def wait(self, timeout: float) -> int:
+            raise subprocess.TimeoutExpired(command, timeout)
+
+    def probe(
+        argv: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        if argv[1] == "exec":
+            return subprocess.CompletedProcess(argv, 1, b"", b"container is not running")
+        if argv[1] == "inspect":
+            return subprocess.CompletedProcess(argv, 0, b"0\n", b"")
+        raise AssertionError(f"unexpected runtime probe: {argv}")
+
+    monkeypatch.setattr(execution_runtime, "_EXIT_EVENT_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(execution_runtime.subprocess, "run", probe)
+
+    return_code, is_recovered = execution_runtime._wait_for_command(
+        cast(subprocess.Popen[bytes], AttachedClient()),
+        command,
+        1,
+        os.environ,
+    )
+
+    assert return_code == 0
+    assert is_recovered is True
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    (
+        (("docker",), None),
+        (("docker", "exec", "--name", "job"), None),
+        (("docker", "run", "image", "python"), None),
+        (("docker", "run", "--name"), None),
+        (("docker", "run", "--name", "job", "image"), ("docker", "job")),
+    ),
+)
+def test_code_execution_runtime_requires_exact_named_run_identity(
+    command: tuple[str, ...],
+    expected: tuple[str, str] | None,
+) -> None:
+    assert execution_runtime._container_identity(command) == expected
+
+
+@pytest.mark.parametrize(
+    ("mount", "expected"),
+    (
+        ("type=bind,source=/tmp/result,target=/sandbox-output/execution-result.json", Path("/tmp/result")),
+        ("type=bind,target=/sandbox-output/execution-result.json", None),
+        ("type=bind,source=/tmp/result,target=/sandbox-output/execution-result.json,readonly", None),
+        ("type=bind,source=/tmp/result,target=/unrelated.json", None),
+    ),
+)
+def test_code_execution_runtime_only_watches_writable_known_result_mounts(
+    mount: str,
+    expected: Path | None,
+) -> None:
+    command = ("docker", "run", "--mount", mount, "image")
+
+    assert execution_runtime._result_mount_source(command) == expected
+
+
+def test_code_execution_runtime_exit_probe_fails_closed_on_ambiguous_runtime_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = ("docker", "run", "--name", "job", "image")
+    responses = iter(
+        (
+            subprocess.CompletedProcess(command, 0, b"", b""),
+            subprocess.CompletedProcess(command, 1, b"", b"permission denied"),
+        )
+    )
+
+    monkeypatch.setattr(execution_runtime.subprocess, "run", lambda *_args, **_kwargs: next(responses))
+
+    assert execution_runtime._container_exit_code_if_gone(command, {}) is None
+    assert execution_runtime._container_exit_code_if_gone(command, {}) is None
+    assert execution_runtime._container_exit_code_if_gone(("docker", "exec"), {}) is None
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    (
+        (subprocess.CompletedProcess(("docker",), 1, b"9\n", b""), None),
+        (subprocess.CompletedProcess(("docker",), 0, b"not-an-integer\n", b""), None),
+        (subprocess.CompletedProcess(("docker",), 0, b"137\n", b""), 137),
+    ),
+)
+def test_code_execution_runtime_accepts_only_successful_integer_exit_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+    result: subprocess.CompletedProcess[bytes],
+    expected: int | None,
+) -> None:
+    monkeypatch.setattr(execution_runtime.subprocess, "run", lambda *_args, **_kwargs: result)
+
+    assert execution_runtime._inspect_container_exit_code("docker", "job", {}) == expected
+
+
+def test_code_execution_runtime_probe_exceptions_do_not_claim_task_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = ("docker", "run", "--name", "job", "image")
+
+    def unavailable(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError("runtime absent")
+
+    monkeypatch.setattr(execution_runtime.subprocess, "run", unavailable)
+
+    assert execution_runtime._container_exit_code_if_gone(command, {}) is None
+    assert execution_runtime._inspect_container_exit_code("docker", "job", {}) is None
+    assert execution_runtime._is_explicit_stopped_error(b"container is stopped") is True
+    assert execution_runtime._is_explicit_stopped_error(b"permission denied") is False
+    assert execution_runtime._has_completed_result(Path("/missing/result.json")) is False
+
+
 def test_code_execution_contract_runner_failure_preserves_safe_typed_evidence(tmp_path: Path) -> None:
     def failure_runner(
         command: Sequence[str],
@@ -257,6 +453,8 @@ def test_code_execution_contract_runner_failure_preserves_safe_typed_evidence(tm
         environment: Mapping[str, str],
     ) -> ContainerCommandResult:
         del timeout_seconds, environment
+        if tuple(command)[1:3] == ("rm", "--force"):
+            return ContainerCommandResult(return_code=0)
         result_path = _mounted_source(command, "/sandbox-output/execution-result.json")
         _write_result(
             result_path,
@@ -296,6 +494,26 @@ def test_code_execution_contract_rejects_weakened_policy() -> None:
         ContainerCodeExecutionAdapter(ContainerCodeExecutionConfig(policy=disabled_network))
     with pytest.raises(ValueError, match="allowlist cannot be expanded"):
         ContainerCodeExecutionAdapter(ContainerCodeExecutionConfig(policy=expanded_env))
+
+
+@pytest.mark.parametrize("cpu_count", [0.0, -1.0, float("nan"), float("inf")])
+def test_code_execution_contract_rejects_nonfinite_or_nonpositive_cpu_limits(cpu_count: float) -> None:
+    with pytest.raises(ValueError, match="CPU count must be finite and positive"):
+        ContainerCodeExecutionAdapter(
+            ContainerCodeExecutionConfig(policy=replace(default_policy(), cpu_count=cpu_count))
+        )
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, float("nan"), float("inf")])
+def test_code_execution_contract_rejects_nonfinite_or_nonpositive_cleanup_timeout(timeout: float) -> None:
+    with pytest.raises(ValueError, match="cleanup timeout must be finite and positive"):
+        ContainerCodeExecutionAdapter(ContainerCodeExecutionConfig(cleanup_timeout_seconds=timeout))
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_code_execution_contract_rejects_invalid_cpu_environment_before_docker(value: str) -> None:
+    with pytest.raises(ValueError, match="FOUNDRY_LITE_CODE_EXECUTION_CPUS must be finite and positive"):
+        ContainerCodeExecutionConfig.from_env({"FOUNDRY_LITE_CODE_EXECUTION_CPUS": value})
 
 
 def test_code_execution_contract_requires_digest_pinned_image_for_protected_runtime() -> None:

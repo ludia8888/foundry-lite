@@ -33,7 +33,9 @@ def validate_mcp_json_schema(value: object, schema: Mapping[str, object], *, pat
 
 def _validate_type(value: object, schema: Mapping[str, object], path: str) -> str | None:
     expected = schema.get("type")
-    if isinstance(expected, str) and not _matches_type(value, expected):
+    if "type" in schema and not isinstance(expected, str):
+        raise McpJsonSchemaError(path, "advertised type is invalid")
+    if isinstance(expected, str) and not _matches_type(value, expected, path):
         raise McpJsonSchemaError(path, f"expected {expected}")
     return expected if isinstance(expected, str) else None
 
@@ -64,6 +66,8 @@ def _validate_object(value: object, schema: Mapping[str, object], path: str) -> 
     if not isinstance(value, Mapping):
         return
     properties_value = schema.get("properties", {})
+    if "properties" in schema and not isinstance(properties_value, Mapping):
+        raise McpJsonSchemaError(path, "advertised properties is invalid")
     properties = properties_value if isinstance(properties_value, Mapping) else {}
     _validate_required(value, schema, path)
     _validate_extras(value, schema, properties, path)
@@ -71,11 +75,26 @@ def _validate_object(value: object, schema: Mapping[str, object], path: str) -> 
 
 
 def _validate_required(value: Mapping[object, object], schema: Mapping[str, object], path: str) -> None:
-    required_value = schema.get("required", ())
-    required = required_value if isinstance(required_value, Sequence) and not isinstance(required_value, str) else ()
-    for name in required:
-        if isinstance(name, str) and name not in value:
+    for name in _required_names(schema, path):
+        if name not in value:
             raise McpJsonSchemaError(f"{path}.{name}", "required property is missing")
+
+
+def _required_names(schema: Mapping[str, object], path: str) -> tuple[str, ...]:
+    if "required" not in schema:
+        return ()
+    required = schema["required"]
+    if not _is_text_sequence(required):
+        raise McpJsonSchemaError(path, "advertised required is invalid")
+    return tuple(required)
+
+
+def _is_text_sequence(value: object) -> TypeGuard[Sequence[str]]:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, str | bytes | bytearray)
+        and all(isinstance(item, str) for item in value)
+    )
 
 
 def _validate_extras(
@@ -84,7 +103,10 @@ def _validate_extras(
     properties: Mapping[object, object],
     path: str,
 ) -> None:
-    if schema.get("additionalProperties") is False:
+    additional = schema.get("additionalProperties")
+    if "additionalProperties" in schema and not isinstance(additional, bool):
+        raise McpJsonSchemaError(path, "advertised additionalProperties is invalid")
+    if additional is False:
         extras = sorted(str(name) for name in value if name not in properties)
         if extras:
             raise McpJsonSchemaError(path, f"additional properties are not allowed: {', '.join(extras)}")
@@ -101,14 +123,28 @@ def _validate_array(value: object, schema: Mapping[str, object], path: str) -> N
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return
     _validate_array_bounds(value, schema, path)
+    _validate_unique_items(value, schema, path)
+    item_schema = _array_item_schema(schema, path)
+    if item_schema is not None:
+        _validate_array_items(value, item_schema, path)
+
+
+def _validate_unique_items(value: Sequence[object], schema: Mapping[str, object], path: str) -> None:
     unique_items = schema.get("uniqueItems")
     if "uniqueItems" in schema and not isinstance(unique_items, bool):
         raise McpJsonSchemaError(path, "advertised uniqueItems is invalid")
     if unique_items is True and _has_duplicate(value):
         raise McpJsonSchemaError(path, "array items must be unique")
+
+
+def _array_item_schema(schema: Mapping[str, object], path: str) -> Mapping[str, object] | None:
     item_schema = schema.get("items")
-    if not isinstance(item_schema, Mapping):
-        return
+    if "items" in schema and not isinstance(item_schema, Mapping):
+        raise McpJsonSchemaError(path, "advertised items is invalid")
+    return item_schema if isinstance(item_schema, Mapping) else None
+
+
+def _validate_array_items(value: Sequence[object], item_schema: Mapping[str, object], path: str) -> None:
     for index, item in enumerate(value):
         validate_mcp_json_schema(item, item_schema, path=f"{path}[{index}]")
 
@@ -116,6 +152,8 @@ def _validate_array(value: object, schema: Mapping[str, object], path: str) -> N
 def _validate_array_bounds(value: Sequence[object], schema: Mapping[str, object], path: str) -> None:
     minimum = schema.get("minItems")
     maximum = schema.get("maxItems")
+    _validate_nonnegative_integer_keyword(schema, "minItems", minimum, path)
+    _validate_nonnegative_integer_keyword(schema, "maxItems", maximum, path)
     if isinstance(minimum, int) and len(value) < minimum:
         raise McpJsonSchemaError(path, f"requires at least {minimum} items")
     if isinstance(maximum, int) and len(value) > maximum:
@@ -123,10 +161,12 @@ def _validate_array_bounds(value: Sequence[object], schema: Mapping[str, object]
 
 
 def _validate_numeric_bounds(value: object, schema: Mapping[str, object], path: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return
     minimum = schema.get("minimum")
     maximum = schema.get("maximum")
+    _validate_number_keyword(schema, "minimum", minimum, path)
+    _validate_number_keyword(schema, "maximum", maximum, path)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return
     if isinstance(minimum, int | float) and value < minimum:
         raise McpJsonSchemaError(path, f"must be greater than or equal to {minimum}")
     if isinstance(maximum, int | float) and value > maximum:
@@ -152,6 +192,8 @@ def _validated_pattern(schema: Mapping[str, object], path: str) -> str | None:
 def _validate_string_bounds(value: str, schema: Mapping[str, object], path: str) -> None:
     minimum = schema.get("minLength")
     maximum = schema.get("maxLength")
+    _validate_nonnegative_integer_keyword(schema, "minLength", minimum, path)
+    _validate_nonnegative_integer_keyword(schema, "maxLength", maximum, path)
     if isinstance(minimum, int) and len(value) < minimum:
         raise McpJsonSchemaError(path, f"requires at least {minimum} characters")
     if isinstance(maximum, int) and len(value) > maximum:
@@ -166,6 +208,21 @@ def _validate_string_pattern(value: str, pattern: str | None, path: str) -> None
             raise McpJsonSchemaError(path, "string does not match pattern")
     except re.error as exc:
         raise McpJsonSchemaError(path, "advertised pattern is invalid") from exc
+
+
+def _validate_nonnegative_integer_keyword(
+    schema: Mapping[str, object],
+    keyword: str,
+    value: object,
+    path: str,
+) -> None:
+    if keyword in schema and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+        raise McpJsonSchemaError(path, f"advertised {keyword} is invalid")
+
+
+def _validate_number_keyword(schema: Mapping[str, object], keyword: str, value: object, path: str) -> None:
+    if keyword in schema and (not isinstance(value, int | float) or isinstance(value, bool)):
+        raise McpJsonSchemaError(path, f"advertised {keyword} is invalid")
 
 
 def _validate_one_of(value: object, schema: Mapping[str, object], path: str) -> None:
@@ -297,7 +354,7 @@ _FORMAT_VALIDATORS = {
 }
 
 
-def _matches_type(value: object, expected: str) -> bool:
+def _matches_type(value: object, expected: str, path: str) -> bool:
     checks = {
         "object": lambda: isinstance(value, Mapping),
         "array": lambda: isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray),
@@ -309,5 +366,5 @@ def _matches_type(value: object, expected: str) -> bool:
     }
     check = checks.get(expected)
     if check is None:
-        raise McpJsonSchemaError("$", f"unsupported schema type: {expected}")
+        raise McpJsonSchemaError(path, f"unsupported schema type: {expected}")
     return check()

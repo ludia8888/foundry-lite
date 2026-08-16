@@ -206,7 +206,13 @@ def _precondition_error(
     "party size must fit the table" is inexpressible there — the reason to move.
     """
     definition = _mapping_or_empty(action_type.get("definition"))
-    condition_context = _condition_context(record, params, ctx, linked_object_properties)
+    condition_context = _condition_context(
+        record,
+        params,
+        ctx,
+        linked_object_properties,
+        _action_parameter_types(definition),
+    )
     for raw_precondition in _object_sequence(definition.get("preconditions", ())):
         precondition = _mapping_or_empty(raw_precondition)
         error = _single_precondition_error(precondition, record, condition_context)
@@ -240,6 +246,7 @@ def _condition_context(
     params: Mapping[str, object],
     ctx: RequestContext | None,
     linked_object_properties: Mapping[str, object],
+    parameter_types: Mapping[str, str],
 ) -> StaticActionConditionContext:
     request_context = ctx or RequestContext()
     return StaticActionConditionContext(
@@ -249,6 +256,7 @@ def _condition_context(
         actor_groups=request_context.roles,
         actor_attributes=request_context.user_attributes,
         linked_object_properties=linked_object_properties,
+        parameter_types=parameter_types,
     )
 
 
@@ -288,7 +296,13 @@ def _submission_criteria_error(
     raw = definition.get("submissionCriteria")
     if not isinstance(raw, Mapping):
         return None
-    condition_context = _condition_context(record, params, ctx, linked_object_properties)
+    condition_context = _condition_context(
+        record,
+        params,
+        ctx,
+        linked_object_properties,
+        _action_parameter_types(definition),
+    )
     if evaluate_action_condition(raw, condition_context):
         return None
     message = raw.get("message")
@@ -300,6 +314,17 @@ def _submission_criteria_error(
 
 def _is_action_definition(definition: Mapping[str, object]) -> bool:
     return isinstance(definition.get("apiName"), str) and definition.get("target") is not None
+
+
+def _action_parameter_types(definition: Mapping[str, object]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw in _object_sequence(definition.get("parameters", ())):
+        parameter = _mapping_or_empty(raw)
+        name = parameter.get("apiName")
+        data_type = parameter.get("type")
+        if isinstance(name, str) and name and isinstance(data_type, str) and data_type:
+            result[name] = data_type
+    return result
 
 
 def _validate_parameter_values(properties: Mapping[str, object], params: Mapping[str, object]) -> Exception | None:

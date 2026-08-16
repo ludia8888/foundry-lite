@@ -161,7 +161,7 @@ def test_tool_broker_schema_and_budget_helpers_cover_fail_closed_edges() -> None
         _validated_arguments(spec, "{bad-json")
     with pytest.raises(ToolBrokerError, match="JSON object"):
         _validated_arguments(spec, "[]")
-    with pytest.raises(ToolBrokerError, match="required must be a list"):
+    with pytest.raises(ToolBrokerError, match="advertised required is invalid"):
         _validated_arguments(
             ToolSpec(
                 **{
@@ -171,7 +171,7 @@ def test_tool_broker_schema_and_budget_helpers_cover_fail_closed_edges() -> None
             ),
             "{}",
         )
-    with pytest.raises(ToolBrokerError, match="properties must be an object"):
+    with pytest.raises(ToolBrokerError, match="advertised properties is invalid"):
         _validated_arguments(
             ToolSpec(
                 **{
@@ -181,7 +181,7 @@ def test_tool_broker_schema_and_budget_helpers_cover_fail_closed_edges() -> None
             ),
             "{}",
         )
-    with pytest.raises(ToolBrokerError, match="does not match type"):
+    with pytest.raises(ToolBrokerError, match="expected array"):
         _validated_arguments(spec, '{"object_type":"PurchaseOrder","object_id":"PO-1","property_names":"id"}')
     with pytest.raises(ToolBrokerError, match="not allowlisted"):
         _check_object_scope(spec, {"object_type": "Invoice", "object_id": "I-1", "property_names": ["id"]})

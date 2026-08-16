@@ -62,6 +62,10 @@ class DebeziumPostgresStreamAdapter:
             for event in self.inner.read_events(stream_name, after_offset=after_offset, limit=limit)
         ]
 
+    def close(self) -> None:
+        """Release resources owned by the wrapped broker adapter."""
+        self.inner.close()
+
     def _normalize_event(self, event: StreamEvent, *, operation: str) -> StreamEvent:
         try:
             payload = dict(normalize_debezium_postgres_payload(event.payload, self.config.primary_key))

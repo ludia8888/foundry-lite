@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import shutil
-from typing import cast, overload
+from types import TracebackType
+from typing import Literal, Self, cast, overload
 
 from foundry_lite.application.core_services import CoreServices
 from foundry_lite.application.dependencies import CoreDependencies
@@ -34,6 +35,8 @@ from foundry_lite.application.facades import (
     VirtualTableGateway,
     build_governed_release_workspace,
 )
+from foundry_lite.application.foundry_lifecycle import FoundryRuntimeLifecycle
+from foundry_lite.application.model_catalog_bootstrap import ensure_model_catalog
 from foundry_lite.application.osdk import (
     OsdkActionInvoker,
     OsdkActionType,
@@ -43,13 +46,6 @@ from foundry_lite.application.osdk import (
     osdk_resource,
 )
 from foundry_lite.application.ports.action_function_executor import ActionFunctionExecutionRequest
-from foundry_lite.application.ports.model_registry_repository import (
-    ModelAliasRecord,
-    ModelCatalogSeed,
-    ModelProviderRecord,
-    ModelRecord,
-)
-from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
 from foundry_lite.application.primitives import (
     CommitResult,
@@ -69,7 +65,6 @@ __all__ = ["CommitResult", "FoundryLite", "StagedFileStats", "_dataset_ref_parts
 __all__ += ["_json_ready", "_normalize_duckdb_type", "_required_row"]
 
 _LOGGER = logging.getLogger(__name__)
-_LOCAL_FAKE_AUTH_REFERENCE = "local-fake-reference"
 
 
 @trace_public_methods
@@ -80,15 +75,38 @@ class FoundryLite:
     workflow. Lifecycle (bootstrap/reset) stays on this root.
     """
 
-    def __init__(self, *, dependencies: CoreDependencies, should_initialize_schema: bool = True) -> None:
-        self._attach_dependencies(dependencies)
-        services = CoreServices.create(dependencies)
-        self._services = services
-        self._attach_facades(services)
-        self._bind_local_workflow_drivers(dependencies, services)
-        if should_initialize_schema:
-            self._initialize_schema_for_unprotected_profile()
-        self.bootstrap()
+    def __init__(
+        self,
+        *,
+        dependencies: CoreDependencies,
+        should_initialize_schema: bool = True,
+        is_stream_adapter_owned: bool = True,
+        is_engine_owned: bool = True,
+        is_orchestrator_owned: bool = True,
+    ) -> None:
+        self._lifecycle = FoundryRuntimeLifecycle(
+            is_stream_adapter_owned=is_stream_adapter_owned,
+            is_engine_owned=is_engine_owned,
+            is_orchestrator_owned=is_orchestrator_owned,
+        )
+        try:
+            self._attach_dependencies(dependencies)
+            services = CoreServices.create(dependencies)
+            self._services = services
+            self._attach_facades(services)
+            self._bind_local_workflow_drivers(dependencies, services)
+            if should_initialize_schema:
+                self._initialize_schema_for_unprotected_profile()
+            self.bootstrap()
+        except BaseException as exc:
+            self._lifecycle.close_failed_initialization(
+                stream_adapter=dependencies.stream_adapter,
+                engine=dependencies.engine,
+                pipeline_orchestrator=dependencies.pipeline_dag_orchestrator,
+                action_orchestrator=dependencies.action_run_orchestrator,
+                primary_error=exc,
+            )
+            raise
 
     def _initialize_schema_for_unprotected_profile(self) -> None:
         """Create metadata tables for local runtimes only.
@@ -131,6 +149,9 @@ class FoundryLite:
         self.osdk_application_repository = dependencies.osdk_application_repository
         self.ai_run_repository = dependencies.ai_run_repository
         self.runtime_repository = dependencies.runtime_repository
+        self.stream_adapter = dependencies.stream_adapter
+        self.pipeline_dag_orchestrator = dependencies.pipeline_dag_orchestrator
+        self.action_run_orchestrator = dependencies.action_run_orchestrator
         self.dataset_storage = dependencies.dataset_storage
         self.connector_registry_repository = dependencies.connector_registry_repository
         self.source_registry_repository = dependencies.source_registry_repository
@@ -140,6 +161,35 @@ class FoundryLite:
         self.source_database_adapter = dependencies.source_database_adapter
         self.model_registry_repository = dependencies.model_registry_repository
         self.model_catalog_seed = dependencies.aip.model_catalog_seed
+
+    def close(
+        self,
+        *,
+        should_close_stream: bool | None = None,
+        primary_error: BaseException | None = None,
+    ) -> None:
+        """Release resources without replacing an exception already in flight."""
+        self._lifecycle.close(
+            stream_adapter=self.stream_adapter,
+            engine=self.engine,
+            pipeline_orchestrator=self.pipeline_dag_orchestrator,
+            action_orchestrator=self.action_run_orchestrator,
+            should_close_stream=should_close_stream,
+            primary_error=primary_error,
+        )
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        del exception_type, traceback
+        self.close(primary_error=exception)
+        return False
 
     def _attach_facades(self, services: CoreServices) -> None:
         self._attach_data_facades(services)
@@ -369,38 +419,7 @@ class FoundryLite:
 
     def _ensure_demo_model_registry(self, now: str) -> None:
         with self.engine.begin() as transaction:
-            self._create_demo_model_registry_rows(transaction, now)
-
-    def _create_demo_model_registry_rows(self, transaction: TransactionContext, now: str) -> None:
-        seed = self.model_catalog_seed or _default_model_catalog_seed()
-        if not self.model_registry_repository.get_providers(
-            transaction=transaction,
-            tenant_id=DEFAULT_TENANT_ID,
-            provider_ids=[seed.provider_id],
-        ):
-            self.model_registry_repository.create_provider(
-                transaction=transaction,
-                record=_provider_record(seed, now),
-            )
-        if not self.model_registry_repository.get_models(
-            transaction=transaction,
-            tenant_id=DEFAULT_TENANT_ID,
-            model_ids=[seed.model_id],
-        ):
-            self.model_registry_repository.create_model(
-                transaction=transaction,
-                record=_model_record(seed, now),
-            )
-        existing = self.model_registry_repository.get_aliases(
-            transaction=transaction,
-            tenant_id=DEFAULT_TENANT_ID,
-            aliases=list(seed.aliases),
-        )
-        for alias in sorted(set(seed.aliases) - {row.alias for row in existing}):
-            self.model_registry_repository.create_alias(
-                transaction=transaction,
-                record=_alias_record(seed, alias, now),
-            )
+            ensure_model_catalog(self.model_registry_repository, transaction, self.model_catalog_seed, now)
 
 
 def _ontology_registry(services: CoreServices) -> OntologyRegistry:
@@ -414,77 +433,3 @@ def _ontology_registry(services: CoreServices) -> OntologyRegistry:
 
 def _source_workspace(services: CoreServices) -> SourceWorkspace:
     return SourceWorkspace(services)
-
-
-def _provider_record(seed: ModelCatalogSeed, now: str) -> ModelProviderRecord:
-    return ModelProviderRecord(
-        provider_id=seed.provider_id,
-        tenant_scope=DEFAULT_TENANT_ID,
-        provider_type=seed.provider_type,
-        profile_name=seed.profile_name,
-        region=seed.region,
-        secret_ref=seed.secret_ref,
-        retention_policy=seed.retention_policy,
-        training_policy=seed.training_policy,
-        status="active",
-        created_at=now,
-    )
-
-
-def _model_record(seed: ModelCatalogSeed, now: str) -> ModelRecord:
-    return ModelRecord(
-        model_id=seed.model_id,
-        tenant_scope=DEFAULT_TENANT_ID,
-        provider_id=seed.provider_id,
-        provider_model_id=seed.provider_model_id,
-        revision=seed.revision,
-        lifecycle=seed.lifecycle,
-        capabilities_json=dict(seed.capabilities_json),
-        context_limit=seed.context_limit,
-        output_limit=seed.output_limit,
-        pricing_json=dict(seed.pricing_json),
-        allowed_classifications=seed.allowed_classifications,
-        created_at=now,
-    )
-
-
-def _alias_record(seed: ModelCatalogSeed, alias: str, now: str) -> ModelAliasRecord:
-    return ModelAliasRecord(
-        alias=alias,
-        tenant_scope=DEFAULT_TENANT_ID,
-        environment="prod",
-        model_id=seed.model_id,
-        version=seed.revision,
-        status="enabled",
-        eval_run_id=None,
-        effective_at=now,
-        retired_at=None,
-    )
-
-
-def _default_model_catalog_seed() -> ModelCatalogSeed:
-    return ModelCatalogSeed(
-        provider_id="local-fake-provider",
-        provider_type="local-fake",
-        profile_name="fake-language-model",
-        region="us-east-1",
-        secret_ref=_LOCAL_FAKE_AUTH_REFERENCE,
-        retention_policy="zero_retention",
-        training_policy="no_train",
-        model_id="local-fake-model",
-        provider_model_id="local-fake-echo",
-        revision="2026-06-25",
-        lifecycle="stable",
-        capabilities_json={
-            "streaming": True,
-            "native_tools": False,
-            "image_input": True,
-            "pdf_input": True,
-            "structured_outputs": True,
-        },
-        context_limit=8192,
-        output_limit=1024,
-        pricing_json={"input_per_1k": 0.002, "output_per_1k": 0.006, "currency": "USD"},
-        allowed_classifications=("public", "internal"),
-        aliases=("default-completion", "gpt-governed", "document-vlm"),
-    )

@@ -150,8 +150,17 @@ def _validate_interface_query_shape(
     validates against its own masked set), so no masked names are passed here.
     """
     property_names = {prop["apiName"] for prop in interface_row["definition"]["properties"]}
+    property_data_types = {
+        str(prop["apiName"]): str(prop["type"]) for prop in interface_row["definition"]["properties"]
+    }
     try:
-        validate_query_properties(filter_ast, order_by, property_names, set())
+        validate_query_properties(
+            filter_ast,
+            order_by,
+            property_names,
+            set(),
+            property_data_types=property_data_types,
+        )
     except ValidationFailed as exc:
         raise ValidationFailed(
             "interface query may only reference interface properties",

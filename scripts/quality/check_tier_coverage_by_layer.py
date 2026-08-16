@@ -40,7 +40,7 @@ LAYER_PREFIXES: dict[str, tuple[str, ...]] = {
 # Each floor sits just under its measurement so ordinary run-to-run drift does not fail the
 # gate. Raise a floor when its layer clears it; the gate prints which ones are ready.
 LAYER_FLOORS: dict[str, float] = {
-    "domain": 92.0,  # measured 92.38
+    "domain": 93.0,  # measured 93.50 in the 2026-08-13 full 6,190-test coverage run
     "application": 93.0,  # measured 93.14
     "infrastructure": 93.0,  # measured 93.59
     "api": 91.0,  # measured 91.97

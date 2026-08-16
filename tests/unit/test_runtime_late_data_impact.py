@@ -206,6 +206,7 @@ def _snapshot(
     materialization_runs: Sequence[RuntimeRow] = (),
 ) -> RuntimeRunSnapshot:
     return {
+        "sourceExplorationRuns": [],
         "syncRuns": list(sync_runs),
         "transformRuns": list(transform_runs),
         "indexRuns": list(index_runs),

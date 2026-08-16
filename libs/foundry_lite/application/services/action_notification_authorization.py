@@ -93,7 +93,15 @@ def _can_read_all(
         object_id = str(edit["objectId"])
         type_row = ontology._active_object_type(transaction, ctx, object_type)
         record = objects._object_record(transaction, ctx, object_type, object_id)
-        if visible_record(record, type_row, ctx.roles) is None:
+        if (
+            visible_record(
+                record,
+                type_row,
+                ctx.roles,
+                ontology._properties_for_object_type(transaction, type_row["id"]),
+            )
+            is None
+        ):
             return False
     return True
 

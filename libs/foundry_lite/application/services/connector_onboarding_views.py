@@ -14,6 +14,7 @@ from foundry_lite.application.services.connector_onboarding_config import (
     ConnectorBundle,
     _resolved_config_fingerprint,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError
 
 CONNECTOR_PREVIEW_ROW_LIMIT = 20
@@ -120,7 +121,11 @@ def _require_same_config(existing: str, requested: str) -> None:
 
 
 def _error_payload(exc: FoundryLiteError) -> dict[str, object]:
-    return {"type": exc.code, "message": exc.message, "details": dict(exc.details)}
+    return {
+        "type": exc.code,
+        "message": scrub_error_text(exc.message),
+        "details": scrub_error_mapping(exc.details),
+    }
 
 
 def _connection_audit_ref(row: ConnectorConnectionRow, idempotency_key: str) -> dict[str, object]:

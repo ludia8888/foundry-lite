@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import signal
 from collections.abc import Callable, Mapping, Sequence
@@ -20,6 +21,7 @@ from foundry_lite.application.ports.action_run_orchestrator import (
     ActionRunDispatchRequest,
     ActionRunRetryableFailure,
 )
+from foundry_lite.domain.error_redaction import scrub_error_text
 
 ActionRunDriver = Callable[[ActionRunDispatchRequest, str], dict[str, Any]]
 ACTION_RUN_RESULT_PREFIX = b"FOUNDRY_LITE_ACTION_RESULT="
@@ -54,18 +56,18 @@ class ActionRunActivities:
         termination_grace_seconds: float = 5.0,
     ) -> None:
         self._driver = driver
-        self._worker_id = worker_id
-        self._activity_subprocess_argv = tuple(activity_subprocess_argv or ())
-        self._termination_grace_seconds = termination_grace_seconds
+        self._worker_id = _validated_worker_id(worker_id)
+        self._activity_subprocess_argv = _validated_subprocess_argv(activity_subprocess_argv)
+        self._termination_grace_seconds = _validated_termination_grace(termination_grace_seconds)
 
     @activity.defn(name="drive_action_run")
     async def drive(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             return await self._drive_with_heartbeats(action_run_dispatch_request_from_payload(payload))
-        except ActionRunRetryableFailure:
-            raise
+        except ActionRunRetryableFailure as exc:
+            raise ActionRunRetryableFailure(scrub_error_text(str(exc))) from exc
         except Exception as exc:
-            raise ApplicationError(str(exc), type=exc.__class__.__name__, non_retryable=True) from exc
+            raise ApplicationError(scrub_error_text(str(exc)), type=exc.__class__.__name__, non_retryable=True) from exc
 
     async def _drive_with_heartbeats(self, request: ActionRunDispatchRequest) -> dict[str, Any]:
         if self._activity_subprocess_argv:
@@ -90,7 +92,7 @@ class ActionRunActivities:
             start_new_session=True,
         )
         payload = {**asdict(request), "worker_id": self._worker_id}
-        communicate = asyncio.create_task(process.communicate(json.dumps(payload).encode()))
+        communicate = asyncio.create_task(process.communicate(json.dumps(payload, allow_nan=False).encode()))
         cancellation = asyncio.create_task(activity.wait_for_cancelled())
         try:
             stdout, stderr = await _wait_for_action_subprocess(communicate, cancellation, request, self._worker_id)
@@ -107,18 +109,49 @@ class ActionRunActivities:
         return _action_subprocess_result(stdout)
 
 
+def _validated_worker_id(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Action activity worker_id must be non-empty")
+    return value
+
+
+def _validated_termination_grace(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("Action activity termination grace must be finite and positive")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("Action activity termination grace must be finite and positive")
+    return float(value)
+
+
+def _validated_subprocess_argv(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+        raise ValueError("Action activity subprocess argv must contain non-empty text")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise ValueError("Action activity subprocess argv must contain non-empty text")
+    return tuple(value)
+
+
 def action_run_dispatch_request_from_payload(payload: Mapping[str, Any]) -> ActionRunDispatchRequest:
     execution_plan = payload.get("execution_plan")
     if not isinstance(execution_plan, Mapping):
         raise ValueError("Action Temporal payload is missing execution_plan")
     return ActionRunDispatchRequest(
-        tenant_id=str(payload["tenant_id"]),
-        run_id=str(payload["run_id"]),
-        action_api_name=str(payload["action_api_name"]),
-        request_id=str(payload["request_id"]),
-        idempotency_key=str(payload["idempotency_key"]),
+        tenant_id=_required_payload_text(payload, "tenant_id"),
+        run_id=_required_payload_text(payload, "run_id"),
+        action_api_name=_required_payload_text(payload, "action_api_name"),
+        request_id=_required_payload_text(payload, "request_id"),
+        idempotency_key=_required_payload_text(payload, "idempotency_key"),
         execution_plan=dict(execution_plan),
     )
+
+
+def _required_payload_text(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Action Temporal payload {key} must be non-empty text")
+    return value
 
 
 async def _wait_for_action_subprocess(
@@ -139,11 +172,18 @@ async def _wait_for_action_subprocess(
 async def _terminate_action_process(process: asyncio.subprocess.Process, grace_seconds: float) -> None:
     if process.returncode is not None:
         return
-    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        await process.wait()
+        return
     try:
         await asyncio.wait_for(process.wait(), timeout=grace_seconds)
     except TimeoutError:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await process.wait()
 
 
@@ -151,7 +191,13 @@ def _action_subprocess_result(stdout: bytes) -> dict[str, Any]:
     line = next((item for item in reversed(stdout.splitlines()) if item.startswith(ACTION_RUN_RESULT_PREFIX)), None)
     if line is None:
         raise RuntimeError("Action activity subprocess did not return a result")
-    value = json.loads(line[len(ACTION_RUN_RESULT_PREFIX) :])
+    try:
+        value = json.loads(
+            line[len(ACTION_RUN_RESULT_PREFIX) :],
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(f"invalid JSON constant {value}")),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError("Action activity subprocess returned invalid JSON") from exc
     if not isinstance(value, dict):
         raise RuntimeError("Action activity subprocess returned an invalid result")
     return value
@@ -159,4 +205,4 @@ def _action_subprocess_result(stdout: bytes) -> dict[str, Any]:
 
 def _action_subprocess_error(stderr: bytes) -> str:
     text = stderr.decode("utf-8", errors="replace").strip()
-    return text[-2000:] or "Action activity subprocess failed"
+    return scrub_error_text(text[-2000:]) if text else "Action activity subprocess failed"

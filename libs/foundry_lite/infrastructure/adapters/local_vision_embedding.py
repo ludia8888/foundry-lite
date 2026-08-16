@@ -16,6 +16,7 @@ from typing import Any
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.embedding_model import EmbeddingModelError, EmbeddingVector
+from foundry_lite.infrastructure.adapters.fastembed_model_cache import fastembed_model_load_lock
 
 # fastembed CLIP image+text towers (matched pair, ONE 512-dim shared space, no torch). The
 # version string is pinned into the index generation so a model upgrade re-projects rather than
@@ -44,20 +45,24 @@ _clip_text_model: Any | None = None
 
 
 def _load_clip_image_model() -> Any:
-    # Build the ONNX image tower lazily/once (module-level cache); fastembed downloads it from
-    # HuggingFace on first use (cached in ~/.cache/huggingface), like bge/whisper.
+    # Build the ONNX image tower lazily/once. FastEmbed downloads it on first use into
+    # FASTEMBED_CACHE_PATH (or the system temp cache).
     global _clip_image_model
     if _clip_image_model is None:
-        fastembed_module = import_module("fastembed")
-        _clip_image_model = fastembed_module.ImageEmbedding(_CLIP_IMAGE_MODEL_NAME)
+        with fastembed_model_load_lock(_CLIP_IMAGE_MODEL_NAME) as cache_dir:
+            if _clip_image_model is None:
+                fastembed_module = import_module("fastembed")
+                _clip_image_model = fastembed_module.ImageEmbedding(_CLIP_IMAGE_MODEL_NAME, cache_dir=str(cache_dir))
     return _clip_image_model
 
 
 def _load_clip_text_model() -> Any:
     global _clip_text_model
     if _clip_text_model is None:
-        fastembed_module = import_module("fastembed")
-        _clip_text_model = fastembed_module.TextEmbedding(_CLIP_TEXT_MODEL_NAME)
+        with fastembed_model_load_lock(_CLIP_TEXT_MODEL_NAME) as cache_dir:
+            if _clip_text_model is None:
+                fastembed_module = import_module("fastembed")
+                _clip_text_model = fastembed_module.TextEmbedding(_CLIP_TEXT_MODEL_NAME, cache_dir=str(cache_dir))
     return _clip_text_model
 
 

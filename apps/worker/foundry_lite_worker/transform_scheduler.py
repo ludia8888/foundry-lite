@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
+from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -54,10 +54,13 @@ class TransformSchedulerWorkerResult:
 
 def run_transform_scheduler_once(config: TransformSchedulerWorkerConfig) -> TransformSchedulerWorkerResult:
     runtime = _build_foundry(config)
-    result = _run_tick(runtime, config, tick_number=1)
-    summary = _summary("max_ticks", 1, 0 if _started_count(result) else 1, [result])
-    _write_evidence(config, summary)
-    return summary
+    try:
+        result = _run_tick(runtime, config, tick_number=1)
+        summary = _summary("max_ticks", 1, 0 if _started_count(result) else 1, [result])
+        _write_evidence(config, summary)
+        return summary
+    finally:
+        runtime.close()
 
 
 def run_transform_scheduler_daemon(
@@ -66,6 +69,18 @@ def run_transform_scheduler_daemon(
     should_stop: Callable[[], bool] | None = None,
 ) -> TransformSchedulerWorkerResult:
     runtime = _build_foundry(config)
+    try:
+        return _run_daemon(runtime, config, should_stop=should_stop)
+    finally:
+        runtime.close()
+
+
+def _run_daemon(
+    runtime: FoundryLite,
+    config: TransformSchedulerWorkerConfig,
+    *,
+    should_stop: Callable[[], bool] | None,
+) -> TransformSchedulerWorkerResult:
     stop_requested = should_stop or _never_stop
     results: list[Mapping[str, object]] = []
     empty_ticks = 0
@@ -239,7 +254,11 @@ def _failure_json(exc: Exception, config: TransformSchedulerWorkerConfig | None)
 
 def _failure_payload(exc: Exception, config: TransformSchedulerWorkerConfig | None) -> Mapping[str, object]:
     if isinstance(exc, ValueError):
-        return {"type": "CONFIGURATION_ERROR", "message": str(exc), "details": _failure_trace(config)}
+        return {
+            "type": "CONFIGURATION_ERROR",
+            "message": scrub_error_text(str(exc)),
+            "details": _failure_trace(config),
+        }
     return runtime_error_payload(exc, _failure_context(config), adapter="transform_scheduler_worker")
 
 

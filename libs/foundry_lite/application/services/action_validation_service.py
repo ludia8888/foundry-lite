@@ -97,9 +97,39 @@ class ActionValidationService(CoreService):
         action_type = self.ontology_lookup_service._active_action_type(conn, ctx, action_api_name)
         contract = authorized_action_contract(action_type["definition"], ctx, "apply")
         require_interface_action_target(conn, ctx, self.ontology_lookup_service, contract, object_type)
+        record = self._validation_target_record(
+            conn, ctx, action_type, contract, object_type, object_id, expected_object_version
+        )
+        media_error = self._media_error(conn, ctx, contract, params)
+        linked_values = self._linked_values(conn, ctx, action_type, record)
+        return action_validation_response(
+            action_type,
+            record,
+            expected_object_version,
+            params,
+            ctx,
+            supplemental_error=media_error,
+            linked_object_properties=linked_values,
+        )
+
+    def _validation_target_record(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type: ActionTypeRow,
+        contract: ActionDefinitionV3,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+    ) -> ObjectRecordRow | None:
         record = self.object_records_service._object_record(conn, ctx, object_type, object_id)
         target_type = self.ontology_lookup_service._active_object_type(conn, ctx, object_type)
-        record = visible_record(record, target_type, ctx.roles)
+        record = visible_record(
+            record,
+            target_type,
+            ctx.roles,
+            self.ontology_lookup_service._properties_for_object_type(conn, target_type["id"]),
+        )
         if record is None:
             record = interface_create_target_record(
                 contract,
@@ -113,17 +143,7 @@ class ActionValidationService(CoreService):
             record_type = self.ontology_lookup_service._object_type_by_id_or_none(conn, ctx, record["object_type_id"])
             if (error := action_target_record_error(action_type, record, record_type)) is not None:
                 raise error
-        media_error = self._media_error(conn, ctx, contract, params)
-        linked_values = self._linked_values(conn, ctx, action_type, record)
-        return action_validation_response(
-            action_type,
-            record,
-            expected_object_version,
-            params,
-            ctx,
-            supplemental_error=media_error,
-            linked_object_properties=linked_values,
-        )
+        return record
 
     def _linked_values(
         self,

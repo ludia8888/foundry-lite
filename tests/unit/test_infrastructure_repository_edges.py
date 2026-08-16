@@ -30,7 +30,6 @@ from foundry_lite.infrastructure.local_runtime import (
     _search_adapter,
     _stream_adapter,
     _workflow_adapter,
-    create_runtime_core_dependencies,
 )
 from foundry_lite.infrastructure.repositories import SchemaMutationDisabledError
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
@@ -127,6 +126,26 @@ def _set_protected_adapter_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _set_protected_governed_release_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY_ID", "1234")
+    monkeypatch.setenv("FOUNDRY_LITE_GITHUB_RELEASE_OWNER", "example")
+    monkeypatch.setenv("FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY", "foundry-lite")
+    monkeypatch.setenv("FOUNDRY_LITE_GITHUB_RELEASE_TOKEN_SECRET_REF", "github-token")
+    monkeypatch.setenv("FOUNDRY_LITE_SECRET_GITHUB_TOKEN", "test-github-token")
+    monkeypatch.setenv("FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID", "srv-example-service")
+    monkeypatch.setenv("FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF", "render-token")
+    monkeypatch.setenv("FOUNDRY_LITE_SECRET_RENDER_TOKEN", "test-render-token")
+
+
+def _create_protected_dependencies_for_cursor_test(tmp_path: Path) -> None:
+    _create_core_dependencies(
+        runtime_profile=RuntimeProfile.from_value("production"),
+        db_url="sqlite:///:memory:",
+        storage_root=tmp_path,
+        profiles=RuntimeAdapterProfiles.from_env("local", {}),
+    )
+
+
 def test_protected_runtime_profile_disables_create_all_schema_mutation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -144,6 +163,7 @@ def test_protected_runtime_profile_disables_create_all_schema_mutation(
         "FOUNDRY_LITE_TRAINED_MODEL_IMAGE",
         f"registry.example/foundry-model@sha256:{'b' * 64}",
     )
+    _set_protected_governed_release_targets(monkeypatch)
     dependencies = _create_core_dependencies(
         runtime_profile=RuntimeProfile.from_value("production"),
         db_url="sqlite:///:memory:",
@@ -163,11 +183,10 @@ def test_protected_runtime_profile_requires_object_query_cursor_secret(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
-    _set_protected_adapter_profiles(monkeypatch)
     monkeypatch.delenv(CURSOR_SIGNING_KEY_ENV, raising=False)
 
     with pytest.raises(ValidationFailed, match="cursor signing key"):
-        create_runtime_core_dependencies(adapter_profile="s3-storage", storage_root=tmp_path / "missing-cursor-secret")
+        _create_protected_dependencies_for_cursor_test(tmp_path / "missing-cursor-secret")
 
 
 def test_protected_runtime_profile_requires_object_query_cursor_key_id(
@@ -175,12 +194,11 @@ def test_protected_runtime_profile_requires_object_query_cursor_key_id(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
-    _set_protected_adapter_profiles(monkeypatch)
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
     monkeypatch.delenv(CURSOR_SIGNING_KEY_ID_ENV, raising=False)
 
     with pytest.raises(ValidationFailed, match="cursor signing key id"):
-        create_runtime_core_dependencies(adapter_profile="s3-storage", storage_root=tmp_path / "missing-cursor-key-id")
+        _create_protected_dependencies_for_cursor_test(tmp_path / "missing-cursor-key-id")
 
 
 def test_protected_runtime_profile_requires_operations_cursor_secret(
@@ -188,17 +206,13 @@ def test_protected_runtime_profile_requires_operations_cursor_secret(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
-    _set_protected_adapter_profiles(monkeypatch)
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
     monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "prod-operations-key-2026-06")
     monkeypatch.delenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, raising=False)
 
     with pytest.raises(ValidationFailed, match="operations cursor signing key"):
-        create_runtime_core_dependencies(
-            adapter_profile="s3-storage",
-            storage_root=tmp_path / "missing-operations-cursor-secret",
-        )
+        _create_protected_dependencies_for_cursor_test(tmp_path / "missing-operations-cursor-secret")
 
 
 def test_object_change_sequence_rejects_unknown_dialect() -> None:

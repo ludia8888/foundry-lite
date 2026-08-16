@@ -101,8 +101,9 @@ def inspect_action_edit_plan(
     for object_type in sorted(touched_types):
         type_row = ontology._active_object_type(conn, ctx, object_type)
         properties = ontology._properties_for_object_type(conn, type_row["id"])
-        sensitive_by_type[object_type] = _inspect_editable_properties(
-            object_type, type_row["primary_key_property"], properties, plan
+        _inspect_editable_properties(object_type, type_row["primary_key_property"], properties, plan)
+        sensitive_by_type[object_type] = frozenset(
+            prop["api_name"] for prop in properties if prop["classification"] in {"finance", "pii"}
         )
     links = {item.link_type for item in plan.links_to_create}
     links.update(item.link_type for item in plan.links_to_delete)

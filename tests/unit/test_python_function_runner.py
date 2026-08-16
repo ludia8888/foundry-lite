@@ -109,6 +109,15 @@ def test_the_official_python_osdk_import_shape_is_available() -> None:
     }
 
 
+def test_dynamic_ontology_modules_do_not_forge_python_metadata_attributes() -> None:
+    runner.install_import_compatibility()
+
+    from ontology_sdk.ontology import objects
+
+    assert not hasattr(objects, "__file__")
+    assert not hasattr(objects, "__path__")
+
+
 # --- the declared type is enforced, not assumed --------------------------------------
 
 
@@ -147,6 +156,26 @@ def test_an_unserializable_value_fails_here_rather_than_on_the_way_out() -> None
     manifest = _manifest("def compute():\n    return {'a': {1, 2}}\n", output_type="struct")
 
     assert _failure(manifest).failure_type == "output_validation_error"
+
+
+@pytest.mark.parametrize("body", ["return float('nan')", "return float('inf')"])
+def test_non_finite_function_numbers_never_cross_the_json_boundary(body: str) -> None:
+    assert _failure(_manifest(f"def compute():\n    {body}\n", output_type="float")).failure_type == (
+        "output_validation_error"
+    )
+
+
+def test_invalid_query_bridge_or_object_set_descriptor_is_a_runner_contract_error() -> None:
+    invalid_bridge = _manifest("def compute():\n    return 1\n")
+    invalid_bridge["queryBridge"] = {"directory": "/tmp", "nonce": "n", "timeoutSeconds": float("nan")}
+    assert _failure(invalid_bridge).failure_type == "runner_contract_error"
+
+    invalid_descriptor = _manifest(
+        "def compute(tables):\n    return tables\n",
+        inputs={"tables": {"$foundryObjectSet": {"objectType": "", "filter": None, "orderBy": []}}},
+        output_type="objectSet",
+    )
+    assert _failure(invalid_descriptor).failure_type == "runner_contract_error"
 
 
 # --- failures are separated by whose fault they are -----------------------------------

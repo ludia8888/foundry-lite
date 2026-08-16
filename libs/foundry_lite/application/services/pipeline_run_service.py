@@ -175,7 +175,7 @@ class PipelineRunService(CoreService):
         """
         if not pipeline_run_unknown_commit_recovery.has_unknown_commit_output(row):
             return False
-        pipeline_run_unknown_commit_recovery.reconcile_unknown_commit_outputs(
+        return pipeline_run_unknown_commit_recovery.reconcile_unknown_commit_outputs(
             self.engine,
             self.pipeline_repository,
             self.pipeline_execution_repository,
@@ -186,7 +186,6 @@ class PipelineRunService(CoreService):
             ctx,
             row,
         )
-        return True
 
     def expire_stale_execution_run(self, ctx: RequestContext, row: PipelineRunRow) -> bool:
         """Fail-close one run whose execution lease lapsed; return whether it did.

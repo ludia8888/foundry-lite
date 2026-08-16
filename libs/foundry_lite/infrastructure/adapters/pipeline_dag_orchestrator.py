@@ -19,6 +19,7 @@ from foundry_lite.application.ports.pipeline_dag_orchestrator import (
 
 PIPELINE_DAG_WORKFLOW_NAME = "PipelineDagWorkflow"
 PIPELINE_DAG_TASK_QUEUE = "foundry-lite-pipeline-dag"
+_LOCAL_WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,13 +36,15 @@ class LocalPipelineDagOrchestrator:
     profile_name = "local-pipeline-dag"
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[PipelineDagDispatchRequest] = queue.Queue()
+        self._queue: queue.Queue[PipelineDagDispatchRequest | None] = queue.Queue()
         self._known: set[str] = set()
         self._cancelled: set[str] = set()
         self._failures: dict[str, Exception] = {}
         self._driver: Callable[[PipelineDagDispatchRequest], None] | None = None
         self._lock = threading.Lock()
         self._worker_started = False
+        self._worker: threading.Thread | None = None
+        self._is_closed = False
 
     def register_driver(self, driver: Callable[[PipelineDagDispatchRequest], None]) -> None:
         self._driver = driver
@@ -49,6 +52,8 @@ class LocalPipelineDagOrchestrator:
     def dispatch(self, request: PipelineDagDispatchRequest) -> PipelineDagDispatchResult:
         workflow_run_id = pipeline_dag_workflow_id(request.tenant_id, request.run_id)
         with self._lock:
+            if self._is_closed:
+                return PipelineDagDispatchResult(workflow_run_id, "unknown", PIPELINE_DAG_TASK_QUEUE)
             if workflow_run_id in self._known:
                 return PipelineDagDispatchResult(
                     workflow_run_id=workflow_run_id,
@@ -86,17 +91,37 @@ class LocalPipelineDagOrchestrator:
         with self._lock:
             return self._failures.get(workflow_run_id)
 
+    def close(self) -> None:
+        """Finish accepted work, then stop the local daemon before its DB is disposed."""
+        with self._lock:
+            if not self._is_closed:
+                self._is_closed = True
+                if self._worker is not None:
+                    self._queue.put(None)
+            worker = self._worker
+        if worker is None:
+            return
+        if worker is threading.current_thread():
+            raise RuntimeError("pipeline orchestrator cannot close from its own worker")
+        worker.join(timeout=_LOCAL_WORKER_SHUTDOWN_TIMEOUT_SECONDS)
+        if worker.is_alive():
+            raise RuntimeError("pipeline orchestrator did not stop before shutdown timeout")
+
     def _start_worker(self) -> None:
         if self._worker_started:
             return
         self._worker_started = True
-        threading.Thread(target=self._work_loop, name="pipeline-dag-local-worker", daemon=True).start()
+        self._worker = threading.Thread(target=self._work_loop, name="pipeline-dag-local-worker", daemon=True)
+        self._worker.start()
 
     def _work_loop(self) -> None:
         while True:
             request = self._queue.get()
-            workflow_run_id = pipeline_dag_workflow_id(request.tenant_id, request.run_id)
+            if request is None:
+                self._queue.task_done()
+                return
             try:
+                workflow_run_id = pipeline_dag_workflow_id(request.tenant_id, request.run_id)
                 if workflow_run_id not in self._cancelled and self._driver is not None:
                     self._driver(request)
             except Exception as exc:
@@ -153,6 +178,9 @@ class TemporalPipelineDagOrchestrator:
     ) -> bool:
         del reason
         return asyncio.run(self.cancel_async(tenant_id, workflow_run_id))
+
+    def close(self) -> None:
+        return None
 
     async def cancel_async(self, tenant_id: str, workflow_run_id: str) -> bool:
         if not pipeline_dag_workflow_id_matches_tenant(tenant_id, workflow_run_id):

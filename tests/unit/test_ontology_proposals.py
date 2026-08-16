@@ -24,7 +24,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
 from pytest import MonkeyPatch, mark, raises
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 ORDERS_CSV = "order_id,status\nO-1,PENDING\n"
 
@@ -498,6 +498,48 @@ def test_ontology_apply_failure_without_receipt_is_recorded_as_failed(
         )
 
     assert foundry.ontology.get_proposal(proposal_id, ctx=REVIEWER)["executionStatus"] == "failed"
+
+
+def test_ontology_apply_failure_scrubs_secret_from_review_and_audit_evidence(
+    foundry,
+    tmp_path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="apply-secret-redaction")
+    proposal_id = str(proposal["id"])
+    _assign(foundry, proposal)
+    foundry.ontology.decide_proposal(
+        proposal_id,
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=REVIEWER,
+    )
+
+    def fail_before_commit(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise ValidationFailed("Authorization: Bearer raw-ontology-token password=raw-ontology-password")
+
+    monkeypatch.setattr(foundry.ontology._proposals.ontology_service, "apply_ontology_text_once", fail_before_commit)
+    with raises(ValidationFailed, match="raw-ontology-token"):
+        foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+
+    with foundry.engine.begin() as transaction:
+        review_metadata = transaction.execute(
+            select(db.insight_reviews.c.review_metadata).where(db.insight_reviews.c.id == proposal_id)
+        ).scalar_one()
+        audit_after_ref = transaction.execute(
+            select(db.audit_events.c.after_ref).where(
+                db.audit_events.c.resource_id == proposal_id,
+                db.audit_events.c.event_type == "ontology.proposal.apply_failed",
+            )
+        ).scalar_one()
+    assert review_metadata["executionError"]["message"] == "***MASKED***"
+    assert audit_after_ref["error"] == "***MASKED***"
+    assert "raw-ontology" not in str((review_metadata, audit_after_ref))
 
 
 def test_ontology_receipt_lookup_failure_preserves_executing_for_safe_recovery(

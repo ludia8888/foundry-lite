@@ -113,8 +113,11 @@ def test_stream_archive_failure_is_visible_in_operations(tmp_path: Path) -> None
     foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
     _publish_shipment(dependencies.stream_adapter, "S-100", ctx=ctx)
 
-    with pytest.raises(ValidationFailed, match="stream archive failed"):
+    with pytest.raises(ValidationFailed, match="stream archive failed") as exc_info:
         foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+
+    assert exc_info.value.details == {"error": "***MASKED***"}
+    assert "raw-stream" not in str(exc_info.value.details)
 
     failed_runs = foundry.operations.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
     failed_run = next(run for run in failed_runs if run["source_type"] == "stream.shipments")
@@ -947,7 +950,7 @@ def _run_error_adapter(row: Any) -> object:
 
 class _ExplodingRowsComputeAdapter(DuckDBComputeAdapter):
     def rows_to_parquet(self, *_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("stream archive parquet write failed")
+        raise RuntimeError("Authorization: Bearer raw-stream-token password=raw-stream-password")
 
 
 class _FailingDeadLetterRepository:

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from foundry_lite.application.services.runtime_error_payloads import (
+    runtime_error_payload,
+    scrub_error_mapping,
+    scrub_error_text,
+)
 from foundry_lite.domain.errors import FoundryLiteError
 
 from foundry_lite_api.schemas import JsonObject, ValidationErrorPayload
@@ -31,12 +36,27 @@ def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTP
     request_id = getattr(getattr(request, "state", None), "request_id", None)
     return HTTPException(
         status_code=status,
-        detail={"code": _code_for_error(exc), "message": exc.message, "details": exc.details, "request_id": request_id},
+        detail={
+            "code": _code_for_error(exc),
+            "message": scrub_error_text(exc.message),
+            "details": _safe_error_details(exc),
+            "request_id": request_id,
+        },
     )
 
 
+def _safe_error_details(exc: FoundryLiteError) -> JsonObject:
+    details = runtime_error_payload(exc).get("details")
+    return scrub_error_mapping(details) if isinstance(details, dict) else {}
+
+
 def _websocket_error(exc: FoundryLiteError, request_id: str) -> JsonObject:
-    return {"code": _code_for_error(exc), "message": exc.message, "details": exc.details, "request_id": request_id}
+    return {
+        "code": _code_for_error(exc),
+        "message": scrub_error_text(exc.message),
+        "details": scrub_error_mapping(exc.details),
+        "request_id": request_id,
+    }
 
 
 def _code_for_error(exc: FoundryLiteError) -> str:

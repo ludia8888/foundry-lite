@@ -14,6 +14,7 @@ from foundry_lite.application.services.aip.citation_service import (
     CitationResolveResult,
     CitationServiceError,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 
 JsonObject = Mapping[str, object]
@@ -71,7 +72,7 @@ def resolve_agent_answer_citations(
 
 def citation_error_payload(exc: Exception) -> dict[str, object] | None:
     if isinstance(exc, CitationServiceError):
-        return {"reason": exc.reason, "detail": exc.detail}
+        return {"reason": scrub_error_text(exc.reason), "detail": scrub_error_text(exc.detail)}
     return None
 
 

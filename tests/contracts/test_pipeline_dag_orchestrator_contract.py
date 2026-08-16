@@ -36,6 +36,7 @@ def test_local_pipeline_dag_orchestrator_contract_is_non_blocking_and_idempotent
     assert dispatched == [request.run_id]
     assert orchestrator.cancel("another-tenant", first.workflow_run_id) is False
     assert orchestrator.cancel(request.tenant_id, first.workflow_run_id, reason="operator") is True
+    orchestrator.close()
 
 
 def test_unavailable_pipeline_dag_orchestrator_contract_fails_closed() -> None:
@@ -70,6 +71,33 @@ def test_local_pipeline_dag_orchestrator_survives_one_failed_run() -> None:
     assert second_completed.wait(2)
     assert str(orchestrator.failure_for(first.workflow_run_id)) == "first run failed"
     assert orchestrator.failure_for(second.workflow_run_id) is None
+    orchestrator.close()
+
+
+def test_local_pipeline_dag_orchestrator_close_drains_work_and_rejects_new_dispatch() -> None:
+    orchestrator = LocalPipelineDagOrchestrator()
+    release = Event()
+    completed = Event()
+
+    def drive(_request: PipelineDagDispatchRequest) -> None:
+        assert release.wait(2)
+        completed.set()
+
+    orchestrator.register_driver(drive)
+    accepted = _dispatch(orchestrator, _request())
+    release.set()
+    orchestrator.close()
+    rejected = _dispatch(
+        orchestrator,
+        replace(_request(), run_id="run-after-close", idempotency_key="run-after-close"),
+    )
+
+    assert accepted.status == "dispatched"
+    assert completed.is_set()
+    assert rejected.status == "unknown"
+    assert orchestrator._worker is not None
+    assert not orchestrator._worker.is_alive()
+    orchestrator.close()
 
 
 def _dispatch(

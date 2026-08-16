@@ -26,6 +26,7 @@ from foundry_lite.application.services.action_branch_lookup import (
     composed_branch_record,
 )
 from foundry_lite.application.services.action_branch_payloads import (
+    branch_conflict_error,
     branch_log_object,
     branch_object_payload,
     branch_request_fingerprint,
@@ -440,7 +441,7 @@ class ActionBranchService(CoreService):
                 tenant_id=ctx.tenant_id,
                 action_run_id=row["id"],
                 transition=ACTION_RUN_CONFLICT,
-                error={"kind": "conflict", "message": str(exc)},
+                error=branch_conflict_error(exc),
                 completed_at=_now(),
             )
 

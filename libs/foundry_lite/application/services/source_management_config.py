@@ -252,7 +252,7 @@ def exploration_run_record(
         status=status,
         result_summary=dict(result_summary),
         error=error,
-        operations_path=f"/operations/source-exploration/{run_id}",
+        operations_path=f"/api/operations/runs/source_exploration/{run_id}",
         created_at=_now(),
     )
 

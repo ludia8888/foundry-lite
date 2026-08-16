@@ -61,6 +61,7 @@ from foundry_lite.application.services.action_distributed_run_support import (
     require_action_attempt_owner,
     require_stored_plan_hash,
     required_action_run,
+    retryable_action_failure_message,
     stored_action_contract,
     stored_edit_plan,
     utc_now,
@@ -296,7 +297,7 @@ class ActionDistributedRunService(CoreService):
         with self.engine.begin() as transaction:
             self._persist_failure(transaction, ctx, row, attempt, exc, changed_at, retry_at)
         if is_retryable:
-            raise ActionStepRetryableFailure(str(exc)) from exc
+            raise ActionStepRetryableFailure(retryable_action_failure_message(exc)) from exc
 
     def _persist_failure(
         self,
