@@ -312,7 +312,12 @@ class KubernetesReleaseController:
         resource: Mapping[str, object],
         reason: str,
     ) -> KubernetesReleaseControllerResult:
-        name, namespace, generation = _resource_identity(resource, self._config.namespace)
+        identity = _failure_identity(resource, self._config.namespace)
+        if identity is None:
+            return KubernetesReleaseControllerResult(
+                _safe_resource_name(resource), "failed", "Failed", "resource_identity_invalid"
+            )
+        name, namespace, generation = identity
         release = _minimal_release(name, namespace, generation)
         try:
             self._patch_status(release, "Failed", reason, None)
@@ -426,6 +431,19 @@ def _resource_identity(resource: Mapping[str, object], default_namespace: str) -
     namespace = _dns_label(metadata.get("namespace", default_namespace), "release_namespace_invalid")
     generation = _positive_int(metadata.get("generation", 1), "release_generation_invalid")
     return name, namespace, generation
+
+
+def _failure_identity(resource: Mapping[str, object], default_namespace: str) -> tuple[str, str, int] | None:
+    try:
+        return _resource_identity(resource, default_namespace)
+    except ValueError:
+        return None
+
+
+def _safe_resource_name(resource: Mapping[str, object]) -> str:
+    metadata = resource.get("metadata")
+    name = metadata.get("name") if isinstance(metadata, Mapping) else None
+    return name if isinstance(name, str) and _DNS_LABEL_PATTERN.fullmatch(name) else "unknown-resource"
 
 
 def _minimal_release(name: str, namespace: str, generation: int) -> _ReleaseResource:

@@ -121,7 +121,9 @@ class InClusterKubernetesHttpTransport:
     ) -> None:
         resolved_host = host if host is not None else os.environ.get("KUBERNETES_SERVICE_HOST", "")
         self._host = _api_host(resolved_host)
-        self._port = port or _api_port(os.getenv("KUBERNETES_SERVICE_PORT_HTTPS", "443"))
+        self._port = (
+            _api_port(str(port)) if port is not None else _api_port(os.getenv("KUBERNETES_SERVICE_PORT_HTTPS", "443"))
+        )
         self._token_path = token_path
         self._context = ssl.create_default_context(cafile=str(ca_path))
 

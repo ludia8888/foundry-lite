@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
+from foundry_lite.infrastructure import kubernetes_release_controller as release_controller
 from foundry_lite.infrastructure.adapters.kubernetes_deployment import (
     KubernetesHttpRequest,
     KubernetesHttpResponse,
@@ -18,6 +20,7 @@ from foundry_lite.infrastructure.kubernetes_release_controller import (
     KubernetesReleaseController,
     KubernetesReleaseControllerConfig,
     ReleaseArtifactResolver,
+    SubprocessCommandRunner,
     VerifiedImageArtifact,
 )
 
@@ -300,3 +303,351 @@ def test_crane_cosign_resolver_never_accepts_mutable_or_malformed_repository() -
 
     with pytest.raises(ArtifactVerificationError, match="image_repository_invalid"):
         resolver.resolve(f"{IMAGE_REPOSITORY}:latest", COMMIT_ID)
+
+
+def test_subprocess_verifier_runs_allowlisted_command_without_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: list[tuple[str, ...]] = []
+
+    def run(arguments: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        observed.append(arguments)
+        assert kwargs["shell"] is False
+        assert kwargs["capture_output"] is True
+        return subprocess.CompletedProcess(arguments, 0, stdout=b"verified", stderr=b"")
+
+    monkeypatch.setattr(release_controller.subprocess, "run", run)
+
+    assert SubprocessCommandRunner().run(("crane", "digest", "image"), timeout_seconds=1, max_output_bytes=32) == (
+        CommandResult(0, b"verified")
+    )
+    assert observed == [("crane", "digest", "image")]
+
+
+def test_subprocess_verifier_classifies_allowlist_timeout_tool_and_output_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = SubprocessCommandRunner()
+    with pytest.raises(ArtifactVerificationError, match="verification_executable_not_allowed"):
+        runner.run(("sh", "-c", "secret"), timeout_seconds=1, max_output_bytes=10)
+
+    failures: list[BaseException | subprocess.CompletedProcess[bytes]] = [
+        subprocess.TimeoutExpired(("crane",), 1),
+        OSError("private-tool-detail"),
+        subprocess.CompletedProcess(("crane",), 0, stdout=b"too-large", stderr=b""),
+        subprocess.CompletedProcess(("crane",), 0, stdout=b"", stderr=b"too-large"),
+    ]
+    reasons = (
+        "verification_timeout",
+        "verification_tool_unavailable",
+        "verification_output_too_large",
+        "verification_output_too_large",
+    )
+    for failure, reason in zip(failures, reasons, strict=True):
+
+        def run(
+            *_args: object,
+            selected: BaseException | subprocess.CompletedProcess[bytes] = failure,
+            **_kwargs: object,
+        ) -> subprocess.CompletedProcess[bytes]:
+            if isinstance(selected, BaseException):
+                raise selected
+            return selected
+
+        monkeypatch.setattr(release_controller.subprocess, "run", run)
+        with pytest.raises(ArtifactVerificationError, match=reason):
+            runner.run(("crane", "digest", "image"), timeout_seconds=1, max_output_bytes=2)
+
+
+def test_crane_resolver_can_record_unsigned_artifact_only_when_policy_allows_it() -> None:
+    manifest = {"manifests": [{"platform": {"os": "linux", "architecture": "arm64"}}]}
+    config = {"config": {"Labels": {"org.opencontainers.image.revision": COMMIT_ID}}}
+    runner = _Runner([(0, DIGEST.encode()), (0, json.dumps(manifest).encode()), (0, json.dumps(config).encode())])
+
+    artifact = CraneCosignArtifactResolver(_config(require_signature=False), runner=runner).resolve(
+        IMAGE_REPOSITORY, COMMIT_ID
+    )
+
+    assert artifact.is_signature_verified is False
+    assert all(arguments[0] != "cosign" for arguments in runner.arguments)
+
+
+@pytest.mark.parametrize(
+    ("outputs", "reason"),
+    [
+        ([(1, b"")], "image_digest_resolution_failed"),
+        ([(0, b"not-a-digest")], "image_digest_invalid"),
+        ([(0, DIGEST.encode()), (0, b"not-json")], "image_manifest_invalid"),
+        (
+            [
+                (0, DIGEST.encode()),
+                (0, b'{"manifests":[{"platform":{"os":"linux","architecture":"arm64"}}]}'),
+                (0, json.dumps({"config": {"Labels": {"org.opencontainers.image.revision": COMMIT_ID}}}).encode()),
+                (0, b"[]"),
+            ],
+            "image_signature_evidence_missing",
+        ),
+    ],
+)
+def test_crane_resolver_fails_closed_on_verifier_output(
+    outputs: list[tuple[int, bytes]],
+    reason: str,
+) -> None:
+    with pytest.raises(ArtifactVerificationError, match=reason):
+        CraneCosignArtifactResolver(_config(), runner=_Runner(outputs)).resolve(IMAGE_REPOSITORY, COMMIT_ID)
+
+
+def test_crane_resolver_rejects_invalid_commit_and_non_utf8_digest() -> None:
+    resolver = CraneCosignArtifactResolver(_config(), runner=_Runner([]))
+    with pytest.raises(ArtifactVerificationError, match="commit_id_invalid"):
+        resolver.resolve(IMAGE_REPOSITORY, "main")
+    with pytest.raises(ArtifactVerificationError, match="image_digest_resolution_failed"):
+        CraneCosignArtifactResolver(_config(), runner=_Runner([(0, b"\xff")])).resolve(IMAGE_REPOSITORY, COMMIT_ID)
+
+
+def test_crane_resolver_accepts_single_platform_config_manifest() -> None:
+    config = {
+        "os": "linux",
+        "architecture": "arm64",
+        "config": {"Labels": {"org.opencontainers.image.revision": COMMIT_ID}},
+    }
+    runner = _Runner(
+        [
+            (0, DIGEST.encode()),
+            (0, b"{}"),
+            (0, json.dumps(config).encode()),
+        ]
+    )
+
+    artifact = CraneCosignArtifactResolver(_config(require_signature=False), runner=runner).resolve(
+        IMAGE_REPOSITORY, COMMIT_ID
+    )
+
+    assert artifact.is_linux_arm64 is True
+
+
+@pytest.mark.parametrize("config", [None, {}, {"config": []}, {"config": {"Labels": []}}])
+def test_crane_resolver_rejects_missing_oci_revision_shape(config: object) -> None:
+    manifest = {"manifests": [{"platform": {"os": "linux", "architecture": "arm64"}}]}
+    runner = _Runner([(0, DIGEST.encode()), (0, json.dumps(manifest).encode()), (0, json.dumps(config).encode())])
+
+    with pytest.raises(ArtifactVerificationError, match="oci_revision_mismatch"):
+        CraneCosignArtifactResolver(_config(require_signature=False), runner=runner).resolve(
+            IMAGE_REPOSITORY, COMMIT_ID
+        )
+
+
+def test_controller_rejects_invalid_list_response() -> None:
+    class _Transport:
+        def __init__(self, response: KubernetesHttpResponse) -> None:
+            self.response = response
+
+        def send(self, _request: KubernetesHttpRequest) -> KubernetesHttpResponse:
+            return self.response
+
+    for response, reason in (
+        (KubernetesHttpResponse(503, {}, b"{}"), "kubernetes_release_list_failed"),
+        (KubernetesHttpResponse(200, {}, b"not-json"), "kubernetes_release_list_invalid"),
+        (_response({"items": {}}), "kubernetes_release_items_invalid"),
+    ):
+        with pytest.raises(RuntimeError, match=reason):
+            KubernetesReleaseController(
+                _config(), transport=_Transport(response), resolver=_Resolver()
+            ).reconcile_once()
+
+
+@pytest.mark.parametrize(
+    ("resource", "target", "reason"),
+    [
+        (_resource(operation="rollback"), None, "rollback_target_missing"),
+        (_resource(operation="rollback", rollback_target="missing"), None, "rollback_target_not_found"),
+        (
+            _resource(operation="rollback", rollback_target="previous"),
+            _resource(phase="Pending", image_digest=DIGEST),
+            "rollback_target_not_verified_live",
+        ),
+    ],
+)
+def test_controller_rejects_unverified_rollback_target(
+    resource: dict[str, object],
+    target: dict[str, object] | None,
+    reason: str,
+) -> None:
+    if target is not None:
+        cast(dict[str, object], target["metadata"])["name"] = "previous"
+    transport = _ClusterTransport(resource, rollback_target=target)
+
+    result = KubernetesReleaseController(_config(), transport=transport, resolver=_Resolver()).reconcile_once()[0]
+
+    assert result.status == "failed"
+    assert result.reason == reason
+
+
+@pytest.mark.parametrize(
+    ("failed_path", "expected_reason"),
+    [("/deployments/", "controller_reconcile_failed"), ("/status", "failure_status_write_failed")],
+)
+def test_controller_classifies_cluster_patch_failures(failed_path: str, expected_reason: str) -> None:
+    class _FailingTransport(_ClusterTransport):
+        def send(self, request: KubernetesHttpRequest) -> KubernetesHttpResponse:
+            if request.method == "PATCH" and failed_path in request.path:
+                self.requests.append(request)
+                return KubernetesHttpResponse(503, {}, b"{}")
+            return super().send(request)
+
+    resource = _resource()
+    if failed_path == "/status":
+        cast(dict[str, object], resource["spec"])["operation"] = "invalid"
+    result = KubernetesReleaseController(
+        _config(), transport=_FailingTransport(resource), resolver=_Resolver()
+    ).reconcile_once()[0]
+
+    assert result.status == "failed"
+    assert result.reason == expected_reason
+
+
+def test_controller_classifies_replica_failure_and_invalid_started_timestamp() -> None:
+    replica_failure = _ClusterTransport(
+        _resource(),
+        is_rollout_live=False,
+        rollout_conditions=[{"type": "ReplicaFailure", "status": "True", "reason": "private"}],
+    )
+    failed = KubernetesReleaseController(_config(), transport=replica_failure, resolver=_Resolver()).reconcile_once()[0]
+    assert failed.reason == "replica_failure"
+
+    resource = _resource(phase="Progressing")
+    cast(dict[str, object], resource["status"])["startedAt"] = "not-a-timestamp"
+    timed_out = KubernetesReleaseController(
+        _config(), transport=_ClusterTransport(resource, is_rollout_live=False), resolver=_Resolver()
+    ).reconcile_once()[0]
+    assert timed_out.reason == "rollout_timeout"
+
+
+def test_controller_classifies_generic_progress_failure_and_naive_started_timestamp() -> None:
+    progressing_failure = _ClusterTransport(
+        _resource(),
+        is_rollout_live=False,
+        rollout_conditions=[{"type": "Progressing", "status": "False", "reason": "Other"}],
+    )
+    result = KubernetesReleaseController(
+        _config(), transport=progressing_failure, resolver=_Resolver()
+    ).reconcile_once()[0]
+    assert result.reason == "rollout_progressing_failed"
+
+    resource = _resource(phase="Progressing")
+    cast(dict[str, object], resource["status"])["startedAt"] = "2026-08-16T01:02:03"
+    result = KubernetesReleaseController(
+        _config(), transport=_ClusterTransport(resource, is_rollout_live=False), resolver=_Resolver()
+    ).reconcile_once()[0]
+    assert result.reason == "rollout_timeout"
+
+
+def test_controller_ignores_unrelated_or_malformed_rollout_conditions() -> None:
+    conditions = cast(
+        list[dict[str, str]],
+        ["not-an-object", {"type": "ReplicaFailure", "status": "False", "reason": "none"}],
+    )
+    result = KubernetesReleaseController(
+        _config(),
+        transport=_ClusterTransport(_resource(), is_rollout_live=False, rollout_conditions=conditions),
+        resolver=_Resolver(),
+    ).reconcile_once()[0]
+
+    assert result.reason == "rollout_progressing"
+
+
+def test_controller_classifies_workload_observation_and_container_identity_failure() -> None:
+    class _ObservationFailure(_ClusterTransport):
+        def send(self, request: KubernetesHttpRequest) -> KubernetesHttpResponse:
+            if request.method == "GET" and "/deployments/" in request.path:
+                self.requests.append(request)
+                return KubernetesHttpResponse(503, {}, b"{}")
+            return super().send(request)
+
+    failed = KubernetesReleaseController(
+        _config(), transport=_ObservationFailure(_resource()), resolver=_Resolver()
+    ).reconcile_once()[0]
+    assert failed.reason == "controller_reconcile_failed"
+
+    class _WrongContainer(_ClusterTransport):
+        def send(self, request: KubernetesHttpRequest) -> KubernetesHttpResponse:
+            response = super().send(request)
+            if request.method == "GET" and "/deployments/" in request.path:
+                payload = json.loads(response.body)
+                payload["spec"]["template"]["spec"]["containers"] = [{"name": "other", "image": self.workload_image}]
+                return _response(payload)
+            return response
+
+    waiting = KubernetesReleaseController(
+        _config(), transport=_WrongContainer(_resource()), resolver=_Resolver()
+    ).reconcile_once()[0]
+    assert waiting.reason == "rollout_progressing"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda resource: resource.update({"spec": []}),
+        lambda resource: cast(dict[str, object], resource["spec"]).update({"workloadRef": []}),
+        lambda resource: cast(dict[str, object], resource["status"]).update({"phase": "Unknown"}),
+        lambda resource: cast(dict[str, object], resource["metadata"]).update({"generation": 0}),
+        lambda resource: cast(dict[str, object], resource["status"]).update({"observedGeneration": -1}),
+    ],
+)
+def test_controller_fails_closed_on_malformed_release_resource(mutation: object) -> None:
+    resource = _resource()
+    mutation(resource)  # type: ignore[operator]
+
+    result = KubernetesReleaseController(
+        _config(), transport=_ClusterTransport(resource), resolver=_Resolver()
+    ).reconcile_once()[0]
+
+    assert result.status == "failed"
+    if cast(dict[str, object], resource["metadata"]).get("generation") == 0:
+        assert result.reason == "resource_identity_invalid"
+
+
+def test_controller_keeps_reconciling_after_resource_identity_failure() -> None:
+    valid_resource = _resource()
+    invalid_resource = _resource()
+    cast(dict[str, object], invalid_resource["metadata"])["generation"] = 0
+
+    class _MultiResourceTransport(_ClusterTransport):
+        def send(self, request: KubernetesHttpRequest) -> KubernetesHttpResponse:
+            if request.method == "GET" and request.path.endswith("/foundrydeployments"):
+                self.requests.append(request)
+                return _response({"items": [invalid_resource, valid_resource]})
+            return super().send(request)
+
+    results = KubernetesReleaseController(
+        _config(), transport=_MultiResourceTransport(valid_resource), resolver=_Resolver()
+    ).reconcile_once()
+
+    assert [(result.status, result.reason) for result in results] == [
+        ("failed", "resource_identity_invalid"),
+        ("reconciled", "exact_digest_live"),
+    ]
+
+
+def test_controller_rejects_oversized_list_body() -> None:
+    class _Transport:
+        def send(self, _request: KubernetesHttpRequest) -> KubernetesHttpResponse:
+            return KubernetesHttpResponse(200, {}, b"x" * (2 * 1024 * 1024 + 1))
+
+    with pytest.raises(RuntimeError, match="kubernetes_release_list_invalid"):
+        KubernetesReleaseController(_config(), transport=_Transport(), resolver=_Resolver()).reconcile_once()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        KubernetesReleaseControllerConfig("Invalid_Namespace", "https://issuer", "identity"),
+        KubernetesReleaseControllerConfig("foundry-qa", "http://issuer", "identity"),
+        KubernetesReleaseControllerConfig("foundry-qa", "https://issuer", ""),
+        KubernetesReleaseControllerConfig("foundry-qa", "https://issuer", "identity", timeout_seconds=0),
+        KubernetesReleaseControllerConfig("foundry-qa", "https://issuer", "identity", timeout_seconds=61),
+        KubernetesReleaseControllerConfig("foundry-qa", "https://issuer", "identity", rollout_timeout_seconds=0),
+        KubernetesReleaseControllerConfig("foundry-qa", "https://issuer", "identity", rollout_timeout_seconds=3601),
+    ],
+)
+def test_controller_rejects_unsafe_configuration(config: KubernetesReleaseControllerConfig) -> None:
+    with pytest.raises(ValueError):
+        KubernetesReleaseController(config, transport=_ClusterTransport(_resource()), resolver=_Resolver())
