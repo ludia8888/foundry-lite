@@ -1,4 +1,5 @@
 const RUN_TYPE_PREFIXES: readonly [prefix: string, runType: string][] = [
+  ["source_explore", "source_exploration"],
   ["transform_run", "transform"],
   ["source_sync_run", "sync"],
   ["sync_run", "sync"],

@@ -51,9 +51,7 @@ test("Postgres wizard uses a database URL credential contract", async ({
 
   await page.goto("/data/connections");
   await page.getByRole("button", { name: "새 소스" }).first().click();
-  await page
-    .getByRole("button", { name: /Postgres 데이터베이스 PostgreSQL/ })
-    .click();
+  await page.getByTestId("source-template-postgres_jdbc").click();
   await page.getByText("직접 연결", { exact: true }).click();
   await page.getByRole("button", { name: "계속" }).click();
   await page.getByPlaceholder("예: 주문 ERP 연결").fill(displayName);
@@ -412,6 +410,14 @@ test("managed REST connection appears as one product-level Source", async ({
     await expect(
       explorer.getByText("미리보기 성공", { exact: true }),
     ).toBeVisible();
+    const operationsEvidenceLink = explorer.getByRole("link", {
+      name: /Operations에서 실행 증거 보기/,
+    });
+    await expect(operationsEvidenceLink).toBeVisible();
+    await expect(operationsEvidenceLink).toHaveAttribute(
+      "href",
+      /\/operations\/runs\/source_exploration\/source_explore_/,
+    );
     await expect(explorer.getByText("E2E-REST-1", { exact: true })).toBeVisible();
     await expect(
       explorer.getByText("읽기 전용 · Dataset commit 없음", { exact: true }),

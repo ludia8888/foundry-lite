@@ -36,6 +36,7 @@ import {
 
 const RUN_TYPE_OPTIONS = [
   { value: "all", label: "전체" },
+  { value: "source_exploration", label: "Source Explorer" },
   { value: "sync", label: "Sync" },
   { value: "transform", label: "Transform" },
   { value: "index", label: "Index" },

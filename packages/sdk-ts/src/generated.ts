@@ -39,10 +39,11 @@ export type FoundryLiteClientOptions = {
 export type FoundryLiteRequestContext = {
   tenantId?: string;
   userId?: string;
-  roles?: string[];
+  roles?: readonly string[];
+  userAttributes?: Readonly<Record<string, unknown>>;
   applicationId?: string;
   clientId?: string;
-  scopes?: string[];
+  scopes?: readonly string[];
 };
 
 export type FoundryLiteTokenProvider = () =>
@@ -1131,7 +1132,7 @@ export type ObjectLinkPayload = {
   warning?: { type: string; message: string };
 };
 export type ObjectFilter =
-  | { property: string; op: "eq" | "in" | "gt" | "gte" | "lt" | "lte" | "contains" | string; value: unknown }
+  | { property: string; op: "eq" | "in" | "gt" | "gte" | "lt" | "lte" | "contains"; value: unknown }
   | { and: ObjectFilter[] }
   | { or: ObjectFilter[] };
 export type ObjectQueryRequest = { filter?: ObjectFilter; orderBy?: Array<Record<string, string>>; limit?: number; cursor?: string | null; search?: string | null };
@@ -1821,6 +1822,7 @@ export type ActionWritebackRecoveryItem = {
   remoteResourceId?: string;
 };
 export type RuntimeRunType =
+  | "source_exploration"
   | "sync"
   | "transform"
   | "index"
@@ -1875,6 +1877,7 @@ export type RuntimeRunQueryFilters = {
   cursor?: string | null;
 };
 export type RuntimeRunQueryResult = {
+  sourceExplorationRuns: RuntimeRow[];
   syncRuns: RuntimeRow[];
   transformRuns: RuntimeRow[];
   indexRuns: RuntimeRow[];
@@ -3694,7 +3697,7 @@ export type OsdkPropertyFilter<TValue = unknown> = {
   $in?: readonly TValue[];
   $gte?: TValue;
   $lte?: TValue;
-  $contains?: string | number | boolean;
+  $contains?: string;
   $isNull?: boolean;
 };
 export type OsdkWhere<TObject extends OsdkObjectType> = Partial<{
@@ -3900,6 +3903,7 @@ export type FoundryLiteOsdkClient = {
   readonly actions: typeof $Actions;
   readonly functions: typeof $Functions;
   readonly media: OsdkMediaClient;
+  readonly requestContext: Readonly<FoundryLiteRequestContext>;
 };
 
 export type OrderProperties = {
@@ -4423,6 +4427,7 @@ export function createFoundryLiteOntologyIndex(
 
 export type FoundryLiteGeneratedClient = {
   request<T = unknown>(path: string, init?: FoundryLiteRequestInit): Promise<T>;
+  readonly requestContext: Readonly<FoundryLiteRequestContext>;
   system: {
     health(): Promise<SystemHealth>;
   };
@@ -4987,10 +4992,24 @@ export function requestContextHeaders(
   if (context.tenantId) headers["X-Tenant-ID"] = context.tenantId;
   if (context.userId) headers["X-User-ID"] = context.userId;
   if (context.roles?.length) headers["X-Roles"] = context.roles.join(",");
+  if (context.userAttributes) headers["X-User-Attributes"] = JSON.stringify(context.userAttributes);
   if (context.applicationId) headers["X-Foundry-Lite-App-ID"] = context.applicationId;
   if (context.clientId) headers["X-Foundry-Lite-Client-ID"] = context.clientId;
   if (context.scopes?.length) headers["X-Foundry-Lite-Scopes"] = context.scopes.join(" ");
   return headers;
+}
+
+function snapshotRequestContext(
+  context: FoundryLiteRequestContext = {},
+): Readonly<FoundryLiteRequestContext> {
+  return Object.freeze({
+    ...context,
+    ...(context.roles ? { roles: Object.freeze([...context.roles]) } : {}),
+    ...(context.scopes ? { scopes: Object.freeze([...context.scopes]) } : {}),
+    ...(context.userAttributes
+      ? { userAttributes: Object.freeze({ ...context.userAttributes }) }
+      : {}),
+  });
 }
 
 export function createSessionTokenProvider(
@@ -6017,7 +6036,16 @@ function normalizeOsdkPropertyOperator(
   }
   if (operator === '$gte') return { property, op: 'gte', value };
   if (operator === '$lte') return { property, op: 'lte', value };
-  if (operator === '$contains') return { property, op: 'contains', value };
+  if (operator === '$contains') {
+    if (typeof value !== 'string') {
+      throw osdkValidationError(
+        'INVALID_OSDK_FILTER_VALUE',
+        'OSDK $contains filter value must be text',
+        { objectType: objectType.apiName, property, operator },
+      );
+    }
+    return { property, op: 'contains', value };
+  }
   if (operator === '$isNull') {
     if (value !== true) {
       throw osdkValidationError(
@@ -6711,10 +6739,12 @@ export function createFoundryLiteOsdkClient(client: FoundryLiteGeneratedClient):
     actions: $Actions,
     functions: $Functions,
     media: createOsdkMediaClient(client),
+    requestContext: client.requestContext,
   });
 }
 
 export function createFoundryLiteClient(clientOptions: FoundryLiteClientOptions): FoundryLiteGeneratedClient {
+  const requestContext = snapshotRequestContext(clientOptions.context);
   async function fetchWithContext(path: string, init?: FoundryLiteRequestInit): Promise<{ response: Response; requestId: string }> {
     const fetcher = clientOptions.fetchImpl ?? fetch;
     const { requestId: explicitRequestId, ...requestInit } = init ?? {};
@@ -6722,7 +6752,7 @@ export function createFoundryLiteClient(clientOptions: FoundryLiteClientOptions)
     const response = await fetcher(`${clientOptions.baseUrl}${path}`, {
       ...requestInit,
       headers: {
-        ...requestContextHeaders(clientOptions.context ?? {}),
+        ...requestContextHeaders(requestContext),
         "X-Request-ID": requestId,
         ...(await authorizationHeader(clientOptions)),
         ...(clientOptions.headers ?? {}),
@@ -6765,6 +6795,7 @@ export function createFoundryLiteClient(clientOptions: FoundryLiteClientOptions)
 
   return {
     request,
+    requestContext,
     system: {
       health: () => request<SystemHealth>(`/healthz`),
     },

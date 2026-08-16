@@ -7,6 +7,11 @@ import {
   type OsdkActionType,
 } from "@foundry-lite/sdk";
 import {
+  foundryLiteActionInputText,
+  foundryLiteActionInputType,
+  foundryLiteActionInputValue,
+} from "@foundry-lite/sdk/action-values";
+import {
   useFoundryLiteMutation,
   useFoundryLiteOsdkClient,
   useFoundryLiteProvidedActionForm,
@@ -91,6 +96,17 @@ function ParameterInput({
       />
     );
   }
+  if (field.dataType === "decimal") {
+    return (
+      <Input
+        type="text"
+        inputMode="decimal"
+        className="h-8 text-xs"
+        value={typeof field.value === "string" ? field.value : ""}
+        onChange={(event) => onChange(foundryLiteActionInputValue(field.dataType, event.target.value))}
+      />
+    );
+  }
   if (field.inputKind === "json") {
     return (
       <Textarea
@@ -107,9 +123,10 @@ function ParameterInput({
   }
   return (
     <Input
+      type={foundryLiteActionInputType(field.dataType)}
       className="h-8 text-xs"
-      value={typeof field.value === "string" ? field.value : ""}
-      onChange={(event) => onChange(event.target.value)}
+      value={foundryLiteActionInputText(field.dataType, field.value)}
+      onChange={(event) => onChange(foundryLiteActionInputValue(field.dataType, event.target.value))}
     />
   );
 }

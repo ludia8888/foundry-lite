@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { LoadingState } from "@/components/shared/LoadingState";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 import { BottomDock } from "./components/BottomDock";
 import { BranchCreateDialog } from "./components/BranchCreateDialog";
@@ -94,6 +95,36 @@ export default function PipelinesPage() {
     const errorNodeCount = Object.keys(workbench.nodeIssues).length;
     return Math.max(nodeCount - errorNodeCount, 0);
   }, [workbench.doc, workbench.nodeIssues]);
+  const testedFingerprint = asText(
+    actions.runBranchTests.result?.graphFingerprint,
+  );
+  const testedBranchId = asText(actions.runBranchTests.result?.branchId);
+  const currentFingerprint = asText(workbench.branch?.graphFingerprint);
+  const testState = useMemo(() => {
+    const result = actions.runBranchTests.result;
+    if (!result) return "missing" as const;
+    if (
+      testedBranchId !== workbench.branchId ||
+      testedFingerprint !== currentFingerprint
+    )
+      return "stale" as const;
+    return result.status === "passed" ? ("passed" as const) : ("failed" as const);
+  }, [
+    actions.runBranchTests.result,
+    currentFingerprint,
+    testedBranchId,
+    testedFingerprint,
+    workbench.branchId,
+  ]);
+  const canPropose =
+    Boolean(workbench.branchId) &&
+    !workbench.isDirty &&
+    testState === "passed";
+
+  const handleRunTests = useCallback(() => {
+    if (!workbench.branchId) return;
+    void actions.runBranchTests.execute({ branchId: workbench.branchId });
+  }, [actions.runBranchTests, workbench.branchId]);
 
   const outputNodes = useMemo(
     () =>
@@ -163,7 +194,9 @@ export default function PipelinesPage() {
         isDirty={workbench.isDirty}
         isSaving={actions.saveGraph.isRunning}
         isProposing={actions.propose.isRunning}
-        canPropose={Boolean(workbench.branchId) && !workbench.isDirty}
+        isTesting={actions.runBranchTests.isRunning}
+        testState={testState}
+        canPropose={canPropose}
         canUndo={workbench.canUndo}
         canRedo={workbench.canRedo}
         isBaseStale={workbench.diff?.baseStale === true}
@@ -176,8 +209,39 @@ export default function PipelinesPage() {
         onCreateBranch={() => setIsBranchDialogOpen(true)}
         onRebase={handleRebase}
         onSave={handleSave}
+        onRunTests={handleRunTests}
         onPropose={() => setIsProposeDialogOpen(true)}
       />
+
+      {actions.runBranchTests.error ? (
+        <div className="border-b px-3 py-2">
+          <ErrorState
+            error={actions.runBranchTests.error}
+            onRetry={handleRunTests}
+          />
+        </div>
+      ) : null}
+      {actions.runBranchTests.result ? (
+        <div
+          aria-label="작업 테스트 결과"
+          aria-live="polite"
+          className={cn(
+            "border-b px-3 py-1.5 text-[11px]",
+            testState === "passed"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : testState === "failed"
+                ? "border-red-200 bg-red-50 text-red-800"
+                : "border-amber-200 bg-amber-50 text-amber-900",
+          )}
+          role="status"
+        >
+          {testState === "passed"
+            ? `제안 준비 완료 · 저장된 작업 테스트 ${String(actions.runBranchTests.result.testCount ?? 0)}개 통과`
+            : testState === "failed"
+              ? `제안 전 수정 필요 · 실패 ${String((actions.runBranchTests.result.failures as unknown[] | undefined)?.length ?? 0)}건`
+              : "저장된 작업이 바뀌었습니다 · 다시 테스트하면 제안할 수 있습니다"}
+        </div>
+      ) : null}
 
       {actions.saveGraph.error ? (
         <div className="border-b px-3 py-2">

@@ -1,6 +1,7 @@
 import type {
   ConnectorResource,
   ConnectorResourceTestResult,
+  FoundryLiteApiError,
 } from "@foundry-lite/sdk";
 import { FileJson2, KeyRound, Loader2, Network, Search } from "lucide-react";
 
@@ -10,13 +11,15 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { formatBytes, readNumberField, readTextField } from "../source-model";
+import { SourceExplorationEvidenceLink } from "./SourceExplorationEvidenceLink";
 
 interface RestResourcePreviewPaneProps {
   resource: ConnectorResource | null;
   result: ConnectorResourceTestResult | null;
-  error: unknown;
+  error: FoundryLiteApiError | null;
   isRunning: boolean;
   requestId: string | null;
+  explorationResult: { explorationRunId: string; operationsPath: string | null } | null;
   onPreview: () => void;
 }
 
@@ -26,6 +29,7 @@ export function RestResourcePreviewPane({
   error,
   isRunning,
   requestId,
+  explorationResult,
   onPreview,
 }: RestResourcePreviewPaneProps) {
   if (!resource) {
@@ -71,7 +75,14 @@ export function RestResourcePreviewPane({
 
       {error ? (
         <div className="p-3">
-          <ErrorState error={error} onRetry={onPreview} />
+          <div className="space-y-2">
+            <ErrorState error={error} onRetry={onPreview} />
+            <SourceExplorationEvidenceLink
+              error={error}
+              className="inline-block text-xs"
+              label="실패 실행 조사"
+            />
+          </div>
         </div>
       ) : null}
       {!error && !result && !isRunning ? (
@@ -118,6 +129,10 @@ export function RestResourcePreviewPane({
       ) : null}
       <div className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-1.5 text-[10px] text-muted-foreground">
         <span>읽기 전용 · Dataset commit 없음</span>
+        <SourceExplorationEvidenceLink
+          result={explorationResult}
+          className="text-[10px]"
+        />
         {requestId ? <span className="font-mono">request={requestId}</span> : null}
         {result ? (
           <span className="ml-auto font-mono">

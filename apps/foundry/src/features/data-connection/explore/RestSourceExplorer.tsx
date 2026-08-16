@@ -103,6 +103,8 @@ export function RestSourceExplorer({
     previewResult?.resourceName === selectedResourceName ? previewResult : null;
   const visibleError =
     previewResourceName === selectedResourceName ? testResource.error : null;
+  const visibleExploration =
+    previewResourceName === selectedResourceName ? testResource.result : null;
 
   const handlePreview = async () => {
     if (!selectedResource) return;
@@ -171,6 +173,14 @@ export function RestSourceExplorer({
             previewResourceName === selectedResourceName
           }
           requestId={testResource.requestId}
+          explorationResult={
+            visibleExploration
+              ? {
+                  explorationRunId: visibleExploration.explorationRunId,
+                  operationsPath: visibleExploration.operationsPath,
+                }
+              : null
+          }
           onPreview={() => void handlePreview()}
         />
         <RestResourceSelectionPane

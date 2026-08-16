@@ -25,6 +25,7 @@ const TABS = [
 type TabValue = (typeof TABS)[number]["value"];
 
 const RUN_TYPES = new Set([
+  "source_exploration",
   "sync",
   "transform",
   "index",

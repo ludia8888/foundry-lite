@@ -36,6 +36,7 @@ export function runPhaseLabel(phase: FoundryLiteOperationsRunPhase): string {
 }
 
 const RUN_TYPE_LABELS: Record<string, string> = {
+  source_exploration: "Source Explorer",
   sync: "Sync",
   transform: "Transform",
   index: "Index",

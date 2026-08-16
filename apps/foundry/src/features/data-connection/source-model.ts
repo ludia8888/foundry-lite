@@ -1,5 +1,16 @@
 import type { StatusIntent } from "@/components/shared/StatusPill";
 
+export interface SourceExplorationEvidence {
+  runId: string;
+  operationsPath: string;
+  href: string;
+}
+
+interface SourceExplorationResultEvidence {
+  explorationRunId: string;
+  operationsPath: string | null;
+}
+
 /** 소스 타입/kind → 한국어 라벨. */
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   rest: "REST 커넥터",
@@ -44,6 +55,7 @@ const STATUS_INTENTS: Record<string, StatusIntent> = {
   pending: "info",
   scheduled: "info",
   paused: "warning",
+  cancelled: "warning",
   failed: "danger",
   error: "danger",
   disabled: "neutral",
@@ -61,6 +73,7 @@ const STATUS_LABELS: Record<string, string> = {
   pending: "대기",
   failed: "실패",
   paused: "일시정지",
+  cancelled: "취소됨",
   disabled: "비활성",
 };
 
@@ -98,6 +111,39 @@ export function toOperationsHref(
 ): string | null {
   if (!path) return null;
   return path.startsWith("/api/") ? path.slice(4) : path;
+}
+
+export function sourceExplorationEvidence(
+  result: SourceExplorationResultEvidence | null | undefined,
+  errorDetails?: Record<string, unknown> | null,
+): SourceExplorationEvidence | null {
+  const candidate = result ?? sourceExplorationErrorEvidence(errorDetails);
+  if (!candidate) return null;
+  const expectedPath = `/api/operations/runs/source_exploration/${candidate.explorationRunId}`;
+  if (candidate.operationsPath !== expectedPath) return null;
+  const href = toOperationsHref(candidate.operationsPath);
+  return href
+    ? {
+        runId: candidate.explorationRunId,
+        operationsPath: candidate.operationsPath,
+        href,
+      }
+    : null;
+}
+
+function sourceExplorationErrorEvidence(
+  details: Record<string, unknown> | null | undefined,
+): SourceExplorationResultEvidence | null {
+  const evidence = details?.operationsEvidence;
+  if (typeof evidence !== "object" || evidence === null) return null;
+  const record = evidence as Record<string, unknown>;
+  if (record.runType !== "source_exploration") return null;
+  if (typeof record.runId !== "string" || !record.runId) return null;
+  if (typeof record.operationsPath !== "string") return null;
+  return {
+    explorationRunId: record.runId,
+    operationsPath: record.operationsPath,
+  };
 }
 
 export function toDatasetHref(

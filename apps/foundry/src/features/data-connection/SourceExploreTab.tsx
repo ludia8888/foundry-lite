@@ -28,7 +28,8 @@ import { ExplorePreviewPane } from "./explore/ExplorePreviewPane";
 import { RestSourceExplorer } from "./explore/RestSourceExplorer";
 import { ExploreSourcePanel } from "./explore/ExploreSourcePanel";
 import { ExploreSyncPanel } from "./explore/ExploreSyncPanel";
-import { readTextField } from "./source-model";
+import { SourceExplorationEvidenceLink } from "./explore/SourceExplorationEvidenceLink";
+import { readTextField, sourceExplorationEvidence } from "./source-model";
 import { WizardField } from "./wizard/WizardFields";
 
 interface SourceExploreTabProps {
@@ -114,6 +115,7 @@ function DatabaseSourceExplorer({
           rows: [],
           columns: [],
           explorationRunId: null,
+          operationsPath: null,
           errorMessage: null,
         },
       }));
@@ -134,18 +136,21 @@ function DatabaseSourceExplorer({
             rows: readExploreSampleRows(result.resultSummary),
             columns: readExploreSchemaColumns(result.resultSummary),
             explorationRunId: result.explorationRunId,
+            operationsPath: result.operationsPath,
             errorMessage: result.error ? JSON.stringify(result.error) : null,
           },
         }));
       } catch (caught) {
         const normalized = normalizeFoundryLiteError(caught);
+        const evidence = sourceExplorationEvidence(null, normalized.details);
         setPreviewsByTable((current) => ({
           ...current,
           [tableName]: {
             status: "failed",
             rows: [],
             columns: [],
-            explorationRunId: null,
+            explorationRunId: evidence?.runId ?? null,
+            operationsPath: evidence?.operationsPath ?? null,
             errorMessage: normalized.message,
           },
         }));
@@ -216,12 +221,22 @@ function DatabaseSourceExplorer({
         isRunning={treeMutation.isRunning}
         onExplore={() => void handleExplore()}
       />
-      {treeMutation.error ? <ErrorState error={treeMutation.error} /> : null}
+      {treeMutation.error ? (
+        <div className="space-y-2">
+          <ErrorState error={treeMutation.error} />
+          <SourceExplorationEvidenceLink
+            error={treeMutation.error}
+            className="inline-block text-xs"
+            label="실패한 Source Explorer 실행 조사"
+          />
+        </div>
+      ) : null}
       {hasTree ? (
         <div className="flex h-[calc(100vh-260px)] min-h-[520px] overflow-hidden rounded border bg-card">
           <ExploreSourcePanel
             tables={tables}
             explorationRunId={treeMutation.result?.explorationRunId ?? null}
+            operationsPath={treeMutation.result?.operationsPath ?? null}
             activeTable={activeTable}
             selectedTables={selectedTables}
             onPreviewTable={handlePreviewTable}

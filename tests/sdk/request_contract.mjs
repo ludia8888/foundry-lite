@@ -80,6 +80,7 @@ const client = sdk.createFoundryLiteClient({
     tenantId: "tenant-a",
     userId: "user-a",
     roles: ["operator", "admin"],
+    userAttributes: { department: "sales", region: "apac" },
     applicationId: "osdk-app-orders",
     clientId: "client-orders",
     scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
@@ -90,6 +91,15 @@ const client = sdk.createFoundryLiteClient({
 });
 coveredHelperIds.add("helpers.createFoundryLiteClient");
 const osdk = sdk.createFoundryLiteOsdkClient(client);
+assert.deepEqual(osdk.requestContext, {
+  tenantId: "tenant-a",
+  userId: "user-a",
+  roles: ["operator", "admin"],
+  userAttributes: { department: "sales", region: "apac" },
+  applicationId: "osdk-app-orders",
+  clientId: "client-orders",
+  scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
+});
 assert.equal(sdk.Order.kind, "object");
 assert.equal(sdk.Order.apiName, "Order");
 assert.equal(sdk.Order.primaryKey, "orderId");
@@ -321,6 +331,7 @@ function assertBaseHeaders(headers, surfaceId) {
   assert.equal(headers["X-Tenant-ID"], "tenant-a", surfaceId);
   assert.equal(headers["X-User-ID"], "user-a", surfaceId);
   assert.equal(headers["X-Roles"], "operator,admin", surfaceId);
+  assert.equal(headers["X-User-Attributes"], JSON.stringify({ department: "sales", region: "apac" }), surfaceId);
   assert.equal(headers["X-Foundry-Lite-App-ID"], "osdk-app-orders", surfaceId);
   assert.equal(headers["X-Foundry-Lite-Client-ID"], "client-orders", surfaceId);
   assert.equal(
@@ -2052,6 +2063,11 @@ await assertOsdkFailFast(
   "osdk.objectset.invalid-operator",
   async () => osdk(sdk.Order).where({ status: { $startsWith: "P" } }).fetchPage(),
   "INVALID_OSDK_FILTER_OPERATOR",
+);
+await assertOsdkFailFast(
+  "osdk.objectset.invalid-contains-value",
+  async () => osdk(sdk.Order).where({ status: { $contains: 1 } }).fetchPage(),
+  "INVALID_OSDK_FILTER_VALUE",
 );
 await assertOsdkFailFast(
   "osdk.objectset.invalid-order-property",
@@ -5675,10 +5691,16 @@ coveredHelperIds.add("helpers.idempotencyKey");
 assert.ok(sdk.createRequestId("screen").startsWith("screen-"));
 coveredHelperIds.add("helpers.createRequestId");
 
-assert.deepEqual(sdk.requestContextHeaders({ tenantId: "tenant-b", userId: "user-b", roles: ["operator"] }), {
+assert.deepEqual(sdk.requestContextHeaders({
+  tenantId: "tenant-b",
+  userId: "user-b",
+  roles: ["operator"],
+  userAttributes: { department: "finance" },
+}), {
   "X-Tenant-ID": "tenant-b",
   "X-User-ID": "user-b",
   "X-Roles": "operator",
+  "X-User-Attributes": JSON.stringify({ department: "finance" }),
 });
 coveredHelperIds.add("helpers.requestContextHeaders");
 

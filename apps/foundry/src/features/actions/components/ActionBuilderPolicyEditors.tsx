@@ -224,8 +224,8 @@ function ConstraintEditor(props: {
       ) : null}
       {["integer", "long", "float", "decimal"].includes(props.dataType) ? (
         <div className="grid gap-2 sm:grid-cols-2">
-          <Field label="최솟값"><Input aria-label={`${props.label} 최솟값`} type="number" value={props.value.minimum} onChange={(event) => update({ minimum: event.target.value })} /></Field>
-          <Field label="최댓값"><Input aria-label={`${props.label} 최댓값`} type="number" value={props.value.maximum} onChange={(event) => update({ maximum: event.target.value })} /></Field>
+          <Field label="최솟값"><Input aria-label={`${props.label} 최솟값`} type={props.dataType === "decimal" ? "text" : "number"} inputMode="decimal" value={props.value.minimum} onChange={(event) => update({ minimum: event.target.value })} /></Field>
+          <Field label="최댓값"><Input aria-label={`${props.label} 최댓값`} type={props.dataType === "decimal" ? "text" : "number"} inputMode="decimal" value={props.value.maximum} onChange={(event) => update({ maximum: event.target.value })} /></Field>
         </div>
       ) : null}
       {["array", "objectSet"].includes(props.dataType) ? (
@@ -286,9 +286,9 @@ function ComparisonEditor(props: {
   const update = (values: Partial<typeof props.value>) => props.onChange({ ...props.value, ...values });
   return (
     <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_100px_minmax(0,1fr)]">
-      <ConditionValueEditor label="왼쪽 조건 값" value={props.value.left} parameters={props.parameters} properties={props.properties} linkedProperties={props.linkedProperties} onChange={(left) => update({ left })} />
+      <ConditionValueEditor label="왼쪽 조건 값" value={props.value.left} parameters={props.parameters} properties={props.properties} linkedProperties={props.linkedProperties} isParameterOnly={props.isParameterOnly} onChange={(left) => update({ left })} />
       <Field label="연산자"><Select value={props.value.operator} onValueChange={(operator) => update({ operator })}><SelectTrigger aria-label="조건 연산자"><SelectValue /></SelectTrigger><SelectContent>{ACTION_BUILDER_CONDITION_OPERATORS.map((operator) => <SelectItem key={operator} value={operator}>{operator}</SelectItem>)}</SelectContent></Select></Field>
-      {props.value.operator !== "exists" ? <ConditionValueEditor label="오른쪽 조건 값" value={props.value.right} parameters={props.parameters} properties={props.properties} linkedProperties={props.linkedProperties} onChange={(right) => update({ right })} /> : <div className="self-end rounded bg-muted/40 p-2 text-[10px] text-muted-foreground">값의 존재 여부만 검사</div>}
+      {props.value.operator !== "exists" ? <ConditionValueEditor label="오른쪽 조건 값" value={props.value.right} parameters={props.parameters} properties={props.properties} linkedProperties={props.linkedProperties} isParameterOnly={props.isParameterOnly} onChange={(right) => update({ right })} /> : <div className="self-end rounded bg-muted/40 p-2 text-[10px] text-muted-foreground">값의 존재 여부만 검사</div>}
     </div>
   );
 }
@@ -310,7 +310,7 @@ function GroupEditor(props: {
       </div>
       {props.value.children.map((child) => (
         <div key={child.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-1">
-          <ConditionNodeEditor value={child} parameters={props.parameters} properties={props.properties} linkedProperties={props.linkedProperties} onChange={(next) => updateChild(child.key, next)} />
+          <ConditionNodeEditor value={child} parameters={props.parameters} properties={props.properties} linkedProperties={props.linkedProperties} isParameterOnly={props.isParameterOnly} onChange={(next) => updateChild(child.key, next)} />
           <Button size="icon-sm" variant="ghost" aria-label="하위 조건 삭제" onClick={() => props.onChange({ ...props.value, children: props.value.children.filter((item) => item.key !== child.key) })}><Trash2 /></Button>
         </div>
       ))}

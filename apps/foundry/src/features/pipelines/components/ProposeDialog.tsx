@@ -53,8 +53,8 @@ export function ProposeDialog({
         <DialogHeader>
           <DialogTitle className="text-[15px]">변경 제안 제출</DialogTitle>
           <DialogDescription className="text-xs">
-            현재 브랜치의 저장된 그래프를 리뷰어에게 제안합니다. 승인 후
-            적용하면 새 버전이 생성됩니다.
+            저장된 작업 테스트를 통과한 현재 작업을 리뷰어에게 보냅니다.
+            승인 후 적용하면 새 버전이 생성됩니다.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

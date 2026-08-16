@@ -4,6 +4,7 @@ import {
   type OsdkActionPayload,
   type OsdkActionType,
 } from "@foundry-lite/sdk";
+import { foundryLiteActionInputType, foundryLiteActionInputValue } from "@foundry-lite/sdk/action-values";
 import {
   foundryLiteActionFormView,
   useFoundryLiteMutation,
@@ -178,6 +179,7 @@ function InlineValueInput({
       autoFocus
       aria-label={ariaLabel}
       className="h-7 flex-1 px-2 text-xs"
+      inputMode={parameterType === "decimal" ? "decimal" : undefined}
       type={inputType(parameterType)}
       value={value}
       onChange={(event) => onChange(event.target.value)}
@@ -202,9 +204,7 @@ function inlineApplyRequest(
 }
 
 function typedDraft(value: string, parameterType: string): unknown {
-  if (["integer", "long", "float", "decimal"].includes(parameterType)) return Number(value);
-  if (parameterType === "boolean") return value === "true";
-  return value;
+  return foundryLiteActionInputValue(parameterType, value);
 }
 
 function draftValue(value: unknown): string {
@@ -212,12 +212,7 @@ function draftValue(value: unknown): string {
   return String(value);
 }
 
-function inputType(parameterType: string): "date" | "datetime-local" | "number" | "text" {
-  if (parameterType === "date") return "date";
-  if (parameterType === "timestamp") return "datetime-local";
-  if (["integer", "long", "float", "decimal"].includes(parameterType)) return "number";
-  return "text";
-}
+const inputType = foundryLiteActionInputType;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

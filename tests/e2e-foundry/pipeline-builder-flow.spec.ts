@@ -1335,7 +1335,7 @@ test("Trained Model builds a real scored Dataset with resolved model pins", asyn
     { pipelineId, name: branchName },
     { "Idempotency-Key": `e2e-trained-model-build-branch-${pipelineId}` },
   );
-  await apiPost<PipelineBranch>(
+  const savedBranch = await apiPost<PipelineBranch>(
     page,
     `/api/pipelines/branches/${encodeURIComponent(branch.id)}/graph`,
     {
@@ -1348,6 +1348,15 @@ test("Trained Model builds a real scored Dataset with resolved model pins", asyn
     errors: Array<Record<string, unknown>>;
   }>(page, `/api/pipelines/branches/${encodeURIComponent(branch.id)}/validate`);
   expect(validation).toMatchObject({ valid: true, errors: [] });
+  const testReceipt = await apiPost<Record<string, unknown>>(
+    page,
+    `/api/pipelines/branches/${encodeURIComponent(branch.id)}/tests/run`,
+  );
+  expect(testReceipt).toMatchObject({
+    status: "passed",
+    graphFingerprint: savedBranch.graphFingerprint,
+    proofKind: "static_graph_output_contract",
+  });
 
   const proposal = await apiPost<PipelineProposal>(
     page,
@@ -2990,6 +2999,15 @@ test("Pipeline Builder runs two Graph v2 Dataset outputs with exact UI and servi
     `/api/pipelines/branches/${encodeURIComponent(branch.id)}/validate`,
   );
   expect(validation).toMatchObject({ valid: true, errors: [] });
+  const testReceipt = await apiPost<Record<string, unknown>>(
+    page,
+    `/api/pipelines/branches/${encodeURIComponent(branch.id)}/tests/run`,
+  );
+  expect(testReceipt).toMatchObject({
+    status: "passed",
+    graphFingerprint: savedBranch.graphFingerprint,
+    proofKind: "static_graph_output_contract",
+  });
 
   const proposal = await apiPost<PipelineProposal>(
     page,
@@ -3221,6 +3239,22 @@ test("Pipeline Builder edits, proposes, deploys, runs, and materializes a backen
   ).toBe(true);
   expect(savedOutputNode).not.toHaveProperty("schema");
   await expect(page.locator("body")).toContainText(finalOutputRef);
+
+  const testButton = page.getByRole("button", {
+    name: "작업 테스트",
+  });
+  await expect(testButton).toBeEnabled();
+  const testResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/api/pipelines/branches/${branch.id}/tests/run`) &&
+      response.request().method() === "POST",
+  );
+  await testButton.click();
+  expect((await testResponse).ok()).toBe(true);
+  await expect(page.getByRole("status", { name: "작업 테스트 결과" })).toContainText(
+    "제안 준비 완료",
+  );
+  await expect(page.getByRole("button", { name: "작업 테스트 통과" })).toBeVisible();
 
   await expect(page.getByRole("button", { name: "변경 제안" })).toBeEnabled();
   await page.getByRole("button", { name: "변경 제안" }).click();

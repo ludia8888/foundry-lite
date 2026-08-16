@@ -1,3 +1,9 @@
+import { FOUNDRY_LITE_ACTION_CONDITION_OPERATORS } from "@foundry-lite/sdk/action-conditions";
+import {
+  foundryLiteActionConditionLiteralValue,
+  foundryLiteActionLiteralValue,
+} from "@foundry-lite/sdk/action-values";
+
 import {
   actionBuilderConstraintsDefinition,
   actionBuilderConstraintsFromDefinition,
@@ -7,9 +13,7 @@ import {
   type ActionBuilderConstraints,
 } from "./action-builder-constraint-model";
 
-export const ACTION_BUILDER_CONDITION_OPERATORS = [
-  "eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte", "contains", "startsWith", "exists",
-] as const;
+export const ACTION_BUILDER_CONDITION_OPERATORS = FOUNDRY_LITE_ACTION_CONDITION_OPERATORS;
 
 export type ActionBuilderDefaultKind =
   | "none" | "literal" | "parameter" | "objectProperty" | "currentUser" | "currentTime" | "generatedId";
@@ -94,22 +98,31 @@ export function newActionBuilderOverride(index: number): ActionBuilderOverride {
   };
 }
 
-export function overrideDefinition(override: ActionBuilderOverride, dataType: string): Record<string, unknown> {
+export function overrideDefinition(
+  override: ActionBuilderOverride,
+  dataType: string,
+  parameterTypes: Readonly<Record<string, string>> = {},
+): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   addTriState(config, "required", override.required);
   addTriState(config, "visible", override.visible);
   addTriState(config, "editable", override.editable);
-  const resolvedDefault = defaultDefinition(override.defaultValue);
+  const resolvedDefault = defaultDefinition(override.defaultValue, dataType);
   if (resolvedDefault) config.default = resolvedDefault;
   if (override.isConstraintsOverridden) {
     config.constraints = actionBuilderConstraintsDefinition(override.constraints, dataType);
   }
-  return { when: conditionDefinition(override.condition), config };
+  return { when: conditionDefinition(override.condition, parameterTypes), config };
 }
 
-export function defaultDefinition(value: ActionBuilderDefault): Record<string, unknown> | undefined {
+export function defaultDefinition(
+  value: ActionBuilderDefault,
+  dataType?: string,
+): Record<string, unknown> | undefined {
   if (value.kind === "none") return undefined;
-  if (value.kind === "literal") return { kind: "literal", value: parseLiteral(value.value) };
+  if (value.kind === "literal") {
+    return { kind: "literal", value: foundryLiteActionLiteralValue(dataType, value.value) };
+  }
   if (value.kind === "parameter") return { kind: "parameter", parameter: value.reference };
   if (value.kind === "objectProperty") return { kind: "objectProperty", property: value.reference };
   if (value.kind === "currentUser") return { kind: "currentUser", attribute: value.reference || "id" };
@@ -117,16 +130,25 @@ export function defaultDefinition(value: ActionBuilderDefault): Record<string, u
   return { kind: "generatedId", strategy: value.reference || "uuid" };
 }
 
-export function conditionDefinition(condition: ActionBuilderCondition): Record<string, unknown> {
+export function conditionDefinition(
+  condition: ActionBuilderCondition,
+  parameterTypes: Readonly<Record<string, string>> = {},
+): Record<string, unknown> {
   if (condition.nodeType === "group") {
-    return { [condition.combinator]: condition.children.map(conditionDefinition) };
+    return {
+      [condition.combinator]: condition.children.map((child) => conditionDefinition(child, parameterTypes)),
+    };
   }
-  if (condition.nodeType === "not") return { not: conditionDefinition(condition.child) };
+  if (condition.nodeType === "not") return { not: conditionDefinition(condition.child, parameterTypes) };
+  const leftType = conditionReferenceType(condition.left, parameterTypes);
+  const rightType = conditionReferenceType(condition.right, parameterTypes);
   const payload: Record<string, unknown> = {
     op: condition.operator,
-    left: conditionValueDefinition(condition.left),
+    left: conditionValueDefinition(condition.left, rightType, condition.operator, true),
   };
-  if (condition.operator !== "exists") payload.right = conditionValueDefinition(condition.right);
+  if (condition.operator !== "exists") {
+    payload.right = conditionValueDefinition(condition.right, leftType, condition.operator, false);
+  }
   return payload;
 }
 
@@ -211,6 +233,9 @@ export function validateActionBuilderCondition(
     if (conditionUsesGroupIdentity(condition.child)) return "그룹/역할 조건은 not으로 부정할 수 없습니다.";
     return validateActionBuilderCondition(condition.child, available, allowLinkedObject);
   }
+  if (!(ACTION_BUILDER_CONDITION_OPERATORS as readonly string[]).includes(condition.operator)) {
+    return `지원하지 않는 조건 연산자입니다: ${condition.operator || "(비어 있음)"}`;
+  }
   if (["neq", "notIn"].includes(condition.operator) && comparisonUsesGroupIdentity(condition)) {
     return "그룹/역할 조건에는 contains, in, eq 같은 긍정 연산자를 사용하세요.";
   }
@@ -234,8 +259,18 @@ function draftOverride(value: unknown, index: number): ActionBuilderOverride {
   };
 }
 
-function conditionValueDefinition(value: ActionBuilderConditionValue): Record<string, unknown> {
-  if (value.kind === "literal") return { kind: "literal", value: parseLiteral(value.value) };
+function conditionValueDefinition(
+  value: ActionBuilderConditionValue,
+  peerType: string | null,
+  operator: string,
+  isLeft: boolean,
+): Record<string, unknown> {
+  if (value.kind === "literal") {
+    return {
+      kind: "literal",
+      value: foundryLiteActionConditionLiteralValue(peerType, operator, isLeft, value.value),
+    };
+  }
   if (value.kind === "parameter") return { kind: "parameter", parameter: value.value };
   if (value.kind === "objectProperty") return { kind: "objectProperty", property: value.value };
   if (value.kind === "linkedObjectProperty") return {
@@ -246,6 +281,13 @@ function conditionValueDefinition(value: ActionBuilderConditionValue): Record<st
     aggregation: value.linkedAggregation ?? "values",
   };
   return { kind: "currentUser", attribute: value.value || "id" };
+}
+
+function conditionReferenceType(
+  value: ActionBuilderConditionValue,
+  parameterTypes: Readonly<Record<string, string>>,
+): string | null {
+  return value.kind === "parameter" ? parameterTypes[value.value] ?? null : null;
 }
 
 function conditionValueFromDefinition(value: unknown): ActionBuilderConditionValue {
@@ -309,12 +351,6 @@ function comparisonUsesGroupIdentity(
 
 function addTriState(target: Record<string, unknown>, field: string, value: "inherit" | "true" | "false") {
   if (value !== "inherit") target[field] = value === "true";
-}
-
-function parseLiteral(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  try { return JSON.parse(trimmed) as unknown; } catch { return value; }
 }
 
 function printableLiteral(value: unknown): string {
