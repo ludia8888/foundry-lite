@@ -72,6 +72,10 @@ def platform_tool_result(
 
 def hash_json(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    # codeql[py/weak-sensitive-data-hashing]
+    # This is a deterministic integrity fingerprint for arbitrary JSON ledger evidence, not a
+    # password verifier or credential store. It must remain reproducible across processes so
+    # later readback can prove that a governed result was not changed.
     return f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
 
 
