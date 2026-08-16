@@ -150,6 +150,20 @@ def test_the_allowance_is_scoped_to_one_path(tmp_path: Path) -> None:
     assert fail_on_sarif_findings.main([str(sarif)]) == 1
 
 
+def test_json_evidence_fingerprint_false_positive_is_exactly_scoped(tmp_path: Path) -> None:
+    rule_id = "py/weak-sensitive-data-hashing"
+    reviewed_path = "libs/foundry_lite/application/services/aip/fde_tool_result.py"
+    reviewed = _result(rule_id)
+    reviewed["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = reviewed_path
+    unrelated = _result(rule_id)
+    unrelated["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] = (
+        "libs/foundry_lite/application/services/auth/passwords.py"
+    )
+
+    assert fail_on_sarif_findings.main([str(_write_sarif(tmp_path / "reviewed.sarif", [reviewed]))]) == 0
+    assert fail_on_sarif_findings.main([str(_write_sarif(tmp_path / "unrelated.sarif", [unrelated]))]) == 1
+
+
 def test_every_allowance_carries_a_reason() -> None:
     """An entry without one is inherited rather than re-judged."""
     for key, reason in fail_on_sarif_findings.REVIEWED_FALSE_POSITIVES.items():

@@ -33,6 +33,16 @@ REVIEWED_FALSE_POSITIVES: dict[tuple[str, str], str] = {
         "run that detects one. CodeQL cannot tell a dict's keys from its values, so the path "
         "carries the taint of the lines beside it."
     ),
+    (
+        "py/weak-sensitive-data-hashing",
+        "libs/foundry_lite/application/services/aip/fde_tool_result.py",
+    ): (
+        "`hash_json` creates a deterministic integrity fingerprint for arbitrary JSON ledger "
+        "evidence; it is not a password verifier or credential store. The same SHA-256 digest "
+        "must be reproducible across processes so governed-release readback can detect changed "
+        "arguments and results. CodeQL labels a JSON value named password as authentication "
+        "material even though this call only fingerprints the canonical evidence envelope."
+    ),
 }
 
 
