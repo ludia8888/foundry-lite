@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+
+from scripts.quality.check_testcontainers_preflight import configure_docker_desktop_credential_path
 
 
 # Anchor every demo asset path to the real repository root so the test suite is
@@ -38,6 +41,7 @@ def _configure_xdist_foundry_home(worker_id: str | None) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    configure_docker_desktop_credential_path(os.environ)
     worker_input = getattr(config, "workerinput", None)
     worker_id = worker_input.get("workerid") if isinstance(worker_input, dict) else None
     _configure_xdist_foundry_home(worker_id)
@@ -45,8 +49,12 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture
-def foundry(tmp_path: Path) -> FoundryLite:
-    return FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+def foundry(tmp_path: Path) -> Iterator[FoundryLite]:
+    runtime = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    try:
+        yield runtime
+    finally:
+        runtime.close()
 
 
 def prepare_indexed_demo(foundry: FoundryLite) -> RequestContext:
