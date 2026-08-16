@@ -12,6 +12,7 @@ from importlib import import_module
 from typing import Any
 
 _NOT_FOUND_ERROR_CODES = {"NoSuchKey", "NoSuchBucket", "NoSuchUpload", "404", "NotFound"}
+_PRECONDITION_ERROR_CODES = {"ConditionalRequestConflict", "PreconditionFailed", "409", "412"}
 
 
 def build_s3_client(
@@ -43,6 +44,17 @@ def is_not_found_error(exc: Exception) -> bool:
         status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
         if code in _NOT_FOUND_ERROR_CODES or status == 404:
             return True
+    return False
+
+
+def is_precondition_failed_error(exc: Exception) -> bool:
+    """Classify an immutable S3 conditional-write collision."""
+
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = str((response.get("Error") or {}).get("Code", ""))
+        status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+        return code in _PRECONDITION_ERROR_CODES or status in {409, 412}
     return False
 
 

@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cryptography.fernet import Fernet
@@ -18,6 +20,37 @@ from foundry_lite.application.ports.prompt_artifact_store import (
 )
 from foundry_lite.application.ports.secret_provider import SecretValue
 from foundry_lite.infrastructure.adapters.local_prompt_artifact_store import LocalPromptArtifactStore
+from foundry_lite.infrastructure.adapters.s3_prompt_artifact_store import (
+    S3PromptArtifactStore,
+    S3PromptArtifactStoreConfig,
+)
+
+
+class _S3Error(Exception):
+    def __init__(self, code: str, status: int) -> None:
+        self.response = {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+        super().__init__(code)
+
+
+class _MemoryS3:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def put_object(self, **kwargs: Any) -> None:
+        target = (str(kwargs["Bucket"]), str(kwargs["Key"]))
+        if kwargs.get("IfNoneMatch") == "*" and target in self.objects:
+            raise _S3Error("PreconditionFailed", 412)
+        self.objects[target] = bytes(kwargs["Body"])
+
+    def get_object(self, **kwargs: Any) -> dict[str, object]:
+        target = (str(kwargs["Bucket"]), str(kwargs["Key"]))
+        if target not in self.objects:
+            raise _S3Error("NoSuchKey", 404)
+        body = self.objects[target]
+        return {"Body": BytesIO(body), "ContentLength": len(body)}
+
+    def delete_object(self, **kwargs: Any) -> None:
+        self.objects.pop((str(kwargs["Bucket"]), str(kwargs["Key"])), None)
 
 
 @dataclass(frozen=True)
@@ -403,6 +436,76 @@ def test_local_prompt_artifact_store_declares_failure_taxonomy(tmp_path: Path) -
     assert ("read_prompt_artifact", "conflict", False) in modes
     assert ("read_prompt_artifact", "not_found", False) in modes
     assert ("delete_prompt_artifact", "unavailable", True) in modes
+
+
+def test_s3_prompt_artifact_store_encrypts_reads_and_deletes_tenant_scoped_object() -> None:
+    raw_prompt = "private accounting system prompt"
+    secret = SecretValue(
+        name="aip_prompt_artifact_encryption_key",
+        version="sha256:s3-key",
+        value=Fernet.generate_key().decode("ascii"),
+    )
+    client = _MemoryS3()
+    store = S3PromptArtifactStore(
+        S3PromptArtifactStoreConfig(bucket="foundry-artifacts", prefix="qa/prompts"),
+        _StaticSecretProvider(secret),
+        client=client,
+    )
+
+    blob = store.write_prompt_artifact(PromptArtifactWrite("tenant-demo", "run-1", "compiled", raw_prompt))
+    plaintext = store.read_prompt_artifact(
+        PromptArtifactRead(
+            tenant_id="tenant-demo",
+            artifact_ref=blob.artifact_ref,
+            encryption_key_ref=blob.encryption_key_ref,
+            expected_artifact_hash=blob.artifact_hash,
+            expected_content_hash=_hash_text(raw_prompt),
+        )
+    )
+
+    assert plaintext == raw_prompt
+    assert blob.artifact_ref.startswith("s3-prompt-artifact://foundry-artifacts/qa/prompts/tenant-demo/")
+    assert all(raw_prompt.encode() not in value for value in client.objects.values())
+    with pytest.raises(PromptArtifactStoreError, match="tenant boundary"):
+        store.read_prompt_artifact(
+            PromptArtifactRead(
+                tenant_id="other-tenant",
+                artifact_ref=blob.artifact_ref,
+                encryption_key_ref=blob.encryption_key_ref,
+                expected_artifact_hash=blob.artifact_hash,
+                expected_content_hash=_hash_text(raw_prompt),
+            )
+        )
+    store.delete_prompt_artifact(PromptArtifactDelete("tenant-demo", blob.artifact_ref))
+    assert client.objects == {}
+
+
+def test_s3_prompt_artifact_store_rejects_missing_hash_mismatch_and_immutable_collision() -> None:
+    secret = SecretValue(
+        name="aip_prompt_artifact_encryption_key",
+        version="sha256:s3-key",
+        value=Fernet.generate_key().decode("ascii"),
+    )
+    store = S3PromptArtifactStore(
+        S3PromptArtifactStoreConfig(bucket="foundry-artifacts"),
+        _StaticSecretProvider(secret),
+        client=_MemoryS3(),
+    )
+    request = PromptArtifactWrite("tenant-demo", "run-1", "compiled", "first")
+    blob = store.write_prompt_artifact(request)
+
+    with pytest.raises(PromptArtifactStoreError, match="could not be stored"):
+        store.write_prompt_artifact(request)
+    with pytest.raises(PromptArtifactStoreError, match="content hash mismatch"):
+        store.read_prompt_artifact(
+            PromptArtifactRead(
+                tenant_id="tenant-demo",
+                artifact_ref=blob.artifact_ref,
+                encryption_key_ref=blob.encryption_key_ref,
+                expected_artifact_hash=blob.artifact_hash,
+                expected_content_hash=_hash_text("other"),
+            )
+        )
 
 
 def _hash_text(value: str) -> str:
