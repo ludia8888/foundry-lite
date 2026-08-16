@@ -24,7 +24,7 @@ jobs:
     name: quality-flaky-nightly
     runs-on: ubuntu-latest
     env:
-      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -95,7 +95,7 @@ jobs:
     name: quality-runtime-full
     runs-on: ubuntu-latest
     env:
-      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
     timeout-minutes: 40
     steps:
       - name: Checkout

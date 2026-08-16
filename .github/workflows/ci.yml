@@ -177,7 +177,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
     # Coverage runs the full backend suite sharded across xdist workers, one file per worker.
     # This lane was serial until the claim behind that choice was measured: sharding was said to
     # misattribute import-time lines and weaken the per-layer signal, but pytest-cov combines one
@@ -260,7 +260,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -330,7 +330,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      FASTEMBED_CACHE_PATH: ${{ runner.temp }}/fastembed_cache
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
     timeout-minutes: 20
     steps:
       - name: Checkout
