@@ -287,6 +287,8 @@ def _operation_findings(root: Path) -> list[KubernetesPackagingFinding]:
     for term in (
         "FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY",
         "FOUNDRY_LITE_OPERATIONS_CURSOR_SIGNING_KEY",
+        '"GRAFANA_ADMIN_USER"',
+        '"GRAFANA_ADMIN_PASSWORD"',
         '"immutable": True',
     ):
         if term not in secret_text:

@@ -52,6 +52,8 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
         "POSTGRES_PASSWORD": postgres_password,
         "MINIO_ROOT_USER": minio_user,
         "MINIO_ROOT_PASSWORD": minio_password,
+        "GRAFANA_ADMIN_USER": "foundry-qa-admin",
+        "GRAFANA_ADMIN_PASSWORD": secrets.token_urlsafe(36),
         "KEYCLOAK_ADMIN": "foundry-qa-admin",
         "KEYCLOAK_ADMIN_PASSWORD": keycloak_admin_password,
         "KEYCLOAK_QA_USER": "sean1234",
