@@ -34,6 +34,10 @@ from foundry_lite.infrastructure.adapters.kraken_websocket import (
     KrakenWebSocketV2Adapter,
     KrakenWebSocketV2Config,
 )
+from foundry_lite.infrastructure.adapters.kubernetes_deployment import (
+    KubernetesDeploymentConfig,
+    KubernetesInfrastructureDeploymentAdapter,
+)
 from foundry_lite.infrastructure.adapters.local_backup_artifact_store import LocalBackupArtifactStore
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
@@ -94,6 +98,8 @@ __all__ = [
     "PostgresVirtualTableReader",
     "DuckDBComputeAdapter",
     "ContainerCodeExecutionAdapter",
+    "KubernetesDeploymentConfig",
+    "KubernetesInfrastructureDeploymentAdapter",
     "DebeziumPostgresSourceConfig",
     "DebeziumPostgresStreamAdapter",
     "FakeConnectorAdapter",

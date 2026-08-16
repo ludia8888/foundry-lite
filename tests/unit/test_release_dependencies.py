@@ -12,6 +12,7 @@ from foundry_lite.application.ports.source_control_release import (
     UnavailableSourceControlReleasePort,
 )
 from foundry_lite.infrastructure.adapters.github_release import GitHubReleaseAdapter
+from foundry_lite.infrastructure.adapters.kubernetes_deployment import KubernetesInfrastructureDeploymentAdapter
 from foundry_lite.infrastructure.adapters.render_deployment import RenderInfrastructureDeploymentAdapter
 from foundry_lite.infrastructure.release_dependencies import build_governed_release_dependencies
 from foundry_lite.infrastructure.secrets.env import EnvSecretProvider
@@ -111,6 +112,44 @@ def test_registered_deployment_provider_swaps_without_application_changes() -> N
     assert dependencies.config.deployment_workload_kind == "deployment"
     assert dependencies.live_authority.deployment_provider_name == "kubernetes"
     assert dependencies.live_authority.is_deployment_provider_live is True
+
+
+def test_builtin_kubernetes_provider_composes_from_provider_neutral_coordinates() -> None:
+    environment = {
+        **_full_environment(),
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER": "kubernetes",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID": "foundry-qa/foundry-lite-api",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE": "immutable_artifact",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_WORKLOAD_KIND": "deployment",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE": "foundry-qa",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_DEPLOYMENT_NAME": "foundry-lite-api",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_CONTAINER_NAME": "api",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_IMAGE_REPOSITORY": "ghcr.io/ludia8888/foundry-lite-api",
+    }
+    environment.pop("FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID")
+    environment.pop("FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF")
+
+    dependencies = _build(environment)
+
+    adapter = dependencies.infrastructure_deployment_adapter
+    assert isinstance(adapter, KubernetesInfrastructureDeploymentAdapter)
+    assert adapter._config.namespace == "foundry-qa"
+    assert adapter._config.source_owner == "example"
+    assert dependencies.config.deployment_release_mode == "immutable_artifact"
+    assert dependencies.live_authority.deployment_provider_name == "kubernetes"
+
+
+def test_builtin_kubernetes_provider_requires_complete_target_coordinates() -> None:
+    environment = {
+        **_full_environment(),
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER": "kubernetes",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID": "foundry-qa/foundry-lite-api",
+    }
+    environment.pop("FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID")
+    environment.pop("FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF")
+
+    with pytest.raises(ValueError, match="partial"):
+        _build(environment)
 
 
 def test_registered_source_provider_swaps_without_application_changes() -> None:

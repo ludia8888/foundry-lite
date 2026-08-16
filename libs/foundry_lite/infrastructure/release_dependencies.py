@@ -29,8 +29,13 @@ from foundry_lite.application.ports.source_control_release import (
     UnavailableSourceControlReleasePort,
 )
 from foundry_lite.application.runtime_profile import RuntimeProfile
-from foundry_lite.infrastructure.adapters.github_release import GitHubReleaseAdapter, GitHubReleaseConfig
-from foundry_lite.infrastructure.adapters.render_deployment import RenderInfrastructureDeploymentAdapter
+from foundry_lite.infrastructure.governed_release_runtime_adapters import (
+    GitHubReleaseAdapter,
+    GitHubReleaseConfig,
+    KubernetesDeploymentConfig,
+    KubernetesInfrastructureDeploymentAdapter,
+    RenderInfrastructureDeploymentAdapter,
+)
 from foundry_lite.infrastructure.repositories.governed_release_live_attestation_repository import (
     SqlAlchemyGovernedReleaseLiveAttestationRepository,
 )
@@ -64,6 +69,11 @@ _GITHUB_BYPASS_POLICY_VERIFIED_ENV = "FOUNDRY_LITE_GITHUB_RELEASE_BYPASS_POLICY_
 _RENDER_SERVICE_ID_ENV = "FOUNDRY_LITE_RENDER_RELEASE_SERVICE_ID"
 _RENDER_TOKEN_REF_ENV = "FOUNDRY_LITE_RENDER_RELEASE_TOKEN_SECRET_REF"  # nosec B105 - env name, not a secret.
 _RENDER_ENVIRONMENT_ENV = "FOUNDRY_LITE_RENDER_RELEASE_ENVIRONMENT"
+_KUBERNETES_NAMESPACE_ENV = "FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE"
+_KUBERNETES_DEPLOYMENT_NAME_ENV = "FOUNDRY_LITE_KUBERNETES_RELEASE_DEPLOYMENT_NAME"
+_KUBERNETES_CONTAINER_NAME_ENV = "FOUNDRY_LITE_KUBERNETES_RELEASE_CONTAINER_NAME"
+_KUBERNETES_IMAGE_REPOSITORY_ENV = "FOUNDRY_LITE_KUBERNETES_RELEASE_IMAGE_REPOSITORY"
+_KUBERNETES_TIMEOUT_ENV = "FOUNDRY_LITE_KUBERNETES_RELEASE_TIMEOUT_SECONDS"
 _COLLECTOR_SOURCE_REVISION_ENV = "FOUNDRY_LITE_GOVERNED_RELEASE_COLLECTOR_SOURCE_REVISION"
 _RENDER_SERVICE_ID_PATTERN = re.compile(r"^srv-[a-z0-9-]{3,64}$")
 DeploymentAdapterFactory = Callable[
@@ -189,7 +199,10 @@ def _deployment_adapter(
     provider = _deployment_provider(environ)
     if provider is None:
         return UnavailableInfrastructureDeploymentAdapter()
-    registry: dict[str, DeploymentAdapterFactory] = {"render": _render_deployment_adapter}
+    registry: dict[str, DeploymentAdapterFactory] = {
+        "kubernetes": _kubernetes_deployment_adapter,
+        "render": _render_deployment_adapter,
+    }
     if factories is not None:
         registry.update({_provider_key(key): value for key, value in factories.items()})
     factory = registry.get(provider)
@@ -218,6 +231,45 @@ def _render_deployment_adapter(
     return RenderInfrastructureDeploymentAdapter(
         secret_provider,
         token_secret_ref=token_ref,
+    )
+
+
+def _kubernetes_deployment_adapter(
+    _secret_provider: SecretProvider,
+    environ: Mapping[str, str],
+) -> KubernetesInfrastructureDeploymentAdapter:
+    names = (
+        _DEPLOYMENT_SERVICE_ID_ENV,
+        _KUBERNETES_NAMESPACE_ENV,
+        _KUBERNETES_DEPLOYMENT_NAME_ENV,
+        _KUBERNETES_CONTAINER_NAME_ENV,
+        _KUBERNETES_IMAGE_REPOSITORY_ENV,
+    )
+    values = _all_or_none(environ, names, "Kubernetes governed release")
+    if values is None:
+        raise ValueError("Kubernetes governed release configuration is missing")
+    source_provider = _source_provider(environ)
+    if source_provider is None:
+        raise ValueError("Kubernetes governed release requires a configured source provider")
+    source_repository = _source_repository(environ, source_provider)
+    return KubernetesInfrastructureDeploymentAdapter(
+        KubernetesDeploymentConfig(
+            namespace=values[_KUBERNETES_NAMESPACE_ENV],
+            service_id=values[_DEPLOYMENT_SERVICE_ID_ENV],
+            deployment_name=values[_KUBERNETES_DEPLOYMENT_NAME_ENV],
+            container_name=values[_KUBERNETES_CONTAINER_NAME_ENV],
+            image_repository=values[_KUBERNETES_IMAGE_REPOSITORY_ENV],
+            source_provider=source_provider,
+            source_owner=source_repository.owner,
+            source_repository=source_repository.name,
+            source_ref=_source_base_ref(environ),
+            timeout_seconds=_bounded_float(
+                environ.get(_KUBERNETES_TIMEOUT_ENV, "15"),
+                _KUBERNETES_TIMEOUT_ENV,
+                minimum=0.1,
+                maximum=30.0,
+            ),
+        )
     )
 
 
@@ -328,6 +380,16 @@ def _nonnegative_integer(value: str, label: str) -> int:
         raise ValueError(f"{label} must be a non-negative integer") from exc
     if parsed < 0:
         raise ValueError(f"{label} must be a non-negative integer")
+    return parsed
+
+
+def _bounded_float(value: str, label: str, *, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a number") from exc
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
     return parsed
 
 
