@@ -11,6 +11,8 @@ import subprocess  # nosec B404 - fixed Helm/kubectl only; remove if arbitrary c
 from pathlib import Path
 from typing import cast
 
+import yaml
+
 from scripts.operations.bootstrap_macmini_qa_secrets import bootstrap as bootstrap_secrets
 from scripts.operations.macmini_qa_guard import (
     QA_ROOT,
@@ -44,15 +46,18 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
     ensure_qa_directories()
     chart = _qa_input_path(args.chart, is_directory=True)
     values = _qa_input_path(args.values, is_directory=False)
+    initial_auth_values = _qa_input_path(args.initial_auth_values, is_directory=False)
+    _validate_initial_auth_values(initial_auth_values)
     manifest = _load_manifest(_qa_input_path(args.image_manifest, is_directory=False))
     _ensure_namespace(args)
     _assert_fresh_release(args)
     secret_receipt = bootstrap_secrets(args)
     override, foundation = _write_overrides(args.run_id, manifest)
-    foundation_result = _helm(args, chart, values, override, foundation)
-    final_result = _helm(args, chart, values, override, None)
+    value_files = (values, initial_auth_values)
+    foundation_result = _helm(args, chart, value_files, override, foundation)
+    final_result = _helm(args, chart, value_files, override, None)
     evidence = _collect_evidence(args)
-    receipt = _receipt(args, manifest, values, override, secret_receipt, foundation_result, final_result, evidence)
+    receipt = _receipt(args, manifest, value_files, override, secret_receipt, foundation_result, final_result, evidence)
     target = QA_ROOT / "evidence" / args.run_id / "deployment-receipt.json"
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_json_receipt(target, receipt)
@@ -79,6 +84,33 @@ def _image_coordinates(name: str, value: object) -> dict[str, str]:
     return {"repository": repository, "digest": digest}
 
 
+def _validate_initial_auth_values(path: Path) -> None:
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("macmini_qa_initial_auth_values_invalid")
+    global_values = value.get("global")
+    auth = value.get("auth")
+    mcp = value.get("mcp")
+    oidc = value.get("external", {}).get("oidc") if isinstance(value.get("external"), dict) else None
+    if not all(isinstance(item, dict) for item in (global_values, auth, mcp, oidc)):
+        raise ValueError("macmini_qa_initial_auth_values_invalid")
+    global_mapping = cast(dict[str, object], global_values)
+    auth_mapping = cast(dict[str, object], auth)
+    mcp_mapping = cast(dict[str, object], mcp)
+    oidc_mapping = cast(dict[str, object], oidc)
+    expected = (
+        global_mapping.get("runtimeProfile") == "test",
+        auth_mapping.get("profile") == "header-trust",
+        isinstance(auth_mapping.get("localOAuthIssuer"), str),
+        auth_mapping.get("localOAuthIssuer") == mcp_mapping.get("publicBaseUrl"),
+        bool(auth_mapping.get("dynamicClientApplicationId")),
+        bool(auth_mapping.get("localConsentRoles")),
+        oidc_mapping.get("discoveryUrl") == "",
+    )
+    if not all(expected):
+        raise ValueError("macmini_qa_initial_auth_values_invalid")
+
+
 def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Path]:
     state = QA_ROOT / "state"
     override = state / f"{run_id}-immutable-images.json"
@@ -101,7 +133,7 @@ def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Pa
 def _helm(
     args: argparse.Namespace,
     chart: Path,
-    values: Path,
+    value_files: tuple[Path, ...],
     override: Path,
     phase_override: Path | None,
 ) -> dict[str, object]:
@@ -113,11 +145,9 @@ def _helm(
         str(chart),
         "--namespace",
         args.namespace,
-        "--values",
-        str(values),
-        "--values",
-        str(override),
     ]
+    for path in (*value_files, override):
+        command.extend(("--values", str(path)))
     if phase_override is not None:
         command.extend(("--values", str(phase_override)))
     command.extend(("--atomic", "--wait", "--wait-for-jobs", "--timeout", "20m"))
@@ -200,7 +230,7 @@ def _pod_summary(value: object) -> list[dict[str, object]]:
 def _receipt(
     args: argparse.Namespace,
     manifest: dict[str, object],
-    values: Path,
+    value_files: tuple[Path, ...],
     override: Path,
     secret_receipt: dict[str, object],
     foundation: dict[str, object],
@@ -215,7 +245,8 @@ def _receipt(
         "namespace": args.namespace,
         "gitRevision": manifest["revision"],
         "images": manifest["images"],
-        "valuesSha256": _hash_paths((values, override)),
+        "valuesSha256": _hash_paths((*value_files, override)),
+        "initialAuthMode": "embedded_oauth_smoke",
         "secretBootstrapStatus": secret_receipt["status"],
         "foundation": foundation,
         "runtime": runtime,
@@ -298,6 +329,7 @@ def main() -> int:
     parser.add_argument("--helm", default=str(QA_ROOT / "bin" / "helm"))
     parser.add_argument("--chart", required=True)
     parser.add_argument("--values", required=True)
+    parser.add_argument("--initial-auth-values", required=True)
     parser.add_argument("--image-manifest", required=True)
     parser.add_argument("--age-recipient-file", required=True)
     receipt = deploy(parser.parse_args())

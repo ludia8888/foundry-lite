@@ -48,11 +48,12 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_m
   --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
   --chart /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite \
   --values /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite/values.macmini-qa.yaml \
+  --initial-auth-values /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite/values.embedded-oauth-smoke.yaml \
   --image-manifest /Users/sean1234/foundry-qa/state/images.json \
   --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt
 ```
 
-도구는 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. final atomic upgrade의 pre-upgrade migration Job은 migration을 실제로 두 번 실행한다. 완료 영수증은 Helm revision, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.
+도구는 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. 초기 runtime은 `values.embedded-oauth-smoke.yaml`을 반드시 검증·적용해 `identity.invalid` 외부 OIDC로 잘못 부팅되는 것을 막고, tailnet 내부 폐루프를 위한 내장 OAuth 시험 모드로 시작한다. final atomic upgrade의 pre-upgrade migration Job은 migration을 실제로 두 번 실행한다. 완료 영수증은 Helm revision, 적용한 두 values 파일의 합성 hash, `initialAuthMode=embedded_oauth_smoke`, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.
 
 ## 5. 내부 tailnet 폐루프
 
