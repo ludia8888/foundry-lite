@@ -1,0 +1,86 @@
+{{- include "foundry-lite.validateProtectedProfile" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-runtime
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+data:
+  FOUNDRY_LITE_RUNTIME_PROFILE: {{ .Values.global.runtimeProfile | quote }}
+  FOUNDRY_LITE_AUTH_PROFILE: {{ .Values.auth.profile | quote }}
+  FOUNDRY_LITE_HOME: /var/data/runtime
+  FOUNDRY_LITE_DURABLE_STATE_MOUNT: /var/data
+  FOUNDRY_LITE_OAUTH_PRIVATE_KEY_PATH: /var/run/foundry-lite/oauth/{{ .Values.secrets.oauthSigningKey }}
+  FOUNDRY_LITE_ADAPTER_PROFILE: s3-storage
+  FOUNDRY_LITE_MEDIA_STORAGE_PROFILE: s3-media
+  FOUNDRY_LITE_EXTERNAL_MEDIA_PROFILE: s3-external
+  FOUNDRY_LITE_CONTENT_INDEX_PROFILE: elasticsearch
+  FOUNDRY_LITE_COMPUTE_PROFILE: kubernetes-job
+  FOUNDRY_LITE_CONNECTOR_PROFILE: rest
+  FOUNDRY_LITE_SEARCH_PROFILE: elasticsearch
+  FOUNDRY_LITE_STREAM_PROFILE: kafka
+  FOUNDRY_LITE_WORKFLOW_PROFILE: temporal
+  FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE: anthropic
+  FOUNDRY_LITE_ACTION_FILE_SCANNER_PROFILE: clamav
+  FOUNDRY_LITE_INFRASTRUCTURE_DEPLOYMENT_PROVIDER: kubernetes
+  FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE: {{ .Release.Namespace | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_SERVICE_ID: {{ .Values.api.serviceId | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_DEPLOYMENT_NAME: {{ include "foundry-lite.fullname" . | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_CONTAINER_NAME: {{ .Values.api.containerName | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_IMAGE_REPOSITORY: {{ .Values.images.api.repository | quote }}
+  FOUNDRY_LITE_S3_ENDPOINT_URL: {{ .Values.external.objectStorage.endpoint | quote }}
+  FOUNDRY_LITE_S3_BUCKET: {{ .Values.external.objectStorage.bucket | quote }}
+  FOUNDRY_LITE_S3_CREATE_BUCKET: "0"
+  FOUNDRY_LITE_KAFKA_BOOTSTRAP_SERVERS: {{ .Values.external.kafka.bootstrapServers | quote }}
+  FOUNDRY_LITE_TEMPORAL_ADDRESS: {{ .Values.external.temporal.endpoint | quote }}
+  FOUNDRY_LITE_TEMPORAL_NAMESPACE: default
+  FOUNDRY_LITE_ELASTICSEARCH_URL: {{ .Values.external.search.endpoint | quote }}
+  FOUNDRY_LITE_CLAMAV_HOST: {{ (splitList ":" .Values.external.clamav.endpoint | first) | quote }}
+  FOUNDRY_LITE_CLAMAV_PORT: {{ (splitList ":" .Values.external.clamav.endpoint | last) | quote }}
+  FOUNDRY_LITE_OIDC_ISSUER: {{ .Values.external.oidc.issuer | quote }}
+  FOUNDRY_LITE_OIDC_AUDIENCE: {{ .Values.external.oidc.audience | quote }}
+{{- if .Values.external.oidc.discoveryUrl }}
+  FOUNDRY_LITE_OIDC_DISCOVERY_URL: {{ .Values.external.oidc.discoveryUrl | quote }}
+  FOUNDRY_LITE_OIDC_HTTPS_TIMEOUT_SECONDS: "5"
+  FOUNDRY_LITE_OIDC_ALLOWED_CLIENT_IDS_JSON: {{ .Values.external.oidc.allowedClientIdsJson | quote }}
+  FOUNDRY_LITE_OIDC_CLIENT_ID_CLAIM: {{ .Values.external.oidc.clientIdClaim | quote }}
+  FOUNDRY_LITE_OIDC_SESSION_CLAIM: {{ .Values.external.oidc.sessionClaim | quote }}
+  FOUNDRY_LITE_OIDC_HUMAN_GRANT_CLAIM: {{ .Values.external.oidc.humanGrantClaim | quote }}
+  FOUNDRY_LITE_OIDC_HUMAN_GRANT_VALUE: {{ .Values.external.oidc.humanGrantValue | quote }}
+  FOUNDRY_LITE_OIDC_GRANT_TYPE_CLAIM: {{ .Values.external.oidc.grantTypeClaim | quote }}
+  FOUNDRY_LITE_OIDC_GRANT_TYPE_VALUE: {{ .Values.external.oidc.grantTypeValue | quote }}
+  FOUNDRY_LITE_OIDC_JWKS_REFRESH_INTERVAL_SECONDS: {{ .Values.external.oidc.jwksRefreshIntervalSeconds | quote }}
+  FOUNDRY_LITE_OIDC_RETIRED_KEY_GRACE_SECONDS: {{ .Values.external.oidc.retiredKeyGraceSeconds | quote }}
+{{- end }}
+{{- if .Values.mcp.publicBaseUrl }}
+  FOUNDRY_LITE_MCP_PUBLIC_BASE_URL: {{ .Values.mcp.publicBaseUrl | quote }}
+{{- end }}
+{{- if .Values.mcp.authorizationServer }}
+  FOUNDRY_LITE_MCP_AUTHORIZATION_SERVER: {{ .Values.mcp.authorizationServer | quote }}
+{{- end }}
+{{- if .Values.mcp.governedReleaseApplicationId }}
+  FOUNDRY_LITE_GOVERNED_RELEASE_APPLICATION_ID: {{ .Values.mcp.governedReleaseApplicationId | quote }}
+{{- end }}
+{{- if .Values.mcp.resourceAudienceScopePrefix }}
+  FOUNDRY_LITE_MCP_RESOURCE_AUDIENCE_SCOPE_PREFIX: {{ .Values.mcp.resourceAudienceScopePrefix | quote }}
+{{- end }}
+{{- if .Values.auth.localOAuthIssuer }}
+  FOUNDRY_LITE_OAUTH_ISSUER: {{ .Values.auth.localOAuthIssuer | quote }}
+{{- end }}
+{{- if .Values.auth.dynamicClientApplicationId }}
+  FOUNDRY_LITE_MCP_DYNAMIC_CLIENT_APPLICATION_ID: {{ .Values.auth.dynamicClientApplicationId | quote }}
+{{- end }}
+{{- if .Values.auth.localConsentRoles }}
+  FOUNDRY_LITE_MCP_LOCAL_CONSENT_ROLES: {{ .Values.auth.localConsentRoles | quote }}
+{{- end }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.external.telemetry.otlpEndpoint | quote }}
+  FOUNDRY_LITE_PROMPT_ARTIFACT_BACKEND: s3
+  FOUNDRY_LITE_BACKUP_ARTIFACT_BACKEND: s3
+  FOUNDRY_LITE_CODE_EXECUTION_IMAGE: {{ include "foundry-lite.image" (list .Values.images.codeExecution .) | quote }}
+  FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE: {{ include "foundry-lite.image" (list .Values.images.nodeCodeExecution .) | quote }}
+  FOUNDRY_LITE_TRAINED_MODEL_PROFILE: kubernetes-job
+  FOUNDRY_LITE_TRAINED_MODEL_IMAGE: {{ include "foundry-lite.image" (list .Values.images.trainedModel .) | quote }}
+  FOUNDRY_LITE_TRAINED_MODEL_WORKSPACE_ROOT: /var/data/code-execution-workspaces
+  FOUNDRY_LITE_CODE_EXECUTION_BROKER_URL: http://{{ include "foundry-lite.fullname" . }}-execution-broker:{{ .Values.executionBroker.port }}
+  FOUNDRY_LITE_CODE_EXECUTION_WORKSPACE_ROOT: /var/data/code-execution-workspaces
+  FOUNDRY_LITE_KUBERNETES_EXECUTION_NAMESPACE: {{ .Release.Namespace | quote }}
+  FOUNDRY_LITE_KUBERNETES_EXECUTION_PVC: {{ include "foundry-lite.fullname" . }}-runtime

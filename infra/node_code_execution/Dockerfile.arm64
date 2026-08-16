@@ -1,0 +1,22 @@
+FROM docker.io/library/node@sha256:253da19867dd03e2f817f433d7782adefd2a2bac8729fcd4ebc6770665167a24
+
+ARG TYPESCRIPT_VERSION=5.9.2
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+
+LABEL dev.foundry-lite.runtime-source-sha="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.revision="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.source="https://github.com/ludia8888/foundry-lite"
+
+RUN npm install --global --no-fund --no-audit "typescript@${TYPESCRIPT_VERSION}" \
+    && install -d -o 65532 -g 65532 -m 0555 /sandbox-output \
+    && (groupadd --gid 65532 sandbox 2>/dev/null || true) \
+    && (useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin sandbox 2>/dev/null || true)
+
+COPY --chown=65532:65532 \
+    libs/foundry_lite/infrastructure/runners/typescript_function_runner.mjs \
+    /opt/foundry-lite/runner/typescript_function_runner.mjs
+
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+USER 65532:65532
+WORKDIR /sandbox

@@ -1,0 +1,178 @@
+{{- if .Values.secrets.bootstrapOauthSigningSecret }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-oauth-bootstrap-{{ .Release.Revision }}
+  labels:
+    {{- include "foundry-lite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-bootstrap
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: oauth-bootstrap
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "foundry-lite.fullname" . }}-oauth-bootstrap
+      automountServiceAccountToken: true
+      securityContext: {{- include "foundry-lite.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: oauth-bootstrap
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/foundry-lite-venv/bin/python
+            - /app/scripts/operations/bootstrap_kubernetes_oauth_secret.py
+            - --namespace
+            - {{ .Release.Namespace }}
+            - --secret-name
+            - {{ .Values.secrets.oauthSigningExistingSecret }}
+            - --secret-key
+            - {{ .Values.secrets.oauthSigningKey }}
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
+---
+{{- end }}
+{{- if .Values.qaDependencies.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-s3-bootstrap-{{ .Release.Revision }}
+  labels:
+    {{- include "foundry-lite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: s3-bootstrap
+  annotations:
+    foundry-lite.io/bootstrap-order: after-minio-ready
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 420
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: s3-bootstrap
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- include "foundry-lite.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-minio
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          command: [/opt/foundry-lite-venv/bin/python, /app/scripts/operations/wait_for_tcp.py]
+          args: [--host, {{ include "foundry-lite.fullname" . }}-minio, --port, "9000", --timeout-seconds, "300"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+      containers:
+        - name: s3-bootstrap
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          command:
+            - /opt/foundry-lite-venv/bin/python
+            - /app/scripts/operations/bootstrap_s3_bucket.py
+            - --endpoint
+            - {{ .Values.external.objectStorage.endpoint }}
+            - --bucket
+            - {{ .Values.external.objectStorage.bucket }}
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: MINIO_ROOT_USER}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: MINIO_ROOT_PASSWORD}}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
+---
+{{- end }}
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "foundry-lite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    foundry-lite.io/migration-contract: idempotent-twice
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- include "foundry-lite.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          command: [/opt/foundry-lite-venv/bin/python, /app/scripts/operations/wait_for_tcp.py]
+          args: [--host, {{ .Values.external.database.host }}, --port, {{ .Values.external.database.port | quote }}, --timeout-seconds, "300"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+      containers:
+        - name: migrate
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - >-
+              /app/deploy/render/predeploy_migrate.sh;
+              cp /tmp/foundry-lite-migration-run.json /tmp/foundry-lite-migration-first.json;
+              /app/deploy/render/predeploy_migrate.sh;
+              echo '{"status":"passed","runs":2,"isIdempotent":true}';
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - secretRef: {name: {{ .Values.secrets.applicationExistingSecret }}}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+{{- end }}

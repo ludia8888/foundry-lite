@@ -1,0 +1,184 @@
+global:
+  protectedProfile: true
+  runtimeProfile: production
+  imagePullSecrets: []
+  storageClass: ""
+  revision: ""
+
+images:
+  api:
+    repository: ghcr.io/ludia8888/foundry-lite-api
+    digest: ""
+  web:
+    repository: ghcr.io/ludia8888/foundry-lite-web
+    digest: ""
+  controller:
+    repository: ghcr.io/ludia8888/foundry-lite-controller
+    digest: ""
+  codeExecution:
+    repository: ghcr.io/ludia8888/foundry-lite-code-execution
+    digest: ""
+  nodeCodeExecution:
+    repository: ghcr.io/ludia8888/foundry-lite-node-code-execution
+    digest: ""
+  trainedModel:
+    repository: ghcr.io/ludia8888/foundry-lite-trained-model
+    digest: ""
+
+secrets:
+  applicationExistingSecret: foundry-lite-application
+  oauthSigningExistingSecret: foundry-lite-oauth-signing
+  oauthSigningKey: oauth-private-key.pem
+  imagePullExistingSecret: ""
+  bootstrapOauthSigningSecret: true
+
+api:
+  replicas: 2
+  serviceId: foundry-lite-api
+  containerName: api
+  port: 10000
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "2", memory: 3Gi}
+
+web:
+  replicas: 2
+  port: 8080
+  service:
+    type: ClusterIP
+    nodePort: null
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+workers:
+  outbox:
+    enabled: true
+    module: foundry_lite_worker.outbox_publisher
+  scheduler:
+    enabled: true
+    module: foundry_lite_worker.source_scheduler
+  pipeline:
+    enabled: true
+    module: foundry_lite_worker.pipeline_control
+  action:
+    enabled: true
+    module: foundry_lite_worker.action_control
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+releaseController:
+  enabled: true
+  signatureIssuer: https://token.actions.githubusercontent.com
+  signatureIdentityRegexp: ^https://github.com/ludia8888/foundry-lite/.*$
+  pollSeconds: 5
+  timeoutSeconds: 20
+  rolloutTimeoutSeconds: 600
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+executionBroker:
+  enabled: true
+  replicas: 2
+  port: 8080
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+migrations:
+  enabled: true
+  backoffLimit: 1
+
+external:
+  database:
+    host: postgresql.example.invalid
+    port: 5432
+  objectStorage:
+    endpoint: https://s3.example.invalid
+    bucket: foundry-lite
+  kafka:
+    bootstrapServers: kafka.example.invalid:9092
+  temporal:
+    endpoint: temporal.example.invalid:7233
+  search:
+    endpoint: https://elasticsearch.example.invalid:9200
+  clamav:
+    endpoint: clamav.example.invalid:3310
+  oidc:
+    issuer: https://identity.example.invalid/realms/foundry-lite
+    discoveryUrl: https://identity.example.invalid/realms/foundry-lite/.well-known/openid-configuration
+    audience: https://foundry.example.invalid/mcp/release/foundry-lite
+    allowedClientIdsJson: '["foundry-lite-chatgpt"]'
+    clientIdClaim: azp
+    sessionClaim: sid
+    humanGrantClaim: human_grant
+    humanGrantValue: "true"
+    grantTypeClaim: authorization_grant_type
+    grantTypeValue: authorization_code
+    jwksRefreshIntervalSeconds: 60
+    retiredKeyGraceSeconds: 300
+  telemetry:
+    otlpEndpoint: http://tempo.example.invalid:4318
+
+mcp:
+  publicBaseUrl: https://foundry.example.invalid
+  authorizationServer: https://identity.example.invalid/realms/foundry-lite
+  governedReleaseApplicationId: foundry-lite
+  resourceAudienceScopePrefix: mcp-audience
+
+auth:
+  profile: oidc
+  localOAuthIssuer: ""
+  dynamicClientApplicationId: ""
+  localConsentRoles: ""
+
+qaDependencies:
+  enabled: false
+  credentialsExistingSecret: foundry-lite-qa-dependencies
+  postgresql:
+    image: docker.io/library/postgres@sha256:f6a3e92973e341fb60ad892159e2089711f3ce3ba5a1ea99dff58d6aeb443241
+    storage: 30Gi
+  minio:
+    image: docker.io/minio/minio@sha256:cb688c06c3135c6d496e2edecd85a91b43e53b6ef17cb2072b0c1832c141d1d2
+    storage: 30Gi
+  redpanda:
+    image: docker.io/redpandadata/redpanda@sha256:7e971c0dc9e14cd14e2a0fdb02205b6f67d321fa78ea303add87f44a211c3e91
+    storage: 10Gi
+  temporal:
+    image: docker.io/temporalio/auto-setup@sha256:2b2b6c46d273b91485e1179c3b3dbdd3065b8e4e1884157e92fc0b380d0798c5
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch@sha256:d42e5ef7191c231ee64cceb847dd69e3bcfb22004cd98eece6c4c558cb26090d
+    storage: 10Gi
+  clamav:
+    image: docker.io/clamav/clamav-debian@sha256:e1d132167de3261ed4963c0faff9eef8416aa475b697721414ebb1066d94718e
+  prometheus:
+    image: docker.io/prom/prometheus@sha256:eb9653beb04cb5143fd8c76aba7dcf3f3fd59bbcc183c6f385b1e77214df3cf0
+    storage: 5Gi
+  tempo:
+    image: docker.io/grafana/tempo@sha256:0f168afdf979b3796c01f26786bce250f4b9d3293b3e640a8199fe90d48e5c3a
+    storage: 5Gi
+  grafana:
+    image: docker.io/grafana/grafana@sha256:bde5c7baab9cae482cf7ef7a4c4e6b52d035e4e7a4f9784fca3a875c8a459291
+    storage: 3Gi
+  keycloak:
+    image: docker.io/keycloak/keycloak@sha256:043c86f180b45ff61331a9b7ad8ba9eb713b7862685a54a2c8595314bd6c9f18
+    publicBaseUrl: https://identity.example.invalid
+    service:
+      type: ClusterIP
+      nodePort: null
+
+networkPolicy:
+  enabled: true
+  kubernetesApiCidr: 10.43.0.1/32
+  tailscaleIngressNamespaceSelector:
+    kubernetes.io/metadata.name: kube-system
+
+backup:
+  agePublicKeyExistingSecret: foundry-lite-backup-age
+  agePublicKeyKey: recipient
+  evidencePvcSize: 10Gi
+
+runtimePersistence:
+  size: 5Gi
