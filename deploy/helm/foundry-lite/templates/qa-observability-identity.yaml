@@ -182,6 +182,16 @@ spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
       initContainers:
+        - name: wait-for-postgresql
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          command: [/opt/foundry-lite-venv/bin/python, /app/scripts/operations/wait_for_tcp.py]
+          args: [--host, {{ include "foundry-lite.fullname" . }}-postgresql, --port, "5432", --timeout-seconds, "300"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
         - name: copy-keycloak-quarkus
           image: {{ .Values.qaDependencies.keycloak.image }}
           command: [/bin/sh, -ec]

@@ -170,6 +170,16 @@ def test_postgresql_probes_use_the_digest_image_binary_path() -> None:
     assert "/usr/local/bin/pg_isready" not in datastores
 
 
+def test_keycloak_waits_for_postgresql_before_starting() -> None:
+    identity = (ROOT / "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    keycloak = identity.split("app.kubernetes.io/component: keycloak", 1)[1]
+    assert "name: wait-for-postgresql" in keycloak
+    assert 'args: [--host, {{ include "foundry-lite.fullname" . }}-postgresql, --port, "5432"' in keycloak
+
+
 def _copy_gate_tree(target: Path) -> None:
     for relative in REQUIRED_PATHS:
         source = ROOT / relative
