@@ -132,6 +132,35 @@ def test_oauth_bootstrap_deadline_includes_clean_host_image_pull() -> None:
     assert "activeDeadlineSeconds: 180" not in jobs
 
 
+def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mounts() -> None:
+    templates = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "deploy/helm/foundry-lite/templates/qa-datastores.yaml",
+            "deploy/helm/foundry-lite/templates/qa-runtime-services.yaml",
+            "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml",
+        )
+    )
+
+    for copy_target in (
+        "/etc/redpanda/. /writable-config/",
+        "/etc/temporal/config/. /writable-config/",
+        "/usr/share/elasticsearch/config/. /writable-config/",
+        "/etc/clamav/. /writable-config/",
+        "/opt/keycloak/lib/quarkus/. /writable-quarkus/",
+    ):
+        assert copy_target in templates
+    for writable_mount in (
+        "mountPath: /etc/redpanda",
+        "mountPath: /etc/temporal/config",
+        "mountPath: /usr/share/elasticsearch/config",
+        "mountPath: /run/clamav",
+        "mountPath: /opt/keycloak/lib/quarkus",
+    ):
+        assert writable_mount in templates
+    assert "command: [clamd]" in templates
+
+
 def _copy_gate_tree(target: Path) -> None:
     for relative in REQUIRED_PATHS:
         source = ROOT / relative

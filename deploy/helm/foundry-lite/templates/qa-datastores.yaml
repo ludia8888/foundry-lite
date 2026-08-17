@@ -146,6 +146,17 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: copy-redpanda-config
+          image: {{ .Values.qaDependencies.redpanda.image }}
+          command: [/bin/sh, -ec]
+          args: ["cp -a /etc/redpanda/. /writable-config/"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /writable-config}
       containers:
         - name: redpanda
           image: {{ .Values.qaDependencies.redpanda.image }}
@@ -169,8 +180,10 @@ spec:
             limits: {cpu: "2", memory: 2Gi}
           volumeMounts:
             - {name: data, mountPath: /var/lib/redpanda/data}
+            - {name: config, mountPath: /etc/redpanda}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        - {name: config, emptyDir: {sizeLimit: 32Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
   volumeClaimTemplates:
     - metadata: {name: data}

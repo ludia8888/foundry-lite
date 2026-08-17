@@ -16,6 +16,17 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: copy-temporal-config
+          image: {{ .Values.qaDependencies.temporal.image }}
+          command: [/bin/sh, -ec]
+          args: ["cp -a /etc/temporal/config/. /writable-config/"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /writable-config}
       containers:
         - name: temporal
           image: {{ .Values.qaDependencies.temporal.image }}
@@ -34,8 +45,10 @@ spec:
             requests: {cpu: 250m, memory: 512Mi}
             limits: {cpu: "2", memory: 2Gi}
           volumeMounts:
+            - {name: config, mountPath: /etc/temporal/config}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        - {name: config, emptyDir: {sizeLimit: 32Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
 ---
 apiVersion: v1
@@ -65,6 +78,17 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: copy-elasticsearch-config
+          image: {{ .Values.qaDependencies.elasticsearch.image }}
+          command: [/bin/sh, -ec]
+          args: ["cp -a /usr/share/elasticsearch/config/. /writable-config/"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /writable-config}
       containers:
         - name: elasticsearch
           image: {{ .Values.qaDependencies.elasticsearch.image }}
@@ -81,8 +105,10 @@ spec:
             limits: {cpu: "2", memory: 3Gi}
           volumeMounts:
             - {name: data, mountPath: /usr/share/elasticsearch/data}
+            - {name: config, mountPath: /usr/share/elasticsearch/config}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        - {name: config, emptyDir: {sizeLimit: 64Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
   volumeClaimTemplates:
     - metadata: {name: data}
@@ -120,9 +146,28 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 100, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: copy-clamav-runtime
+          image: {{ .Values.qaDependencies.clamav.image }}
+          command: [/bin/sh, -ec]
+          args:
+            - >-
+              cp -a /etc/clamav/. /writable-config/;
+              if [ ! -f /writable-signatures/main.cvd ]; then
+                cp -a /var/lib/clamav/. /writable-signatures/;
+              fi
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts:
+            - {name: config, mountPath: /writable-config}
+            - {name: signatures, mountPath: /writable-signatures}
       containers:
         - name: clamav
           image: {{ .Values.qaDependencies.clamav.image }}
+          command: [clamd]
+          args: [--foreground=true, --config-file=/etc/clamav/clamd.conf]
           securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
           ports: [{name: clamd, containerPort: 3310}]
           readinessProbe: {tcpSocket: {port: clamd}, initialDelaySeconds: 30, periodSeconds: 10}
@@ -133,9 +178,11 @@ spec:
           volumeMounts:
             - {name: signatures, mountPath: /var/lib/clamav}
             - {name: config, mountPath: /etc/clamav}
+            - {name: run, mountPath: /run/clamav}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - {name: config, emptyDir: {sizeLimit: 16Mi}}
+        - {name: run, emptyDir: {sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
   volumeClaimTemplates:
     - metadata: {name: signatures}

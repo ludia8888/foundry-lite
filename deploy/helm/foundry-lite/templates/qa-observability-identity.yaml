@@ -181,6 +181,17 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: copy-keycloak-quarkus
+          image: {{ .Values.qaDependencies.keycloak.image }}
+          command: [/bin/sh, -ec]
+          args: ["cp -a /opt/keycloak/lib/quarkus/. /writable-quarkus/"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts:
+            - {name: quarkus, mountPath: /writable-quarkus}
       containers:
         - name: keycloak
           image: {{ .Values.qaDependencies.keycloak.image }}
@@ -207,9 +218,11 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /opt/keycloak/data}
             - {name: realm, mountPath: /opt/keycloak/data/import, readOnly: true}
+            - {name: quarkus, mountPath: /opt/keycloak/lib/quarkus}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - {name: realm, configMap: {name: {{ include "foundry-lite.fullname" . }}-keycloak-realm}}
+        - {name: quarkus, emptyDir: {sizeLimit: 512Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
   volumeClaimTemplates:
     - metadata: {name: data}
