@@ -158,11 +158,13 @@ def test_pvc_disk_pressure_stops_at_threshold_and_cleans_resources(monkeypatch) 
     original = "ghcr.io/ludia8888/foundry-lite-api@sha256:" + ("c" * 64)
     created: list[dict[str, object]] = []
     cleaned: list[str] = []
-    disk_samples = iter((10_000_000, 9_900_000, 9_900_001))
+    disk_samples = iter((10_000_000, 9_900_000, 9_900_001, 9_999_000))
+    sleeps: list[float] = []
     monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
     monkeypatch.setattr(subject, "_create_fault_resource", lambda _args, value, _reason: created.append(value))
     monkeypatch.setattr(subject, "_cleanup_disk_fault", lambda _args, name: cleaned.append(name))
     monkeypatch.setattr(subject, "_colima_available_kib", lambda: next(disk_samples))
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
 
     def kubectl(_args: Namespace, operation: tuple[str, ...], _timeout: float) -> subprocess.CompletedProcess[bytes]:
         output = json.dumps({"bytesWritten": 112 * 1024 * 1024}).encode() if operation[0] == "logs" else b""
@@ -176,12 +178,27 @@ def test_pvc_disk_pressure_stops_at_threshold_and_cleans_resources(monkeypatch) 
     assert receipt["logicalUsagePercent"] == 87.5
     assert receipt["diskPressureAlert"] is True
     assert receipt["cleanupObserved"] is True
-    assert receipt["cleanupObservedAvailableKiB"] == 9_900_001
-    assert receipt["colimaDiskReclaimObserved"] is False
+    assert receipt["cleanupObservedAvailableKiB"] == 9_999_000
+    assert receipt["colimaDiskReclaimObserved"] is True
     assert receipt["existingMacHostPathFilled"] is False
     assert created[0]["spec"]["resources"]["requests"]["storage"] == "128Mi"  # type: ignore[index]
     assert created[1]["kind"] == "Job"
     assert cleaned == [subject._fault_resource_name("disk", "enterprise-qa")]
+    assert sleeps == [subject._DISK_RECLAIM_INTERVAL_SECONDS]
+
+
+def test_colima_disk_inventory_reads_the_pvc_data_filesystem(monkeypatch) -> None:
+    captured: list[tuple[str, ...]] = []
+    output = b"Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vdb1 100 20 80 20% /var/lib/rancher\n"
+
+    def command(operation: tuple[str, ...], _timeout: float) -> subprocess.CompletedProcess[bytes]:
+        captured.append(operation)
+        return subprocess.CompletedProcess(operation, 0, output, b"")
+
+    monkeypatch.setattr(subject, "_command", command)
+
+    assert subject._colima_available_kib() == 80
+    assert captured[0][-1] == "/var/lib/rancher/k3s/storage"
 
 
 def test_fault_command_prepends_private_tools_for_colima_restart(tmp_path: Path, monkeypatch) -> None:

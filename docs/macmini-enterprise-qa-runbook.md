@@ -151,7 +151,7 @@ Tailscale owner와 DNS가 `sean1234` 대상임을 확인한 뒤에만 443을 Web
 
 각 장애는 `scripts/operations/inject_macmini_fault.py`로 한 번에 하나만 실행하고, 원래 replica와 NetworkPolicy selector를 `finally`에서 복구한다. 추가 deny policy는 기존 allow policy를 무효화하지 못하므로 network partition은 기존 internal policy의 selector를 bounded하게 patch한 뒤 원본으로 되돌린다.
 
-지원하는 추가 안전 장애 이름은 `invalid-image`, `migration-failure`, `pvc-disk-pressure`다. `invalid-image`는 존재하지 않는 digest가 새 API replica로 승격되지 않는지 확인한 뒤 `rollout undo`가 아니라 관측한 원래 digest를 명시적으로 복원한다. `migration-failure`는 임시 immutable DB Secret과 `helm upgrade --atomic --reuse-values`로 실제 pre-upgrade migration hook을 연결 불가능한 loopback DB에 실행하고, 실패 뒤 release가 계속 `deployed`이며 live Deployment image·가용 replica가 바뀌지 않았는지 확인한다. `pvc-disk-pressure`는 전용 128 MiB `local-path` PVC만 112 MiB(87.5%)까지 채워 임계 경보를 기록하고, 더 쓰지 않은 채 Job과 PVC를 삭제하여 Colima VM disk 회복을 확인한다. macOS host path나 기존 PVC는 채우지 않는다.
+지원하는 추가 안전 장애 이름은 `invalid-image`, `migration-failure`, `pvc-disk-pressure`다. `invalid-image`는 존재하지 않는 digest가 새 API replica로 승격되지 않는지 확인한 뒤 `rollout undo`가 아니라 관측한 원래 digest를 명시적으로 복원한다. `migration-failure`는 임시 immutable DB Secret과 `helm upgrade --atomic --reuse-values`로 실제 pre-upgrade migration hook을 연결 불가능한 loopback DB에 실행하고, 실패 뒤 release가 계속 `deployed`이며 live Deployment image·가용 replica가 바뀌지 않았는지 확인한다. `pvc-disk-pressure`는 전용 128 MiB `local-path` PVC만 112 MiB(87.5%)까지 채워 임계 경보를 기록하고, 더 쓰지 않은 채 Job과 PVC를 삭제한다. 정리는 Kubernetes 리소스 부재뿐 아니라 PVC가 실제 저장되는 Colima 데이터 디스크의 `/var/lib/rancher/k3s/storage` 가용 공간 회복으로 확인한다. macOS host path나 기존 PVC는 채우지 않는다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_macmini_fault.py \
