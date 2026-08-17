@@ -9,8 +9,9 @@ import os
 import re
 import stat
 import subprocess  # nosec B404 - fixed Helm/kubectl only; remove if arbitrary command input is introduced.
+import tempfile
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import yaml
 
@@ -37,6 +38,13 @@ _IMAGE_REPOSITORIES = {
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_DOCKER = Path("/opt/homebrew/bin/docker")
+_DOCKER_SOCKET = Path("/Users/sean1234/.colima/foundry-qa/docker.sock")
+_MAX_DOCKER_OUTPUT = 8 * 1024 * 1024
+
+
+class _Digest(Protocol):
+    def update(self, value: bytes, /) -> None: ...
 
 
 def deploy(args: argparse.Namespace) -> dict[str, object]:
@@ -53,12 +61,23 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
     _ensure_namespace(args)
     _assert_fresh_release(args)
     secret_receipt = bootstrap_secrets(args)
+    image_prepull = _prepull_images(manifest, _qa_input_path(args.registry_token_file, is_directory=False))
     override, foundation = _write_overrides(args.run_id, manifest)
     value_files = (values, initial_auth_values)
     foundation_result = _helm(args, chart, value_files, override, foundation)
     final_result = _helm(args, chart, value_files, override, None)
     evidence = _collect_evidence(args)
-    receipt = _receipt(args, manifest, value_files, override, secret_receipt, foundation_result, final_result, evidence)
+    receipt = _receipt(
+        args,
+        manifest,
+        value_files,
+        override,
+        secret_receipt,
+        image_prepull,
+        foundation_result,
+        final_result,
+        evidence,
+    )
     target = QA_ROOT / "evidence" / args.run_id / "deployment-receipt.json"
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_json_receipt(target, receipt)
@@ -83,6 +102,124 @@ def _image_coordinates(name: str, value: object) -> dict[str, str]:
     if repository != _IMAGE_REPOSITORIES[name] or not _DIGEST.fullmatch(digest):
         raise ValueError("macmini_qa_image_coordinate_invalid")
     return {"repository": repository, "digest": digest}
+
+
+def _prepull_images(manifest: dict[str, object], token_path: Path) -> dict[str, object]:
+    _assert_docker_runtime()
+    token = _read_private_token(token_path)
+    images = cast(dict[str, dict[str, str]], manifest["images"])
+    output_digest = hashlib.sha256()
+    state = QA_ROOT / "state"
+    with tempfile.TemporaryDirectory(prefix=".registry-auth-", dir=state) as raw_config:
+        config = Path(raw_config)
+        config.chmod(0o700)
+        _docker_login(config, token, output_digest)
+        for name in _IMAGE_NAMES:
+            coordinate = f"{images[name]['repository']}@{images[name]['digest']}"
+            _docker_pull(config, coordinate, str(manifest["revision"]), output_digest)
+    return {
+        "status": "passed",
+        "count": len(_IMAGE_NAMES),
+        "dockerSocket": str(_DOCKER_SOCKET),
+        "outputSha256": "sha256:" + output_digest.hexdigest(),
+        "rawCredentialStored": False,
+    }
+
+
+def _assert_docker_runtime() -> None:
+    if not _DOCKER.is_file() or not os.access(_DOCKER, os.X_OK):
+        raise RuntimeError("macmini_qa_docker_cli_invalid")
+    try:
+        socket_metadata = _DOCKER_SOCKET.stat()
+    except OSError as exc:
+        raise RuntimeError("macmini_qa_docker_socket_invalid") from exc
+    if not stat.S_ISSOCK(socket_metadata.st_mode) or socket_metadata.st_uid != os.getuid():
+        raise RuntimeError("macmini_qa_docker_socket_invalid")
+
+
+def _read_private_token(path: Path) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        value = stream.read(4097).strip()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise RuntimeError("macmini_qa_registry_token_invalid")
+    if not 20 <= len(value) <= 4096 or any(character in value for character in b" \t\r\n"):
+        raise RuntimeError("macmini_qa_registry_token_invalid")
+    return value
+
+
+def _docker_login(config: Path, token: bytes, output_digest: _Digest) -> None:
+    result = _run_docker(
+        config,
+        ("login", "ghcr.io", "--username", "ludia8888", "--password-stdin"),
+        timeout=60,
+        input_bytes=token + b"\n",
+    )
+    _accept_docker_result(result, output_digest, "macmini_qa_registry_login_failed")
+
+
+def _docker_pull(config: Path, coordinate: str, revision: str, output_digest: _Digest) -> None:
+    pulled = _run_docker(config, ("pull", coordinate), timeout=1200)
+    _accept_docker_result(pulled, output_digest, "macmini_qa_image_prepull_failed")
+    inspected = _run_docker(config, ("image", "inspect", coordinate), timeout=60)
+    _accept_docker_result(inspected, output_digest, "macmini_qa_image_inspect_failed")
+    _validate_cached_image(_decode_image_inspection(inspected.stdout), coordinate, revision)
+
+
+def _decode_image_inspection(payload: bytes) -> dict[str, object]:
+    try:
+        values = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("macmini_qa_image_inspect_failed") from exc
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+        raise RuntimeError("macmini_qa_image_inspect_failed")
+    return cast(dict[str, object], values[0])
+
+
+def _validate_cached_image(value: dict[str, object], coordinate: str, revision: str) -> None:
+    config = value.get("Config")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    repo_digests = value.get("RepoDigests")
+    expected = (
+        value.get("Architecture") == "arm64",
+        value.get("Os") == "linux",
+        isinstance(labels, dict) and labels.get("org.opencontainers.image.revision") == revision,
+        isinstance(repo_digests, list) and coordinate in repo_digests,
+    )
+    if not all(expected):
+        raise RuntimeError("macmini_qa_image_inspect_failed")
+
+
+def _run_docker(
+    config: Path,
+    operation: tuple[str, ...],
+    *,
+    timeout: float,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    command = (
+        str(_DOCKER),
+        "--config",
+        str(config),
+        "--host",
+        f"unix://{_DOCKER_SOCKET}",
+        *operation,
+    )
+    return subprocess.run(  # nosec B603 - fixed Docker CLI and dedicated foundry-qa socket only.
+        command,
+        input=input_bytes,
+        check=False,
+        capture_output=True,
+        timeout=timeout,
+    )
+
+
+def _accept_docker_result(result: subprocess.CompletedProcess[bytes], output_digest: _Digest, reason: str) -> None:
+    if result.returncode != 0 or len(result.stdout) + len(result.stderr) > _MAX_DOCKER_OUTPUT:
+        raise RuntimeError(reason)
+    output_digest.update(result.stdout)
+    output_digest.update(result.stderr)
 
 
 def _validate_initial_auth_values(path: Path) -> None:
@@ -235,6 +372,7 @@ def _receipt(
     value_files: tuple[Path, ...],
     override: Path,
     secret_receipt: dict[str, object],
+    image_prepull: dict[str, object],
     foundation: dict[str, object],
     runtime: dict[str, object],
     evidence: dict[str, object],
@@ -250,6 +388,7 @@ def _receipt(
         "valuesSha256": _hash_paths((*value_files, override)),
         "initialAuthMode": "embedded_oauth_smoke",
         "secretBootstrapStatus": secret_receipt["status"],
+        "imagePrepull": image_prepull,
         "foundation": foundation,
         "runtime": runtime,
         "evidence": evidence,

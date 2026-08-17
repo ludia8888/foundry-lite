@@ -96,6 +96,71 @@ def test_macmini_profile_requires_private_registry_pull_secret() -> None:
     assert values["global"]["imagePullSecrets"] == ["foundry-lite-ghcr"]
 
 
+def test_image_prepull_uses_only_exact_digests_and_keeps_token_out_of_argv(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
+    monkeypatch.setattr(subject, "_assert_docker_runtime", lambda: None)
+    (tmp_path / "state").mkdir()
+    token = tmp_path / "state" / "github-packages-token"
+    token_value = b"ghp_test_registry_token_value_123456789"
+    token.write_bytes(token_value + b"\n")
+    token.chmod(0o600)
+    manifest = subject._load_manifest(_write_manifest(tmp_path))
+    observed: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        observed.append((command, kwargs))
+        if "inspect" in command:
+            coordinate = command[-1]
+            payload = [
+                {
+                    "Architecture": "arm64",
+                    "Os": "linux",
+                    "RepoDigests": [coordinate],
+                    "Config": {"Labels": {"org.opencontainers.image.revision": "a" * 40}},
+                }
+            ]
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload).encode(), stderr=b"")
+        return subprocess.CompletedProcess(command, 0, stdout=b"ok", stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", run)
+
+    receipt = subject._prepull_images(manifest, token)
+
+    commands = [command for command, _kwargs in observed]
+    assert receipt["status"] == "passed"
+    assert receipt["count"] == 6
+    assert receipt["rawCredentialStored"] is False
+    assert len([command for command in commands if "pull" in command]) == 6
+    assert all("@sha256:" in command[-1] for command in commands if "pull" in command)
+    assert token_value.decode() not in repr(commands)
+    login_kwargs = next(kwargs for command, kwargs in observed if "login" in command)
+    assert login_kwargs["input"] == token_value + b"\n"
+    assert not list((tmp_path / "state").glob(".registry-auth-*"))
+
+
+def test_image_prepull_fails_closed_without_exposing_registry_output(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
+    monkeypatch.setattr(subject, "_assert_docker_runtime", lambda: None)
+    (tmp_path / "state").mkdir()
+    token = tmp_path / "state" / "github-packages-token"
+    token.write_text("ghp_test_registry_token_value_123456789\n", encoding="utf-8")
+    token.chmod(0o600)
+    manifest = subject._load_manifest(_write_manifest(tmp_path))
+
+    def run(command: tuple[str, ...], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if "pull" in command:
+            return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"private registry detail")
+        return subprocess.CompletedProcess(command, 0, stdout=b"ok", stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", run)
+
+    with pytest.raises(RuntimeError, match="macmini_qa_image_prepull_failed") as error:
+        subject._prepull_images(manifest, token)
+
+    assert "private registry detail" not in str(error.value)
+    assert not list((tmp_path / "state").glob(".registry-auth-*"))
+
+
 def test_initial_deploy_requires_explicit_embedded_oauth_overlay(tmp_path: Path) -> None:
     valid = tmp_path / "embedded.yaml"
     valid.write_text(
