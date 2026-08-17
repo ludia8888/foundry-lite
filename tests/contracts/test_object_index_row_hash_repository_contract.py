@@ -10,7 +10,7 @@ import pytest
 from foundry_lite.application.ports import ObjectIndexRowHashRepository
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectIndexRowHashRepository
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
 
 
@@ -277,3 +277,30 @@ def test_object_index_row_hash_repository_contract_scopes_by_tenant_and_object_t
     assert demo_orders == {"O-2": "hash-order-2"}
     assert demo_customers == {"C-1": "hash-customer"}
     assert other_tenant_orders == {"O-1": "hash-other-tenant"}
+
+
+def test_sqlalchemy_object_index_row_hash_repository_replaces_100k_snapshot_without_variable_overflow(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'metadata-100k.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyObjectIndexRowHashRepository(engine)
+    expected_count = 100_000
+    row_hashes = {f"O-{index:06d}": f"hash-{index:06d}" for index in range(expected_count)}
+
+    with engine.begin() as transaction:
+        repository.replace_row_hashes(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            dataset_version_id="dsv_orders_100k",
+            row_hashes=row_hashes,
+            updated_at="2026-08-17T00:00:00Z",
+        )
+        stored_count = transaction.scalar(
+            select(func.count())
+            .select_from(db.object_index_row_hashes)
+            .where(db.object_index_row_hashes.c.tenant_id == "tenant-demo")
+        )
+
+    assert stored_count == expected_count

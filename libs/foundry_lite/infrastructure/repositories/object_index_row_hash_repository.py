@@ -14,6 +14,10 @@ from foundry_lite.infrastructure import schema as db
 # SQLite caps bound parameters per statement, so key deletes are chunked well
 # below the historical 999-variable limit instead of assuming a modern build.
 _DELETE_CHUNK_SIZE = 500
+# Each row has seven bound values. Keeping a batch at 100 rows stays below
+# SQLite's historical 999-variable ceiling even if a dialect rewrites the
+# executemany call into one multi-value statement.
+_INSERT_CHUNK_SIZE = 100
 
 
 class SqlAlchemyObjectIndexRowHashRepository:
@@ -97,8 +101,12 @@ class SqlAlchemyObjectIndexRowHashRepository:
     ) -> None:
         if not row_hashes:
             return
-        transaction.execute(
-            insert(db.object_index_row_hashes).values(
+        ordered_row_hashes = sorted(row_hashes.items())
+        statement = insert(db.object_index_row_hashes)
+        for start in range(0, len(ordered_row_hashes), _INSERT_CHUNK_SIZE):
+            chunk = ordered_row_hashes[start : start + _INSERT_CHUNK_SIZE]
+            transaction.execute(
+                statement,
                 [
                     {
                         "id": f"object_index_row_hash_{uuid4().hex}",
@@ -109,7 +117,6 @@ class SqlAlchemyObjectIndexRowHashRepository:
                         "dataset_version_id": dataset_version_id,
                         "updated_at": updated_at,
                     }
-                    for object_id, row_hash in sorted(row_hashes.items())
-                ]
+                    for object_id, row_hash in chunk
+                ],
             )
-        )
