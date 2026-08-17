@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import BinaryIO, Protocol, cast
 
 import boto3  # type: ignore[import-untyped]
+from botocore.config import Config  # type: ignore[import-untyped]
 
 _MAX_OBJECTS = 100_000
 _MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024
@@ -344,7 +345,8 @@ def _client() -> tuple[S3SnapshotClient, str]:
     bucket = os.environ.get("FOUNDRY_LITE_S3_BUCKET", "")
     if not endpoint or not bucket:
         raise RuntimeError("s3_snapshot_configuration_missing")
-    return cast(S3SnapshotClient, boto3.client("s3", endpoint_url=endpoint)), bucket
+    config = Config(request_checksum_calculation="when_required", s3={"payload_signing_enabled": False})
+    return cast(S3SnapshotClient, boto3.client("s3", endpoint_url=endpoint, config=config)), bucket
 
 
 def main() -> int:

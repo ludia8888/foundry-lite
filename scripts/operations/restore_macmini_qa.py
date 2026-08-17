@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess  # nosec B404 - fixed age/Helm/kubectl only; remove if arbitrary commands are introduced.
 import tarfile
@@ -43,6 +44,8 @@ _APP_DEPLOYMENTS = (
     ("foundry-lite-worker-action", 1),
 )
 _MAX_API_BYTES = 2 * 1024 * 1024
+_KUBERNETES_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
+_STORAGE_SIZE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi)$")
 
 
 def restore(args: argparse.Namespace) -> dict[str, object]:
@@ -68,6 +71,7 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
         release_chart = _archived_release_chart(payload)
         _install_recovery(args, temporary, release_values, release_chart, is_foundation=True)
         _restore_postgresql(args, payload / "postgres.dump")
+        _ensure_recovery_runtime_pvc(args, release_values)
         _scale_named(args, args.recovery_namespace, "foundry-lite", 1)
         _wait_deployment(args, args.recovery_namespace, "foundry-lite", 300)
         _restore_s3(args, payload / "s3-versions.tar")
@@ -294,6 +298,59 @@ def _foundation_values(temporary: Path) -> Path:
     )
     os.chmod(path, 0o600)
     return path
+
+
+def _ensure_recovery_runtime_pvc(args: argparse.Namespace, release_values: Path) -> None:
+    values = json.loads(release_values.read_text(encoding="utf-8"))
+    global_values = values.get("global") if isinstance(values, dict) else None
+    runtime = values.get("runtimePersistence") if isinstance(values, dict) else None
+    storage_class = global_values.get("storageClass") if isinstance(global_values, dict) else None
+    size = runtime.get("size") if isinstance(runtime, dict) else None
+    if (
+        not isinstance(runtime, dict)
+        or runtime.get("enabled") is not True
+        or not isinstance(storage_class, str)
+        or _KUBERNETES_NAME.fullmatch(storage_class) is None
+        or not isinstance(size, str)
+        or _STORAGE_SIZE.fullmatch(size) is None
+    ):
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    manifest = _runtime_pvc_manifest(args.recovery_namespace, storage_class, size)
+    result = _kubectl_input(
+        args,
+        args.recovery_namespace,
+        ("apply", "-f", "-"),
+        json.dumps(manifest, separators=(",", ":")).encode(),
+        30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("macmini_restore_runtime_pvc_apply_failed")
+
+
+def _runtime_pvc_manifest(namespace: str, storage_class: str, size: str) -> dict[str, object]:
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": "foundry-lite-runtime",
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": "foundry-lite",
+                "app.kubernetes.io/instance": "foundry-lite",
+                "app.kubernetes.io/managed-by": "Helm",
+            },
+            "annotations": {
+                "meta.helm.sh/release-name": "foundry-lite",
+                "meta.helm.sh/release-namespace": namespace,
+                "helm.sh/resource-policy": "keep",
+            },
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": storage_class,
+            "resources": {"requests": {"storage": size}},
+        },
+    }
 
 
 def _scale_named(args: argparse.Namespace, namespace: str, name: str, replicas: int) -> None:

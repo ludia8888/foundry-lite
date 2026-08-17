@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import io
 from datetime import UTC, datetime, timedelta
+from typing import Protocol, cast
 
 import pytest
 
+from scripts.operations import s3_version_snapshot as subject
 from scripts.operations.s3_version_snapshot import build_manifest, export_archive, import_archive
+
+
+class _ConfigView(Protocol):
+    request_checksum_calculation: str
+    s3: dict[str, object]
 
 
 class _FakeS3:
@@ -80,3 +87,23 @@ def test_s3_version_snapshot_refuses_nonempty_restore_target() -> None:
     target.add("existing", b"data")
     with pytest.raises(RuntimeError, match="restore_bucket_not_empty"):
         import_archive(target, "qa-bucket", io.BytesIO())
+
+
+def test_s3_snapshot_client_streams_without_rewinding_tar_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def client(service: str, **kwargs: object) -> object:
+        captured.update({"service": service, **kwargs})
+        return object()
+
+    monkeypatch.setenv("FOUNDRY_LITE_S3_ENDPOINT_URL", "http://minio:9000")
+    monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", "qa-bucket")
+    monkeypatch.setattr(subject.boto3, "client", client)
+
+    _, bucket = subject._client()
+
+    config = cast(_ConfigView, captured["config"])
+    assert bucket == "qa-bucket"
+    assert captured["service"] == "s3"
+    assert config.request_checksum_calculation == "when_required"
+    assert config.s3["payload_signing_enabled"] is False

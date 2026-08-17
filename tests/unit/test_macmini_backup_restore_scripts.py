@@ -222,6 +222,38 @@ def test_restore_requires_a_bounded_archived_release_chart(tmp_path: Path) -> No
         restore_subject._archived_release_chart(tmp_path)
 
 
+def test_restore_creates_helm_owned_runtime_pvc_before_temporary_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_values = _exact_release_values()
+    release_values["global"]["storageClass"] = "local-path"  # type: ignore[index]
+    release_values["runtimePersistence"] = {"enabled": True, "size": "5Gi"}
+    path = tmp_path / "values.json"
+    path.write_text(json.dumps(release_values), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def kubectl_input(
+        _args: argparse.Namespace,
+        namespace: str,
+        operation: tuple[str, ...],
+        payload: bytes,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        captured.update({"namespace": namespace, "operation": operation, "manifest": json.loads(payload)})
+        return subprocess.CompletedProcess(operation, 0, b"", b"")
+
+    monkeypatch.setattr(restore_subject, "_kubectl_input", kubectl_input)
+    args = argparse.Namespace(recovery_namespace="foundry-qa-recovery")
+
+    restore_subject._ensure_recovery_runtime_pvc(args, path)
+
+    manifest = captured["manifest"]
+    assert captured["namespace"] == "foundry-qa-recovery"
+    assert manifest["metadata"]["annotations"]["meta.helm.sh/release-name"] == "foundry-lite"  # type: ignore[index]
+    assert manifest["spec"]["storageClassName"] == "local-path"  # type: ignore[index]
+
+
 def test_restore_helm_install_uses_exact_values_in_two_phases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
