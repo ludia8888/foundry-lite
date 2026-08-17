@@ -25,6 +25,8 @@ from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, a
 _RECOVERY_NAMESPACE = "foundry-qa-recovery"
 _SECRETS = (
     "foundry-lite-application",
+    "foundry-lite-runtime-application",
+    "foundry-lite-migration",
     "foundry-lite-oauth-signing",
     "foundry-lite-qa-dependencies",
     "foundry-lite-backup-age",

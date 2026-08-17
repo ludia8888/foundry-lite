@@ -20,7 +20,7 @@ external:
     issuer: https://identity.invalid/realms/foundry-lite
     discoveryUrl: https://identity.invalid/realms/foundry-lite/.well-known/openid-configuration
     audience: https://foundry.invalid/mcp/release/foundry-lite
-  telemetry: {otlpEndpoint: http://foundry-lite-tempo:4318}
+  telemetry: {otlpEndpoint: http://foundry-lite-tempo:4318/v1/traces}
 
 api:
   replicas: 2

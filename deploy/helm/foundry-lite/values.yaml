@@ -27,9 +27,13 @@ images:
 
 secrets:
   applicationExistingSecret: foundry-lite-application
+  runtimeApplicationExistingSecret: foundry-lite-runtime-application
+  migrationExistingSecret: foundry-lite-migration
   oauthSigningExistingSecret: foundry-lite-oauth-signing
   oauthSigningKey: oauth-private-key.pem
   bootstrapOauthSigningSecret: true
+  # Includes a clean-host pull of the immutable API image before key generation.
+  oauthBootstrapActiveDeadlineSeconds: 900
 
 api:
   replicas: 2
@@ -119,7 +123,7 @@ external:
     jwksRefreshIntervalSeconds: 60
     retiredKeyGraceSeconds: 300
   telemetry:
-    otlpEndpoint: http://tempo.example.invalid:4318
+    otlpEndpoint: http://tempo.example.invalid:4318/v1/traces
 
 mcp:
   publicBaseUrl: https://foundry.example.invalid
@@ -139,6 +143,8 @@ qaDependencies:
   postgresql:
     image: docker.io/library/postgres@sha256:f6a3e92973e341fb60ad892159e2089711f3ce3ba5a1ea99dff58d6aeb443241
     storage: 30Gi
+    applicationRole: foundry_lite_app
+    database: foundry_lite
   minio:
     image: docker.io/minio/minio@sha256:cb688c06c3135c6d496e2edecd85a91b43e53b6ef17cb2072b0c1832c141d1d2
     storage: 30Gi
@@ -180,4 +186,5 @@ backup:
   evidencePvcSize: 10Gi
 
 runtimePersistence:
+  enabled: true
   size: 5Gi

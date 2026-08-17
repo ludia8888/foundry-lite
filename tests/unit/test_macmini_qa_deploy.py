@@ -64,9 +64,30 @@ def test_foundation_phase_disables_application_until_migration(tmp_path: Path, m
     assert immutable["global"]["revision"] == "a" * 40
     assert phase["api"]["replicas"] == 0
     assert phase["web"]["replicas"] == 0
+    assert phase["runtimePersistence"]["enabled"] is False
     assert phase["migrations"]["enabled"] is False
     assert all(not config["enabled"] for config in phase["workers"].values())
     assert override.stat().st_mode & 0o077 == 0
+
+
+def test_foundation_overrides_are_idempotent_for_exact_retry(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
+    (tmp_path / "state").mkdir()
+    manifest = subject._load_manifest(_write_manifest(tmp_path))
+
+    first = subject._write_overrides("run-1", manifest)
+    second = subject._write_overrides("run-1", manifest)
+
+    assert second == first
+    assert all(path.stat().st_mode & 0o077 == 0 for path in second)
+
+
+def test_private_override_retry_rejects_changed_payload(tmp_path: Path) -> None:
+    target = tmp_path / "override.json"
+    subject._write_private_json(target, {"revision": "first"})
+
+    with pytest.raises(RuntimeError, match="private_json_conflict"):
+        subject._write_private_json(target, {"revision": "changed"})
 
 
 def test_macmini_profile_requires_private_registry_pull_secret() -> None:
@@ -134,6 +155,32 @@ def test_migration_evidence_requires_observed_idempotent_receipt(monkeypatch) ->
     assert evidence["isIdempotent"] is True
     assert str(evidence["logSha256"]).startswith("sha256:")
     assert evidence["rawLogStored"] is False
+
+
+def test_kubectl_is_always_bound_to_the_approved_namespace(monkeypatch) -> None:
+    observed: tuple[str, ...] = ()
+
+    def fake_run(command, **_kwargs):
+        nonlocal observed
+        observed = tuple(command)
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+
+    subject._kubectl(
+        Namespace(kubectl="kubectl", kubeconfig="/private/kubeconfig", namespace="foundry-qa"),
+        ("logs", "job/foundry-lite-migrate-2", "-c", "migrate"),
+        60,
+    )
+
+    assert observed[:6] == (
+        "kubectl",
+        "--kubeconfig",
+        "/private/kubeconfig",
+        "--namespace",
+        "foundry-qa",
+        "logs",
+    )
 
 
 @pytest.mark.parametrize(

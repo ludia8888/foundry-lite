@@ -16,6 +16,8 @@ from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, a
 
 _SECRET_NAMES = (
     "foundry-lite-application",
+    "foundry-lite-runtime-application",
+    "foundry-lite-migration",
     "foundry-lite-qa-dependencies",
     "foundry-lite-backup-age",
     "foundry-lite-ghcr",
@@ -35,12 +37,15 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
     recipient = _recipient(args.age_recipient_file)
     registry_config = _registry_docker_config(args.registry_token_file)
     postgres_password = secrets.token_urlsafe(36)
+    postgres_app_password = secrets.token_urlsafe(36)
     minio_user = "foundryqa"
     minio_password = secrets.token_urlsafe(36)
     keycloak_admin_password = secrets.token_urlsafe(36)
     keycloak_author_password = secrets.token_urlsafe(24)
     keycloak_reviewer_password = secrets.token_urlsafe(24)
-    database_url = _database_url(postgres_password)
+    database_url = _database_url(postgres_password, username="postgres")
+    runtime_database_url = _database_url(postgres_app_password, username="foundry_lite_app")
+    migration_database_url = _database_url(postgres_password, username="postgres")
     application = {
         "FOUNDRY_LITE_DB_URL": database_url,
         "AWS_ACCESS_KEY_ID": minio_user,
@@ -56,6 +61,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
     }
     dependencies = {
         "POSTGRES_PASSWORD": postgres_password,
+        "POSTGRES_APP_PASSWORD": postgres_app_password,
         "MINIO_ROOT_USER": minio_user,
         "MINIO_ROOT_PASSWORD": minio_password,
         "GRAFANA_ADMIN_USER": "foundry-qa-admin",
@@ -68,6 +74,12 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
         "KEYCLOAK_QA_REVIEWER_USER_PASSWORD": keycloak_reviewer_password,
     }
     _apply_secret(args, "foundry-lite-application", application)
+    _apply_secret(
+        args,
+        "foundry-lite-runtime-application",
+        {**application, "FOUNDRY_LITE_DB_URL": runtime_database_url},
+    )
+    _apply_secret(args, "foundry-lite-migration", {"FOUNDRY_LITE_DB_URL": migration_database_url})
     _apply_secret(args, "foundry-lite-qa-dependencies", dependencies)
     _apply_secret(args, "foundry-lite-backup-age", {"recipient": recipient})
     _apply_registry_secret(args, "foundry-lite-ghcr", registry_config)
@@ -168,9 +180,9 @@ def _private_registry_token_path(raw_path: str) -> Path:
     return resolved
 
 
-def _database_url(password: str) -> str:
+def _database_url(password: str, *, username: str) -> str:
     encoded = urllib.parse.quote(password, safe="")
-    return f"postgresql+psycopg://postgres:{encoded}@foundry-lite-postgresql:5432/foundry_lite"
+    return f"postgresql+psycopg://{username}:{encoded}@foundry-lite-postgresql:5432/foundry_lite"
 
 
 def _recipient(path: str) -> str:

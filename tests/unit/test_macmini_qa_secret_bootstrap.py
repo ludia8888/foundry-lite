@@ -38,6 +38,17 @@ def test_bootstrap_generates_all_protected_runtime_signing_material(monkeypatch)
     )
 
     application = captured["foundry-lite-application"]
+    runtime_application = captured["foundry-lite-runtime-application"]
+    migration = captured["foundry-lite-migration"]
+    assert "postgres:" in application["FOUNDRY_LITE_DB_URL"]
+    assert "foundry_lite_app:" in runtime_application["FOUNDRY_LITE_DB_URL"]
+    assert "postgres:" in migration["FOUNDRY_LITE_DB_URL"]
+    assert application["FOUNDRY_LITE_DB_URL"] == migration["FOUNDRY_LITE_DB_URL"]
+    assert runtime_application["FOUNDRY_LITE_DB_URL"] != migration["FOUNDRY_LITE_DB_URL"]
+    assert (
+        runtime_application["FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY"]
+        == application["FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY"]
+    )
     assert application["FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY_ID"] == "macmini-qa-v1"
     assert application["FOUNDRY_LITE_OPERATIONS_CURSOR_SIGNING_KEY_ID"] == "macmini-qa-v1"
     assert len(application["FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY"]) >= 48
@@ -47,6 +58,7 @@ def test_bootstrap_generates_all_protected_runtime_signing_material(monkeypatch)
         != application["FOUNDRY_LITE_OPERATIONS_CURSOR_SIGNING_KEY"]
     )
     dependencies = captured["foundry-lite-qa-dependencies"]
+    assert len(dependencies["POSTGRES_APP_PASSWORD"]) >= 36
     assert dependencies["GRAFANA_ADMIN_USER"] == "foundry-qa-admin"
     assert len(dependencies["GRAFANA_ADMIN_PASSWORD"]) >= 36
     assert dependencies["GRAFANA_ADMIN_PASSWORD"] != dependencies["KEYCLOAK_ADMIN_PASSWORD"]
@@ -62,6 +74,7 @@ def test_bootstrap_generates_all_protected_runtime_signing_material(monkeypatch)
     assert referenced_dependency_keys == set(dependencies)
     assert registry == {"foundry-lite-ghcr": b'{"auths":{}}'}
     assert "foundry-lite-ghcr" in receipt["secretNames"]
+    assert "foundry-lite-runtime-application" in receipt["secretNames"]
     assert receipt["status"] == "created"
 
 

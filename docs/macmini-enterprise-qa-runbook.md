@@ -60,7 +60,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/prepare_
 
 ## 4. 최초 설치
 
-application secret, QA dependency secret, backup age recipient, pull secret은 Git이나 Helm values에 기록하지 않는다. `state/github-packages-token`은 `read:packages`만 가진 임시 token을 한 줄로 담은 `0600` 일반 파일이어야 하며, bootstrap은 이를 immutable `kubernetes.io/dockerconfigjson` Secret으로 변환한다. token 원문은 receipt나 Helm values에 남기지 않는다. 부분적으로만 생성된 secret은 자동 덮어쓰지 않고 사람이 원인을 확인하도록 실패한다.
+초기 smoke application secret, protected runtime application secret, migration secret, QA dependency secret, backup age recipient, pull secret은 Git이나 Helm values에 기록하지 않는다. 내장 OAuth smoke는 명시적인 비보호 `test` profile과 관리자 연결로만 짧게 검증한다. production OIDC 전환은 Pod rollout 전에 `applicationExistingSecret`을 별도 `foundry-lite-runtime-application` Secret으로 바꾸며, 이 최종 runtime URL은 `NOSUPERUSER`·`NOBYPASSRLS`인 `foundry_lite_app` 역할만 사용한다. Alembic migration은 별도 관리자 Secret을 사용한다. Helm의 bounded bootstrap Job은 runtime 역할이 이미 privileged이면 권한을 자동 축소해 숨기지 않고 실패하며, 현재·미래 테이블과 sequence에 필요한 DML 권한만 부여한다. `state/github-packages-token`은 `read:packages`만 가진 임시 token을 한 줄로 담은 `0600` 일반 파일이어야 하며, bootstrap은 이를 immutable `kubernetes.io/dockerconfigjson` Secret으로 변환한다. token 원문은 receipt나 Helm values에 남기지 않는다. 부분적으로만 생성된 secret은 자동 덮어쓰지 않고 사람이 원인을 확인하도록 실패한다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_macmini_qa.py \
@@ -74,7 +74,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_m
   --registry-token-file /Users/sean1234/foundry-qa/state/github-packages-token
 ```
 
-도구는 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. 초기 runtime은 `values.embedded-oauth-smoke.yaml`을 반드시 검증·적용해 `identity.invalid` 외부 OIDC로 잘못 부팅되는 것을 막고, tailnet 내부 폐루프를 위한 내장 OAuth 시험 모드로 시작한다. final atomic upgrade의 pre-upgrade migration Job은 migration을 실제로 두 번 실행한다. 완료 영수증은 Helm revision, 적용한 두 values 파일의 합성 hash, `initialAuthMode=embedded_oauth_smoke`, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.
+도구는 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. 초기 runtime은 `values.embedded-oauth-smoke.yaml`을 반드시 검증·적용해 `identity.invalid` 외부 OIDC로 잘못 부팅되는 것을 막고, 비보호 `test` profile에서 tailnet 내부 폐루프를 위한 내장 OAuth만 짧게 점검한다. pre-upgrade role bootstrap은 최종 runtime DB principal의 비슈퍼유저·`NOBYPASSRLS` 상태를 보장하고, 이어지는 migration Job은 별도 관리자 Secret으로 migration을 실제로 두 번 실행한다. 이 초기 smoke는 production RLS 합격 증거로 계산하지 않는다. Keycloak OIDC atomic 전환이 production profile과 별도 runtime Secret을 함께 선택하고 rollout을 끝낸 뒤에만 protected runtime·RLS 검증을 시작한다. 완료 영수증은 Helm revision, 적용한 두 values 파일의 합성 hash, `initialAuthMode=embedded_oauth_smoke`, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.
 
 ## 5. 내부 tailnet 폐루프
 
@@ -101,6 +101,16 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
 ```
 
 외부 OIDC 단계에서는 같은 명령에 `--bearer-token-file /Users/sean1234/foundry-qa/state/operator-token`을 추가한다. token 파일은 `0600`이어야 하며 token 원문은 stdout, config, 소크 sample, 최종 summary 어디에도 기록하지 않는다.
+
+production OIDC 전환과 위 폐루프가 끝난 뒤에는 실제 API Pod의 현재 DB 연결로 PostgreSQL object-store를 검사한다. 이 검사는 `current_user=foundry_lite_app`, 모든 privilege flag false, JSONB 15개 컬럼, 운영 인덱스 10개(그중 `jsonb_path_ops` GIN 2개), `ENABLE/FORCE RLS`와 tenant policy가 있는 9개 테이블, tenant context가 없거나 다른 tenant일 때 0건, 교차 tenant insert 차단을 요구한다. 쓰기 검사는 transaction rollback 안에서 실행한다.
+
+```bash
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python \
+  scripts/operations/verify_macmini_postgres_object_store.py \
+  --run-id "$RUN_ID" \
+  --namespace foundry-qa \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig
+```
 
 ## 6. Keycloak과 hosted ChatGPT
 

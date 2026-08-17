@@ -123,6 +123,102 @@ def test_macmini_nodeports_expose_web_api_gateway_and_keycloak_separately() -> N
     assert 'proxy_pass http://{{ include "foundry-lite.fullname" . }}-api:10000;' in web_config
 
 
+def test_oauth_bootstrap_deadline_includes_clean_host_image_pull() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
+
+    assert values["secrets"]["oauthBootstrapActiveDeadlineSeconds"] >= 900
+    assert "activeDeadlineSeconds: {{ .Values.secrets.oauthBootstrapActiveDeadlineSeconds }}" in jobs
+    assert "activeDeadlineSeconds: 180" not in jobs
+
+
+def test_api_and_workers_can_read_oauth_key_as_the_image_nonroot_principal() -> None:
+    for template_name in ("api.yaml", "workers.yaml"):
+        template = (ROOT / "deploy/helm/foundry-lite/templates" / template_name).read_text(encoding="utf-8")
+
+        assert "runAsUser: 10001" in template
+        assert "runAsGroup: 10001" in template
+        assert "fsGroup: 10001" in template
+        assert "fsGroupChangePolicy: OnRootMismatch" in template
+        assert "defaultMode: 0440" in template
+
+
+def test_otlp_http_trace_endpoint_includes_the_collector_path() -> None:
+    base = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    macmini = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))
+
+    assert base["external"]["telemetry"]["otlpEndpoint"].endswith("/v1/traces")
+    assert macmini["external"]["telemetry"]["otlpEndpoint"] == ("http://foundry-lite-tempo:4318/v1/traces")
+
+
+def test_runtime_and_migration_database_principals_are_separate() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
+    helpers = (ROOT / "deploy/helm/foundry-lite/templates/_helpers.tpl").read_text(encoding="utf-8")
+
+    assert values["secrets"]["applicationExistingSecret"] != values["secrets"]["migrationExistingSecret"]
+    assert values["secrets"]["runtimeApplicationExistingSecret"] == "foundry-lite-runtime-application"
+    assert values["qaDependencies"]["postgresql"]["applicationRole"] == "foundry_lite_app"
+    assert "bootstrap_postgres_application_role.py" in jobs
+    assert jobs.count(".Values.secrets.migrationExistingSecret") == 2
+    assert "key: POSTGRES_APP_PASSWORD" in jobs
+    assert "distinct application and migration database secrets" in helpers
+
+
+def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mounts() -> None:
+    templates = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "deploy/helm/foundry-lite/templates/qa-datastores.yaml",
+            "deploy/helm/foundry-lite/templates/qa-runtime-services.yaml",
+            "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml",
+        )
+    )
+
+    for copy_target in (
+        "cp -R /etc/redpanda/. /writable-config/",
+        "cp -R /etc/temporal/config/. /writable-config/",
+        "cp -R /usr/share/elasticsearch/config/. /writable-config/",
+        "cp -R /etc/clamav/. /writable-config/",
+        "cp -R /opt/keycloak/lib/quarkus/. /writable-quarkus/",
+    ):
+        assert copy_target in templates
+    for writable_mount in (
+        "mountPath: /etc/redpanda",
+        "mountPath: /etc/temporal/config",
+        "mountPath: /usr/share/elasticsearch/config",
+        "mountPath: /usr/share/elasticsearch/logs",
+        "mountPath: /var/log/clamav",
+        "mountPath: /run/clamav",
+        "mountPath: /opt/keycloak/lib/quarkus",
+    ):
+        assert writable_mount in templates
+    assert "command: [clamd]" in templates
+
+
+def test_postgresql_probes_use_the_digest_image_binary_path() -> None:
+    datastores = (ROOT / "deploy/helm/foundry-lite/templates/qa-datastores.yaml").read_text(encoding="utf-8")
+
+    assert datastores.count("/usr/bin/pg_isready") == 2
+    assert "/usr/local/bin/pg_isready" not in datastores
+
+
+def test_keycloak_waits_for_postgresql_before_starting() -> None:
+    identity = (ROOT / "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml").read_text(encoding="utf-8")
+
+    keycloak = identity.split("app.kubernetes.io/component: keycloak", 1)[1]
+    assert "name: wait-for-postgresql" in keycloak
+    assert 'args: [--host, {{ include "foundry-lite.fullname" . }}-postgresql, --port, "5432"' in keycloak
+
+
+def test_runtime_pvc_can_be_deferred_until_a_consumer_exists() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    runtime_pvc = (ROOT / "deploy/helm/foundry-lite/templates/runtime-pvc.yaml").read_text(encoding="utf-8")
+
+    assert values["runtimePersistence"]["enabled"] is True
+    assert runtime_pvc.startswith("{{- if .Values.runtimePersistence.enabled }}")
+
+
 def _copy_gate_tree(target: Path) -> None:
     for relative in REQUIRED_PATHS:
         source = ROOT / relative
