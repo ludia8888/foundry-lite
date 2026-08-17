@@ -56,7 +56,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/prepare_
   --run-id "$RUN_ID" --profile foundry-qa --restart
 ```
 
-합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. `uv`, kubectl, Helm, age, age-keygen, cosign, crane, kubeconform은 `/Users/sean1234/foundry-qa/bin`에 exact URL/archive member/SHA-256 검증 후 설치한다.
+합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. 준비 도구는 k3s `/readyz`를 bounded polling한 뒤 guest kubeconfig의 실제 loopback API port로 secrets encryption JSON 상태와 key hash 일치를 검증하고, 현재 `colima-foundry-qa` context를 `/Users/sean1234/foundry-qa/state/kubeconfig`에 mode `0600`으로 내보내 다시 `/readyz`를 확인한다. `uv`, kubectl, Helm, age, age-keygen, cosign, crane, kubeconform은 `/Users/sean1234/foundry-qa/bin`에 exact URL/archive member/SHA-256 검증 후 설치한다.
 
 ## 4. 최초 설치
 
@@ -65,7 +65,7 @@ application secret, QA dependency secret, backup age recipient, pull secret은 G
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_macmini_qa.py \
   --run-id "$RUN_ID" \
-  --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
   --chart /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite \
   --values /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite/values.macmini-qa.yaml \
   --initial-auth-values /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite/values.embedded-oauth-smoke.yaml \
@@ -121,7 +121,7 @@ Tailscale owner와 DNS가 `sean1234` 대상임을 확인한 뒤에만 443을 Web
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_macmini_fault.py \
   --run-id "$RUN_ID" \
-  --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
   --fault api-pod-delete
 ```
 
@@ -134,7 +134,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_m
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/backup_macmini_qa.py \
   --run-id "$RUN_ID" \
-  --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
   --bearer-token-file /Users/sean1234/foundry-qa/state/operator-token \
   --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt
 ```
@@ -144,7 +144,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/backup_m
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/restore_macmini_qa.py \
   --run-id "$RUN_ID" \
-  --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
   --age-identity-file /Users/sean1234/foundry-qa/state/age-identity.txt \
   --bearer-token-file /Users/sean1234/foundry-qa/state/operator-token
 ```
@@ -156,7 +156,7 @@ Dataset inventory, active object index, action/materialization run, row/object/h
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_soak.py \
   --run-id "$RUN_ID" \
-  --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
   --duration-seconds 86400 --interval-seconds 60 \
   --probe healthz=http://127.0.0.1:30443/healthz \
   --probe readyz=http://127.0.0.1:30443/readyz \
