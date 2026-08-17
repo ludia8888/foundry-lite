@@ -74,10 +74,20 @@ def run(argv: Sequence[str], *, timeout_seconds: float = 120.0) -> CommandResult
         list(argv),
         check=False,
         capture_output=True,
+        env=_qa_command_environment(),
         text=True,
         timeout=timeout_seconds,
     )
     return CommandResult(tuple(argv), completed.returncode, completed.stdout, completed.stderr)
+
+
+def _qa_command_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    qa_bin = str(QA_ROOT / "bin")
+    homebrew_bin = "/opt/homebrew/bin"
+    inherited = [entry for entry in environment.get("PATH", "").split(os.pathsep) if entry]
+    environment["PATH"] = os.pathsep.join(dict.fromkeys((qa_bin, homebrew_bin, *inherited)))
+    return environment
 
 
 def write_json_receipt(path: Path, payload: object) -> None:

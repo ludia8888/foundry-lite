@@ -57,6 +57,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/prepare_
 ```
 
 합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. 준비 도구는 k3s `/readyz`를 bounded polling한 뒤 guest kubeconfig의 실제 loopback API port로 secrets encryption JSON 상태와 key hash 일치를 검증하고, 현재 `colima-foundry-qa` context를 `/Users/sean1234/foundry-qa/state/kubeconfig`에 mode `0600`으로 내보내 다시 `/readyz`를 확인한다. `uv`, kubectl, Helm, age, age-keygen, cosign, crane, kubeconform은 `/Users/sean1234/foundry-qa/bin`에 exact URL/archive member/SHA-256 검증 후 설치한다.
+비대화형 SSH가 사용자 shell의 PATH를 로드하지 않아도 Colima의 Kubernetes dependency check가 QA 전용 kubectl을 찾을 수 있도록, 모든 준비 명령은 `/Users/sean1234/foundry-qa/bin`과 `/opt/homebrew/bin`을 상속 PATH 앞에 결정적으로 추가한다. 원문 PATH나 secret은 영수증에 기록하지 않는다.
 
 ## 4. 최초 설치
 
