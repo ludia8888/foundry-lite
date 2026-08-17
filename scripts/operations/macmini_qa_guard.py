@@ -74,14 +74,14 @@ def run(argv: Sequence[str], *, timeout_seconds: float = 120.0) -> CommandResult
         list(argv),
         check=False,
         capture_output=True,
-        env=_qa_command_environment(),
+        env=qa_command_environment(),
         text=True,
         timeout=timeout_seconds,
     )
     return CommandResult(tuple(argv), completed.returncode, completed.stdout, completed.stderr)
 
 
-def _qa_command_environment() -> dict[str, str]:
+def qa_command_environment() -> dict[str, str]:
     environment = dict(os.environ)
     qa_bin = str(QA_ROOT / "bin")
     homebrew_bin = "/opt/homebrew/bin"
