@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess  # nosec B404 - fixed Helm/kubectl only; remove if arbitrary command input is introduced.
 from pathlib import Path
 from typing import cast
@@ -307,10 +308,24 @@ def _qa_input_path(raw: str, *, is_directory: bool) -> Path:
 
 
 def _write_private_json(path: Path, value: object) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        _assert_existing_private_json(path, payload)
+        return
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2, sort_keys=True)
-        stream.write("\n")
+        stream.write(payload.decode())
+
+
+def _assert_existing_private_json(path: Path, expected: bytes) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise RuntimeError("macmini_qa_private_json_invalid")
+        if metadata.st_size > 1024 * 1024 or stream.read() != expected:
+            raise RuntimeError("macmini_qa_private_json_conflict")
 
 
 def _hash_paths(paths: tuple[Path, ...]) -> str:
