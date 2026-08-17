@@ -123,6 +123,15 @@ def test_macmini_nodeports_expose_web_api_gateway_and_keycloak_separately() -> N
     assert 'proxy_pass http://{{ include "foundry-lite.fullname" . }}-api:10000;' in web_config
 
 
+def test_oauth_bootstrap_deadline_includes_clean_host_image_pull() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
+
+    assert values["secrets"]["oauthBootstrapActiveDeadlineSeconds"] >= 900
+    assert "activeDeadlineSeconds: {{ .Values.secrets.oauthBootstrapActiveDeadlineSeconds }}" in jobs
+    assert "activeDeadlineSeconds: 180" not in jobs
+
+
 def _copy_gate_tree(target: Path) -> None:
     for relative in REQUIRED_PATHS:
         source = ROOT / relative

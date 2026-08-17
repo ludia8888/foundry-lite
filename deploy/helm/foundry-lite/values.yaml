@@ -30,6 +30,8 @@ secrets:
   oauthSigningExistingSecret: foundry-lite-oauth-signing
   oauthSigningKey: oauth-private-key.pem
   bootstrapOauthSigningSecret: true
+  # Includes a clean-host pull of the immutable API image before key generation.
+  oauthBootstrapActiveDeadlineSeconds: 900
 
 api:
   replicas: 2
