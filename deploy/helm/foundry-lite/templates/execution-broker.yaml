@@ -82,6 +82,8 @@ spec:
             - secretRef: {name: {{ .Values.secrets.applicationExistingSecret }}}
           env:
             - {name: PORT, value: {{ .Values.executionBroker.port | quote }}}
+            - name: FOUNDRY_LITE_KUBERNETES_EXECUTION_IMAGE_PULL_SECRETS_JSON
+              value: {{ .Values.global.imagePullSecrets | toJson | quote }}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5

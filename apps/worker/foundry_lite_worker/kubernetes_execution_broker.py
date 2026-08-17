@@ -77,8 +77,20 @@ def _broker_from_env() -> KubernetesExecutionBroker:
                 )
             ),
             pvc_mount_root=Path("/var/data"),
+            image_pull_secrets=_image_pull_secrets(),
         )
     )
+
+
+def _image_pull_secrets() -> tuple[str, ...]:
+    raw = os.environ["FOUNDRY_LITE_KUBERNETES_EXECUTION_IMAGE_PULL_SECRETS_JSON"]
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Kubernetes execution image pull secrets must be JSON") from exc
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        raise ValueError("Kubernetes execution image pull secrets must be a non-empty string list")
+    return tuple(cast(list[str], value))
 
 
 async def _json_body(request: Request) -> Mapping[str, object]:

@@ -30,6 +30,9 @@ from foundry_lite.infrastructure.adapters.container_trained_model_runtime import
 _NAME = re.compile(r"^foundry-lite-(?:python|function|model)-[0-9a-f]{32}$")
 _DIGEST_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 _INPUT_TARGET = re.compile(r"^/sandbox-inputs/input-[0-9]{4}\.parquet$")
+_KUBERNETES_DNS_SUBDOMAIN = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$"
+)
 _REQUIRED_FLAGS = frozenset(
     {
         "--pull=never",
@@ -130,6 +133,7 @@ def kubernetes_execution_job_payload(
     *,
     namespace: str,
     pvc_name: str,
+    image_pull_secrets: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Build one non-retrying, no-token, read-only, default-denied Job."""
 
@@ -139,7 +143,8 @@ def kubernetes_execution_job_payload(
         "foundry-lite.io/execution-sandbox": "true",
         "foundry-lite.io/execution-name": spec.name,
     }
-    spec_hash = kubernetes_execution_spec_hash(spec)
+    validated_pull_secrets = validate_kubernetes_image_pull_secrets(image_pull_secrets)
+    spec_hash = kubernetes_execution_spec_hash(spec, image_pull_secrets=validated_pull_secrets)
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -200,13 +205,22 @@ def kubernetes_execution_job_payload(
                             "emptyDir": {"medium": "Memory", "sizeLimit": spec.tmpfs_size},
                         },
                     ],
+                    **(
+                        {"imagePullSecrets": [{"name": name} for name in validated_pull_secrets]}
+                        if validated_pull_secrets
+                        else {}
+                    ),
                 },
             },
         },
     }
 
 
-def kubernetes_execution_spec_hash(spec: KubernetesExecutionSpec) -> str:
+def kubernetes_execution_spec_hash(
+    spec: KubernetesExecutionSpec,
+    *,
+    image_pull_secrets: tuple[str, ...] = (),
+) -> str:
     """Fingerprint every execution field used for idempotent Job reconciliation."""
 
     payload = {
@@ -225,9 +239,20 @@ def kubernetes_execution_spec_hash(spec: KubernetesExecutionSpec) -> str:
         "tmpfsSize": spec.tmpfs_size,
         "maxFileBytes": spec.max_file_bytes,
         "tmpMountPath": spec.tmp_mount_path,
+        "imagePullSecrets": validate_kubernetes_image_pull_secrets(image_pull_secrets),
     }
     encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_kubernetes_image_pull_secrets(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate bounded Kubernetes Secret references used by dynamically created Jobs."""
+
+    if len(values) > 8 or len(set(values)) != len(values):
+        raise ValueError("Kubernetes image pull secrets are invalid")
+    if any(_KUBERNETES_DNS_SUBDOMAIN.fullmatch(value) is None for value in values):
+        raise ValueError("Kubernetes image pull secret name is invalid")
+    return values
 
 
 def _command_parts(

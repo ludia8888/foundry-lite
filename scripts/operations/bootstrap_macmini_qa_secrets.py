@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import secrets
+import stat
 import subprocess  # nosec B404 - fixed kubectl only; remove if arbitrary command input is introduced.
 import urllib.parse
 from pathlib import Path
@@ -17,18 +18,22 @@ _SECRET_NAMES = (
     "foundry-lite-application",
     "foundry-lite-qa-dependencies",
     "foundry-lite-backup-age",
+    "foundry-lite-ghcr",
 )
+_REGISTRY_SERVER = "ghcr.io"
+_REGISTRY_USERNAME = "ludia8888"
 
 
 def bootstrap(args: argparse.Namespace) -> dict[str, object]:
     assert_host_boundary()
     assert_namespace(args.namespace)
-    recipient = _recipient(args.age_recipient_file)
     present = {name: _secret_exists(args, name) for name in _SECRET_NAMES}
     if all(present.values()):
         return _receipt("already_exists")
     if any(present.values()):
         raise RuntimeError("macmini_qa_secret_set_is_partial")
+    recipient = _recipient(args.age_recipient_file)
+    registry_config = _registry_docker_config(args.registry_token_file)
     postgres_password = secrets.token_urlsafe(36)
     minio_user = "foundryqa"
     minio_password = secrets.token_urlsafe(36)
@@ -62,6 +67,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
     _apply_secret(args, "foundry-lite-application", application)
     _apply_secret(args, "foundry-lite-qa-dependencies", dependencies)
     _apply_secret(args, "foundry-lite-backup-age", {"recipient": recipient})
+    _apply_registry_secret(args, "foundry-lite-ghcr", registry_config)
     _write_keycloak_login(keycloak_qa_password)
     return _receipt("created")
 
@@ -77,13 +83,37 @@ def _secret_exists(args: argparse.Namespace, name: str) -> bool:
 
 
 def _apply_secret(args: argparse.Namespace, name: str, values: dict[str, str]) -> None:
+    _apply_encoded_secret(
+        args,
+        name,
+        resource_type="Opaque",
+        data={key: base64.b64encode(value.encode()).decode() for key, value in values.items()},
+    )
+
+
+def _apply_registry_secret(args: argparse.Namespace, name: str, docker_config: bytes) -> None:
+    _apply_encoded_secret(
+        args,
+        name,
+        resource_type="kubernetes.io/dockerconfigjson",
+        data={".dockerconfigjson": base64.b64encode(docker_config).decode()},
+    )
+
+
+def _apply_encoded_secret(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    resource_type: str,
+    data: dict[str, str],
+) -> None:
     payload = {
         "apiVersion": "v1",
         "kind": "Secret",
         "metadata": {"name": name, "namespace": args.namespace, "labels": {"app.kubernetes.io/name": "foundry-lite"}},
-        "type": "Opaque",
+        "type": resource_type,
         "immutable": True,
-        "data": {key: base64.b64encode(value.encode()).decode() for key, value in values.items()},
+        "data": data,
     }
     result = subprocess.run(  # nosec B603 - namespace-bound kubectl argv; remove if shell or free argv appears.
         _kubectl(args, ("apply", "-f", "-")),
@@ -94,6 +124,45 @@ def _apply_secret(args: argparse.Namespace, name: str, values: dict[str, str]) -
     )
     if result.returncode != 0:
         raise RuntimeError("macmini_qa_secret_apply_failed")
+
+
+def _registry_docker_config(path: str) -> bytes:
+    token = _private_registry_token(path)
+    authorization = base64.b64encode(f"{_REGISTRY_USERNAME}:{token}".encode()).decode()
+    payload = {
+        "auths": {
+            _REGISTRY_SERVER: {
+                "username": _REGISTRY_USERNAME,
+                "password": token,
+                "auth": authorization,
+            }
+        }
+    }
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _private_registry_token(raw_path: str) -> str:
+    resolved = _private_registry_token_path(raw_path)
+    metadata = resolved.stat()
+    if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_size > 4096:
+        raise ValueError("macmini_qa_registry_token_file_invalid")
+    token = resolved.read_text(encoding="utf-8").strip()
+    if len(token) < 20 or len(token) > 512 or any(value.isspace() for value in token):
+        raise ValueError("macmini_qa_registry_token_file_invalid")
+    return token
+
+
+def _private_registry_token_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_symlink():
+        raise ValueError("macmini_qa_registry_token_file_invalid")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("macmini_qa_registry_token_file_invalid") from exc
+    if resolved.parent != QA_ROOT / "state" or not resolved.is_file():
+        raise ValueError("macmini_qa_registry_token_file_invalid")
+    return resolved
 
 
 def _database_url(password: str) -> str:
@@ -137,6 +206,7 @@ def main() -> int:
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--kubectl", default=str(QA_ROOT / "bin" / "kubectl"))
     parser.add_argument("--age-recipient-file", required=True)
+    parser.add_argument("--registry-token-file", required=True)
     receipt = bootstrap(parser.parse_args())
     print(json.dumps(receipt, sort_keys=True))
     return 0

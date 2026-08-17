@@ -1,6 +1,7 @@
 global:
   protectedProfile: true
   storageClass: local-path
+  imagePullSecrets: [foundry-lite-ghcr]
 
 qaDependencies:
   enabled: true

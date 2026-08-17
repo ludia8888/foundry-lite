@@ -21,6 +21,7 @@ from foundry_lite.infrastructure.kubernetes_execution_spec import (
     kubernetes_execution_job_payload,
     kubernetes_execution_spec_hash,
     parse_kubernetes_execution_command,
+    validate_kubernetes_image_pull_secrets,
 )
 
 _MAX_KUBERNETES_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -40,6 +41,7 @@ class KubernetesExecutionBrokerConfig:
     pvc_mount_root: Path
     poll_interval_seconds: float = 0.25
     observation_grace_seconds: float = 15.0
+    image_pull_secrets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +172,7 @@ class KubernetesExecutionBroker:
             spec,
             namespace=self._config.namespace,
             pvc_name=self._config.pvc_name,
+            image_pull_secrets=self._config.image_pull_secrets,
         )
         resource = self._create_or_reconcile(spec, job)
         if resource is None:
@@ -190,7 +193,10 @@ class KubernetesExecutionBroker:
         spec: KubernetesExecutionSpec,
         job: Mapping[str, object],
     ) -> Mapping[str, object] | None:
-        expected_hash = kubernetes_execution_spec_hash(spec)
+        expected_hash = kubernetes_execution_spec_hash(
+            spec,
+            image_pull_secrets=self._config.image_pull_secrets,
+        )
         try:
             response = self._send("POST", _jobs_path(self._config.namespace), job)
         except ExecutionKubernetesTransportError:
@@ -289,7 +295,10 @@ class KubernetesExecutionBroker:
             "durationMs": int((time.monotonic() - started) * 1000),
             "exitCode": exit_code,
             "reason": reason,
-            "executionSpecSha256": kubernetes_execution_spec_hash(spec),
+            "executionSpecSha256": kubernetes_execution_spec_hash(
+                spec,
+                image_pull_secrets=self._config.image_pull_secrets,
+            ),
             "resultSha256": _terminal_target_hash(spec, status, "/sandbox-output/execution-result.json")
             or _terminal_target_hash(spec, status, "/model-output/result.json"),
             "outputSha256": _terminal_target_hash(spec, status, "/sandbox-output/result.parquet"),
@@ -408,6 +417,7 @@ def _validate_config(config: KubernetesExecutionBrokerConfig) -> None:
         raise ValueError("Kubernetes execution broker poll interval is invalid")
     if config.observation_grace_seconds <= 0 or config.observation_grace_seconds > 60:
         raise ValueError("Kubernetes execution broker observation grace is invalid")
+    validate_kubernetes_image_pull_secrets(config.image_pull_secrets)
 
 
 def _validate_execution_name(name: str) -> None:

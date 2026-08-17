@@ -40,7 +40,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/prepare_
 
 ## 4. 최초 설치
 
-application secret, QA dependency secret, backup age recipient, pull secret은 Git이나 Helm values에 기록하지 않는다. 부분적으로만 생성된 secret은 자동 덮어쓰지 않고 사람이 원인을 확인하도록 실패한다.
+application secret, QA dependency secret, backup age recipient, pull secret은 Git이나 Helm values에 기록하지 않는다. `state/github-packages-token`은 `read:packages`만 가진 임시 token을 한 줄로 담은 `0600` 일반 파일이어야 하며, bootstrap은 이를 immutable `kubernetes.io/dockerconfigjson` Secret으로 변환한다. token 원문은 receipt나 Helm values에 남기지 않는다. 부분적으로만 생성된 secret은 자동 덮어쓰지 않고 사람이 원인을 확인하도록 실패한다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_macmini_qa.py \
@@ -50,7 +50,8 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_m
   --values /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite/values.macmini-qa.yaml \
   --initial-auth-values /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite/values.embedded-oauth-smoke.yaml \
   --image-manifest /Users/sean1234/foundry-qa/state/images.json \
-  --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt
+  --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt \
+  --registry-token-file /Users/sean1234/foundry-qa/state/github-packages-token
 ```
 
 도구는 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. 초기 runtime은 `values.embedded-oauth-smoke.yaml`을 반드시 검증·적용해 `identity.invalid` 외부 OIDC로 잘못 부팅되는 것을 막고, tailnet 내부 폐루프를 위한 내장 OAuth 시험 모드로 시작한다. final atomic upgrade의 pre-upgrade migration Job은 migration을 실제로 두 번 실행한다. 완료 영수증은 Helm revision, 적용한 두 values 파일의 합성 hash, `initialAuthMode=embedded_oauth_smoke`, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.

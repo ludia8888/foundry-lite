@@ -69,6 +69,12 @@ def test_foundation_phase_disables_application_until_migration(tmp_path: Path, m
     assert override.stat().st_mode & 0o077 == 0
 
 
+def test_macmini_profile_requires_private_registry_pull_secret() -> None:
+    values = subject.yaml.safe_load(Path("deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))
+
+    assert values["global"]["imagePullSecrets"] == ["foundry-lite-ghcr"]
+
+
 def test_initial_deploy_requires_explicit_embedded_oauth_overlay(tmp_path: Path) -> None:
     valid = tmp_path / "embedded.yaml"
     valid.write_text(

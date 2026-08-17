@@ -29,7 +29,6 @@ secrets:
   applicationExistingSecret: foundry-lite-application
   oauthSigningExistingSecret: foundry-lite-oauth-signing
   oauthSigningKey: oauth-private-key.pem
-  imagePullExistingSecret: ""
   bootstrapOauthSigningSecret: true
 
 api:

@@ -332,6 +332,7 @@ def main() -> int:
     parser.add_argument("--initial-auth-values", required=True)
     parser.add_argument("--image-manifest", required=True)
     parser.add_argument("--age-recipient-file", required=True)
+    parser.add_argument("--registry-token-file", required=True)
     receipt = deploy(parser.parse_args())
     print(json.dumps(receipt, sort_keys=True))
     return 0

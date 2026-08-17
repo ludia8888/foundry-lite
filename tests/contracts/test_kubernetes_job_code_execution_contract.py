@@ -119,6 +119,49 @@ def test_kubernetes_job_payload_enforces_digest_identity_resources_and_no_networ
     assert len(payload["metadata"]["annotations"]["foundry-lite.io/execution-spec-sha256"]) == 64
 
 
+def test_kubernetes_job_payload_binds_private_registry_secret_into_reconcile_hash(tmp_path: Path) -> None:
+    pvc_root, workspace, command = _workspace_command(tmp_path)
+    spec = parse_kubernetes_execution_command(
+        command,
+        timeout_seconds=600,
+        shared_workspace_root=workspace,
+        pvc_mount_root=pvc_root,
+    )
+
+    private = kubernetes_execution_job_payload(
+        spec,
+        namespace="foundry-qa",
+        pvc_name="foundry-runtime",
+        image_pull_secrets=("foundry-lite-ghcr",),
+    )
+    public = kubernetes_execution_job_payload(spec, namespace="foundry-qa", pvc_name="foundry-runtime")
+
+    assert private["spec"]["template"]["spec"]["imagePullSecrets"] == [{"name": "foundry-lite-ghcr"}]
+    assert (
+        private["metadata"]["annotations"]["foundry-lite.io/execution-spec-sha256"]
+        != public["metadata"]["annotations"]["foundry-lite.io/execution-spec-sha256"]
+    )
+
+
+@pytest.mark.parametrize("name", ("UPPERCASE", "bad_name", "double..dot", "-leading"))
+def test_kubernetes_job_payload_rejects_invalid_pull_secret_name(tmp_path: Path, name: str) -> None:
+    pvc_root, workspace, command = _workspace_command(tmp_path)
+    spec = parse_kubernetes_execution_command(
+        command,
+        timeout_seconds=600,
+        shared_workspace_root=workspace,
+        pvc_mount_root=pvc_root,
+    )
+
+    with pytest.raises(ValueError, match="pull secret name"):
+        kubernetes_execution_job_payload(
+            spec,
+            namespace="foundry-qa",
+            pvc_name="foundry-runtime",
+            image_pull_secrets=(name,),
+        )
+
+
 def test_kubernetes_execution_command_rejects_mutable_image_network_or_workspace_escape(tmp_path: Path) -> None:
     pvc_root, workspace, command = _workspace_command(tmp_path)
 
@@ -474,12 +517,17 @@ def test_execution_broker_worker_builds_only_fixed_environment_config(
     monkeypatch.setenv("FOUNDRY_LITE_KUBERNETES_EXECUTION_NAMESPACE", "foundry-qa")
     monkeypatch.setenv("FOUNDRY_LITE_KUBERNETES_EXECUTION_PVC", "foundry-runtime")
     monkeypatch.setenv("FOUNDRY_LITE_CODE_EXECUTION_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_KUBERNETES_EXECUTION_IMAGE_PULL_SECRETS_JSON",
+        '["foundry-lite-ghcr"]',
+    )
 
     assert broker_worker._broker_from_env() is marker
     assert observed[0].namespace == "foundry-qa"
     assert observed[0].pvc_name == "foundry-runtime"
     assert observed[0].shared_workspace_root == tmp_path
     assert observed[0].pvc_mount_root == Path("/var/data")
+    assert observed[0].image_pull_secrets == ("foundry-lite-ghcr",)
 
 
 def test_execution_broker_worker_main_binds_cluster_service_without_access_log(

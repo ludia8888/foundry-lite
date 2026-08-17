@@ -290,6 +290,9 @@ def _operation_findings(root: Path) -> list[KubernetesPackagingFinding]:
         "FOUNDRY_LITE_OPERATIONS_CURSOR_SIGNING_KEY",
         '"GRAFANA_ADMIN_USER"',
         '"GRAFANA_ADMIN_PASSWORD"',
+        '"foundry-lite-ghcr"',
+        '"kubernetes.io/dockerconfigjson"',
+        "registry_token_file",
         '"immutable": True',
     ):
         if term not in secret_text:
@@ -299,7 +302,13 @@ def _operation_findings(root: Path) -> list[KubernetesPackagingFinding]:
     for term in ('"age-keygen"', '"uv"'):
         if term not in installer_text:
             findings.append(_finding("macmini_bootstrap_tool_missing", installer_path, term))
-    for term in ("--atomic", "--wait-for-jobs", '"migrations": {"enabled": False}', "_IMAGE_REPOSITORIES"):
+    for term in (
+        "--atomic",
+        "--wait-for-jobs",
+        '"migrations": {"enabled": False}',
+        "_IMAGE_REPOSITORIES",
+        '"--registry-token-file"',
+    ):
         if term not in deploy_text:
             findings.append(_finding("macmini_deploy_contract_missing", deploy_path, term))
     for path in worker_paths:
