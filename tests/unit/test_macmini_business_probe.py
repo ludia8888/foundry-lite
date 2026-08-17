@@ -6,6 +6,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from foundry_lite_api import runtime as api_runtime
+from foundry_lite_api.main import app
 
 from scripts.operations import run_macmini_business_probe as subject
 from scripts.operations.run_macmini_business_probe import (
@@ -55,6 +60,32 @@ class FakeClient(ApiClient):
         return self.responses[("POST", path)].pop(0)
 
 
+class FastApiProbeClient(ApiClient):
+    base_url = "http://127.0.0.1:30443"
+
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+        self.test_headers = {
+            "X-Tenant-ID": "tenant-demo",
+            "X-User-ID": "enterprise-qa-operator",
+            "X-Roles": "admin,data_engineer,ops_manager",
+        }
+
+    def json_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: object | None = None,
+        headers: Mapping[str, str] | None = None,
+        acceptable_statuses: tuple[int, ...] = (200,),
+    ) -> ApiResponse:
+        request_headers = {**self.test_headers, **(headers or {})}
+        response = self.client.request(method, path, json=payload, headers=request_headers)
+        assert response.status_code in acceptable_statuses, response.text
+        return ApiResponse(response.status_code, response.json())
+
+
 def test_base_url_allows_https_or_loopback_http_only() -> None:
     assert _validated_base_url("https://qa.example") == "https://qa.example"
     assert _validated_base_url("http://127.0.0.1:30443/") == "http://127.0.0.1:30443"
@@ -91,6 +122,83 @@ def test_probe_requires_same_successful_action_run_and_materialized_row() -> Non
     assert len(action_calls) == 2
     assert action_calls[0][2] == action_calls[1][2]
     assert action_calls[0][3] == action_calls[1][3]
+
+
+def test_probe_matches_real_public_api_and_product_closed_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "runtime"))
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "enterprise-qa-operator",
+        "X-Roles": "admin,data_engineer,ops_manager",
+        "Idempotency-Key": "macmini-enterprise-qa-source-v1",
+    }
+    client = TestClient(app)
+    try:
+        uploaded = client.post(
+            "/api/sources/csv/uploads",
+            headers=headers,
+            data={
+                "sourceName": "enterprise_qa_probe_orders",
+                "displayName": "Enterprise QA probe orders",
+                "datasetRef": "qa.enterprise_probe_orders",
+                "syncName": "enterprise-qa-probe-seed-v1",
+                "primaryKey": '["probe_order_id"]',
+            },
+            files={
+                "file": (
+                    "probe-orders.csv",
+                    b"probe_order_id,status,operator_note\nenterprise-qa-order-1,NEW,\n",
+                    "text/csv",
+                )
+            },
+        )
+        assert uploaded.status_code == 200
+        action_log = client.post(
+            "/api/sources/csv/uploads",
+            headers={**headers, "Idempotency-Key": "macmini-enterprise-qa-action-log-source-v1"},
+            data={
+                "sourceName": "enterprise_qa_action_log_seed",
+                "displayName": "Enterprise QA action log seed",
+                "datasetRef": "ops.action_log",
+                "syncName": "enterprise-qa-action-log-seed-v1",
+                "primaryKey": '["action_run_id"]',
+            },
+            files={
+                "file": (
+                    "action-log.csv",
+                    b"action_run_id\nenterprise-qa-bootstrap-placeholder\n",
+                    "text/csv",
+                )
+            },
+        )
+        assert action_log.status_code == 200, action_log.text
+        applied = client.post(
+            "/api/ontology/apply",
+            headers=headers,
+            json={"yamlText": subject.ONTOLOGY_YAML},
+        )
+        assert applied.status_code == 200
+        indexed = client.post(f"/api/operations/index/{OBJECT_TYPE}/replay", headers=headers)
+        assert indexed.status_code == 200
+        before = client.get(f"/api/objects/{OBJECT_TYPE}/{OBJECT_ID}", headers=headers)
+        assert before.status_code == 200
+
+        probe_client = FastApiProbeClient(client)
+        config = subject._probe_config(FastApiProbeClient.base_url, before.json())
+        receipt = run_probe(probe_client, config)
+        periodic_replay = run_probe(probe_client, config)
+
+        assert receipt["status"] == "passed"
+        assert receipt["idempotentReplay"] is True
+        assert receipt["materializationRowCount"] == 1
+        assert receipt["datasetPreviewMatched"] is True
+        assert receipt["objectQueryMatched"] is True
+        assert periodic_replay["actionRunId"] == receipt["actionRunId"]
+        assert periodic_replay["idempotentReplay"] is True
+        assert periodic_replay["materializationVersionId"] != receipt["materializationVersionId"]
+    finally:
+        foundry.close()
 
 
 def test_probe_fails_when_second_action_is_not_an_exact_replay() -> None:
@@ -137,7 +245,10 @@ def test_bootstrap_uses_api_closed_loop_and_writes_private_pinned_config(
     responses = _probe_responses()
     responses.update(
         {
-            ("POST", "/api/sources/csv/uploads"): [ApiResponse(200, {"commitResult": {"rowCount": 1}})],
+            ("POST", "/api/sources/csv/uploads"): [
+                ApiResponse(200, {"commitResult": {"rowCount": 1}}),
+                ApiResponse(200, {"commitResult": {"rowCount": 1}}),
+            ],
             ("GET", "/api/ontology/catalog"): [ApiResponse(404, None)],
             ("POST", "/api/ontology/apply"): [ApiResponse(200, {"versionNumber": 1})],
             ("POST", f"/api/operations/index/{OBJECT_TYPE}/replay"): [ApiResponse(200, {"objects_upserted": 1})],
@@ -217,8 +328,16 @@ def _probe_responses() -> dict[tuple[str, str], list[ApiResponse]]:
                 {"status": "succeeded", "actionRunId": "action-run-1", "idempotentReplay": True},
             ),
         ],
-        ("GET", "/api/actions/runs/action-run-1"): [
-            ApiResponse(200, {"status": "succeeded", "target_object_id": OBJECT_ID})
+        ("GET", "/api/operations/runs/action/action-run-1"): [
+            ApiResponse(
+                200,
+                {
+                    "runId": "action-run-1",
+                    "runType": "action",
+                    "status": "succeeded",
+                    "references": {"target_object_id": OBJECT_ID},
+                },
+            )
         ],
         ("POST", "/api/materializations/action_log/run"): [
             ApiResponse(

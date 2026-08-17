@@ -166,6 +166,7 @@ class ApiClient:
 def bootstrap_probe(client: ApiClient, config_path: Path) -> dict[str, object]:
     _require_new_config_path(config_path)
     _upload_probe_dataset(client)
+    _upload_action_log_dataset(client)
     _ensure_probe_ontology(client)
     index = _mapping(client.json_request("POST", f"/api/operations/index/{OBJECT_TYPE}/replay").payload)
     current = _get_probe_object(client)
@@ -224,6 +225,29 @@ def _upload_probe_dataset(client: ApiClient) -> None:
     )
 
 
+def _upload_action_log_dataset(client: ApiClient) -> None:
+    boundary = "foundry-lite-enterprise-qa-action-log-boundary-v1"
+    fields = {
+        "sourceName": "enterprise_qa_action_log_seed",
+        "displayName": "Enterprise QA action log seed",
+        "datasetRef": "ops.action_log",
+        "syncName": "enterprise-qa-action-log-seed-v1",
+        "primaryKey": '["action_run_id"]',
+    }
+    body = _multipart_body(
+        boundary,
+        fields,
+        "action-log.csv",
+        b"action_run_id\nenterprise-qa-bootstrap-placeholder\n",
+    )
+    client.multipart_request(
+        "/api/sources/csv/uploads",
+        body=body,
+        boundary=boundary,
+        headers={"Idempotency-Key": "macmini-enterprise-qa-action-log-source-v1"},
+    )
+
+
 def _ensure_probe_ontology(client: ApiClient) -> None:
     catalog = client.json_request("GET", "/api/ontology/catalog", acceptable_statuses=(200, 404))
     if catalog.status_code == 200 and _catalog_has_probe_type(catalog.payload):
@@ -279,8 +303,14 @@ def _require_action_replay(first: Mapping[str, object], replay: Mapping[str, obj
 
 def _verify_action_run(client: ApiClient, action_run_id: str, target: Mapping[str, object]) -> None:
     encoded = urllib.parse.quote(action_run_id, safe="")
-    run = _mapping(client.json_request("GET", f"/api/actions/runs/{encoded}").payload)
-    if run.get("status") != "succeeded" or run.get("target_object_id") != target.get("objectId"):
+    run = _mapping(client.json_request("GET", f"/api/operations/runs/action/{encoded}").payload)
+    references = _mapping(run.get("references"))
+    if (
+        run.get("runId") != action_run_id
+        or run.get("runType") != "action"
+        or run.get("status") != "succeeded"
+        or references.get("target_object_id") != target.get("objectId")
+    ):
         raise BusinessProbeError("macmini_business_probe_action_run_invalid")
 
 
