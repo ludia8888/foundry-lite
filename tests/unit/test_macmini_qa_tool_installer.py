@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -50,6 +51,25 @@ def test_tool_installer_rejects_changed_installed_binary(tmp_path: Path, monkeyp
         subject.install("helm", "https://example.invalid/helm.tgz", digest, "release/helm")
 
 
+def test_tool_installer_rejects_relaxed_existing_binary_permissions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qa_root = tmp_path / "foundry-qa"
+    (qa_root / "bin").mkdir(parents=True)
+    (qa_root / "state").mkdir()
+    archive = _archive(tmp_path, b"verified-binary")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    monkeypatch.setattr(subject, "QA_ROOT", qa_root)
+    monkeypatch.setattr(subject, "ensure_qa_directories", lambda: None)
+    monkeypatch.setattr(subject, "_download", lambda _url, target: target.write_bytes(archive.read_bytes()))
+    subject.install("helm", "https://example.invalid/helm.tgz", digest, "release/helm")
+    (qa_root / "bin" / "helm").chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="target_conflict"):
+        subject.install("helm", "https://example.invalid/helm.tgz", digest, "release/helm")
+
+
 @pytest.mark.parametrize("name", ["age-keygen", "uv"])
 def test_tool_installer_allows_required_bootstrap_tools(
     name: str,
@@ -69,6 +89,45 @@ def test_tool_installer_allows_required_bootstrap_tools(
 
     assert receipt["tool"] == name
     assert (qa_root / "bin" / name).read_bytes() == b"verified-bootstrap-tool"
+
+
+def test_tool_manifest_installs_the_exact_darwin_arm64_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qa_root = tmp_path / "foundry-qa"
+    manifest = qa_root / "repo" / "deploy" / "macmini-tools-arm64.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        (Path("deploy/macmini-tools-arm64.json")).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    installed: list[str] = []
+
+    def install(name: str, _url: str, _digest: str, _member: str | None) -> dict[str, object]:
+        installed.append(name)
+        return {"tool": name, "status": "installed"}
+
+    monkeypatch.setattr(subject, "QA_ROOT", qa_root)
+    monkeypatch.setattr(subject, "install", install)
+
+    receipt = subject.install_manifest(str(manifest))
+
+    assert set(installed) == subject._ALLOWED_TOOLS
+    assert receipt["platform"] == "darwin-arm64"
+    assert receipt["outsideQaRootWritten"] is False
+
+
+def test_shell_uv_bootstrap_matches_the_pinned_manifest() -> None:
+    manifest = json.loads(Path("deploy/macmini-tools-arm64.json").read_text(encoding="utf-8"))
+    uv = next(value for value in manifest["tools"] if value["name"] == "uv")
+    script = Path("scripts/operations/bootstrap_macmini_qa_uv.sh").read_text(encoding="utf-8")
+
+    assert f'UV_VERSION="{uv["version"]}"' in script
+    assert f'UV_ARCHIVE_SHA256="{uv["sha256"]}"' in script
+    assert f'UV_ARCHIVE_MEMBER="{uv["archiveMember"]}"' in script
+    assert 'EXPECTED_USER="sean1234"' in script
+    assert 'EXPECTED_HOME="/Users/sean1234"' in script
 
 
 def _archive(tmp_path: Path, payload: bytes) -> Path:

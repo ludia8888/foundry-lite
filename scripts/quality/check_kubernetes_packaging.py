@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import urllib.parse
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "kubernetes_packaging.json"
 CHART_ROOT = Path("deploy/helm/foundry-lite")
+TOOL_MANIFEST = Path("deploy/macmini-tools-arm64.json")
 REQUIRED_PATHS = (
     CHART_ROOT / "Chart.yaml",
     CHART_ROOT / "values.yaml",
@@ -51,6 +53,8 @@ REQUIRED_PATHS = (
     Path("scripts/operations/bootstrap_macmini_qa_secrets.py"),
     Path("scripts/operations/deploy_macmini_qa.py"),
     Path("scripts/operations/install_macmini_qa_tool.py"),
+    Path("scripts/operations/bootstrap_macmini_qa_uv.sh"),
+    TOOL_MANIFEST,
     Path("apps/worker/foundry_lite_worker/outbox_publisher.py"),
     Path("apps/worker/foundry_lite_worker/source_scheduler.py"),
 )
@@ -77,6 +81,7 @@ def collect_findings(root: Path = ROOT) -> list[KubernetesPackagingFinding]:
         *_template_findings(root),
         *_rbac_findings(root),
         *_execution_isolation_findings(root),
+        *_tool_manifest_findings(root),
         *_operation_findings(root),
     ]
 
@@ -299,9 +304,20 @@ def _operation_findings(root: Path) -> list[KubernetesPackagingFinding]:
             findings.append(_finding("protected_secret_contract_missing", secret_path, term))
     installer_path = Path("scripts/operations/install_macmini_qa_tool.py")
     installer_text = (root / installer_path).read_text(encoding="utf-8")
-    for term in ('"age-keygen"', '"uv"'):
+    for term in ('"age-keygen"', '"uv"', "install_manifest", "macmini-tools-arm64.json"):
         if term not in installer_text:
             findings.append(_finding("macmini_bootstrap_tool_missing", installer_path, term))
+    uv_bootstrap_path = Path("scripts/operations/bootstrap_macmini_qa_uv.sh")
+    uv_bootstrap_text = (root / uv_bootstrap_path).read_text(encoding="utf-8")
+    for term in (
+        'EXPECTED_USER="sean1234"',
+        'EXPECTED_HOME="/Users/sean1234"',
+        "UV_ARCHIVE_SHA256=",
+        "tool-install-uv.json",
+        "Mach-O 64-bit executable arm64",
+    ):
+        if term not in uv_bootstrap_text:
+            findings.append(_finding("macmini_uv_bootstrap_contract_missing", uv_bootstrap_path, term))
     for term in (
         "--atomic",
         "--wait-for-jobs",
@@ -315,6 +331,53 @@ def _operation_findings(root: Path) -> list[KubernetesPackagingFinding]:
         text = (root / path).read_text(encoding="utf-8")
         if "create_runtime_core_dependencies" not in text or "create_local_core_dependencies" in text:
             findings.append(_finding("protected_worker_composition_invalid", path, "runtime composition root"))
+    return findings
+
+
+def _tool_manifest_findings(root: Path) -> list[KubernetesPackagingFinding]:
+    expected_names = {"uv", "kubectl", "helm", "age", "age-keygen", "cosign", "crane", "kubeconform"}
+    try:
+        payload = json.loads((root / TOOL_MANIFEST).read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return [_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "JSON")]
+    if not isinstance(payload, dict):
+        return [_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "mapping")]
+    values = payload.get("tools")
+    if (
+        payload.get("schemaVersion") != "foundry-lite-macmini-tools/v1"
+        or payload.get("platform") != "darwin-arm64"
+        or not isinstance(values, list)
+    ):
+        return [_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "header")]
+    findings: list[KubernetesPackagingFinding] = []
+    names: list[str] = []
+    for value in values:
+        if not isinstance(value, dict):
+            findings.append(_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "tool mapping"))
+            continue
+        name = value.get("name")
+        version = value.get("version")
+        names.append(name if isinstance(name, str) else "")
+        url = urllib.parse.urlsplit(str(value.get("url", "")))
+        digest = str(value.get("sha256", ""))
+        member = value.get("archiveMember")
+        if set(value) != {"name", "version", "url", "sha256", "archiveMember"}:
+            findings.append(_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "tool fields"))
+        if (
+            not isinstance(name, str)
+            or not isinstance(version, str)
+            or not version
+            or url.scheme != "https"
+            or not url.hostname
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            findings.append(_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, str(name or "")))
+        if (member is not None and not isinstance(member, str)) or (
+            isinstance(member, str) and (member.startswith("/") or ".." in Path(member).parts)
+        ):
+            findings.append(_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "archive member"))
+    if len(names) != len(expected_names) or set(names) != expected_names:
+        findings.append(_finding("macmini_tool_manifest_invalid", TOOL_MANIFEST, "exact tool allowlist"))
     return findings
 
 

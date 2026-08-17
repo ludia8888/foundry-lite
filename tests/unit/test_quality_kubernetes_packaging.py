@@ -4,6 +4,8 @@ import json
 import shutil
 from pathlib import Path
 
+import yaml
+
 from scripts.quality.check_kubernetes_packaging import REQUIRED_PATHS, ROOT, collect_findings, main
 
 
@@ -48,6 +50,17 @@ def test_kubernetes_packaging_gate_rejects_sandbox_network_allow(tmp_path: Path)
     assert any(item.code == "execution_network_deny_contract_missing" for item in findings)
 
 
+def test_kubernetes_packaging_gate_rejects_mutable_macmini_tool_manifest(tmp_path: Path) -> None:
+    _copy_gate_tree(tmp_path)
+    manifest = tmp_path / "deploy/macmini-tools-arm64.json"
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(text.replace("5bb0e5fe008a773c", "latest", 1), encoding="utf-8")
+
+    findings = collect_findings(tmp_path)
+
+    assert any(item.code == "macmini_tool_manifest_invalid" and item.detail == "uv" for item in findings)
+
+
 def test_kubernetes_packaging_gate_writes_machine_report(tmp_path: Path) -> None:
     output = tmp_path / "report.json"
 
@@ -78,6 +91,18 @@ def test_keycloak_realm_references_only_defined_scopes_and_enforces_public_oauth
         "reject-implicit-grant",
         "reject-ropc-grant",
     } <= executor_names
+
+
+def test_macmini_nodeports_expose_web_api_gateway_and_keycloak_separately() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))
+    web_service = values["web"]["service"]
+    keycloak_service = values["qaDependencies"]["keycloak"]["service"]
+    web_config = (ROOT / "deploy/helm/foundry-lite/templates/web-config.yaml").read_text(encoding="utf-8")
+
+    assert web_service == {"type": "NodePort", "nodePort": 30443}
+    assert keycloak_service == {"type": "NodePort", "nodePort": 30444}
+    assert r"location ~ ^/(api|mcp|readyz|\.well-known)" in web_config
+    assert 'proxy_pass http://{{ include "foundry-lite.fullname" . }}-api:10000;' in web_config
 
 
 def _copy_gate_tree(target: Path) -> None:

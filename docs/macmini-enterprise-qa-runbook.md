@@ -30,13 +30,33 @@
 
 원격에서 먼저 hostname, macOS principal, home, Tailscale identity를 읽기 전용으로 확인한다. 다음 명령은 `assert_host_boundary()`를 통과한 `sean1234`만 실행할 수 있고, 전용 profile만 stop/start한다.
 
+clean host에는 시스템 Python 3.9만 있을 수 있으므로 Python 설치 도구를 먼저 실행할 수 있다고 가정하지 않는다. public repository의 exact `main` SHA를 private QA root에 checkout한 다음, 시스템 Bash bootstrap이 고정된 uv 0.12.5 darwin-arm64 archive의 SHA-256과 Mach-O architecture를 확인해 `bin/uv`만 설치한다. 그 uv가 Python 3.12를 QA state 안에 설치한 뒤, tracked `deploy/macmini-tools-arm64.json`의 exact allowlist 전체를 Python installer로 검증·설치한다. GitHub release의 `latest`나 Homebrew 전역 설치를 실행 시점에 따라가지 않는다.
+
+```bash
+RELEASE_SHA="<원격 main의 정확한 40자리 SHA>"
+/bin/mkdir -p /Users/sean1234/foundry-qa
+/bin/chmod 700 /Users/sean1234/foundry-qa
+/usr/bin/git clone https://github.com/ludia8888/foundry-lite.git /Users/sean1234/foundry-qa/repo
+cd /Users/sean1234/foundry-qa/repo
+/usr/bin/git checkout --detach "$RELEASE_SHA"
+/bin/bash scripts/operations/bootstrap_macmini_qa_uv.sh
+export PATH="/Users/sean1234/foundry-qa/bin:$PATH"
+export UV_PYTHON_INSTALL_DIR="/Users/sean1234/foundry-qa/state/python"
+export UV_CACHE_DIR="/Users/sean1234/foundry-qa/state/uv-cache"
+/Users/sean1234/foundry-qa/bin/uv python install 3.12
+PYTHONPATH=. /Users/sean1234/foundry-qa/bin/uv run --no-project --python 3.12 python \
+  scripts/operations/install_macmini_qa_tool.py \
+  --manifest /Users/sean1234/foundry-qa/repo/deploy/macmini-tools-arm64.json
+/Users/sean1234/foundry-qa/bin/uv sync --all-groups --frozen
+```
+
 ```bash
 cd /Users/sean1234/foundry-qa/repo
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/prepare_macmini_qa.py \
   --run-id "$RUN_ID" --profile foundry-qa --restart
 ```
 
-합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. `uv`, kubectl, Helm, age, age-keygen, cosign, kubeconform 같은 도구는 `/Users/sean1234/foundry-qa/bin`에 digest/hash 검증 후 설치한다.
+합격 조건은 `6 CPU / 16 GiB / 120 GiB`, aarch64, k3s, secrets encryption enabled이며 host reboot와 다른 profile mutation은 모두 false다. `uv`, kubectl, Helm, age, age-keygen, cosign, crane, kubeconform은 `/Users/sean1234/foundry-qa/bin`에 exact URL/archive member/SHA-256 검증 후 설치한다.
 
 ## 4. 최초 설치
 
@@ -70,7 +90,7 @@ Funnel을 열기 전에 tailnet에서 다음을 모두 실제 배포에 대해 �
 
 HTTP 200만으로 합격시키지 않는다. DB transaction, dataset/object version, action run, audit/outbox, downstream 결과 hash를 함께 대조한다.
 
-현재 실행처럼 Tailscale 장비 owner가 `sean1234`가 아니라면 Serve/Funnel을 변경하지 않는다. 이 경우 SSH 세션 안에서 API NodePort `http://127.0.0.1:30443`과 Web NodePort `http://127.0.0.1:30444`를 사용해 내부 폐루프를 검증하고, 공개 hosted 단계는 `blocked`로 기록한다. 이는 제품 실패가 아니라 다른 사용자의 네트워크 설정을 건드리지 않기 위한 안전 경계다.
+현재 실행처럼 Tailscale 장비 owner가 `sean1234`가 아니라면 Serve/Funnel을 변경하지 않는다. 이 경우 SSH 세션 안에서 Web과 `/api`·`/mcp`를 함께 라우팅하는 gateway NodePort `http://127.0.0.1:30443`을 사용해 내부 폐루프를 검증한다. `30444`는 Web이 아니라 Keycloak 전용 NodePort다. 공개 hosted 단계는 `blocked`로 기록한다. 이는 제품 실패가 아니라 다른 사용자의 네트워크 설정을 건드리지 않기 위한 안전 경계다.
 
 24시간 검증용 전용 객체와 Action은 실제 배포 API를 통해 한 번 bootstrap한다. 이 명령은 CSV Source commit, Ontology activation, Object reindex, Object query, Action 실행과 동일 요청 replay, Action Log materialization과 Dataset preview를 수행하고 이후 replay에 필요한 정확한 초기 object version을 `0600` config에 고정한다.
 

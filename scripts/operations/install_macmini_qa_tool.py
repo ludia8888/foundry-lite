@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import urllib.parse
@@ -17,6 +18,8 @@ from scripts.operations.macmini_qa_guard import QA_ROOT, ensure_qa_directories
 
 _ALLOWED_TOOLS = frozenset({"age", "age-keygen", "cosign", "crane", "helm", "kubeconform", "kubectl", "uv"})
 _MAX_DOWNLOAD_BYTES = 250 * 1024 * 1024
+_MANIFEST_RELATIVE_PATH = Path("deploy/macmini-tools-arm64.json")
+_MANIFEST_SCHEMA = "foundry-lite-macmini-tools/v1"
 
 
 def install(name: str, url: str, expected_sha256: str, archive_member: str | None) -> dict[str, object]:
@@ -46,6 +49,69 @@ def install(name: str, url: str, expected_sha256: str, archive_member: str | Non
         return receipt
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
+
+
+def install_manifest(raw_path: str) -> dict[str, object]:
+    path = _manifest_path(raw_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("macmini_qa_tool_manifest_invalid") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    values = payload.get("tools")
+    if (
+        payload.get("schemaVersion") != _MANIFEST_SCHEMA
+        or payload.get("platform") != "darwin-arm64"
+        or not isinstance(values, list)
+    ):
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    tools = [_manifest_tool(value) for value in values]
+    if len(tools) != len(_ALLOWED_TOOLS) or {value[0] for value in tools} != _ALLOWED_TOOLS:
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    receipts = [install(name, url, digest, member) for name, url, digest, member in tools]
+    return {
+        "schemaVersion": 1,
+        "status": "passed",
+        "platform": "darwin-arm64",
+        "manifestSha256": _hash_file(path),
+        "tools": receipts,
+        "outsideQaRootWritten": False,
+    }
+
+
+def _manifest_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    expected = (QA_ROOT / "repo" / _MANIFEST_RELATIVE_PATH).resolve()
+    if path.is_symlink():
+        raise ValueError("macmini_qa_tool_manifest_path_invalid")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("macmini_qa_tool_manifest_path_invalid") from exc
+    if resolved != expected or not resolved.is_file():
+        raise ValueError("macmini_qa_tool_manifest_path_invalid")
+    return resolved
+
+
+def _manifest_tool(value: object) -> tuple[str, str, str, str | None]:
+    if not isinstance(value, dict) or set(value) != {"name", "version", "url", "sha256", "archiveMember"}:
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    name = value.get("name")
+    version = value.get("version")
+    url = value.get("url")
+    digest = value.get("sha256")
+    member = value.get("archiveMember")
+    if (
+        not isinstance(name, str)
+        or not isinstance(version, str)
+        or not version
+        or not isinstance(url, str)
+        or not isinstance(digest, str)
+        or (member is not None and not isinstance(member, str))
+    ):
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    return name, url, digest, member
 
 
 def _download(url: str, target: Path) -> None:
@@ -100,7 +166,14 @@ def _existing_receipt(
     target: Path,
 ) -> dict[str, object]:
     metadata = _metadata_path(name)
-    if not target.is_file() or not metadata.is_file() or metadata.stat().st_mode & 0o077:
+    if (
+        not target.is_file()
+        or target.is_symlink()
+        or stat.S_IMODE(target.stat().st_mode) != 0o700
+        or not metadata.is_file()
+        or metadata.is_symlink()
+        or stat.S_IMODE(metadata.stat().st_mode) != 0o600
+    ):
         raise RuntimeError("macmini_qa_tool_target_conflict")
     try:
         value = json.loads(metadata.read_text(encoding="utf-8"))
@@ -148,12 +221,21 @@ def _write_metadata(name: str, receipt: dict[str, object]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--url", required=True)
-    parser.add_argument("--sha256", required=True)
+    parser.add_argument("--manifest")
+    parser.add_argument("--name")
+    parser.add_argument("--url")
+    parser.add_argument("--sha256")
     parser.add_argument("--archive-member")
     args = parser.parse_args()
-    receipt = install(args.name, args.url, args.sha256, args.archive_member)
+    single_values = (args.name, args.url, args.sha256, args.archive_member)
+    if args.manifest is not None:
+        if any(value is not None for value in single_values):
+            parser.error("--manifest cannot be combined with single-tool arguments")
+        receipt = install_manifest(args.manifest)
+    else:
+        if not all(isinstance(value, str) and value for value in single_values[:3]):
+            parser.error("--name, --url, and --sha256 are required without --manifest")
+        receipt = install(args.name, args.url, args.sha256, args.archive_member)
     print(receipt)
     return 0
 
