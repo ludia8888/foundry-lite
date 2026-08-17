@@ -20,7 +20,7 @@ spec:
         - name: copy-temporal-config
           image: {{ .Values.qaDependencies.temporal.image }}
           command: [/bin/sh, -ec]
-          args: ["cp -a /etc/temporal/config/. /writable-config/"]
+          args: ["cp -R /etc/temporal/config/. /writable-config/"]
           securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
           resources:
             requests: {cpu: 10m, memory: 32Mi}
@@ -82,7 +82,7 @@ spec:
         - name: copy-elasticsearch-config
           image: {{ .Values.qaDependencies.elasticsearch.image }}
           command: [/bin/sh, -ec]
-          args: ["cp -a /usr/share/elasticsearch/config/. /writable-config/"]
+          args: ["cp -R /usr/share/elasticsearch/config/. /writable-config/"]
           securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
           resources:
             requests: {cpu: 10m, memory: 32Mi}
@@ -152,9 +152,9 @@ spec:
           command: [/bin/sh, -ec]
           args:
             - >-
-              cp -a /etc/clamav/. /writable-config/;
+              cp -R /etc/clamav/. /writable-config/;
               if [ ! -f /writable-signatures/main.cvd ]; then
-                cp -a /var/lib/clamav/. /writable-signatures/;
+                cp -R /var/lib/clamav/. /writable-signatures/;
               fi
           securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
           resources:

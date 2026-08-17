@@ -143,11 +143,11 @@ def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mou
     )
 
     for copy_target in (
-        "/etc/redpanda/. /writable-config/",
-        "/etc/temporal/config/. /writable-config/",
-        "/usr/share/elasticsearch/config/. /writable-config/",
-        "/etc/clamav/. /writable-config/",
-        "/opt/keycloak/lib/quarkus/. /writable-quarkus/",
+        "cp -R /etc/redpanda/. /writable-config/",
+        "cp -R /etc/temporal/config/. /writable-config/",
+        "cp -R /usr/share/elasticsearch/config/. /writable-config/",
+        "cp -R /etc/clamav/. /writable-config/",
+        "cp -R /opt/keycloak/lib/quarkus/. /writable-quarkus/",
     ):
         assert copy_target in templates
     for writable_mount in (

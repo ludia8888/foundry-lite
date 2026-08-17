@@ -185,7 +185,7 @@ spec:
         - name: copy-keycloak-quarkus
           image: {{ .Values.qaDependencies.keycloak.image }}
           command: [/bin/sh, -ec]
-          args: ["cp -a /opt/keycloak/lib/quarkus/. /writable-quarkus/"]
+          args: ["cp -R /opt/keycloak/lib/quarkus/. /writable-quarkus/"]
           securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
           resources:
             requests: {cpu: 25m, memory: 64Mi}
