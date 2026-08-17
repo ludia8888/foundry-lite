@@ -117,11 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = OAuthSecretBootstrapConfig(args.namespace, args.secret_name, args.secret_key)
     try:
-        status = ensure_oauth_secret(config)
+        ensure_oauth_secret(config)
     except (RuntimeError, ValueError):
         print(json.dumps({"status": "failed", "reason": "oauth_secret_bootstrap_failed"}))
         return 1
-    print(json.dumps({"status": status, "secretName": config.secret_name, "isImmutable": True}, sort_keys=True))
+    print('{"isImmutable": true, "status": "completed"}')
     return 0
 
 

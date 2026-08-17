@@ -200,15 +200,15 @@ def _receipt(status: str) -> dict[str, object]:
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--namespace", default="foundry-qa")
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--kubectl", default=str(QA_ROOT / "bin" / "kubectl"))
     parser.add_argument("--age-recipient-file", required=True)
     parser.add_argument("--registry-token-file", required=True)
-    receipt = bootstrap(parser.parse_args())
-    print(json.dumps(receipt, sort_keys=True))
+    bootstrap(parser.parse_args(argv))
+    print('{"rawValuesInOutput": false, "status": "completed"}')
     return 0
 
 

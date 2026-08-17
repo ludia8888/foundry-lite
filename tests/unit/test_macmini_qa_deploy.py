@@ -166,6 +166,36 @@ def test_initial_deploy_rejects_existing_release(monkeypatch) -> None:
         subject._assert_fresh_release(Namespace(helm="helm", namespace="foundry-qa"))
 
 
+def test_deploy_cli_prints_only_the_safe_receipt_pointer(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(subject, "deploy", lambda _args: {"secret": "must-not-be-printed"})
+
+    result = subject.main(
+        [
+            "--run-id",
+            "run-1",
+            "--kubeconfig",
+            "/private/kubeconfig",
+            "--chart",
+            "/private/chart",
+            "--values",
+            "/private/values.yaml",
+            "--initial-auth-values",
+            "/private/auth.yaml",
+            "--image-manifest",
+            "/private/images.json",
+            "--age-recipient-file",
+            "/private/age.pub",
+            "--registry-token-file",
+            "/private/github-token",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert json.loads(output) == {"receiptStored": True, "status": "passed"}
+    assert "must-not-be-printed" not in output
+
+
 def _write_manifest(tmp_path: Path) -> Path:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(_manifest()), encoding="utf-8")

@@ -94,3 +94,23 @@ def test_existing_complete_secret_set_does_not_require_retained_registry_token(m
     receipt = subject.bootstrap(Namespace(namespace="foundry-qa"))
 
     assert receipt["status"] == "already_exists"
+
+
+def test_secret_bootstrap_cli_prints_only_a_constant_safe_completion(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(subject, "bootstrap", lambda _args: {"secret": "must-not-be-printed"})
+
+    result = subject.main(
+        [
+            "--kubeconfig",
+            "/private/kubeconfig",
+            "--age-recipient-file",
+            "/private/age.pub",
+            "--registry-token-file",
+            "/private/github-token",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert json.loads(output) == {"rawValuesInOutput": False, "status": "completed"}
+    assert "must-not-be-printed" not in output

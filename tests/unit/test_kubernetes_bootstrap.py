@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import pytest
 from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
+from scripts.operations import bootstrap_kubernetes_oauth_secret as oauth_subject
 from scripts.operations.bootstrap_kubernetes_oauth_secret import (
     OAuthSecretBootstrapConfig,
     SecretApi,
@@ -93,6 +94,26 @@ def test_oauth_bootstrap_rejects_mutable_or_malformed_existing_secret() -> None:
 
     with pytest.raises(RuntimeError, match="oauth_secret_validation_failed"):
         ensure_oauth_secret(_oauth_config(), api=api)
+
+
+def test_oauth_bootstrap_cli_never_prints_secret_identifiers(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(oauth_subject, "ensure_oauth_secret", lambda _config: "created")
+
+    result = oauth_subject.main(
+        [
+            "--namespace",
+            "foundry-qa",
+            "--secret-name",
+            "sensitive-secret-name",
+            "--secret-key",
+            "sensitive-secret-key",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert json.loads(output) == {"isImmutable": True, "status": "completed"}
+    assert "sensitive-secret" not in output
 
 
 def test_s3_bootstrap_is_idempotent_and_enables_versioning_on_create() -> None:
