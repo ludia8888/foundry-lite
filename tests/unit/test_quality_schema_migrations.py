@@ -178,6 +178,35 @@ def test_expand_phase_allows_safe_rls_upgrade_sql(tmp_path: Path) -> None:
     assert gate.collect_findings(versions_dir=versions_dir) == []
 
 
+def test_expand_phase_allows_only_audited_json_to_jsonb_compatibility_conversions(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body=(
+            'op.execute("ALTER TABLE object_records ALTER COLUMN properties TYPE jsonb USING properties::jsonb")'
+        ),
+    )
+
+    assert gate.collect_findings(versions_dir=versions_dir) == []
+
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body=(
+            'op.execute("ALTER TABLE object_records ALTER COLUMN properties TYPE jsonb USING edit_properties::jsonb")'
+        ),
+    )
+
+    findings = gate.collect_findings(versions_dir=versions_dir)
+    assert any(finding.code == "migration_expand_execute_destructive_sql" for finding in findings)
+
+
 def test_expand_phase_requires_ai_tenant_table_rls(tmp_path: Path) -> None:
     versions_dir = tmp_path / "migrations" / "versions"
     _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)

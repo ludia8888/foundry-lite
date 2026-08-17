@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -28,6 +29,18 @@ PHASE_COMPATIBILITY_WINDOWS = {
 }
 EXPAND_ALLOWED_OPS = frozenset({"op.add_column", "op.create_index", "op.create_table", "op.execute"})
 DESTRUCTIVE_SQL_PREFIXES = ("ALTER ", "DELETE ", "DROP ", "RENAME ", "TRUNCATE ")
+_JSONB_COMPATIBLE_COLUMNS = {
+    "OBJECT_RECORDS": frozenset({"PROPERTIES", "BASE_PROPERTIES", "EDIT_PROPERTIES", "PROPERTY_VERSIONS"}),
+    "OBJECT_RECORD_VERSIONS": frozenset({"PROPERTIES", "BASE_PROPERTIES", "EDIT_PROPERTIES", "PROPERTY_VERSIONS"}),
+    "OBJECT_LINKS": frozenset({"PROPERTIES"}),
+    "OBJECT_EDITS": frozenset({"PATCH", "PREVIOUS_VALUES", "REVERT_PAYLOAD"}),
+    "OBJECT_CONFLICTS": frozenset({"SOURCE_VALUE", "EDIT_VALUE"}),
+    "OBJECT_SETS": frozenset({"DEFINITION"}),
+}
+_JSONB_CONVERSION = re.compile(
+    r"^ALTER TABLE (?P<table>[A-Z0-9_]+) ALTER COLUMN (?P<column>[A-Z0-9_]+) "
+    r"TYPE JSONB USING (?P<source>[A-Z0-9_]+)::JSONB;?$"
+)
 
 
 @dataclass(frozen=True)
@@ -492,6 +505,8 @@ def _expand_sql_findings(operation: OperationCall, path: str) -> list[MigrationF
     statement = operation.sql_statement.lstrip().upper()
     if _is_safe_rls_statement(statement):
         return []
+    if _is_compatible_jsonb_conversion(statement):
+        return []
     if not statement.startswith(DESTRUCTIVE_SQL_PREFIXES):
         return []
     return [
@@ -509,6 +524,14 @@ def _is_safe_rls_statement(statement: str) -> bool:
     return normalized.startswith("ALTER TABLE ") and normalized.endswith(
         (" ENABLE ROW LEVEL SECURITY", " FORCE ROW LEVEL SECURITY")
     )
+
+
+def _is_compatible_jsonb_conversion(statement: str) -> bool:
+    normalized = " ".join(statement.split())
+    match = _JSONB_CONVERSION.fullmatch(normalized)
+    if match is None or match.group("column") != match.group("source"):
+        return False
+    return match.group("column") in _JSONB_COMPATIBLE_COLUMNS.get(match.group("table"), ())
 
 
 def _graph_findings(revisions: list[MigrationRevision]) -> list[MigrationFinding]:

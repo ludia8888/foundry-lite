@@ -232,6 +232,7 @@
     "quality:schema-migrations": "uv run python scripts/quality/check_schema_migrations.py",
     "quality:schema-migration-runner": "uv run pytest tests/unit/test_migration_runner.py -q -ra",
     "quality:schema-migration-runner-live": "uv run pytest tests/contracts/test_migration_runner_postgres_contract.py -q -ra",
+    "quality:postgres-object-store-live": "uv run pytest -p no:tach tests/contracts/test_postgres_object_store_contract.py tests/contracts/test_postgres_rls_contract.py::test_postgres_rls_hides_dataset_and_object_rows_between_tenants tests/contracts/test_object_read_repository_contract.py -q -ra",
     "quality:audit-mutation": "uv run python scripts/quality/check_audit_on_mutation.py",
     "quality:transaction-outbox": "uv run python scripts/quality/check_transaction_outbox_pair.py",
     "quality:action-idempotency": "uv run python scripts/quality/check_idempotency_on_action.py",
