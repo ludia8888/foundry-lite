@@ -53,21 +53,9 @@ def install(name: str, url: str, expected_sha256: str, archive_member: str | Non
 
 def install_manifest(raw_path: str) -> dict[str, object]:
     path = _manifest_path(raw_path)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError("macmini_qa_tool_manifest_invalid") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("macmini_qa_tool_manifest_invalid")
-    values = payload.get("tools")
-    if (
-        payload.get("schemaVersion") != _MANIFEST_SCHEMA
-        or payload.get("platform") != "darwin-arm64"
-        or not isinstance(values, list)
-    ):
-        raise ValueError("macmini_qa_tool_manifest_invalid")
+    values = _load_manifest_values(path)
     tools = [_manifest_tool(value) for value in values]
-    if len(tools) != len(_ALLOWED_TOOLS) or {value[0] for value in tools} != _ALLOWED_TOOLS:
+    if not _has_exact_tool_allowlist(tools):
         raise ValueError("macmini_qa_tool_manifest_invalid")
     receipts = [install(name, url, digest, member) for name, url, digest, member in tools]
     return {
@@ -78,6 +66,28 @@ def install_manifest(raw_path: str) -> dict[str, object]:
         "tools": receipts,
         "outsideQaRootWritten": False,
     }
+
+
+def _load_manifest_values(path: Path) -> list[object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("macmini_qa_tool_manifest_invalid") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    values = payload.get("tools")
+    header_checks = (
+        payload.get("schemaVersion") == _MANIFEST_SCHEMA,
+        payload.get("platform") == "darwin-arm64",
+        isinstance(values, list),
+    )
+    if not all(header_checks) or not isinstance(values, list):
+        raise ValueError("macmini_qa_tool_manifest_invalid")
+    return values
+
+
+def _has_exact_tool_allowlist(tools: list[tuple[str, str, str, str | None]]) -> bool:
+    return len(tools) == len(_ALLOWED_TOOLS) and {value[0] for value in tools} == _ALLOWED_TOOLS
 
 
 def _manifest_path(raw_path: str) -> Path:
@@ -166,14 +176,15 @@ def _existing_receipt(
     target: Path,
 ) -> dict[str, object]:
     metadata = _metadata_path(name)
-    if (
-        not target.is_file()
-        or target.is_symlink()
-        or stat.S_IMODE(target.stat().st_mode) != 0o700
-        or not metadata.is_file()
-        or metadata.is_symlink()
-        or stat.S_IMODE(metadata.stat().st_mode) != 0o600
-    ):
+    safety_checks = (
+        target.is_file(),
+        not target.is_symlink(),
+        stat.S_IMODE(target.stat().st_mode) == 0o700,
+        metadata.is_file(),
+        not metadata.is_symlink(),
+        stat.S_IMODE(metadata.stat().st_mode) == 0o600,
+    )
+    if not all(safety_checks):
         raise RuntimeError("macmini_qa_tool_target_conflict")
     try:
         value = json.loads(metadata.read_text(encoding="utf-8"))

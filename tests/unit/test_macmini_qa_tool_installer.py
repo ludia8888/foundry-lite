@@ -118,6 +118,21 @@ def test_tool_manifest_installs_the_exact_darwin_arm64_allowlist(
     assert receipt["outsideQaRootWritten"] is False
 
 
+def test_tool_manifest_rejects_a_non_darwin_arm64_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qa_root = tmp_path / "foundry-qa"
+    manifest = qa_root / "repo" / "deploy" / "macmini-tools-arm64.json"
+    manifest.parent.mkdir(parents=True)
+    text = Path("deploy/macmini-tools-arm64.json").read_text(encoding="utf-8")
+    manifest.write_text(text.replace('"darwin-arm64"', '"linux-arm64"'), encoding="utf-8")
+    monkeypatch.setattr(subject, "QA_ROOT", qa_root)
+
+    with pytest.raises(ValueError, match="manifest_invalid"):
+        subject.install_manifest(str(manifest))
+
+
 def test_shell_uv_bootstrap_matches_the_pinned_manifest() -> None:
     manifest = json.loads(Path("deploy/macmini-tools-arm64.json").read_text(encoding="utf-8"))
     uv = next(value for value in manifest["tools"] if value["name"] == "uv")

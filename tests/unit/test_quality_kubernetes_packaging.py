@@ -61,6 +61,18 @@ def test_kubernetes_packaging_gate_rejects_mutable_macmini_tool_manifest(tmp_pat
     assert any(item.code == "macmini_tool_manifest_invalid" and item.detail == "uv" for item in findings)
 
 
+def test_kubernetes_packaging_gate_rejects_escaping_tool_archive_member(tmp_path: Path) -> None:
+    _copy_gate_tree(tmp_path)
+    manifest = tmp_path / "deploy/macmini-tools-arm64.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["tools"][0]["archiveMember"] = "../uv"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    findings = collect_findings(tmp_path)
+
+    assert any(item.code == "macmini_tool_manifest_invalid" and item.detail == "archive member" for item in findings)
+
+
 def test_kubernetes_packaging_gate_writes_machine_report(tmp_path: Path) -> None:
     output = tmp_path / "report.json"
 
