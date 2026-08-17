@@ -47,6 +47,47 @@ def test_backup_pauses_only_worker_component_deployments() -> None:
     assert _worker_identity(api) is None
 
 
+def test_backup_and_restore_scaling_preserve_helm_field_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    backup_commands: list[tuple[str, ...]] = []
+    restore_commands: list[tuple[str, ...]] = []
+    inventory = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "foundry-lite-worker-action",
+                    "labels": {"app.kubernetes.io/component": "worker-action"},
+                },
+                "spec": {"replicas": 1},
+            }
+        ]
+    }
+
+    def backup_kubectl(
+        _args: argparse.Namespace, operation: tuple[str, ...], _timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        backup_commands.append(operation)
+        stdout = json.dumps(inventory).encode() if operation[0] == "get" else b""
+        return subprocess.CompletedProcess(operation, 0, stdout, b"")
+
+    def restore_kubectl(
+        _args: argparse.Namespace,
+        _namespace: str,
+        operation: tuple[str, ...],
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        restore_commands.append(operation)
+        return subprocess.CompletedProcess(operation, 0, b"", b"")
+
+    monkeypatch.setattr(backup_subject, "_kubectl", backup_kubectl)
+    monkeypatch.setattr(restore_subject, "_kubectl", restore_kubectl)
+
+    backup_subject._pause_workers(argparse.Namespace())
+    restore_subject._scale_named(argparse.Namespace(), "foundry-qa-recovery", "foundry-lite", 1)
+
+    assert backup_commands[-1][-1] == "--field-manager=helm"
+    assert restore_commands[-1][-1] == "--field-manager=helm"
+
+
 def test_backup_freezes_commit_point_after_platform_evidence_mutations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

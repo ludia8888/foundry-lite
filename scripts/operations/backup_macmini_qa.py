@@ -125,7 +125,7 @@ def _pause_workers(args: argparse.Namespace) -> list[dict[str, object]]:
         if identity is None:
             continue
         name, replicas = identity
-        scaled = _kubectl(args, ("scale", "deployment", name, "--replicas=0"), 30)
+        scaled = _kubectl(args, ("scale", "deployment", name, "--replicas=0", "--field-manager=helm"), 30)
         if scaled.returncode != 0:
             raise RuntimeError("macmini_backup_worker_pause_failed")
         receipts.append({"name": name, "replicasBefore": replicas, "replicasAfter": 0})

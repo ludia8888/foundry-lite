@@ -354,7 +354,8 @@ def _runtime_pvc_manifest(namespace: str, storage_class: str, size: str) -> dict
 
 
 def _scale_named(args: argparse.Namespace, namespace: str, name: str, replicas: int) -> None:
-    result = _kubectl(args, namespace, ("scale", "deployment", name, f"--replicas={replicas}"), 30)
+    operation = ("scale", "deployment", name, f"--replicas={replicas}", "--field-manager=helm")
+    result = _kubectl(args, namespace, operation, 30)
     if result.returncode != 0:
         raise RuntimeError("macmini_restore_scale_failed")
 
