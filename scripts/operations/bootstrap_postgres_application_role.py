@@ -54,19 +54,18 @@ def _reconcile_role(cursor: Any, role: str, password: str) -> str:
     if flags is not None and any(bool(value) for value in flags):
         raise RuntimeError("postgres_application_role_is_privileged")
     identifier = sql.Identifier(role)
+    password_literal = sql.Literal(password)
     if flags is None:
         cursor.execute(
             sql.SQL(
-                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %s"
-            ).format(identifier),
-            (password,),
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}"
+            ).format(identifier, password_literal)
         )
         return "created"
     cursor.execute(
-        sql.SQL("ALTER ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %s").format(
-            identifier
+        sql.SQL("ALTER ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD {}").format(
+            identifier, password_literal
         ),
-        (password,),
     )
     return "updated"
 
