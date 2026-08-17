@@ -67,6 +67,26 @@ def test_bootstrap_creates_a_non_privileged_runtime_role_without_leaking_credent
     assert observed["dsn"].startswith("postgresql://postgres:")
     assert observed["kwargs"] == {"autocommit": True}
     assert len(cursor.calls) == 10
+    create_role_statement, create_role_parameters = cursor.calls[2]
+    assert create_role_parameters is None
+    assert "PASSWORD $1" not in create_role_statement.as_string(None)
+
+
+def test_bootstrap_quotes_role_password_as_a_postgres_literal() -> None:
+    cursor = _Cursor()
+    environment = _environment() | {"POSTGRES_APP_PASSWORD": "runtime-'quoted'-password-value-123456789"}
+
+    subject.bootstrap(
+        "foundry_lite_app",
+        "foundry_lite",
+        environment,
+        lambda *_args, **_kwargs: _Connection(cursor),
+    )
+
+    statement, parameters = cursor.calls[2]
+    rendered = statement.as_string(None)
+    assert parameters is None
+    assert "PASSWORD 'runtime-''quoted''-password-value-123456789'" in rendered
 
 
 def test_bootstrap_rejects_an_existing_privileged_role() -> None:
