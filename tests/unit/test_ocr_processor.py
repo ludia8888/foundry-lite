@@ -111,14 +111,16 @@ def test_repeated_timeouts_do_not_accumulate_worker_threads() -> None:
         release.wait(timeout=10)
         return ["never"]
 
-    adapter = OcrProcessorAdapter(timeout_seconds=0, ocr_engine=_blocking)
     baseline = threading.active_count()
     try:
         for _ in range(20):
+            # A new adapter mirrors repeatedly composed Foundry runtimes. The bound must hold
+            # across instances, not only across repeated calls on one adapter.
+            adapter = OcrProcessorAdapter(timeout_seconds=0, ocr_engine=_blocking)
             with pytest.raises(AdapterError) as excinfo:
                 adapter.process(_request())
             assert excinfo.value.failure.kind == "timeout"
-        # Bounded by the shared executor, not ~20 leaked threads.
+        # Bounded process-wide, not ~20 retained per-instance executor threads.
         assert threading.active_count() - baseline <= 8
     finally:
         release.set()

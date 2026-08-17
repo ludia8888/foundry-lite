@@ -35,10 +35,11 @@ from foundry_lite.application.ports.media_processor import (
 
 _DERIVATIVE_KIND = "asr_v1"
 _DEFAULT_TIMEOUT_SECONDS = 300
-# Cap on live worker threads. Whisper decodes in-process (ctranslate2 C code) and cannot be
-# force-cancelled, so on timeout we abandon the worker; a SHARED bounded pool (not a fresh pool
-# per call) means repeated timeouts reuse a fixed thread set instead of leaking one per timeout.
+# Cap on live worker threads across every adapter instance in this process. Whisper decodes
+# in-process (ctranslate2 C code) and cannot be force-cancelled, so a process-wide bounded pool
+# prevents independently composed runtimes from each retaining worker threads after timeouts.
 _MAX_WORKER_THREADS = 4
+_PROCESSOR_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="asr")
 
 
 @dataclass(frozen=True)
@@ -131,7 +132,6 @@ class AsrProcessorAdapter:
     def __init__(self, *, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS, asr_engine: AsrEngine | None = None) -> None:
         self._timeout_seconds = timeout_seconds
         self._asr_engine = asr_engine or _default_asr_engine
-        self._executor = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="asr")
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -198,9 +198,9 @@ class AsrProcessorAdapter:
         bounds: AsrProcessingBounds,
     ) -> Sequence[TranscriptSegment]:
         assert request.source_path is not None
-        # Shared bounded pool: on timeout we abandon the worker (in-process whisper decode cannot
-        # be cancelled) but reuse a fixed thread set, so repeated timeouts do not leak threads.
-        future = self._executor.submit(self._asr_engine, request.source_path, bounds)
+        # Process-wide bounded pool: repeated composition roots cannot multiply the live-thread
+        # cap when timed-out in-process Whisper calls cannot be force-cancelled.
+        future = _PROCESSOR_EXECUTOR.submit(self._asr_engine, request.source_path, bounds)
         try:
             return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:

@@ -36,10 +36,11 @@ _DERIVATIVE_KIND = "thumbnail"
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_MAX_PIXELS = 64_000_000  # ~64MP resource cap (decompression-bomb guard, M-T3-001).
 _DEFAULT_THUMBNAIL_DIM = 256
-# Cap on live worker threads. An in-thread Pillow decode cannot be force-cancelled, so on timeout
-# we abandon the worker; a SHARED bounded pool (not a fresh pool per call) means repeated timeouts
-# reuse a fixed thread set instead of leaking one live thread per timeout.
+# Cap on live worker threads across every adapter instance in this process. An in-thread Pillow
+# decode cannot be force-cancelled, so a process-wide bounded pool prevents independently
+# composed runtimes from each retaining their own worker threads after timeouts.
 _MAX_WORKER_THREADS = 4
+_PROCESSOR_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="image")
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,6 @@ class ImageProcessorAdapter:
         self._max_pixels = max_pixels
         self._thumbnail_dim = thumbnail_dim
         self._image_describer = image_describer or _pillow_describe
-        self._executor = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="image")
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -161,9 +161,9 @@ class ImageProcessorAdapter:
 
     def _describe_within_timeout(self, request: MediaProcessingRequest) -> ImageDescription:
         assert request.source_path is not None
-        # Shared bounded pool: on timeout we abandon the worker (an in-thread Pillow decode cannot
-        # be cancelled) but reuse a fixed thread set, so repeated timeouts do not leak threads.
-        future = self._executor.submit(
+        # Process-wide bounded pool: repeated composition roots cannot multiply the live-thread
+        # cap when timed-out in-thread Pillow calls cannot be force-cancelled.
+        future = _PROCESSOR_EXECUTOR.submit(
             self._image_describer, request.source_path, self._max_pixels, self._thumbnail_dim
         )
         try:
