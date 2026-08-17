@@ -948,6 +948,10 @@ test가 경합 스케줄을 직접 만들어야 하며, 그 테스트가 들어�
   공유해 테스트 수집 순서 자체가 흔들리지 않게 한다.
 - 모든 회차 return code는 `0`이어야 한다.
 - 모든 회차의 pytest summary는 같아야 한다.
+- 기본 회차 timeout은 900초다. 전체 evidence를 직렬 실행하는 GitHub Release lane은
+  2026-08-17의 6.9k-test 실측에서 정상 회차가 기존 900초 경계에 도달한 증거를 근거로
+  회차당 1200초, job 전체 180분의 bounded budget을 사용한다. 이는 3회 반복이나
+  실패 조건을 줄이는 우회가 아니며, timeout 시에도 아래 JSON을 artifact로 보존한다.
 - 결과는 `artifacts/quality/flaky_detector.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_flaky_detector.py`가 안정적으로 통과하는 fake runner,
