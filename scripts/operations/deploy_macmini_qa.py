@@ -293,7 +293,14 @@ def _kubectl(
     operation: tuple[str, ...],
     timeout: float,
 ) -> subprocess.CompletedProcess[bytes]:
-    command = (args.kubectl, "--kubeconfig", args.kubeconfig, *operation)
+    command = (
+        args.kubectl,
+        "--kubeconfig",
+        args.kubeconfig,
+        "--namespace",
+        args.namespace,
+        *operation,
+    )
     return subprocess.run(  # nosec B603 - namespace-bound kubectl argv; remove if shell or free argv appears.
         command, check=False, capture_output=True, timeout=timeout
     )

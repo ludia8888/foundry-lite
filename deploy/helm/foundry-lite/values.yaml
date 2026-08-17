@@ -121,7 +121,7 @@ external:
     jwksRefreshIntervalSeconds: 60
     retiredKeyGraceSeconds: 300
   telemetry:
-    otlpEndpoint: http://tempo.example.invalid:4318
+    otlpEndpoint: http://tempo.example.invalid:4318/v1/traces
 
 mcp:
   publicBaseUrl: https://foundry.example.invalid

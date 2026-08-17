@@ -157,6 +157,32 @@ def test_migration_evidence_requires_observed_idempotent_receipt(monkeypatch) ->
     assert evidence["rawLogStored"] is False
 
 
+def test_kubectl_is_always_bound_to_the_approved_namespace(monkeypatch) -> None:
+    observed: tuple[str, ...] = ()
+
+    def fake_run(command, **_kwargs):
+        nonlocal observed
+        observed = tuple(command)
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+
+    subject._kubectl(
+        Namespace(kubectl="kubectl", kubeconfig="/private/kubeconfig", namespace="foundry-qa"),
+        ("logs", "job/foundry-lite-migrate-2", "-c", "migrate"),
+        60,
+    )
+
+    assert observed[:6] == (
+        "kubectl",
+        "--kubeconfig",
+        "/private/kubeconfig",
+        "--namespace",
+        "foundry-qa",
+        "logs",
+    )
+
+
 @pytest.mark.parametrize(
     "output",
     (

@@ -143,6 +143,14 @@ def test_api_and_workers_can_read_oauth_key_as_the_image_nonroot_principal() -> 
         assert "defaultMode: 0440" in template
 
 
+def test_otlp_http_trace_endpoint_includes_the_collector_path() -> None:
+    base = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    macmini = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))
+
+    assert base["external"]["telemetry"]["otlpEndpoint"].endswith("/v1/traces")
+    assert macmini["external"]["telemetry"]["otlpEndpoint"] == ("http://foundry-lite-tempo:4318/v1/traces")
+
+
 def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mounts() -> None:
     templates = "\n".join(
         (ROOT / path).read_text(encoding="utf-8")
