@@ -47,6 +47,54 @@ def test_backup_pauses_only_worker_component_deployments() -> None:
     assert _worker_identity(api) is None
 
 
+def test_backup_freezes_commit_point_after_platform_evidence_mutations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    target = tmp_path / "backup"
+    target.mkdir()
+
+    def api_json(_base: str, _token: str, path: str, _payload: object) -> dict[str, object]:
+        events.append(path)
+        return {"status": "paused"} if path.endswith("/start") else {}
+
+    class CommitPointCaptured(RuntimeError):
+        pass
+
+    def postgres_inventory(_args: argparse.Namespace) -> object:
+        events.append("postgres-inventory")
+        raise CommitPointCaptured
+
+    monkeypatch.setattr(backup_subject, "assert_host_boundary", lambda: None)
+    monkeypatch.setattr(backup_subject, "assert_namespace", lambda _namespace: None)
+    monkeypatch.setattr(backup_subject, "_private_text", lambda _path: "operator-token")
+    monkeypatch.setattr(backup_subject, "_age_recipient", lambda _path: "age1recipient")
+    monkeypatch.setattr(backup_subject, "_backup_directory", lambda _run_id: target)
+    monkeypatch.setattr(backup_subject, "_api_json", api_json)
+    monkeypatch.setattr(backup_subject, "_pause_workers", lambda _args: [])
+    monkeypatch.setattr(backup_subject, "_helm_release_values", lambda _args: _exact_release_values())
+    monkeypatch.setattr(backup_subject, "_package_release_chart", lambda *_args: target / "helm-chart.tgz")
+    monkeypatch.setattr(backup_subject, "_postgres_inventory", postgres_inventory)
+    args = argparse.Namespace(
+        namespace="foundry-qa",
+        bearer_token_file=str(tmp_path / "token"),
+        age_recipient_file=str(tmp_path / "recipient"),
+        run_id="run-1",
+        api_base_url="http://127.0.0.1:30443",
+    )
+
+    with pytest.raises(CommitPointCaptured):
+        backup_subject.backup(args)
+
+    assert events == [
+        "/api/operations/backup-restore/restore-mode/start",
+        "/api/operations/backup-restore/preflight",
+        "/api/operations/backup-restore/artifacts",
+        "postgres-inventory",
+    ]
+
+
 def test_restore_safe_extract_rejects_links(tmp_path: Path) -> None:
     archive_path = tmp_path / "payload.tar"
     with tarfile.open(archive_path, mode="w") as archive:
