@@ -19,7 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
-    timeout-minutes: 90
+    # The release lane intentionally keeps coverage, three randomized full-suite
+    # replays, live-runtime ratchets, and the 100k/1m performance smokes together.
+    # A measured run reached the performance smokes only after 90 minutes, so keep
+    # a bounded 120-minute budget rather than dropping release evidence.
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v6
