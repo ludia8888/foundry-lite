@@ -285,6 +285,7 @@ def _foundation_values(temporary: Path) -> Path:
                 "executionBroker": {"enabled": False},
                 "releaseController": {"enabled": False},
                 "migrations": {"enabled": False},
+                "runtimePersistence": {"enabled": False},
                 "secrets": {"bootstrapOauthSigningSecret": False},
                 "workers": {name: {"enabled": False} for name in ("outbox", "scheduler", "pipeline", "action")},
             }
