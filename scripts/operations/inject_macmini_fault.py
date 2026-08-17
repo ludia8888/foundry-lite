@@ -39,6 +39,9 @@ _INVALID_DIGEST = "sha256:" + ("0" * 64)
 _DISK_PVC_MIB = 128
 _DISK_FILL_MIB = 112
 _DISK_RECLAIM_MINIMUM_KIB = 8 * 1024
+_DISK_RECLAIM_ATTEMPTS = 30
+_DISK_RECLAIM_INTERVAL_SECONDS = 1.0
+_COLIMA_PVC_STORAGE_PATH = "/var/lib/rancher/k3s/storage"
 
 
 def inject(args: argparse.Namespace) -> dict[str, object]:
@@ -246,13 +249,13 @@ def _pvc_disk_pressure_fault(args: argparse.Namespace) -> dict[str, object]:
     finally:
         _cleanup_disk_fault(args, name)
     minimum_reclaimed = available_during + _DISK_RECLAIM_MINIMUM_KIB
-    available_after = _colima_available_kib()
+    available_after = _wait_for_disk_reclaim(minimum_reclaimed)
     usage_percent = round(bytes_written / (_DISK_PVC_MIB * 1024 * 1024) * 100, 2)
     is_bounded = available_before - available_during <= 256 * 1024
     is_cleaned = _disk_fault_resources_absent(args, name)
-    is_disk_reclaimed = available_after >= minimum_reclaimed
+    is_disk_reclaimed = available_after is not None
     is_alerted = usage_percent >= 85.0
-    is_passed = completed.returncode == 0 and is_alerted and is_bounded and is_cleaned
+    is_passed = completed.returncode == 0 and is_alerted and is_bounded and is_cleaned and is_disk_reclaimed
     return {
         "status": "passed" if is_passed else "failed",
         "target": f"persistentvolumeclaim/{name}",
@@ -545,13 +548,24 @@ def _assert_disk_fault_capacity(available_kib: int) -> None:
 
 
 def _colima_available_kib() -> int:
-    result = _command(("colima", "ssh", "--profile", "foundry-qa", "--", "df", "-Pk", "/"), 30)
+    operation = ("colima", "ssh", "--profile", "foundry-qa", "--", "df", "-Pk", _COLIMA_PVC_STORAGE_PATH)
+    result = _command(operation, 30)
     _require_success(result, "macmini_fault_disk_inventory_failed")
     try:
         value = int(result.stdout.decode().splitlines()[-1].split()[3])
     except (IndexError, ValueError) as exc:
         raise RuntimeError("macmini_fault_disk_inventory_failed") from exc
     return value
+
+
+def _wait_for_disk_reclaim(minimum_available_kib: int) -> int | None:
+    for attempt in range(_DISK_RECLAIM_ATTEMPTS):
+        available_kib = _colima_available_kib()
+        if available_kib >= minimum_available_kib:
+            return available_kib
+        if attempt + 1 < _DISK_RECLAIM_ATTEMPTS:
+            time.sleep(_DISK_RECLAIM_INTERVAL_SECONDS)
+    return None
 
 
 def _network_policy_selector(value: object) -> dict[str, object]:
