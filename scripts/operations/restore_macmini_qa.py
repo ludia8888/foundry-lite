@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from scripts.operations.backup_macmini_qa import _validated_release_values
 from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, assert_namespace
 
 _RECOVERY_NAMESPACE = "foundry-qa-recovery"
@@ -26,6 +27,8 @@ _SECRETS = (
     "foundry-lite-application",
     "foundry-lite-oauth-signing",
     "foundry-lite-qa-dependencies",
+    "foundry-lite-backup-age",
+    "foundry-lite-ghcr",
 )
 _APP_DEPLOYMENTS = (
     ("foundry-lite", 2),
@@ -59,8 +62,9 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
         _ensure_namespace(args)
         for secret in _SECRETS:
             _copy_secret(args, secret)
-        _install_recovery(args, temporary)
-        _scale_recovery(args, replicas=0)
+        release_values = _archived_release_values(payload)
+        release_chart = _archived_release_chart(payload)
+        _install_recovery(args, temporary, release_values, release_chart, is_foundation=True)
         _restore_postgresql(args, payload / "postgres.dump")
         _scale_named(args, args.recovery_namespace, "foundry-lite", 1)
         _wait_deployment(args, args.recovery_namespace, "foundry-lite", 300)
@@ -69,7 +73,7 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
         expected = json.loads((payload / "database-inventory.json").read_text(encoding="utf-8"))
         if observed != expected:
             raise RuntimeError("macmini_restore_database_inventory_mismatch")
-        _scale_recovery(args, replicas=None)
+        _install_recovery(args, temporary, release_values, release_chart, is_foundation=False)
         _wait_all_recovery(args)
         restore_id = f"enterprise-qa-{args.run_id}"
         with _port_forward(args, args.recovery_namespace, 18081):
@@ -113,6 +117,9 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
             "rpo": 0,
             "databaseInventoryMatched": True,
             "s3ContentCoordinatesMatched": True,
+            "exactHelmReleaseValuesRestored": True,
+            "exactHelmChartRestored": True,
+            "twoPhaseRecoveryInstall": True,
             "recoveryResumeStatus": recovery_resume.get("status"),
             "sourceResumeStatus": source_resume.get("status"),
             "sourceWorkersResumed": True,
@@ -198,7 +205,14 @@ def _copy_secret(args: argparse.Namespace, name: str) -> None:
         raise RuntimeError("macmini_restore_secret_apply_failed")
 
 
-def _install_recovery(args: argparse.Namespace, temporary: Path) -> None:
+def _install_recovery(
+    args: argparse.Namespace,
+    temporary: Path,
+    release_values: Path,
+    release_chart: Path,
+    *,
+    is_foundation: bool,
+) -> None:
     overrides = temporary / "recovery-overrides.json"
     overrides.write_text(
         json.dumps(
@@ -210,21 +224,30 @@ def _install_recovery(args: argparse.Namespace, temporary: Path) -> None:
         encoding="utf-8",
     )
     os.chmod(overrides, 0o600)
-    command = (
+    command = [
         args.helm,
         "upgrade",
         "--install",
         "foundry-lite",
-        args.chart,
+        str(release_chart),
         "--namespace",
         args.recovery_namespace,
         "--values",
-        args.values,
+        str(release_values),
         "--values",
         str(overrides),
-        "--atomic",
-        "--timeout",
-        "15m",
+    ]
+    if is_foundation:
+        foundation = _foundation_values(temporary)
+        command.extend(("--values", str(foundation)))
+    command.extend(
+        (
+            "--atomic",
+            "--wait",
+            "--wait-for-jobs",
+            "--timeout",
+            "15m",
+        )
     )
     result = subprocess.run(  # nosec B603 - validated Helm argv; remove if shell or free argv appears.
         command, check=False, capture_output=True, timeout=1000
@@ -233,10 +256,39 @@ def _install_recovery(args: argparse.Namespace, temporary: Path) -> None:
         raise RuntimeError("macmini_restore_helm_install_failed")
 
 
-def _scale_recovery(args: argparse.Namespace, replicas: int | None) -> None:
-    for name, normal in _APP_DEPLOYMENTS:
-        target = normal if replicas is None else replicas
-        _scale_named(args, args.recovery_namespace, name, target)
+def _archived_release_values(payload: Path) -> Path:
+    path = payload / "helm-release-values.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("macmini_restore_helm_values_invalid") from exc
+    _validated_release_values(value)
+    return path
+
+
+def _archived_release_chart(payload: Path) -> Path:
+    path = payload / "helm-chart.tgz"
+    if not path.is_file() or path.stat().st_size == 0 or path.stat().st_size > 4 * 1024 * 1024:
+        raise RuntimeError("macmini_restore_helm_chart_invalid")
+    return path
+
+
+def _foundation_values(temporary: Path) -> Path:
+    path = temporary / "recovery-foundation.json"
+    path.write_text(
+        json.dumps(
+            {
+                "api": {"replicas": 0},
+                "web": {"replicas": 0},
+                "executionBroker": {"enabled": False},
+                "releaseController": {"enabled": False},
+                "workers": {name: {"enabled": False} for name in ("outbox", "scheduler", "pipeline", "action")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(path, 0o600)
+    return path
 
 
 def _scale_named(args: argparse.Namespace, namespace: str, name: str, replicas: int) -> None:
@@ -512,8 +564,6 @@ def main() -> int:
     parser.add_argument("--age", default=str(QA_ROOT / "bin" / "age"))
     parser.add_argument("--age-identity-file", required=True)
     parser.add_argument("--bearer-token-file", required=True)
-    parser.add_argument("--chart", required=True)
-    parser.add_argument("--values", required=True)
     parser.add_argument("--source-api-base-url", default="http://127.0.0.1:30443")
     receipt = restore(parser.parse_args())
     print(json.dumps(receipt, sort_keys=True))

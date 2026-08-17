@@ -109,7 +109,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_m
 
 ## 8. 백업과 recovery namespace 복원
 
-백업은 restore mode로 write/outbox를 잠근 뒤 PostgreSQL dump, MinIO version manifest, schema revision, high-watermark, image digest와 checksum을 하나의 commit point로 묶고 age recipient로 암호화한다. raw token과 secret은 evidence에 넣지 않는다.
+백업은 restore mode로 write/outbox를 잠근 뒤 PostgreSQL dump, MinIO version manifest, schema revision, high-watermark, image digest와 checksum을 하나의 commit point로 묶고 age recipient로 암호화한다. 이때 Helm의 실제 merged release values도 commit point 앞뒤로 두 번 조회해 동일해야 하며, exact Git revision, 6개 GHCR repository/digest, image pull Secret 참조, 인증 profile, QA dependency profile을 검증한 뒤 암호화 archive에 포함한다. 로컬 chart 경로가 release Git SHA의 깨끗한 tracked tree인지 확인하고 exact chart package도 같은 archive에 고정한다. Helm values에는 Secret 내용이 없고 참조 이름만 있으며, raw token과 Secret 내용은 evidence나 archive에 넣지 않는다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/backup_macmini_qa.py \
@@ -119,7 +119,17 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/backup_m
   --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt
 ```
 
-복원은 원본을 덮지 않고 `foundry-qa-recovery` namespace에 수행한다. Dataset inventory, active object index, action/materialization run, row/object/hash가 원본 백업 시점과 일치해야 resume approval을 허용한다. 목표는 RTO 30분 이내, backup commit point 기준 RPO 0이다.
+복원은 원본을 덮지 않고 `foundry-qa-recovery` namespace에 수행한다. source namespace에서 애플리케이션 설정, OAuth signing key, QA dependency credential, age recipient, GHCR pull credential Secret을 recovery namespace에 직접 복제하되, Secret 내용은 백업 archive나 영수증에 기록하지 않는다. 먼저 API/Web/worker/controller/broker를 끈 foundation phase로 PostgreSQL·MinIO와 기반 서비스만 준비하고 PostgreSQL을 복원한다. 그 뒤 recovery 내부에서만 API 하나를 잠시 켜 S3 version archive를 복원하고 DB inventory를 비교한다. 마지막 atomic Helm phase에서 백업에 고정된 exact chart package와 release values를 다시 적용한 다음 전체 deployment를 기다린다. 현재 checkout의 chart/default values나 mutable image tag로 대체하지 않는다.
+
+```bash
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/restore_macmini_qa.py \
+  --run-id "$RUN_ID" \
+  --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
+  --age-identity-file /Users/sean1234/foundry-qa/state/age-identity.txt \
+  --bearer-token-file /Users/sean1234/foundry-qa/state/operator-token
+```
+
+Dataset inventory, active object index, action/materialization run, row/object/hash가 원본 백업 시점과 일치해야 recovery와 source의 resume approval을 허용한다. 목표는 RTO 30분 이내, backup commit point 기준 RPO 0이다.
 
 ## 9. 24시간 소크
 

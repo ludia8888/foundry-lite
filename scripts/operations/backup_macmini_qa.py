@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess  # nosec B404 - fixed operator tools only; remove if arbitrary command input is introduced.
 import tarfile
@@ -20,6 +21,18 @@ from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, a
 _MAX_API_BYTES = 2 * 1024 * 1024
 _S3_SNAPSHOT_SCRIPT = "/app/scripts/operations/s3_version_snapshot.py"
 _WORKER_COMPONENT_PREFIX = "worker-"
+_IMAGE_NAMES = ("api", "web", "controller", "codeExecution", "nodeCodeExecution", "trainedModel")
+_IMAGE_REPOSITORIES = {
+    "api": "ghcr.io/ludia8888/foundry-lite-api",
+    "web": "ghcr.io/ludia8888/foundry-lite-web",
+    "controller": "ghcr.io/ludia8888/foundry-lite-controller",
+    "codeExecution": "ghcr.io/ludia8888/foundry-lite-code-execution",
+    "nodeCodeExecution": "ghcr.io/ludia8888/foundry-lite-node-code-execution",
+    "trainedModel": "ghcr.io/ludia8888/foundry-lite-trained-model",
+}
+_REVISION = re.compile(r"^[0-9a-f]{40}$")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_CHART_RELATIVE_PATH = Path("deploy/helm/foundry-lite")
 
 
 def backup(args: argparse.Namespace) -> dict[str, object]:
@@ -39,6 +52,8 @@ def backup(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("macmini_backup_restore_mode_not_active")
     workers = _pause_workers(args)
     before = _postgres_inventory(args)
+    release_values = _helm_release_values(args)
+    _package_release_chart(args, target, release_values)
     preflight = _api_json(
         args.api_base_url,
         token,
@@ -58,7 +73,10 @@ def backup(args: argparse.Namespace) -> dict[str, object]:
     after = _postgres_inventory(args)
     if before != after:
         raise RuntimeError("macmini_backup_commit_point_drift")
+    if release_values != _helm_release_values(args):
+        raise RuntimeError("macmini_backup_release_values_drift")
     _write_json(target / "database-inventory.json", before)
+    _write_json(target / "helm-release-values.json", release_values)
     _write_json(target / "restore-mode.json", mode)
     _write_json(target / "platform-preflight.json", preflight)
     _write_json(target / "platform-artifact.json", artifact)
@@ -83,6 +101,8 @@ def backup(args: argparse.Namespace) -> dict[str, object]:
         "encryptedArchiveSha256": encrypted_sha,
         "postgresqlCommitPointStable": True,
         "s3VersionAndContentHashesCaptured": True,
+        "exactHelmReleaseValuesCaptured": True,
+        "exactHelmChartCaptured": True,
         "restoreModeRemainsActive": True,
         "workersRemainPaused": True,
         "rawTokensStored": False,
@@ -234,6 +254,118 @@ def _kubernetes_images(args: argparse.Namespace, output: Path) -> None:
     _write_json(output, {"schemaVersion": 1, "images": images})
 
 
+def _helm_release_values(args: argparse.Namespace) -> dict[str, object]:
+    result = subprocess.run(  # nosec B603 - fixed Helm read-only argv; remove if free argv appears.
+        (
+            args.helm,
+            "get",
+            "values",
+            "foundry-lite",
+            "--namespace",
+            args.namespace,
+            "--all",
+            "--output",
+            "json",
+        ),
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )
+    if result.returncode != 0 or len(result.stdout) > 4 * 1024 * 1024:
+        raise RuntimeError("macmini_backup_helm_values_failed")
+    try:
+        values = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("macmini_backup_helm_values_invalid") from exc
+    return _validated_release_values(values)
+
+
+def _package_release_chart(
+    args: argparse.Namespace,
+    target: Path,
+    release_values: dict[str, object],
+) -> Path:
+    chart = _release_chart_path(args.chart)
+    revision = _dict_or_empty(release_values.get("global")).get("revision")
+    repository = QA_ROOT / "repo"
+    head = subprocess.run(  # nosec B603 - fixed read-only Git argv; remove if free argv appears.
+        (args.git, "-C", str(repository), "rev-parse", "HEAD"),
+        check=False,
+        capture_output=True,
+        timeout=30,
+    )
+    status = subprocess.run(  # nosec B603 - fixed read-only Git argv; remove if free argv appears.
+        (
+            args.git,
+            "-C",
+            str(repository),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            str(_CHART_RELATIVE_PATH),
+        ),
+        check=False,
+        capture_output=True,
+        timeout=30,
+    )
+    if head.returncode != 0 or head.stdout.decode().strip() != revision or status.returncode != 0 or status.stdout:
+        raise RuntimeError("macmini_backup_chart_source_not_exact_release")
+    packaged = subprocess.run(  # nosec B603 - fixed Helm package argv; remove if free argv appears.
+        (args.helm, "package", str(chart), "--destination", str(target)),
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )
+    candidates = list(target.glob("foundry-lite-*.tgz"))
+    if packaged.returncode != 0 or len(candidates) != 1 or candidates[0].stat().st_size == 0:
+        raise RuntimeError("macmini_backup_chart_package_failed")
+    destination = target / "helm-chart.tgz"
+    candidates[0].replace(destination)
+    os.chmod(destination, 0o600)
+    return destination
+
+
+def _release_chart_path(raw_path: str) -> Path:
+    path = Path(raw_path)
+    expected = (QA_ROOT / "repo" / _CHART_RELATIVE_PATH).resolve()
+    if path.is_symlink():
+        raise ValueError("macmini_backup_chart_path_invalid")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("macmini_backup_chart_path_invalid") from exc
+    if resolved != expected or not resolved.is_dir():
+        raise ValueError("macmini_backup_chart_path_invalid")
+    return resolved
+
+
+def _validated_release_values(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError("macmini_backup_helm_values_invalid")
+    global_values = _dict_or_empty(value.get("global"))
+    images = _dict_or_empty(value.get("images"))
+    auth = _dict_or_empty(value.get("auth"))
+    qa_dependencies = _dict_or_empty(value.get("qaDependencies"))
+    image_values = {name: _dict_or_empty(images.get(name)) for name in _IMAGE_NAMES}
+    expected = (
+        _REVISION.fullmatch(str(global_values.get("revision", ""))) is not None,
+        _has_pull_secret(global_values.get("imagePullSecrets")),
+        set(images) == set(_IMAGE_NAMES),
+        all(_DIGEST.fullmatch(str(item.get("digest", ""))) is not None for item in image_values.values()),
+        all(image_values[name].get("repository") == _IMAGE_REPOSITORIES[name] for name in _IMAGE_NAMES),
+        auth.get("profile") in {"header-trust", "oidc"},
+        qa_dependencies.get("enabled") is True,
+    )
+    if not all(expected):
+        raise RuntimeError("macmini_backup_helm_values_invalid")
+    return value
+
+
+def _has_pull_secret(value: object) -> bool:
+    return isinstance(value, list) and "foundry-lite-ghcr" in value
+
+
 def _api_json(base_url: str, token: str, path: str, payload: object) -> dict[str, object]:
     base = urllib.parse.urlsplit(base_url)
     if base.scheme not in {"http", "https"} or not base.hostname:
@@ -368,6 +500,9 @@ def main() -> int:
     parser.add_argument("--namespace", default="foundry-qa")
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--kubectl", default=str(QA_ROOT / "bin" / "kubectl"))
+    parser.add_argument("--helm", default=str(QA_ROOT / "bin" / "helm"))
+    parser.add_argument("--git", default="git")
+    parser.add_argument("--chart", default=str(QA_ROOT / "repo" / _CHART_RELATIVE_PATH))
     parser.add_argument("--api-base-url", default="http://127.0.0.1:30443")
     parser.add_argument("--bearer-token-file", required=True)
     parser.add_argument("--age-recipient-file", required=True)

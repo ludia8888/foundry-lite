@@ -1,15 +1,37 @@
 from __future__ import annotations
 
+import argparse
 import io
 import json
+import subprocess
 import tarfile
 from pathlib import Path
 
 import pytest
 
+from scripts.operations import backup_macmini_qa as backup_subject
 from scripts.operations import restore_macmini_qa as restore_subject
 from scripts.operations.backup_macmini_qa import _worker_identity
 from scripts.operations.restore_macmini_qa import _safe_extract
+
+
+def _exact_release_values() -> dict[str, object]:
+    images = {
+        name: {
+            "repository": repository,
+            "digest": f"sha256:{index:064x}",
+        }
+        for index, (name, repository) in enumerate(backup_subject._IMAGE_REPOSITORIES.items(), start=1)
+    }
+    return {
+        "global": {
+            "revision": "a" * 40,
+            "imagePullSecrets": ["foundry-lite-ghcr"],
+        },
+        "images": images,
+        "auth": {"profile": "header-trust"},
+        "qaDependencies": {"enabled": True},
+    }
 
 
 def test_backup_pauses_only_worker_component_deployments() -> None:
@@ -75,3 +97,107 @@ def test_restore_api_rejects_redirects() -> None:
         restore_subject._NoRedirect().redirect_request(
             object(), object(), 302, "redirect", object(), "https://evil.invalid"
         )
+
+
+def test_backup_release_values_require_exact_images_auth_and_pull_secret() -> None:
+    values = _exact_release_values()
+
+    assert backup_subject._validated_release_values(values) == values
+
+    values["images"]["api"]["digest"] = "latest"  # type: ignore[index]
+    with pytest.raises(RuntimeError, match="helm_values_invalid"):
+        backup_subject._validated_release_values(values)
+
+
+def test_backup_packages_only_the_clean_exact_release_chart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qa_root = tmp_path / "foundry-qa"
+    chart = qa_root / "repo" / "deploy" / "helm" / "foundry-lite"
+    chart.mkdir(parents=True)
+    target = qa_root / "backups" / "run-1"
+    target.mkdir(parents=True)
+    commands: list[tuple[str, ...]] = []
+
+    def run(command: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, b"a" * 40 + b"\n", b"")
+        if "status" in command:
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        (target / "foundry-lite-0.1.0.tgz").write_bytes(b"exact-chart-package")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(backup_subject, "QA_ROOT", qa_root)
+    monkeypatch.setattr(backup_subject.subprocess, "run", run)
+    args = argparse.Namespace(git="git", helm="helm", chart=str(chart))
+
+    packaged = backup_subject._package_release_chart(args, target, _exact_release_values())
+
+    assert packaged == target / "helm-chart.tgz"
+    assert packaged.read_bytes() == b"exact-chart-package"
+    assert len(commands) == 3
+
+
+def test_restore_copies_every_release_secret_needed_by_recovery() -> None:
+    assert set(restore_subject._SECRETS) == {
+        "foundry-lite-application",
+        "foundry-lite-oauth-signing",
+        "foundry-lite-qa-dependencies",
+        "foundry-lite-backup-age",
+        "foundry-lite-ghcr",
+    }
+
+
+def test_restore_reads_and_validates_archived_release_values(tmp_path: Path) -> None:
+    path = tmp_path / "helm-release-values.json"
+    path.write_text(json.dumps(_exact_release_values()), encoding="utf-8")
+
+    assert restore_subject._archived_release_values(tmp_path) == path
+
+    path.write_text(json.dumps({"global": {"revision": "mutable"}}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="helm_values_invalid"):
+        restore_subject._archived_release_values(tmp_path)
+
+
+def test_restore_requires_a_bounded_archived_release_chart(tmp_path: Path) -> None:
+    chart = tmp_path / "helm-chart.tgz"
+    chart.write_bytes(b"exact-chart-package")
+
+    assert restore_subject._archived_release_chart(tmp_path) == chart
+
+    chart.write_bytes(b"")
+    with pytest.raises(RuntimeError, match="helm_chart_invalid"):
+        restore_subject._archived_release_chart(tmp_path)
+
+
+def test_restore_helm_install_uses_exact_values_in_two_phases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archived = tmp_path / "helm-release-values.json"
+    archived.write_text(json.dumps(_exact_release_values()), encoding="utf-8")
+    chart = tmp_path / "helm-chart.tgz"
+    chart.write_bytes(b"exact-chart-package")
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(restore_subject.subprocess, "run", run)
+    args = argparse.Namespace(
+        helm="/qa/bin/helm",
+        recovery_namespace="foundry-qa-recovery",
+    )
+
+    restore_subject._install_recovery(args, tmp_path, archived, chart, is_foundation=True)
+    restore_subject._install_recovery(args, tmp_path, archived, chart, is_foundation=False)
+
+    assert len(commands) == 2
+    assert all(str(chart) in command for command in commands)
+    assert all(str(archived) in command for command in commands)
+    assert all("--atomic" in command and "--wait-for-jobs" in command for command in commands)
+    assert str(tmp_path / "recovery-foundation.json") in commands[0]
+    assert str(tmp_path / "recovery-foundation.json") not in commands[1]
