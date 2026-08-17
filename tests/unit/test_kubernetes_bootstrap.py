@@ -116,6 +116,33 @@ def test_oauth_bootstrap_cli_never_prints_secret_identifiers(monkeypatch, capsys
     assert "sensitive-secret" not in output
 
 
+def test_oauth_bootstrap_cli_reports_only_allowlisted_failure_code(monkeypatch, capsys) -> None:
+    def fail(_config: OAuthSecretBootstrapConfig) -> str:
+        raise RuntimeError("secret_api_request_failed")
+
+    monkeypatch.setattr(oauth_subject, "ensure_oauth_secret", fail)
+
+    result = oauth_subject.main(
+        [
+            "--namespace",
+            "foundry-qa",
+            "--secret-name",
+            "sensitive-secret-name",
+            "--secret-key",
+            "sensitive-secret-key",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert json.loads(output) == {
+        "errorCode": "secret_api_request_failed",
+        "reason": "oauth_secret_bootstrap_failed",
+        "status": "failed",
+    }
+    assert "sensitive-secret" not in output
+
+
 def test_s3_bootstrap_is_idempotent_and_enables_versioning_on_create() -> None:
     existing = _S3()
     missing = _S3(head_status=404)

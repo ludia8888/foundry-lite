@@ -132,6 +132,18 @@ def test_oauth_bootstrap_deadline_includes_clean_host_image_pull() -> None:
     assert "activeDeadlineSeconds: 180" not in jobs
 
 
+def test_oauth_signing_secret_bootstrap_runs_only_on_first_install() -> None:
+    jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
+    rbac = (ROOT / "deploy/helm/foundry-lite/templates/serviceaccounts-rbac.yaml").read_text(encoding="utf-8")
+    oauth_job = jobs.split("{{- if and .Values.qaDependencies.enabled .Values.migrations.enabled }}", 1)[0]
+    oauth_rbac = rbac.split("{{- if .Values.secrets.bootstrapOauthSigningSecret }}", 1)[1].split("{{- end }}", 1)[0]
+
+    assert oauth_job.count("helm.sh/hook: pre-install") == 1
+    assert "pre-upgrade" not in oauth_job
+    assert oauth_rbac.count("helm.sh/hook: pre-install") == 3
+    assert "pre-upgrade" not in oauth_rbac
+
+
 def test_api_and_workers_can_read_oauth_key_as_the_image_nonroot_principal() -> None:
     for template_name in ("api.yaml", "workers.yaml"):
         template = (ROOT / "deploy/helm/foundry-lite/templates" / template_name).read_text(encoding="utf-8")
