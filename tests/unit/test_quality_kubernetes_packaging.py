@@ -132,6 +132,17 @@ def test_oauth_bootstrap_deadline_includes_clean_host_image_pull() -> None:
     assert "activeDeadlineSeconds: 180" not in jobs
 
 
+def test_api_and_workers_can_read_oauth_key_as_the_image_nonroot_principal() -> None:
+    for template_name in ("api.yaml", "workers.yaml"):
+        template = (ROOT / "deploy/helm/foundry-lite/templates" / template_name).read_text(encoding="utf-8")
+
+        assert "runAsUser: 10001" in template
+        assert "runAsGroup: 10001" in template
+        assert "fsGroup: 10001" in template
+        assert "fsGroupChangePolicy: OnRootMismatch" in template
+        assert "defaultMode: 0440" in template
+
+
 def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mounts() -> None:
     templates = "\n".join(
         (ROOT / path).read_text(encoding="utf-8")
@@ -171,9 +182,7 @@ def test_postgresql_probes_use_the_digest_image_binary_path() -> None:
 
 
 def test_keycloak_waits_for_postgresql_before_starting() -> None:
-    identity = (ROOT / "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml").read_text(
-        encoding="utf-8"
-    )
+    identity = (ROOT / "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml").read_text(encoding="utf-8")
 
     keycloak = identity.split("app.kubernetes.io/component: keycloak", 1)[1]
     assert "name: wait-for-postgresql" in keycloak

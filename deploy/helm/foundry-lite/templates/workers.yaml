@@ -27,7 +27,14 @@ spec:
       serviceAccountName: {{ include "foundry-lite.fullname" $root }}-api
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
-      securityContext: {{- include "foundry-lite.podSecurityContext" $root | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       {{- with $root.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- range . }}
@@ -62,7 +69,7 @@ spec:
         - name: oauth-signing
           secret:
             secretName: {{ $root.Values.secrets.oauthSigningExistingSecret }}
-            defaultMode: 0400
+            defaultMode: 0440
 ---
 {{- end }}
 {{- end }}
