@@ -158,7 +158,7 @@ def test_pvc_disk_pressure_stops_at_threshold_and_cleans_resources(monkeypatch) 
     original = "ghcr.io/ludia8888/foundry-lite-api@sha256:" + ("c" * 64)
     created: list[dict[str, object]] = []
     cleaned: list[str] = []
-    disk_samples = iter((10_000_000, 9_900_000, 9_999_000))
+    disk_samples = iter((10_000_000, 9_900_000, 9_900_001))
     monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
     monkeypatch.setattr(subject, "_create_fault_resource", lambda _args, value, _reason: created.append(value))
     monkeypatch.setattr(subject, "_cleanup_disk_fault", lambda _args, name: cleaned.append(name))
@@ -175,10 +175,46 @@ def test_pvc_disk_pressure_stops_at_threshold_and_cleans_resources(monkeypatch) 
     assert receipt["status"] == "passed"
     assert receipt["logicalUsagePercent"] == 87.5
     assert receipt["diskPressureAlert"] is True
+    assert receipt["cleanupObserved"] is True
+    assert receipt["cleanupObservedAvailableKiB"] == 9_900_001
+    assert receipt["colimaDiskReclaimObserved"] is False
     assert receipt["existingMacHostPathFilled"] is False
     assert created[0]["spec"]["resources"]["requests"]["storage"] == "128Mi"  # type: ignore[index]
     assert created[1]["kind"] == "Job"
     assert cleaned == [subject._fault_resource_name("disk", "enterprise-qa")]
+
+
+def test_fault_command_prepends_private_tools_for_colima_restart(tmp_path: Path, monkeypatch) -> None:
+    qa_root = tmp_path / "foundry-qa"
+    observed: dict[str, object] = {}
+
+    def fake_run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        observed.update({"command": command, **kwargs})
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr("scripts.operations.macmini_qa_guard.QA_ROOT", qa_root)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(subject.subprocess, "run", fake_run)
+
+    result = subject._command(("colima", "start", "foundry-qa"), 600)
+
+    assert result.returncode == 0
+    environment = observed["env"]
+    assert isinstance(environment, dict)
+    assert environment["PATH"].split(":") == [str(qa_root / "bin"), "/opt/homebrew/bin", "/usr/bin", "/bin"]
+
+
+def test_workload_pod_inventory_excludes_completed_and_failed_jobs() -> None:
+    payload = {
+        "items": [
+            {"metadata": {"name": "api-1", "ownerReferences": [{"kind": "ReplicaSet"}]}},
+            {"metadata": {"name": "postgres-0", "ownerReferences": [{"kind": "StatefulSet"}]}},
+            {"metadata": {"name": "migration-1", "ownerReferences": [{"kind": "Job"}]}},
+            {"metadata": {"name": "oauth-failed", "ownerReferences": [{"kind": "Job"}]}},
+        ]
+    }
+
+    assert subject._workload_pod_names(payload) == ("api-1", "postgres-0")
 
 
 def test_disk_fault_cleans_pvc_when_job_creation_fails(monkeypatch) -> None:

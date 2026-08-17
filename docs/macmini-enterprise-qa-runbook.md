@@ -157,7 +157,7 @@ Tailscale owner와 DNS가 `sean1234` 대상임을 확인한 뒤에만 443을 Web
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_macmini_fault.py \
   --run-id "$RUN_ID" \
   --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
-  --fault api-pod-delete
+  --fault api-pod
 ```
 
 검증 대상은 API Pod, worker, PostgreSQL, MinIO, Redpanda, Temporal, Elasticsearch, ClamAV, invalid image, migration failure, network partition, disposable PVC disk pressure, Colima stop/start, Funnel/Keycloak 중단이다. 장애가 끝나도 replica, selector, PVC, current image digest가 원래 값과 다르면 실패다.

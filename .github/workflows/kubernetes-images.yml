@@ -206,7 +206,7 @@ jobs:
             --arg controller "${IMAGE_PREFIX}-controller@${CONTROLLER_DIGEST}" \
             '{revision:$revision, platform:"linux/arm64", images:{api:$api,web:$web,codeExecution:$codeExecution,nodeCodeExecution:$nodeCodeExecution,trainedModel:$trainedModel,controller:$controller},sbom:"oci-attestation",signature:"sigstore-keyless"}' \
             > artifacts/kubernetes-images/manifest.json
-          sha256sum artifacts/kubernetes-images/manifest.json > artifacts/kubernetes-images/SHA256SUMS
+          (cd artifacts/kubernetes-images && sha256sum manifest.json > SHA256SUMS)
 
       - uses: actions/upload-artifact@v7
         with:

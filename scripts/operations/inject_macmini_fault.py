@@ -12,7 +12,12 @@ import subprocess  # nosec B404 - fixed kubectl only; remove if arbitrary comman
 import time
 from datetime import UTC, datetime
 
-from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, assert_namespace
+from scripts.operations.macmini_qa_guard import (
+    QA_ROOT,
+    assert_host_boundary,
+    assert_namespace,
+    qa_command_environment,
+)
 
 _DEPENDENCIES = {
     "postgresql": ("statefulset", "foundry-lite-postgresql", 300),
@@ -27,11 +32,13 @@ _POD_SELECTORS = {
     "api-pod": "app.kubernetes.io/name=foundry-lite,app.kubernetes.io/component=api",
     "worker-pod": "app.kubernetes.io/name=foundry-lite,app.kubernetes.io/component=worker-action",
 }
+_WORKLOAD_POD_OWNER_KINDS = frozenset({"DaemonSet", "ReplicaSet", "StatefulSet"})
 _API_DEPLOYMENT = "foundry-lite"
 _API_CONTAINER = "api"
 _INVALID_DIGEST = "sha256:" + ("0" * 64)
 _DISK_PVC_MIB = 128
 _DISK_FILL_MIB = 112
+_DISK_RECLAIM_MINIMUM_KIB = 8 * 1024
 
 
 def inject(args: argparse.Namespace) -> dict[str, object]:
@@ -143,12 +150,21 @@ def _colima_restart(args: argparse.Namespace) -> dict[str, object]:
     _require_success(stop, "macmini_fault_colima_stop_failed")
     start = _command(("colima", "start", "foundry-qa"), 600)
     _require_success(start, "macmini_fault_colima_start_failed")
-    rollout = _kubectl(args, ("wait", "--for=condition=Ready", "pods", "--all", "--timeout=600s"), 620)
+    pods = _json_output(
+        _kubectl(args, ("get", "pods", "-o", "json"), 30),
+        "macmini_fault_colima_pod_inventory_failed",
+    )
+    names = _workload_pod_names(pods)
+    if not names:
+        raise RuntimeError("macmini_fault_colima_workload_pods_missing")
+    targets = tuple(f"pod/{name}" for name in names)
+    rollout = _kubectl(args, ("wait", "--for=condition=Ready", *targets, "--timeout=600s"), 620)
     return {
         "status": "passed" if rollout.returncode == 0 else "failed",
         "target": "colima/foundry-qa",
         "recoveryTargetSeconds": 600,
         "recoveryObserved": rollout.returncode == 0,
+        "readyWorkloadPodCount": len(names),
     }
 
 
@@ -229,12 +245,14 @@ def _pvc_disk_pressure_fault(args: argparse.Namespace) -> dict[str, object]:
         bytes_written = _disk_bytes_written(logs)
     finally:
         _cleanup_disk_fault(args, name)
+    minimum_reclaimed = available_during + _DISK_RECLAIM_MINIMUM_KIB
     available_after = _colima_available_kib()
     usage_percent = round(bytes_written / (_DISK_PVC_MIB * 1024 * 1024) * 100, 2)
     is_bounded = available_before - available_during <= 256 * 1024
-    is_recovered = available_after >= available_during
+    is_cleaned = _disk_fault_resources_absent(args, name)
+    is_disk_reclaimed = available_after >= minimum_reclaimed
     is_alerted = usage_percent >= 85.0
-    is_passed = completed.returncode == 0 and is_alerted and is_bounded and is_recovered
+    is_passed = completed.returncode == 0 and is_alerted and is_bounded and is_cleaned
     return {
         "status": "passed" if is_passed else "failed",
         "target": f"persistentvolumeclaim/{name}",
@@ -242,7 +260,10 @@ def _pvc_disk_pressure_fault(args: argparse.Namespace) -> dict[str, object]:
         "diskPressureAlert": is_alerted,
         "writeStoppedAtThreshold": True,
         "colimaDiskGrowthBounded": is_bounded,
-        "cleanupObserved": is_recovered,
+        "cleanupObserved": is_cleaned,
+        "cleanupMinimumAvailableKiB": minimum_reclaimed,
+        "cleanupObservedAvailableKiB": available_after,
+        "colimaDiskReclaimObserved": is_disk_reclaimed,
         "existingMacHostPathFilled": False,
     }
 
@@ -497,6 +518,15 @@ def _cleanup_disk_fault(args: argparse.Namespace, name: str) -> None:
         raise RuntimeError("macmini_fault_disk_cleanup_failed")
 
 
+def _disk_fault_resources_absent(args: argparse.Namespace, name: str) -> bool:
+    for kind in ("job", "pvc"):
+        result = _kubectl(args, ("get", kind, name, "--ignore-not-found=true", "-o", "name"), 30)
+        _require_success(result, "macmini_fault_disk_cleanup_verify_failed")
+        if result.stdout.strip():
+            return False
+    return True
+
+
 def _disk_bytes_written(logs: subprocess.CompletedProcess[bytes]) -> int:
     _require_success(logs, "macmini_fault_disk_log_missing")
     try:
@@ -569,13 +599,22 @@ def _kubectl_input(
 ) -> subprocess.CompletedProcess[bytes]:
     command = (args.kubectl, "--kubeconfig", args.kubeconfig, "--namespace", args.namespace, *operation)
     return subprocess.run(  # nosec B603 - namespace-bound kubectl argv; remove if shell or free argv appears.
-        command, input=payload, check=False, capture_output=True, timeout=timeout
+        command,
+        input=payload,
+        check=False,
+        capture_output=True,
+        env=qa_command_environment(),
+        timeout=timeout,
     )
 
 
 def _command(command: tuple[str, ...], timeout: float) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(  # nosec B603 - allowlisted fault argv; remove if shell or free argv appears.
-        command, check=False, capture_output=True, timeout=timeout
+        command,
+        check=False,
+        capture_output=True,
+        env=qa_command_environment(),
+        timeout=timeout,
     )
 
 
@@ -605,6 +644,27 @@ def _pod_names(payload: object) -> tuple[str, ...]:
         if isinstance(name, str):
             names.append(name)
     return tuple(names)
+
+
+def _workload_pod_names(payload: object) -> tuple[str, ...]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return ()
+    names = (_workload_pod_name(item) for item in payload["items"])
+    return tuple(sorted(name for name in names if name is not None))
+
+
+def _workload_pod_name(item: object) -> str | None:
+    metadata = item.get("metadata") if isinstance(item, dict) else None
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("name"), str):
+        return None
+    references = metadata.get("ownerReferences")
+    if not isinstance(references, list) or not any(_is_workload_owner(value) for value in references):
+        return None
+    return str(metadata["name"])
+
+
+def _is_workload_owner(value: object) -> bool:
+    return isinstance(value, dict) and value.get("kind") in _WORKLOAD_POD_OWNER_KINDS
 
 
 def _validate_duration(value: int) -> None:
