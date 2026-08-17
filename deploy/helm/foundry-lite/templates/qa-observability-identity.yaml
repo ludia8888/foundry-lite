@@ -281,10 +281,14 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_ADMIN}}
             - name: KEYCLOAK_ADMIN_PASSWORD
               valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_ADMIN_PASSWORD}}
-            - name: KEYCLOAK_QA_USER
-              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_QA_USER}}
-            - name: KEYCLOAK_QA_USER_PASSWORD
-              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_QA_USER_PASSWORD}}
+            - name: KEYCLOAK_QA_AUTHOR_USER
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_QA_AUTHOR_USER}}
+            - name: KEYCLOAK_QA_AUTHOR_USER_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_QA_AUTHOR_USER_PASSWORD}}
+            - name: KEYCLOAK_QA_REVIEWER_USER
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_QA_REVIEWER_USER}}
+            - name: KEYCLOAK_QA_REVIEWER_USER_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: KEYCLOAK_QA_REVIEWER_USER_PASSWORD}}
           resources:
             requests: {cpu: 25m, memory: 64Mi}
             limits: {cpu: 250m, memory: 256Mi}
