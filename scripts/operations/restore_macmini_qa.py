@@ -284,6 +284,8 @@ def _foundation_values(temporary: Path) -> Path:
                 "web": {"replicas": 0},
                 "executionBroker": {"enabled": False},
                 "releaseController": {"enabled": False},
+                "migrations": {"enabled": False},
+                "secrets": {"bootstrapOauthSigningSecret": False},
                 "workers": {name: {"enabled": False} for name in ("outbox", "scheduler", "pipeline", "action")},
             }
         ),

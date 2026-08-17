@@ -251,3 +251,6 @@ def test_restore_helm_install_uses_exact_values_in_two_phases(
     assert all("--atomic" in command and "--wait-for-jobs" in command for command in commands)
     assert str(tmp_path / "recovery-foundation.json") in commands[0]
     assert str(tmp_path / "recovery-foundation.json") not in commands[1]
+    foundation = json.loads((tmp_path / "recovery-foundation.json").read_text(encoding="utf-8"))
+    assert foundation["migrations"] == {"enabled": False}
+    assert foundation["secrets"] == {"bootstrapOauthSigningSecret": False}
