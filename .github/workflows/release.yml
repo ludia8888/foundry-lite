@@ -19,11 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.cache/fastembed
+      # Release replays the complete suite after coverage has already warmed the
+      # runner. A healthy 6.9k-test replay reached 900 seconds, so retain a
+      # bounded 20-minute per-iteration ceiling without reducing the 3 runs.
+      FOUNDRY_LITE_FLAKY_ITERATION_TIMEOUT_SECONDS: "1200"
     # The release lane intentionally keeps coverage, three randomized full-suite
     # replays, live-runtime ratchets, and the 100k/1m performance smokes together.
-    # A measured run reached the performance smokes only after 90 minutes, so keep
-    # a bounded 120-minute budget rather than dropping release evidence.
-    timeout-minutes: 120
+    # A measured run reached the performance smokes only after 90 minutes and a
+    # healthy randomized replay later reached the old 15-minute iteration limit.
+    # Keep a bounded 180-minute budget rather than dropping release evidence.
+    timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -111,6 +116,7 @@ jobs:
             artifacts/quality/operator_evidence.json
             artifacts/quality/operator_evidence_summary.md
             artifacts/quality/runtime_root_cause_summary.md
+            artifacts/quality/flaky_detector.json
             artifacts/diagnostics
           retention-days: 90
           if-no-files-found: warn

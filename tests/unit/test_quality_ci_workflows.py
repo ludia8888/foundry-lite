@@ -1077,8 +1077,19 @@ def test_release_gate_budget_covers_full_evidence_rehearsal() -> None:
     # The release lane runs coverage, three randomized full-suite replays,
     # live-runtime ratchets, and both performance smokes serially. A 90-minute
     # budget canceled a healthy run after the runtime ratchets had passed and
-    # the 100k performance smoke had started, so preserve the measured headroom.
-    assert "timeout-minutes: 120" in release_job
+    # the 100k performance smoke had started. The old 900-second flaky-iteration
+    # ceiling then canceled a healthy 6.9k-test replay at 900.08 seconds, so the
+    # release lane preserves all three replays and gives each a bounded 20 minutes.
+    assert "timeout-minutes: 180" in release_job
+    assert 'FOUNDRY_LITE_FLAKY_ITERATION_TIMEOUT_SECONDS: "1200"' in release_job
+
+
+def test_release_gate_uploads_flaky_detector_report_on_failure() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    artifact_step = workflow.split("- name: Upload release evidence artifacts", maxsplit=1)[1]
+
+    assert "if: always()" in artifact_step
+    assert "artifacts/quality/flaky_detector.json" in artifact_step
 
 
 def test_release_gate_installs_live_media_prerequisites_before_release_gate() -> None:
