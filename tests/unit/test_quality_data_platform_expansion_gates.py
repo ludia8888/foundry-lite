@@ -93,6 +93,35 @@ def test_non_readme_doc_cannot_claim_deferred_feature_as_active(tmp_path: Path) 
     assert any(finding.code == "doc_deferred_pattern_claimed_current" for finding in findings)
 
 
+def test_release_truth_rejects_protected_author_self_review_claim(tmp_path: Path) -> None:
+    _write_semantic_tree(
+        tmp_path,
+        implementation_status="S3 storage ratchet proof is active-covered.\n",
+        readme="Record DLQ remains future work.\n",
+    )
+    ledger = tmp_path / "docs" / "sprint-evidence-ledger.md"
+    ledger.write_text("Protected reviewer claim (author self-claim allowed).\n", encoding="utf-8")
+
+    findings = _collect_semantic(tmp_path)
+
+    assert any(finding.code == "protected_author_self_review_claim" for finding in findings)
+
+
+def test_release_truth_rejects_implemented_jsonb_in_target_list(tmp_path: Path) -> None:
+    _write_semantic_tree(
+        tmp_path,
+        implementation_status=(
+            "S3 storage ratchet proof is active-covered.\n"
+            "- PostgreSQL JSONB object store with production indexes and row-level security.\n"
+        ),
+        readme="Record DLQ remains future work.\n",
+    )
+
+    findings = _collect_semantic(tmp_path)
+
+    assert any(finding.code == "implemented_jsonb_described_as_target" for finding in findings)
+
+
 def test_data_pattern_matrix_requires_future_test_for_deferred(tmp_path: Path) -> None:
     _write_pattern_tree(tmp_path)
     matrix_path = tmp_path / "docs" / "data-engineering-pattern-matrix.json"

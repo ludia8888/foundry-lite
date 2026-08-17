@@ -29,6 +29,33 @@ DEFAULT_DOCS = (
     ROOT / "docs" / "data-platform-expansion-sprint-plan-ko.md",
     ROOT / "docs" / "quality-gate-roadmap.md",
 )
+RELEASE_TRUTH_DOCS = (
+    "README.md",
+    "docs/implementation-status.md",
+    "docs/quality-gate-roadmap.md",
+    "docs/governed-release-hosted-staging-runbook.md",
+    "docs/sprint-evidence-ledger.md",
+)
+FORBIDDEN_RELEASE_TRUTH = (
+    (
+        re.compile(r"author self-claim allowed", re.IGNORECASE),
+        "protected_author_self_review_claim",
+        "Protected release documentation cannot say that the author may claim their own review.",
+    ),
+    (
+        re.compile(r"the author may self-claim", re.IGNORECASE),
+        "protected_author_self_review_claim",
+        "Protected release documentation cannot say that the author may claim their own review.",
+    ),
+    (
+        re.compile(
+            r"^\s*-\s*PostgreSQL JSONB object store with production indexes and row-level security\.\s*$",
+            re.IGNORECASE,
+        ),
+        "implemented_jsonb_described_as_target",
+        "The implemented PostgreSQL JSONB/index/RLS contract cannot remain in the unimplemented target list.",
+    ),
+)
 
 FUTURE_MARKERS = (
     "future",
@@ -244,6 +271,21 @@ def collect_findings(
         if doc_path != readme:
             findings.extend(_pattern_current_claim_findings(data_patterns, doc_path, root=root))
         findings.extend(_future_scope_findings(active_entries, doc_path, root=root))
+    findings.extend(_release_truth_findings(root))
+    return findings
+
+
+def _release_truth_findings(root: Path) -> list[SemanticDocFinding]:
+    findings: list[SemanticDocFinding] = []
+    for relative_path in RELEASE_TRUTH_DOCS:
+        path = root / relative_path
+        if not path.exists():
+            continue
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for pattern, code, message in FORBIDDEN_RELEASE_TRUTH:
+                if pattern.search(line) is None:
+                    continue
+                findings.append(_finding(code, path, line_number, pattern.pattern, message, root=root))
     return findings
 
 

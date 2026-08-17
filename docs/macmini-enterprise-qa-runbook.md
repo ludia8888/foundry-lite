@@ -110,6 +110,30 @@ Keycloak 26.7은 OAuth `resource` parameter를 직접 audience로 해석하지 �
 
 ChatGPT DCR 뒤에는 생성된 public client의 실제 id를 확인하여 `external.oidc.allowedClientIdsJson`에 exact allowlist로 넣고 atomic upgrade한다. 그 전까지 hosted 호출은 의도적으로 `blocked`다. token은 같은 issuer/tenant, exact MCP resource audience와 scope, `azp`, `sid`, `human_grant=true`, `authorization_grant_type=authorization_code`를 가져야 한다. 로그인과 위젯 확인 gesture는 사용자가 직접 수행한다.
 
+secret bootstrap은 서로 다른 `sean1234-author`와 `sean1234-reviewer` 계정을 만들고 자격 증명은 mode `0600`인 `/Users/sean1234/foundry-qa/state/keycloak-qa-principals.txt`에만 둔다. 두 계정으로 각각 Authorization Code + PKCE 로그인을 완료한 뒤 raw access token은 `state/author-token`과 `state/reviewer-token`에 mode `0600`으로만 저장한다. 다음 두 명령은 Helm 값을 production OIDC로 atomic 전환하고, 실제 production auth adapter로 두 JWT의 issuer/audience/client/scope/human grant와 서로 다른 `sub`/`sid`를 검증한다. 영수증에는 hash만 남고 raw token은 기록하지 않는다.
+
+```bash
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/switch_macmini_external_oidc.py \
+  --run-id "$RUN_ID" \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
+  --chart /Users/sean1234/foundry-qa/repo/deploy/helm/foundry-lite \
+  --public-base-url "https://<sean1234-owned-host>" \
+  --identity-base-url "https://<sean1234-owned-idp-host>" \
+  --application-id "<release-application-id>" \
+  --allowed-client-id "<ChatGPT-DCR-client-id>"
+
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/verify_macmini_external_oidc.py \
+  --run-id "$RUN_ID" \
+  --issuer "https://<sean1234-owned-idp-host>/realms/foundry-lite" \
+  --discovery-url "https://<sean1234-owned-idp-host>/realms/foundry-lite/.well-known/openid-configuration" \
+  --audience "https://<sean1234-owned-host>/mcp/release/<release-application-id>" \
+  --allowed-client-id "<ChatGPT-DCR-client-id>" \
+  --author-token-file /Users/sean1234/foundry-qa/state/author-token \
+  --reviewer-token-file /Users/sean1234/foundry-qa/state/reviewer-token
+```
+
+이 검사는 서로 다른 IdP subject/session을 기술적으로 증명한다. 실제 물리적으로 서로 다른 두 사람이 계정을 공유하지 않았다는 조직적 통제는 IdP 계정 정책과 운영 절차로 별도 증명해야 한다.
+
 Tailscale owner와 DNS가 `sean1234` 대상임을 확인한 뒤에만 443을 Web/API/MCP, 8443을 Keycloak에 제한적으로 연다. 공개 단계가 끝나면 두 Funnel을 끄고 tailnet 내부 가동만 남긴다.
 
 ## 7. 장애 주입
