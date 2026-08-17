@@ -652,6 +652,33 @@ def test_python_transform_runs_through_sdk_handles_without_raw_storage_path(tmp_
     assert "python_source_sha256" in transform_run["definition_snapshot"]
 
 
+def test_transform_commit_preserves_safe_execution_runtime_evidence(tmp_path: Path) -> None:
+    compute = _RuntimeEvidenceTransformAdapter()
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-runtime-evidence")
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.evidence_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.evidence_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.evidence_orders", _csv(tmp_path, "evidence.csv", "O-1", 100), ctx=ctx)
+    foundry.transforms.register_sql(
+        "evidence_orders",
+        sql="select order_id, amount from {{ input('raw.evidence_orders') }}",
+        inputs={"orders": "raw.evidence_orders"},
+        output_dataset_ref="clean.evidence_orders",
+        ctx=ctx,
+    )
+
+    result = foundry.transforms.run("evidence_orders", ctx=ctx)
+    with foundry.engine.begin() as conn:
+        transaction = (
+            conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == result.transaction_id))
+            .mappings()
+            .one()
+        )
+
+    assert transaction["metadata"]["runtimeEvidence"] == compute.runtime_evidence
+
+
 def test_python_transform_row_errors_are_quarantined_without_failing_run(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-record-dlq"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
@@ -1054,6 +1081,18 @@ class _TransformInputPlanSpy(DuckDBComputeAdapter):
                 sum(_input_path_count(input_paths) for input_paths in plan.input_paths_by_ref.values())
             )
         return super().execute_transform(plan)
+
+
+class _RuntimeEvidenceTransformAdapter(DuckDBComputeAdapter):
+    runtime_evidence = {
+        "executionMode": "kubernetes-job",
+        "imageDigest": "sha256:" + "c" * 64,
+        "networkDisabled": True,
+    }
+
+    def execute_transform(self, plan: TransformPlan) -> TransformExecutionResult:
+        super().execute_transform(plan)
+        return TransformExecutionResult(runtime_evidence=self.runtime_evidence)
 
 
 class _PartitionFilterSpy:

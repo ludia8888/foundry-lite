@@ -18,6 +18,7 @@ Included in the Sprint 00-36 v1 core:
 - SQLite plus local filesystem storage for the default local adapter.
 - Immutable dataset transaction and manifest commit protocol.
 - DuckDB SQL transforms and SDK-handle Python transforms with input version binding, append output mode, bounded downstream graph trigger, and lineage.
+- Protected Function/Transform execution can route through isolated Kubernetes Jobs. Operator-safe image/result/network evidence is returned as Function `runtimeEvidence` through the generated SDK and persisted as Transform Dataset transaction `runtimeEvidence`; raw tokens, source, inputs, stdout, and stderr are excluded by the adapter port contract. This is repository and contract proof until the Mac mini live deployment evidence is collected.
 - Ontology YAML import, validation, and activation.
 - Order and Customer object indexing.
 - Object query, link traversal, and saved-set-ready query model.

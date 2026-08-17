@@ -66,6 +66,7 @@ Funnel을 열기 전에 tailnet에서 다음을 모두 실제 배포에 대해 �
 - 식당 예약 고객 OSDK와 영수증/media 처리
 - Builder, Ontology, Governed Release MCP의 read/write 흐름
 - Python Function, Node Function, trained-model Kubernetes Job과 결과 hash
+- Function API/생성 SDK의 `runtimeEvidence`와 Transform Dataset transaction metadata의 `runtimeEvidence`가 같은 exact image/result/network 증거를 보존하고 raw token·source·input·stdout·stderr를 포함하지 않는지 확인
 
 HTTP 200만으로 합격시키지 않는다. DB transaction, dataset/object version, action run, audit/outbox, downstream 결과 hash를 함께 대조한다.
 
