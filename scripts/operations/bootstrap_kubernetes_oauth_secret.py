@@ -19,6 +19,20 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_SAFE_ERROR_CODES = frozenset(
+    {
+        "kubernetes_api_configuration_invalid",
+        "oauth_secret_create_outcome_unknown",
+        "oauth_secret_name_invalid",
+        "oauth_secret_read_failed",
+        "oauth_secret_timeout_invalid",
+        "oauth_secret_validation_failed",
+        "secret_api_path_invalid",
+        "secret_api_request_failed",
+        "secret_api_response_too_large",
+        "service_account_token_missing",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,8 +132,16 @@ def main(argv: list[str] | None = None) -> int:
     config = OAuthSecretBootstrapConfig(args.namespace, args.secret_name, args.secret_key)
     try:
         ensure_oauth_secret(config)
-    except (RuntimeError, ValueError):
-        print(json.dumps({"status": "failed", "reason": "oauth_secret_bootstrap_failed"}))
+    except (RuntimeError, ValueError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "reason": "oauth_secret_bootstrap_failed",
+                    "errorCode": _safe_error_code(exc),
+                }
+            )
+        )
         return 1
     print('{"isImmutable": true, "status": "completed"}')
     return 0
@@ -168,6 +190,11 @@ def _mapping(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError("oauth_secret_payload_invalid")
     return value
+
+
+def _safe_error_code(exc: RuntimeError | ValueError) -> str:
+    value = str(exc)
+    return value if value in _SAFE_ERROR_CODES else "oauth_secret_bootstrap_failed"
 
 
 def _validate_config(config: OAuthSecretBootstrapConfig) -> None:
