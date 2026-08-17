@@ -88,6 +88,47 @@ def test_backup_and_restore_scaling_preserve_helm_field_ownership(monkeypatch: p
     assert restore_commands[-1][-1] == "--field-manager=helm"
 
 
+def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    scaled: list[tuple[str, str, str, int]] = []
+    waited: list[tuple[str, str, str]] = []
+
+    def replicas(_args: argparse.Namespace, _namespace: str, kind: str, name: str) -> int:
+        return 2 if kind == "deployment" and name in {"foundry-lite", "foundry-lite-web"} else 1
+
+    def scale(
+        _args: argparse.Namespace,
+        namespace: str,
+        kind: str,
+        name: str,
+        count: int,
+    ) -> None:
+        scaled.append((namespace, kind, name, count))
+
+    def wait(
+        _args: argparse.Namespace,
+        namespace: str,
+        kind: str,
+        name: str,
+        _timeout: int,
+    ) -> None:
+        waited.append((namespace, kind, name))
+
+    monkeypatch.setattr(restore_subject, "_workload_replicas", replicas)
+    monkeypatch.setattr(restore_subject, "_scale_workload", scale)
+    monkeypatch.setattr(restore_subject, "_wait_workload", wait)
+    args = argparse.Namespace(source_namespace="foundry-qa", recovery_namespace="foundry-qa-recovery")
+
+    receipt = restore_subject._handoff_source_capacity(args)
+    restore_subject._hibernate_recovery(args)
+    restore_subject._restore_source_capacity(args, receipt)
+
+    assert ("foundry-qa", "deployment", "foundry-lite", 1) in scaled
+    assert ("foundry-qa-recovery", "statefulset", "foundry-lite-postgresql", 0) in scaled
+    assert ("foundry-qa-recovery", "deployment", "foundry-lite-worker-action", 0) in scaled
+    assert ("foundry-qa", "deployment", "foundry-lite", 2) in scaled
+    assert ("foundry-qa", "statefulset", "foundry-lite-keycloak") in waited
+
+
 def test_backup_freezes_commit_point_after_platform_evidence_mutations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
