@@ -143,6 +143,8 @@ def test_backup_packages_only_the_clean_exact_release_chart(
 def test_restore_copies_every_release_secret_needed_by_recovery() -> None:
     assert set(restore_subject._SECRETS) == {
         "foundry-lite-application",
+        "foundry-lite-runtime-application",
+        "foundry-lite-migration",
         "foundry-lite-oauth-signing",
         "foundry-lite-qa-dependencies",
         "foundry-lite-backup-age",

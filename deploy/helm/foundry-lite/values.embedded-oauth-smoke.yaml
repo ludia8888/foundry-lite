@@ -1,5 +1,7 @@
-# Pre-production-only hosted OAuth smoke. It deliberately runs the application
-# runtime as `test` so the production fail-closed external-IdP rule remains intact.
+# Pre-production-only hosted OAuth smoke. This intentionally remains an
+# unprotected test profile because local header trust is not valid in staging
+# or production. The production OIDC switch also selects the separate bounded
+# runtime database Secret before protected Pods roll out.
 global:
   runtimeProfile: test
 

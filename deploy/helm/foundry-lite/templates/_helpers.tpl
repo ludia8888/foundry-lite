@@ -53,6 +53,9 @@ capabilities:
 
 {{- define "foundry-lite.validateProtectedProfile" -}}
 {{- if .Values.global.protectedProfile -}}
+{{- if eq .Values.secrets.applicationExistingSecret .Values.secrets.migrationExistingSecret -}}
+{{- fail "protectedProfile requires distinct application and migration database secrets" -}}
+{{- end -}}
 {{- if and (eq .Values.global.runtimeProfile "production") (ne .Values.auth.profile "oidc") -}}
 {{- fail "production protectedProfile requires auth.profile=oidc" -}}
 {{- end -}}

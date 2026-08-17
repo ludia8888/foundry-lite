@@ -151,6 +151,20 @@ def test_otlp_http_trace_endpoint_includes_the_collector_path() -> None:
     assert macmini["external"]["telemetry"]["otlpEndpoint"] == ("http://foundry-lite-tempo:4318/v1/traces")
 
 
+def test_runtime_and_migration_database_principals_are_separate() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
+    helpers = (ROOT / "deploy/helm/foundry-lite/templates/_helpers.tpl").read_text(encoding="utf-8")
+
+    assert values["secrets"]["applicationExistingSecret"] != values["secrets"]["migrationExistingSecret"]
+    assert values["secrets"]["runtimeApplicationExistingSecret"] == "foundry-lite-runtime-application"
+    assert values["qaDependencies"]["postgresql"]["applicationRole"] == "foundry_lite_app"
+    assert "bootstrap_postgres_application_role.py" in jobs
+    assert jobs.count(".Values.secrets.migrationExistingSecret") == 2
+    assert "key: POSTGRES_APP_PASSWORD" in jobs
+    assert "distinct application and migration database secrets" in helpers
+
+
 def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mounts() -> None:
     templates = "\n".join(
         (ROOT / path).read_text(encoding="utf-8")

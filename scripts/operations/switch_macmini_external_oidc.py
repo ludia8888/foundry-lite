@@ -68,6 +68,7 @@ def _desired_values(
     audience = f"{public_base}/mcp/release/{application_id}"
     return {
         "global": {"runtimeProfile": "production"},
+        "secrets": {"applicationExistingSecret": "foundry-lite-runtime-application"},
         "auth": {
             "profile": "oidc",
             "localOAuthIssuer": "",

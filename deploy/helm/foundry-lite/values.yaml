@@ -27,6 +27,8 @@ images:
 
 secrets:
   applicationExistingSecret: foundry-lite-application
+  runtimeApplicationExistingSecret: foundry-lite-runtime-application
+  migrationExistingSecret: foundry-lite-migration
   oauthSigningExistingSecret: foundry-lite-oauth-signing
   oauthSigningKey: oauth-private-key.pem
   bootstrapOauthSigningSecret: true
@@ -141,6 +143,8 @@ qaDependencies:
   postgresql:
     image: docker.io/library/postgres@sha256:f6a3e92973e341fb60ad892159e2089711f3ce3ba5a1ea99dff58d6aeb443241
     storage: 30Gi
+    applicationRole: foundry_lite_app
+    database: foundry_lite
   minio:
     image: docker.io/minio/minio@sha256:cb688c06c3135c6d496e2edecd85a91b43e53b6ef17cb2072b0c1832c141d1d2
     storage: 30Gi

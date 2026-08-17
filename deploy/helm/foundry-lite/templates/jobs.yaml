@@ -52,6 +52,70 @@ spec:
         - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
 ---
 {{- end }}
+{{- if and .Values.qaDependencies.enabled .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-database-role-bootstrap-{{ .Release.Revision }}
+  labels:
+    {{- include "foundry-lite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database-role-bootstrap
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-7"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: database-role-bootstrap
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- include "foundry-lite.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          command: [/opt/foundry-lite-venv/bin/python, /app/scripts/operations/wait_for_tcp.py]
+          args: [--host, {{ .Values.external.database.host }}, --port, {{ .Values.external.database.port | quote }}, --timeout-seconds, "240"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+      containers:
+        - name: database-role-bootstrap
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          command:
+            - /opt/foundry-lite-venv/bin/python
+            - /app/scripts/operations/bootstrap_postgres_application_role.py
+            - --role
+            - {{ .Values.qaDependencies.postgresql.applicationRole }}
+            - --database
+            - {{ .Values.qaDependencies.postgresql.database }}
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - secretRef: {name: {{ .Values.secrets.migrationExistingSecret }}}
+          env:
+            - name: POSTGRES_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: POSTGRES_APP_PASSWORD}}
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 16Mi}}
+---
+{{- end }}
 {{- if .Values.qaDependencies.enabled }}
 apiVersion: batch/v1
 kind: Job
@@ -167,7 +231,7 @@ spec:
               echo '{"status":"passed","runs":2,"isIdempotent":true}';
           securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
           envFrom:
-            - secretRef: {name: {{ .Values.secrets.applicationExistingSecret }}}
+            - secretRef: {name: {{ .Values.secrets.migrationExistingSecret }}}
           resources:
             requests: {cpu: 100m, memory: 256Mi}
             limits: {cpu: "1", memory: 1Gi}

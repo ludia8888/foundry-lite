@@ -81,6 +81,7 @@ def test_switch_performs_one_atomic_upgrade_then_reconciles_exact_values(
     override = tmp_path / "state/run-1-external-oidc.json"
     assert override.stat().st_mode & 0o077 == 0
     assert json.loads(override.read_text(encoding="utf-8")) == desired
+    assert desired["secrets"] == {"applicationExistingSecret": "foundry-lite-runtime-application"}
 
 
 def test_switch_does_not_blind_retry_an_already_reconciled_release(
