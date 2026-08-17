@@ -1,0 +1,297 @@
+{{- if .Values.qaDependencies.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-postgres-init
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+data:
+  00-databases.sql: |
+    CREATE DATABASE foundry_lite;
+    CREATE DATABASE keycloak;
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-prometheus
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: foundry-lite-api
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["{{ include "foundry-lite.fullname" . }}-api:10000"]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-tempo
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+data:
+  tempo.yaml: |
+    server:
+      http_listen_port: 3200
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            http:
+              endpoint: 0.0.0.0:4318
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/traces
+    compactor:
+      compaction:
+        block_retention: 24h
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-keycloak-realm
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+data:
+  foundry-lite-realm.json: |
+    {
+      "realm": "foundry-lite",
+      "enabled": true,
+      "registrationAllowed": false,
+      "registrationEmailAsUsername": false,
+      "loginWithEmailAllowed": false,
+      "resetPasswordAllowed": false,
+      "bruteForceProtected": true,
+      "failureFactor": 5,
+      "waitIncrementSeconds": 60,
+      "maxFailureWaitSeconds": 900,
+      "sslRequired": "external",
+      "accessTokenLifespan": 300,
+      "accessCodeLifespan": 60,
+      "accessCodeLifespanUserAction": 300,
+      "revokeRefreshToken": true,
+      "refreshTokenMaxReuse": 0,
+      "ssoSessionIdleTimeout": 1800,
+      "ssoSessionMaxLifespan": 36000,
+      "clientSessionIdleTimeout": 1800,
+      "clientSessionMaxLifespan": 36000,
+      "roles": {
+        "realm": [
+          {"name": "admin"},
+          {"name": "data_engineer"},
+          {"name": "ops_manager"},
+          {"name": "finance"},
+          {"name": "reviewer"}
+        ]
+      },
+      "clientScopes": [
+        {
+          "name": "profile",
+          "description": "OpenID Connect profile claims",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "true", "display.on.consent.screen": "true", "consent.screen.text": "사용자 이름 확인"},
+          "protocolMappers": [
+            {"name": "full name", "protocol": "openid-connect", "protocolMapper": "oidc-full-name-mapper", "consentRequired": false, "config": {"id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}},
+            {"name": "given name", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-property-mapper", "consentRequired": false, "config": {"user.attribute": "firstName", "claim.name": "given_name", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}},
+            {"name": "family name", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-property-mapper", "consentRequired": false, "config": {"user.attribute": "lastName", "claim.name": "family_name", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}},
+            {"name": "username", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-property-mapper", "consentRequired": false, "config": {"user.attribute": "username", "claim.name": "preferred_username", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}}
+          ]
+        },
+        {
+          "name": "email",
+          "description": "OpenID Connect email claims",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "true", "display.on.consent.screen": "true", "consent.screen.text": "이메일 확인"},
+          "protocolMappers": [
+            {"name": "email", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-property-mapper", "consentRequired": false, "config": {"user.attribute": "email", "claim.name": "email", "jsonType.label": "String", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}},
+            {"name": "email verified", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-property-mapper", "consentRequired": false, "config": {"user.attribute": "emailVerified", "claim.name": "email_verified", "jsonType.label": "boolean", "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true"}}
+          ]
+        },
+        {
+          "name": "foundry-lite-runtime",
+          "protocol": "openid-connect",
+          "attributes": {"include.in.token.scope": "false", "display.on.consent.screen": "false"},
+          "protocolMappers": [
+            {
+              "name": "foundry-lite-tenant",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {"claim.name": "tenant_id", "claim.value": "tenant-qa", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}
+            },
+            {
+              "name": "foundry-lite-human-grant",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {"claim.name": "human_grant", "claim.value": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}
+            },
+            {
+              "name": "foundry-lite-grant-type",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {"claim.name": "authorization_grant_type", "claim.value": "authorization_code", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}
+            },
+            {
+              "name": "foundry-lite-realm-roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "consentRequired": false,
+              "config": {"claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}
+            }
+          ]
+        },
+        {
+          "name": "osdk",
+          "description": "Bounded parameterized scopes for generated OSDK, MCP, action, and function capabilities.",
+          "protocol": "openid-connect",
+          "attributes": {
+            "include.in.token.scope": "true",
+            "display.on.consent.screen": "true",
+            "consent.screen.text": "요청한 Foundry-lite 업무 기능 사용",
+            "is.parameterized.scope": "true",
+            "parameterized.scope.type": "custom",
+            "parameterized.scope.regexp": "[A-Za-z0-9._:-]{1,240}",
+            "parameterized.scope.repeatable": "true"
+          }
+        },
+        {
+          "name": "mcp-audience",
+          "description": "Maps the exact MCP protected-resource URI requested as an OAuth scope into the access-token audience.",
+          "protocol": "openid-connect",
+          "attributes": {
+            "include.in.token.scope": "true",
+            "display.on.consent.screen": "false",
+            "is.parameterized.scope": "true",
+            "parameterized.scope.type": "custom",
+            "parameterized.scope.regexp": "https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/mcp/(builder|ontology|release)/[A-Za-z0-9._:-]{1,128}",
+            "parameterized.scope.repeatable": "false"
+          },
+          "protocolMappers": [
+            {
+              "name": "exact-mcp-audience",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-parameterized-scope-mapper",
+              "consentRequired": false,
+              "config": {
+                "claim.name": "aud",
+                "jsonType.label": "String",
+                "access.token.claim": "true",
+                "id.token.claim": "false",
+                "userinfo.token.claim": "false",
+                "introspection.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "defaultDefaultClientScopes": ["profile", "email", "foundry-lite-runtime"],
+      "defaultOptionalClientScopes": ["osdk", "mcp-audience"],
+      "clientProfiles": {
+        "profiles": [
+          {
+            "name": "foundry-lite-public-oauth",
+            "description": "Public Authorization Code clients with exact HTTPS redirects, PKCE S256, consent, and no implicit or password grants.",
+            "executors": [
+              {
+                "executor": "secure-redirect-uris-enforcer",
+                "configuration": {
+                  "allow-ipv4-loopback-address": "false",
+                  "allow-ipv6-loopback-address": "false",
+                  "allow-private-use-uri-scheme": "false",
+                  "allow-http-scheme": "false",
+                  "allow-wildcard-context-path": "false",
+                  "allow-open-redirect": "false",
+                  "oauth-2-1-compliant": "true",
+                  "allow-permitted-domains": ["([A-Za-z0-9-]+\\.)*chatgpt\\.com", "([A-Za-z0-9-]+\\.)*openai\\.com"]
+                }
+              },
+              {"executor": "pkce-enforcer", "configuration": {"auto-configure": "true"}},
+              {"executor": "consent-required", "configuration": {"auto-configure": "true"}},
+              {"executor": "full-scope-disabled", "configuration": {"auto-configure": "true"}},
+              {"executor": "reject-implicit-grant", "configuration": {"auto-configure": "true"}},
+              {"executor": "reject-ropc-grant", "configuration": {"auto-configure": "true"}}
+            ]
+          },
+          {
+            "name": "reject-anonymous-confidential",
+            "description": "Anonymous DCR may not create a confidential client.",
+            "executors": [{"executor": "reject-request", "configuration": {}}]
+          }
+        ]
+      },
+      "clientPolicies": {
+        "policies": [
+          {
+            "name": "foundry-lite-public-oauth-policy",
+            "description": "Applies the protected public OAuth profile to all public OIDC clients.",
+            "enabled": true,
+            "conditions": [
+              {"condition": "client-access-type", "configuration": {"type": ["public"]}},
+              {"condition": "client-type", "configuration": {"protocol": "openid-connect"}}
+            ],
+            "profiles": ["foundry-lite-public-oauth"]
+          },
+          {
+            "name": "reject-anonymous-confidential-policy",
+            "description": "Rejects confidential clients created through anonymous dynamic registration.",
+            "enabled": true,
+            "conditions": [
+              {"condition": "client-updater-context", "configuration": {"update-client-source": ["ByAnonymous"]}},
+              {"condition": "client-access-type", "configuration": {"type": ["confidential"]}}
+            ],
+            "profiles": ["reject-anonymous-confidential"]
+          }
+        ]
+      },
+      "components": {
+        "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy": [
+          {
+            "id": "b5b9db08-46ec-44dc-a254-8078fe8fae7c",
+            "name": "Foundry-lite DCR consent",
+            "providerId": "consent-required",
+            "subType": "anonymous",
+            "config": {}
+          },
+          {
+            "id": "8394eed9-963a-4b16-b067-0a7da5fc89c1",
+            "name": "Foundry-lite DCR trusted redirect hosts",
+            "providerId": "trusted-hosts",
+            "subType": "anonymous",
+            "config": {
+              "trusted-hosts": ["chatgpt.com", "*.chatgpt.com", "openai.com", "*.openai.com"],
+              "host-sending-registration-request-must-match": ["false"],
+              "client-uris-must-match": ["true"]
+            }
+          },
+          {
+            "id": "e086758f-0fa8-4cd2-83de-7a38417e657b",
+            "name": "Foundry-lite DCR client ceiling",
+            "providerId": "max-clients",
+            "subType": "anonymous",
+            "config": {"max-clients": ["10"]}
+          },
+          {
+            "id": "c0089ea5-b5ba-49dd-9059-8701517e2498",
+            "name": "Foundry-lite DCR scopes",
+            "providerId": "allowed-client-templates",
+            "subType": "anonymous",
+            "config": {"allow-default-scopes": ["true"]}
+          },
+          {
+            "id": "a423606c-f129-40c3-a6d3-699cc59af87b",
+            "name": "Foundry-lite DCR mapper denylist",
+            "providerId": "allowed-protocol-mappers",
+            "subType": "anonymous",
+            "config": {"allowed-protocol-mapper-types": []}
+          }
+        ]
+      },
+      "attributes": {
+        "oauth2DeviceCodeLifespan": "600",
+        "parRequestUriLifespan": "60"
+      }
+    }
+{{- end }}

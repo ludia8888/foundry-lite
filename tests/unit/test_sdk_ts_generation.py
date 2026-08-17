@@ -736,6 +736,7 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "export type OntologyProposalPayload = {",
         "export type ObjectAggregateRequest = {",
         "export type FunctionExecutionResult = {",
+        "runtimeEvidence: Record<string, unknown> | null;",
         'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit")',
         "requireIdempotencyKey(",
     ]

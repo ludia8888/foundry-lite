@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+
+FROM public.ecr.aws/docker/library/python@sha256:9bb659dc6d5218917236f3711e866a5634bb4c2f208de9d4533aa4863f57c1d3 AS runtime
+
+COPY --from=ghcr.io/astral-sh/uv@sha256:472f1708b76a78cca4b6d4d7fe46426fa4b614de8b5f1371e5c0d0cb80ac03c1 /uv /uvx /usr/local/bin/
+
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+LABEL org.opencontainers.image.revision="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.source="https://github.com/ludia8888/foundry-lite"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/libs:/app/apps/api:/app/apps/cli:/app/apps/worker \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/foundry-lite-venv
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates curl ffmpeg libgomp1 openjdk-17-jre-headless poppler-utils tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --all-extras --group deployment --no-group dev --no-install-project
+
+COPY alembic.ini ./
+COPY apps/api ./apps/api
+COPY apps/cli ./apps/cli
+COPY apps/worker ./apps/worker
+COPY libs ./libs
+COPY migrations ./migrations
+COPY scripts/operations ./scripts/operations
+COPY deploy/render ./deploy/render
+
+RUN groupadd --gid 10001 foundry-lite \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin foundry-lite \
+    && mkdir -p /var/data /app/artifacts/operations \
+    && chown -R 10001:10001 /var/data /app/artifacts \
+    && chmod 0555 /app/deploy/render/*.sh
+
+USER 10001:10001
+EXPOSE 10000
+CMD ["/app/deploy/render/start_api.sh"]

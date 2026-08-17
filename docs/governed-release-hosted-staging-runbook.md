@@ -8,6 +8,7 @@
 |---|---|---|
 | API 컨테이너 | 패키징됨 | `deploy/render/Dockerfile.api`가 Python 3.12, 전체 production adapter extra, non-root 사용자와 고정 시작 명령을 제공한다. |
 | Render Blueprint | 템플릿 준비 | `deploy/render/render.staging-bootstrap.yaml`은 protected staging API와 PostgreSQL을 선언하지만 아직 적용하지 않았다. 적용하면 유료 리소스가 생길 수 있다. |
+| Kubernetes package | repository proof 통과, live 설치 대기 | `deploy/helm/foundry-lite`와 Kubernetes deployment provider/controller, ARM64 image workflow, S3/OIDC/격리 실행 및 Mac mini 운영 도구가 있다. 실제 single-node 실행은 [Mac mini Enterprise QA runbook](./macmini-enterprise-qa-runbook.md)에서 별도로 추적하며, 완료 전에는 hosted production proof가 아니다. |
 | DB migration | 패키징됨 | 매 배포 전에 `deploy/render/predeploy_migrate.sh`가 singleton-lock Alembic runner로 `head`를 적용한다. |
 | readiness | 구성 확인 가능 | `/readyz`는 실제 API composition과 metadata DB `SELECT 1`을 확인한다. 단순 생존 확인인 `/healthz`와 목적이 다르다. |
 | GPT 내 MCP App UI | hosted branch·read-only reload slice 실증 | `ui://foundry-lite/governed-release-v9-87ac4aeadd8c.html`은 MCP Apps `2026-01-26` JSON-RPC `postMessage` bridge를 기본으로 사용하고 `window.openai`는 기존 host 호환 fallback으로만 사용한다. 2026-08-12 hosted ChatGPT에서 workspace open → exact widget branch create → Builder handoff와 read-only inbox 재접속 복구를 실증했다. |

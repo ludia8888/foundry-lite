@@ -19,10 +19,12 @@ from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters.container_code_execution import (
     ContainerCodeExecutionAdapter,
 )
+from foundry_lite.infrastructure.artifact_store_composition import (
+    ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
+    is_local_prompt_artifact_key_allowed,
+)
 from foundry_lite.infrastructure.local_runtime import (
-    _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
     RuntimeAdapterProfiles,
-    _allow_local_prompt_artifact_key_from_env,
     _compute_adapter,
     _connector_adapter,
     _create_core_dependencies,
@@ -98,11 +100,11 @@ def test_runtime_workflow_adapter_selects_temporal_and_rejects_unknown_profile(
 
 
 def test_prompt_artifact_local_dev_key_requires_explicit_env_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, raising=False)
-    assert not _allow_local_prompt_artifact_key_from_env()
+    monkeypatch.delenv(ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, raising=False)
+    assert not is_local_prompt_artifact_key_allowed()
 
-    monkeypatch.setenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, "true")
-    assert _allow_local_prompt_artifact_key_from_env()
+    monkeypatch.setenv(ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, "true")
+    assert is_local_prompt_artifact_key_allowed()
 
 
 def _set_protected_adapter_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,6 +121,10 @@ def _set_protected_adapter_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "FOUNDRY_LITE_CODE_EXECUTION_IMAGE",
         f"registry.example/foundry-python@sha256:{'a' * 64}",
+    )
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE",
+        f"registry.example/foundry-node@sha256:{'c' * 64}",
     )
     monkeypatch.setenv(
         "FOUNDRY_LITE_TRAINED_MODEL_IMAGE",
@@ -158,6 +164,10 @@ def test_protected_runtime_profile_disables_create_all_schema_mutation(
     monkeypatch.setenv(
         "FOUNDRY_LITE_CODE_EXECUTION_IMAGE",
         f"registry.example/foundry-python@sha256:{'a' * 64}",
+    )
+    monkeypatch.setenv(
+        "FOUNDRY_LITE_NODE_CODE_EXECUTION_IMAGE",
+        f"registry.example/foundry-node@sha256:{'c' * 64}",
     )
     monkeypatch.setenv(
         "FOUNDRY_LITE_TRAINED_MODEL_IMAGE",

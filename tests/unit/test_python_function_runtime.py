@@ -23,9 +23,14 @@ _CTX = RequestContext(roles=("analyst",), actor_user_id="u-1", tenant_id="tenant
 class _RecordingAdapter:
     profile_name = "recording"
 
-    def __init__(self, output: object = 6) -> None:
+    def __init__(
+        self,
+        output: object = 6,
+        runtime_evidence: Mapping[str, object] | None = None,
+    ) -> None:
         self.plans: list[FunctionExecutionPlan] = []
         self._output = output
+        self._runtime_evidence = runtime_evidence
         self.query_executor: FunctionQueryExecutor | None = None
 
     def execute_function(
@@ -36,7 +41,12 @@ class _RecordingAdapter:
     ) -> FunctionExecutionResult:
         self.plans.append(plan)
         self.query_executor = query_executor
-        return FunctionExecutionResult(output=self._output, stderr_byte_count=0, duration_ms=1)
+        return FunctionExecutionResult(
+            output=self._output,
+            stderr_byte_count=0,
+            duration_ms=1,
+            runtime_evidence=self._runtime_evidence,
+        )
 
 
 class _RecordingObjectQuery:
@@ -154,6 +164,20 @@ def test_the_plan_carries_the_pinned_version_and_the_declared_output_type() -> N
     plan = adapter.plans[0]
     assert (plan.function_api_name, plan.function_version, plan.output_type) == ("TotalSeats", "v3", "integer")
     assert plan.entrypoint == "compute"
+
+
+def test_the_sandbox_result_preserves_safe_runtime_evidence_for_the_caller() -> None:
+    evidence = {"executionMode": "kubernetes-job", "imageDigest": "sha256:" + "a" * 64}
+    service, _, _ = _service(adapter=_RecordingAdapter(runtime_evidence=evidence))
+
+    result = service.run(
+        _CTX,
+        definition=_definition({"apiName": "threshold", "type": "integer"}),
+        inputs={"threshold": 4},
+    )
+
+    assert result.output == 6
+    assert result.runtime_evidence == evidence
 
 
 def test_a_scalar_input_is_passed_through_without_a_query() -> None:

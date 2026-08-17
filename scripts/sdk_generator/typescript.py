@@ -1197,6 +1197,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  status: string;",
         "  output: Record<string, unknown>;",
         "  resultHash: string;",
+        "  runtimeEvidence: Record<string, unknown> | null;",
         "};",
         "export type ObjectSubscriptionRequest = {",
         "  filter?: ObjectFilter | null;",

@@ -116,11 +116,16 @@ class FunctionExecutionPlan:
 
 @dataclass(frozen=True)
 class FunctionExecutionResult:
-    """Sandbox outcome for one function call."""
+    """Sandbox outcome for one function call.
+
+    ``runtime_evidence`` is operator-safe metadata only. Adapters must never place raw tokens,
+    source, input values, stdout, or stderr in this mapping.
+    """
 
     output: object
     stderr_byte_count: int
     duration_ms: int
+    runtime_evidence: Mapping[str, object] | None = None
 
 
 class CodeExecutionAdapter(Protocol):

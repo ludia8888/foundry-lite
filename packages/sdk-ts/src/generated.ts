@@ -1169,6 +1169,7 @@ export type FunctionExecutionResult = {
   status: string;
   output: Record<string, unknown>;
   resultHash: string;
+  runtimeEvidence: Record<string, unknown> | null;
 };
 export type ObjectSubscriptionRequest = {
   filter?: ObjectFilter | null;

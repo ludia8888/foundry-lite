@@ -1,0 +1,157 @@
+{{- if .Values.qaDependencies.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: {{ include "foundry-lite.fullname" . }}-temporal}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: temporal
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: temporal
+          image: {{ .Values.qaDependencies.temporal.image }}
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          env:
+            - {name: DB, value: postgres12}
+            - {name: DB_PORT, value: "5432"}
+            - {name: POSTGRES_USER, value: postgres}
+            - name: POSTGRES_PWD
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: POSTGRES_PASSWORD}}
+            - {name: POSTGRES_SEEDS, value: {{ include "foundry-lite.fullname" . }}-postgresql}
+          ports: [{name: grpc, containerPort: 7233}]
+          readinessProbe: {tcpSocket: {port: grpc}, initialDelaySeconds: 20, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: grpc}, initialDelaySeconds: 60, periodSeconds: 10}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "foundry-lite.fullname" . }}-temporal}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal
+  ports: [{name: grpc, port: 7233}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: {{ include "foundry-lite.fullname" . }}-elasticsearch}
+spec:
+  serviceName: {{ include "foundry-lite.fullname" . }}-elasticsearch
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: elasticsearch
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: elasticsearch
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: elasticsearch
+          image: {{ .Values.qaDependencies.elasticsearch.image }}
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          env:
+            - {name: discovery.type, value: single-node}
+            - {name: xpack.security.enabled, value: "false"}
+            - {name: ES_JAVA_OPTS, value: "-Xms768m -Xmx768m"}
+          ports: [{name: http, containerPort: 9200}]
+          readinessProbe: {httpGet: {path: /_cluster/health, port: http}, initialDelaySeconds: 20, periodSeconds: 10}
+          livenessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 60, periodSeconds: 20}
+          resources:
+            requests: {cpu: 250m, memory: 1536Mi}
+            limits: {cpu: "2", memory: 3Gi}
+          volumeMounts:
+            - {name: data, mountPath: /usr/share/elasticsearch/data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.qaDependencies.elasticsearch.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "foundry-lite.fullname" . }}-elasticsearch}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: elasticsearch
+  ports: [{name: http, port: 9200}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: {{ include "foundry-lite.fullname" . }}-clamav}
+spec:
+  serviceName: {{ include "foundry-lite.fullname" . }}-clamav
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: clamav
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: clamav
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 100, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: clamav
+          image: {{ .Values.qaDependencies.clamav.image }}
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          ports: [{name: clamd, containerPort: 3310}]
+          readinessProbe: {tcpSocket: {port: clamd}, initialDelaySeconds: 30, periodSeconds: 10}
+          livenessProbe: {tcpSocket: {port: clamd}, initialDelaySeconds: 90, periodSeconds: 20}
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+          volumeMounts:
+            - {name: signatures, mountPath: /var/lib/clamav}
+            - {name: config, mountPath: /etc/clamav}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: config, emptyDir: {sizeLimit: 16Mi}}
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+  volumeClaimTemplates:
+    - metadata: {name: signatures}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass }}
+        {{- end }}
+        resources: {requests: {storage: 2Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "foundry-lite.fullname" . }}-clamav}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: clamav
+  ports: [{name: clamd, port: 3310}]
+{{- end }}

@@ -529,11 +529,21 @@ def test_code_execution_contract_requires_digest_pinned_image_for_protected_runt
     adapter = ContainerCodeExecutionAdapter(
         ContainerCodeExecutionConfig(
             image_reference=f"registry.example/foundry-python@sha256:{digest}",
+            node_image_reference=f"registry.example/foundry-node@sha256:{digest}",
             is_image_digest_required=True,
         )
     )
 
     assert adapter.config.image_reference.endswith(digest)
+
+    with pytest.raises(ValueError, match="Node image reference pinned"):
+        ContainerCodeExecutionAdapter(
+            ContainerCodeExecutionConfig(
+                image_reference=f"registry.example/foundry-python@sha256:{digest}",
+                node_image_reference="registry.example/foundry-node:latest",
+                is_image_digest_required=True,
+            )
+        )
 
 
 def test_code_execution_contract_protected_env_enables_digest_guard() -> None:

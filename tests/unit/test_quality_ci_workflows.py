@@ -1070,6 +1070,17 @@ def test_release_gate_runs_for_tags_or_manual_dispatch_not_every_main_push() -> 
     assert "workflow_dispatch:" in trigger
 
 
+def test_release_gate_budget_covers_full_evidence_rehearsal() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    release_job = workflow.split("release_gate:", maxsplit=1)[1]
+
+    # The release lane runs coverage, three randomized full-suite replays,
+    # live-runtime ratchets, and both performance smokes serially. A 90-minute
+    # budget canceled a healthy run after the runtime ratchets had passed and
+    # the 100k performance smoke had started, so preserve the measured headroom.
+    assert "timeout-minutes: 120" in release_job
+
+
 def test_release_gate_installs_live_media_prerequisites_before_release_gate() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 

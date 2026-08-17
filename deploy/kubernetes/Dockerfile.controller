@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1.7
+
+ARG API_BASE_IMAGE
+FROM gcr.io/go-containerregistry/crane@sha256:8f5dc5ba9ccf8528d40c3f9983345f9929eb17b0b26f9564fd3fe1f84e47dea2 AS crane
+FROM ghcr.io/sigstore/cosign/cosign@sha256:b74da950a9b069fbdba58fcf66e899952a190fff2a943dbf30e55279d70274d4 AS cosign
+
+FROM ${API_BASE_IMAGE} AS runtime
+
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+LABEL org.opencontainers.image.revision="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.source="https://github.com/ludia8888/foundry-lite"
+
+COPY --from=crane /ko-app/crane /usr/local/bin/crane
+COPY --from=cosign /ko-app/cosign /usr/local/bin/cosign
+
+USER 10001:10001
+ENTRYPOINT ["/opt/foundry-lite-venv/bin/python", "-m", "foundry_lite_worker.kubernetes_release_controller"]

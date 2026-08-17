@@ -1,0 +1,18 @@
+# Pre-production-only hosted OAuth smoke. It deliberately runs the application
+# runtime as `test` so the production fail-closed external-IdP rule remains intact.
+global:
+  runtimeProfile: test
+
+auth:
+  profile: header-trust
+  localOAuthIssuer: https://foundry.invalid
+  dynamicClientApplicationId: foundry-lite
+  localConsentRoles: tenant_admin ops_manager ontology_admin action_executor
+
+mcp:
+  publicBaseUrl: https://foundry.invalid
+  authorizationServer: ""
+
+external:
+  oidc:
+    discoveryUrl: ""

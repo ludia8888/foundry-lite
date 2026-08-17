@@ -1,0 +1,127 @@
+{{- if .Values.executionBroker.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "foundry-lite.fullname" . }}-execution-broker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+  labels:
+    {{- include "foundry-lite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-broker
+spec:
+  replicas: {{ .Values.executionBroker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execution-broker
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: execution-broker
+      annotations:
+        foundry-lite.io/revision: {{ .Values.global.revision | quote }}
+    spec:
+      serviceAccountName: {{ include "foundry-lite.fullname" . }}-execution-broker
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext: {{- include "foundry-lite.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: execution-broker
+          image: {{ include "foundry-lite.image" (list .Values.images.api .) }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/foundry-lite-venv/bin/python
+            - -m
+            - foundry_lite_worker.kubernetes_execution_broker
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - {name: http, containerPort: {{ .Values.executionBroker.port }}, protocol: TCP}
+          envFrom:
+            - configMapRef: {name: {{ include "foundry-lite.fullname" . }}-runtime}
+            - secretRef: {name: {{ .Values.secrets.applicationExistingSecret }}}
+          env:
+            - {name: PORT, value: {{ .Values.executionBroker.port | quote }}}
+            - name: FOUNDRY_LITE_KUBERNETES_EXECUTION_IMAGE_PULL_SECRETS_JSON
+              value: {{ .Values.global.imagePullSecrets | toJson | quote }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources: {{- toYaml .Values.executionBroker.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: runtime, mountPath: /var/data}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
+        - name: runtime
+          persistentVolumeClaim: {claimName: {{ include "foundry-lite.fullname" . }}-runtime}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-broker
+  ports:
+    - {name: http, port: {{ .Values.executionBroker.port }}, targetPort: http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-execution-broker
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execution-broker
+{{- end }}

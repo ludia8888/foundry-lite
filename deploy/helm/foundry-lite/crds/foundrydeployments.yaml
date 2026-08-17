@@ -1,0 +1,65 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: foundrydeployments.release.foundry-lite.io
+  labels:
+    app.kubernetes.io/managed-by: Helm
+spec:
+  group: release.foundry-lite.io
+  scope: Namespaced
+  names:
+    plural: foundrydeployments
+    singular: foundrydeployment
+    kind: FoundryDeployment
+    shortNames: [fdeploy]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - {name: Commit, type: string, jsonPath: .spec.commitId}
+        - {name: Phase, type: string, jsonPath: .status.phase}
+        - {name: Digest, type: string, jsonPath: .status.imageDigest}
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [serviceId, commitId, imageRepository, operation, workloadRef, idempotencyKeyHash]
+              x-kubernetes-validations:
+                - rule: self == oldSelf
+                  message: FoundryDeployment spec is immutable; create a new deterministic release resource.
+              properties:
+                serviceId: {type: string, minLength: 1, maxLength: 256}
+                commitId: {type: string, pattern: "^([0-9a-f]{40}|[0-9a-f]{64})$"}
+                imageRepository: {type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"}
+                operation: {type: string, enum: [deploy, rollback]}
+                rollbackTargetDeployId: {type: string, maxLength: 253}
+                idempotencyKeyHash: {type: string, pattern: "^[0-9a-f]{64}$"}
+                workloadRef:
+                  type: object
+                  required: [apiVersion, kind, name, containerName]
+                  properties:
+                    apiVersion: {type: string, enum: [apps/v1]}
+                    kind: {type: string, enum: [Deployment]}
+                    name: {type: string, maxLength: 253}
+                    containerName: {type: string, maxLength: 253}
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, ResolvingArtifact, VerifyingArtifact, Applying, Progressing, Live, Failed, Canceled]
+                reason: {type: string, maxLength: 256}
+                observedGeneration: {type: integer, minimum: 0}
+                imageDigest: {type: string, pattern: "^sha256:[0-9a-f]{64}$"}
+                imageReference: {type: string, maxLength: 512}
+                isSignatureVerified: {type: boolean}
+                isLinuxArm64: {type: boolean}
+                startedAt: {type: string, format: date-time}
+                updatedAt: {type: string, format: date-time}
+                finishedAt: {type: string, format: date-time}

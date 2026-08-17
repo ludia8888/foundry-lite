@@ -1,0 +1,85 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-default-deny
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-dns
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: foundry-lite.io/execution-sandbox, operator: DoesNotExist}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-internal
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: foundry-lite.io/execution-sandbox, operator: DoesNotExist}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: foundry-lite.io/execution-sandbox, operator: DoesNotExist}
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - {key: foundry-lite.io/execution-sandbox, operator: DoesNotExist}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-kubernetes-api
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, execution-broker, release-controller]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: {{ .Values.networkPolicy.kubernetesApiCidr | quote }}}
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-external-https
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [execution-sandbox, execution-broker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: {cidr: 0.0.0.0/0}
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}

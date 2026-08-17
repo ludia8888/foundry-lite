@@ -32,10 +32,11 @@ from foundry_lite.application.ports.media_processor import (
 
 _DERIVATIVE_KIND = "ocr_v1"
 _DEFAULT_TIMEOUT_SECONDS = 60
-# Cap on live worker threads. An in-thread OCR call cannot be force-cancelled, so on timeout
-# we abandon the worker; a SHARED bounded pool (not a fresh pool per call) means repeated
-# timeouts reuse a fixed set of threads instead of leaking one live thread per timeout.
+# Cap on live worker threads across every adapter instance in this process. An in-thread OCR
+# call cannot be force-cancelled, so on timeout we abandon the worker; a process-wide bounded
+# pool prevents independently composed runtimes from each retaining their own worker threads.
 _MAX_WORKER_THREADS = 4
+_PROCESSOR_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="ocr")
 
 # source_path -> one text block per page/region (a single image yields one block).
 OcrEngine = Callable[[str], Sequence[str]]
@@ -81,7 +82,6 @@ class OcrProcessorAdapter:
     def __init__(self, *, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS, ocr_engine: OcrEngine | None = None) -> None:
         self._timeout_seconds = timeout_seconds
         self._ocr_engine = ocr_engine or _default_ocr_engine
-        self._executor = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="ocr")
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -131,9 +131,9 @@ class OcrProcessorAdapter:
 
     def _ocr_within_timeout(self, request: MediaProcessingRequest) -> Sequence[str]:
         assert request.source_path is not None
-        # Shared bounded pool: on timeout we abandon the worker (an in-thread OCR call cannot be
-        # cancelled) but reuse a fixed thread set, so repeated timeouts do not leak threads.
-        future = self._executor.submit(self._ocr_engine, request.source_path)
+        # Process-wide bounded pool: repeated composition roots cannot multiply the live-thread
+        # cap when timed-out in-thread OCR calls cannot be force-cancelled.
+        future = _PROCESSOR_EXECUTOR.submit(self._ocr_engine, request.source_path)
         try:
             return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:

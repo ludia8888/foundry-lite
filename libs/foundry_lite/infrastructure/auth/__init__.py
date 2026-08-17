@@ -12,6 +12,7 @@ from foundry_lite.infrastructure.auth.local import (
 from foundry_lite.infrastructure.auth.oauth_token_issuer import (
     OAUTH_AUDIENCE_ENV,
     OAUTH_ISSUER_ENV,
+    OAUTH_PRIVATE_KEY_PATH_ENV,
     LocalOAuthTokenIssuer,
 )
 from foundry_lite.infrastructure.auth.oidc import (
@@ -20,6 +21,7 @@ from foundry_lite.infrastructure.auth.oidc import (
     OIDC_AUDIENCE_ENV,
     OIDC_CLIENT_ID_CLAIM_ENV,
     OIDC_DISCOVERY_JSON_ENV,
+    OIDC_DISCOVERY_URL_ENV,
     OIDC_GRANT_TYPE_CLAIM_ENV,
     OIDC_GRANT_TYPE_VALUE_ENV,
     OIDC_HUMAN_GRANT_CLAIM_ENV,
@@ -66,10 +68,12 @@ __all__ = [
     "LocalOAuthTokenIssuer",
     "OAUTH_AUDIENCE_ENV",
     "OAUTH_ISSUER_ENV",
+    "OAUTH_PRIVATE_KEY_PATH_ENV",
     "OIDC_ALLOWED_CLIENT_IDS_JSON_ENV",
     "OIDC_AUDIENCE_ENV",
     "OIDC_CLIENT_ID_CLAIM_ENV",
     "OIDC_DISCOVERY_JSON_ENV",
+    "OIDC_DISCOVERY_URL_ENV",
     "OIDC_GRANT_TYPE_CLAIM_ENV",
     "OIDC_GRANT_TYPE_VALUE_ENV",
     "OIDC_HUMAN_GRANT_CLAIM_ENV",

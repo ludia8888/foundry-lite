@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "foundry-lite-macmini-tools/v1",
+  "platform": "darwin-arm64",
+  "tools": [
+    {
+      "name": "uv",
+      "version": "0.12.5",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.12.5/uv-aarch64-apple-darwin.tar.gz",
+      "sha256": "5bb0e5fe008a773c3dbcb97ff79cd89e1241464fe9d2f986d52ad8f1b037bd62",
+      "archiveMember": "uv-aarch64-apple-darwin/uv"
+    },
+    {
+      "name": "kubectl",
+      "version": "1.35.0",
+      "url": "https://dl.k8s.io/release/v1.35.0/bin/darwin/arm64/kubectl",
+      "sha256": "cf699c56340dc775230fde4ef84237d27563ea6ef52164c7d078072b586c3918",
+      "archiveMember": null
+    },
+    {
+      "name": "helm",
+      "version": "4.2.4",
+      "url": "https://get.helm.sh/helm-v4.2.4-darwin-arm64.tar.gz",
+      "sha256": "d747eb4e28bd2727173d15b759fa0a17822291ec09db7ced3d55af290a3661a2",
+      "archiveMember": "darwin-arm64/helm"
+    },
+    {
+      "name": "age",
+      "version": "1.3.1",
+      "url": "https://github.com/FiloSottile/age/releases/download/v1.3.1/age-v1.3.1-darwin-arm64.tar.gz",
+      "sha256": "01120ea2cbf0463d4c6bd767f99f3271bbed1cdc8a9aa718a76ba1fe4f01998b",
+      "archiveMember": "age/age"
+    },
+    {
+      "name": "age-keygen",
+      "version": "1.3.1",
+      "url": "https://github.com/FiloSottile/age/releases/download/v1.3.1/age-v1.3.1-darwin-arm64.tar.gz",
+      "sha256": "01120ea2cbf0463d4c6bd767f99f3271bbed1cdc8a9aa718a76ba1fe4f01998b",
+      "archiveMember": "age/age-keygen"
+    },
+    {
+      "name": "cosign",
+      "version": "3.1.3",
+      "url": "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-darwin-arm64",
+      "sha256": "5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76",
+      "archiveMember": null
+    },
+    {
+      "name": "crane",
+      "version": "0.21.9",
+      "url": "https://github.com/google/go-containerregistry/releases/download/v0.21.9/go-containerregistry_Darwin_arm64.tar.gz",
+      "sha256": "11cc3640e53473eb0d8c501068573e52a259f4d82177e6dd11b7bacb8955459e",
+      "archiveMember": "crane"
+    },
+    {
+      "name": "kubeconform",
+      "version": "0.8.0",
+      "url": "https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-darwin-arm64.tar.gz",
+      "sha256": "f84f4dfbebf4a6b0b230385fa065a39ea35e02608c2b50d025dcf64775a69d67",
+      "archiveMember": "kubeconform"
+    }
+  ]
+}

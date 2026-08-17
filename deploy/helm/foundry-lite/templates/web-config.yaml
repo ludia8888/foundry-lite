@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-web
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      server_name _;
+      server_tokens off;
+      client_max_body_size 32m;
+
+      location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 'ok';
+      }
+
+      location ~ ^/(api|mcp|readyz|\.well-known)(/|$) {
+        proxy_pass http://{{ include "foundry-lite.fullname" . }}-api:10000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+      }
+
+      location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+      }
+    }

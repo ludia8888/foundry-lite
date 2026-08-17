@@ -1,0 +1,12 @@
+global:
+  protectedProfile: true
+  revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+images:
+  api: {repository: ghcr.io/ludia8888/foundry-lite-api, digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  web: {repository: ghcr.io/ludia8888/foundry-lite-web, digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  controller: {repository: ghcr.io/ludia8888/foundry-lite-controller, digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+  codeExecution: {repository: ghcr.io/ludia8888/foundry-lite-code-execution, digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  nodeCodeExecution: {repository: ghcr.io/ludia8888/foundry-lite-node-code-execution, digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
+  trainedModel: {repository: ghcr.io/ludia8888/foundry-lite-trained-model, digest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+qaDependencies:
+  enabled: true

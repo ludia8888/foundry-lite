@@ -1,0 +1,7 @@
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps/foundry/**
+!packages/sdk-ts/**
+!packages/restaurant-reservation-osdk/**

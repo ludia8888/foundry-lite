@@ -54,6 +54,7 @@ class FunctionExecutionResult(TypedDict):
     status: str
     output: OntologyJsonObject
     resultHash: str
+    runtimeEvidence: Mapping[str, object] | None
 
 
 class FunctionExecutionService(CoreService):
@@ -209,7 +210,8 @@ class FunctionExecutionService(CoreService):
         absent rather than fabricated.
         """
         run_id = execution_id or _new_id("fnrun")
-        output = self.python_function_runtime_service.run(ctx, definition=row["definition"], inputs=inputs)
+        execution = self.python_function_runtime_service.run(ctx, definition=row["definition"], inputs=inputs)
+        output = execution.output
         return {
             "functionApiName": row["api_name"],
             "logicRunId": run_id,
@@ -217,6 +219,7 @@ class FunctionExecutionService(CoreService):
             "status": "SUCCEEDED",
             "output": {"value": output},
             "resultHash": _result_hash(row, run_id, output),
+            "runtimeEvidence": (dict(execution.runtime_evidence) if execution.runtime_evidence is not None else None),
         }
 
     def _require_function_roles(self, ctx: RequestContext, row: FunctionTypeRow) -> None:
@@ -280,6 +283,7 @@ def _execution_result(
         "status": result.logic_result.status,
         "output": dict(result.logic_result.output_json),
         "resultHash": result.logic_result.result_hash,
+        "runtimeEvidence": None,
     }
 
 

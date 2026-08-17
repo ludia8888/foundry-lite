@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["global", "images", "secrets", "api", "web", "external", "qaDependencies"],
+  "properties": {
+    "global": {
+      "type": "object",
+      "required": ["protectedProfile", "revision"],
+      "properties": {
+        "protectedProfile": {"type": "boolean"},
+        "revision": {"type": "string", "pattern": "^$|^[0-9a-f]{40}$|^[0-9a-f]{64}$"}
+      }
+    },
+    "images": {
+      "type": "object",
+      "required": ["api", "web", "controller", "codeExecution", "nodeCodeExecution", "trainedModel"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["repository", "digest"],
+        "properties": {
+          "repository": {"type": "string", "minLength": 3},
+          "digest": {"type": "string", "pattern": "^$|^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "qaDependencies": {
+      "type": "object",
+      "required": ["enabled", "credentialsExistingSecret"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "credentialsExistingSecret": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

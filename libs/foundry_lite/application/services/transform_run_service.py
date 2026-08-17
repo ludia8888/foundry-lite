@@ -343,6 +343,8 @@ class TransformRunService(CoreService):
         metadata: dict[str, object] = {}
         if execution.dead_letters:
             metadata.update(transform_dead_letter_summary(execution, dead_letter_ids))
+        if execution.runtime_evidence is not None:
+            metadata["runtimeEvidence"] = dict(execution.runtime_evidence)
         watermark = transform_output_platform_watermark(
             output_dataset=plan.output_dataset,
             input_versions=plan.input_versions,

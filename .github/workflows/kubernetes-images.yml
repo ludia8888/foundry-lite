@@ -1,0 +1,215 @@
+name: Foundry-lite Kubernetes Images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: foundry-lite-kubernetes-images-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish_arm64:
+    name: publish-arm64-signed-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/foundry-lite
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish API
+        id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/kubernetes/Dockerfile.api
+          platforms: linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.IMAGE_PREFIX }}-api:sha-${{ env.REVISION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: FOUNDRY_LITE_RUNTIME_SOURCE_SHA=${{ env.REVISION }}
+
+      - name: Build and publish Web
+        id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/kubernetes/Dockerfile.web
+          platforms: linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.IMAGE_PREFIX }}-web:sha-${{ env.REVISION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: FOUNDRY_LITE_RUNTIME_SOURCE_SHA=${{ env.REVISION }}
+
+      - name: Build and publish isolated code execution
+        id: code_execution
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/code_execution/Dockerfile.arm64
+          platforms: linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.IMAGE_PREFIX }}-code-execution:sha-${{ env.REVISION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: FOUNDRY_LITE_RUNTIME_SOURCE_SHA=${{ env.REVISION }}
+
+      - name: Build and publish isolated Node function execution
+        id: node_code_execution
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/node_code_execution/Dockerfile.arm64
+          platforms: linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.IMAGE_PREFIX }}-node-code-execution:sha-${{ env.REVISION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: FOUNDRY_LITE_RUNTIME_SOURCE_SHA=${{ env.REVISION }}
+
+      - name: Build and publish isolated trained model
+        id: trained_model
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/trained_model_sidecar/Dockerfile.arm64
+          platforms: linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.IMAGE_PREFIX }}-trained-model:sha-${{ env.REVISION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: FOUNDRY_LITE_RUNTIME_SOURCE_SHA=${{ env.REVISION }}
+
+      - name: Build and publish release controller
+        id: controller
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/kubernetes/Dockerfile.controller
+          platforms: linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.IMAGE_PREFIX }}-controller:sha-${{ env.REVISION }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.REVISION }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            API_BASE_IMAGE=${{ env.IMAGE_PREFIX }}-api@${{ steps.api.outputs.digest }}
+            FOUNDRY_LITE_RUNTIME_SOURCE_SHA=${{ env.REVISION }}
+
+      - uses: sigstore/cosign-installer@v4.0.0
+
+      - uses: imjasonh/setup-crane@v0.4
+
+      - name: Keyless-sign exact image digests
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          CODE_DIGEST: ${{ steps.code_execution.outputs.digest }}
+          NODE_CODE_DIGEST: ${{ steps.node_code_execution.outputs.digest }}
+          TRAINED_MODEL_DIGEST: ${{ steps.trained_model.outputs.digest }}
+          CONTROLLER_DIGEST: ${{ steps.controller.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_PREFIX}-api@${API_DIGEST}"
+          cosign sign --yes "${IMAGE_PREFIX}-web@${WEB_DIGEST}"
+          cosign sign --yes "${IMAGE_PREFIX}-code-execution@${CODE_DIGEST}"
+          cosign sign --yes "${IMAGE_PREFIX}-node-code-execution@${NODE_CODE_DIGEST}"
+          cosign sign --yes "${IMAGE_PREFIX}-trained-model@${TRAINED_MODEL_DIGEST}"
+          cosign sign --yes "${IMAGE_PREFIX}-controller@${CONTROLLER_DIGEST}"
+
+      - name: Verify signatures, ARM64 platform, and OCI revision
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          CODE_DIGEST: ${{ steps.code_execution.outputs.digest }}
+          NODE_CODE_DIGEST: ${{ steps.node_code_execution.outputs.digest }}
+          TRAINED_MODEL_DIGEST: ${{ steps.trained_model.outputs.digest }}
+          CONTROLLER_DIGEST: ${{ steps.controller.outputs.digest }}
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/kubernetes-images.yml@refs/heads/main
+          CERTIFICATE_ISSUER: https://token.actions.githubusercontent.com
+        run: |
+          set -euo pipefail
+          for image in \
+            "${IMAGE_PREFIX}-api@${API_DIGEST}" \
+            "${IMAGE_PREFIX}-web@${WEB_DIGEST}" \
+            "${IMAGE_PREFIX}-code-execution@${CODE_DIGEST}" \
+            "${IMAGE_PREFIX}-node-code-execution@${NODE_CODE_DIGEST}" \
+            "${IMAGE_PREFIX}-trained-model@${TRAINED_MODEL_DIGEST}" \
+            "${IMAGE_PREFIX}-controller@${CONTROLLER_DIGEST}"
+          do
+            cosign verify \
+              --certificate-identity "${CERTIFICATE_IDENTITY}" \
+              --certificate-oidc-issuer "${CERTIFICATE_ISSUER}" \
+              "${image}" > /dev/null
+            config="$(crane config --platform linux/arm64 "${image}")"
+            jq -e --arg revision "${REVISION}" \
+              '.architecture == "arm64" and .os == "linux" and .config.Labels["org.opencontainers.image.revision"] == $revision' \
+              <<<"${config}" > /dev/null
+          done
+
+      - name: Write immutable deployment manifest
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          CODE_DIGEST: ${{ steps.code_execution.outputs.digest }}
+          NODE_CODE_DIGEST: ${{ steps.node_code_execution.outputs.digest }}
+          TRAINED_MODEL_DIGEST: ${{ steps.trained_model.outputs.digest }}
+          CONTROLLER_DIGEST: ${{ steps.controller.outputs.digest }}
+        run: |
+          mkdir -p artifacts/kubernetes-images
+          jq -n \
+            --arg revision "$REVISION" \
+            --arg api "${IMAGE_PREFIX}-api@${API_DIGEST}" \
+            --arg web "${IMAGE_PREFIX}-web@${WEB_DIGEST}" \
+            --arg codeExecution "${IMAGE_PREFIX}-code-execution@${CODE_DIGEST}" \
+            --arg nodeCodeExecution "${IMAGE_PREFIX}-node-code-execution@${NODE_CODE_DIGEST}" \
+            --arg trainedModel "${IMAGE_PREFIX}-trained-model@${TRAINED_MODEL_DIGEST}" \
+            --arg controller "${IMAGE_PREFIX}-controller@${CONTROLLER_DIGEST}" \
+            '{revision:$revision, platform:"linux/arm64", images:{api:$api,web:$web,codeExecution:$codeExecution,nodeCodeExecution:$nodeCodeExecution,trainedModel:$trainedModel,controller:$controller},sbom:"oci-attestation",signature:"sigstore-keyless"}' \
+            > artifacts/kubernetes-images/manifest.json
+          sha256sum artifacts/kubernetes-images/manifest.json > artifacts/kubernetes-images/SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kubernetes-images-${{ github.sha }}
+          path: artifacts/kubernetes-images
+          retention-days: 90

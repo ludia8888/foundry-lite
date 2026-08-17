@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 from foundry_lite.application.ports import FunctionTypeRow
+from foundry_lite.application.ports.code_execution import FunctionExecutionResult as SandboxFunctionExecutionResult
 from foundry_lite.application.services.function_execution_service import FunctionExecutionService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
@@ -33,13 +34,29 @@ class _RecordingScope:
 
 
 class _RecordingPythonRuntime:
-    def __init__(self, output: object = 6) -> None:
+    def __init__(
+        self,
+        output: object = 6,
+        runtime_evidence: Mapping[str, object] | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self._output = output
+        self._runtime_evidence = runtime_evidence
 
-    def run(self, ctx: RequestContext, *, definition: Mapping[str, object], inputs: Mapping[str, object]) -> object:
+    def run(
+        self,
+        ctx: RequestContext,
+        *,
+        definition: Mapping[str, object],
+        inputs: Mapping[str, object],
+    ) -> SandboxFunctionExecutionResult:
         self.calls.append({"ctx": ctx, "definition": definition, "inputs": inputs})
-        return self._output
+        return SandboxFunctionExecutionResult(
+            output=self._output,
+            stderr_byte_count=0,
+            duration_ms=1,
+            runtime_evidence=self._runtime_evidence,
+        )
 
 
 class _FakeConnection:
@@ -111,6 +128,15 @@ def test_a_python_function_runs_in_the_sandbox_and_never_touches_the_logic_dag()
     assert result["status"] == "SUCCEEDED"
     assert result["output"] == {"value": 6}
     assert runtime.calls[0]["inputs"] == {"threshold": 4}
+
+
+def test_a_code_function_returns_the_safe_sandbox_runtime_evidence() -> None:
+    evidence = {"executionMode": "kubernetes-job", "resultSha256": "sha256:" + "b" * 64}
+    service, _, _, _ = _service(_RecordingPythonRuntime(runtime_evidence=evidence))
+
+    result = service._execute_row(_CTX, _row(), {})
+
+    assert result["runtimeEvidence"] == evidence
 
 
 def test_a_typescript_v2_function_uses_the_code_sandbox_not_the_logic_dag() -> None:

@@ -14,6 +14,7 @@ from typing import Protocol
 from foundry_lite.application.ports.code_execution import (
     CodeExecutionAdapter,
     FunctionExecutionPlan,
+    FunctionExecutionResult,
     FunctionQueryExecutor,
 )
 from foundry_lite.application.services.base import CoreService
@@ -73,7 +74,7 @@ class PythonFunctionRuntimeService(CoreService):
         *,
         definition: Mapping[str, object],
         inputs: Mapping[str, object],
-    ) -> object:
+    ) -> FunctionExecutionResult:
         source = _definition_source(definition)
         plan = FunctionExecutionPlan(
             function_api_name=str(definition.get("apiName") or ""),
@@ -90,7 +91,7 @@ class PythonFunctionRuntimeService(CoreService):
         return self.code_execution_adapter.execute_function(
             plan,
             query_executor=self._query_executor(ctx),
-        ).output
+        )
 
     def _resolved_inputs(
         self,

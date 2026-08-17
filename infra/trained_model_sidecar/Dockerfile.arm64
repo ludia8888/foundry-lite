@@ -1,0 +1,18 @@
+FROM public.ecr.aws/docker/library/python@sha256:9bb659dc6d5218917236f3711e866a5634bb4c2f208de9d4533aa4863f57c1d3
+
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+
+LABEL dev.foundry-lite.runtime-source-sha="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.revision="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.source="https://github.com/ludia8888/foundry-lite"
+
+RUN groupadd --gid 65532 model \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin model \
+    && install -d -o 65532 -g 65532 -m 0555 /model-output
+
+COPY --chown=65532:65532 \
+    libs/foundry_lite/infrastructure/runners/trained_model_runner.py \
+    /opt/foundry-lite/model/trained_model_runner.py
+
+USER 65532:65532
+WORKDIR /model

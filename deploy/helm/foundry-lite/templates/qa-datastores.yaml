@@ -1,0 +1,192 @@
+{{- if .Values.qaDependencies.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-postgresql
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "foundry-lite.fullname" . }}-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgresql
+          image: {{ .Values.qaDependencies.postgresql.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          env:
+            - {name: POSTGRES_USER, value: postgres}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: POSTGRES_PASSWORD}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports: [{name: postgresql, containerPort: 5432}]
+          readinessProbe: {exec: {command: [/usr/local/bin/pg_isready, -U, postgres]}, initialDelaySeconds: 10, periodSeconds: 5}
+          livenessProbe: {exec: {command: [/usr/local/bin/pg_isready, -U, postgres]}, initialDelaySeconds: 30, periodSeconds: 10}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+            - {name: tmp, mountPath: /tmp}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+      volumes:
+        - {name: run, emptyDir: {sizeLimit: 64Mi}}
+        - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
+        - {name: init, configMap: {name: {{ include "foundry-lite.fullname" . }}-postgres-init}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.qaDependencies.postgresql.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "foundry-lite.fullname" . }}-postgresql}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgresql
+  ports: [{name: postgresql, port: 5432, targetPort: postgresql}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-minio
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "foundry-lite.fullname" . }}-minio
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: minio
+          image: {{ .Values.qaDependencies.minio.image }}
+          args: [server, /data, --console-address, ":9001"]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: MINIO_ROOT_USER}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: MINIO_ROOT_PASSWORD}}
+          ports: [{name: api, containerPort: 9000}, {name: console, containerPort: 9001}]
+          readinessProbe: {httpGet: {path: /minio/health/ready, port: api}, initialDelaySeconds: 5, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /minio/health/live, port: api}, initialDelaySeconds: 20, periodSeconds: 10}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.qaDependencies.minio.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "foundry-lite.fullname" . }}-minio}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports: [{name: api, port: 9000}, {name: console, port: 9001}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-redpanda
+  labels: {{- include "foundry-lite.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "foundry-lite.fullname" . }}-redpanda
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redpanda
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redpanda
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: redpanda
+          image: {{ .Values.qaDependencies.redpanda.image }}
+          args:
+            - redpanda
+            - start
+            - --smp=1
+            - --memory=1G
+            - --reserve-memory=0M
+            - --overprovisioned
+            - --node-id=0
+            - --check=false
+            - --kafka-addr=internal://0.0.0.0:9092
+            - --advertise-kafka-addr=internal://{{ include "foundry-lite.fullname" . }}-redpanda:9092
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          ports: [{name: kafka, containerPort: 9092}, {name: admin, containerPort: 9644}]
+          readinessProbe: {httpGet: {path: /v1/status/ready, port: admin}, initialDelaySeconds: 10, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /v1/status/ready, port: admin}, initialDelaySeconds: 30, periodSeconds: 10}
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/redpanda/data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.global.storageClass }}
+        storageClassName: {{ .Values.global.storageClass }}
+        {{- end }}
+        resources: {requests: {storage: {{ .Values.qaDependencies.redpanda.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "foundry-lite.fullname" . }}-redpanda}
+spec:
+  selector:
+    {{- include "foundry-lite.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redpanda
+  ports: [{name: kafka, port: 9092}, {name: admin, port: 9644}]
+{{- end }}

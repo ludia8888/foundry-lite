@@ -1,0 +1,60 @@
+{{- if .Values.releaseController.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "foundry-lite.fullname" . }}-release-controller
+  labels:
+    {{- include "foundry-lite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: release-controller
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: release-controller
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: release-controller
+      annotations:
+        foundry-lite.io/revision: {{ .Values.global.revision | quote }}
+    spec:
+      serviceAccountName: {{ include "foundry-lite.fullname" . }}-release-controller
+      automountServiceAccountToken: true
+      securityContext: {{- include "foundry-lite.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: controller
+          image: {{ include "foundry-lite.image" (list .Values.images.controller .) }}
+          imagePullPolicy: IfNotPresent
+          command: [/opt/foundry-lite-venv/bin/python, -m, foundry_lite_worker.kubernetes_release_controller]
+          securityContext: {{- include "foundry-lite.containerSecurityContext" . | nindent 12 }}
+          env:
+            - {name: FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+            - {name: FOUNDRY_LITE_KUBERNETES_SIGNATURE_ISSUER, value: {{ .Values.releaseController.signatureIssuer | quote }}}
+            - {name: FOUNDRY_LITE_KUBERNETES_SIGNATURE_IDENTITY_REGEXP, value: {{ .Values.releaseController.signatureIdentityRegexp | quote }}}
+            - {name: FOUNDRY_LITE_KUBERNETES_REQUIRE_SIGNATURE, value: "true"}
+            - {name: FOUNDRY_LITE_KUBERNETES_CONTROLLER_POLL_SECONDS, value: {{ .Values.releaseController.pollSeconds | quote }}}
+            - {name: FOUNDRY_LITE_KUBERNETES_CONTROLLER_TIMEOUT_SECONDS, value: {{ .Values.releaseController.timeoutSeconds | quote }}}
+            - {name: FOUNDRY_LITE_KUBERNETES_ROLLOUT_TIMEOUT_SECONDS, value: {{ .Values.releaseController.rolloutTimeoutSeconds | quote }}}
+          readinessProbe:
+            exec: {command: [/opt/foundry-lite-venv/bin/python, -c, "import os; os.kill(1, 0)"]}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            exec: {command: [/opt/foundry-lite-venv/bin/python, -c, "import os; os.kill(1, 0)"]}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources: {{- toYaml .Values.releaseController.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
+{{- end }}

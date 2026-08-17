@@ -125,7 +125,7 @@ Governed Release와 Ontology/Pipeline proposal은 **검토 담당 배정과 사�
 
 외부 source-control adapter가 구성된 작성자 경로도 실제 hosted ChatGPT에서 별도로 확인했다. 의도적으로 인증에 실패하는 non-secret QA token을 사용해 provider 쓰기가 성공할 수 없게 한 상태에서 작성자 `user-demo`의 pending Ontology 후보를 조회하자 `GitHub 후보 PR 게시`만 활성화되고 claim·승인·반려·병합·활성화·배포·rollback은 계속 비활성화됐다. 게시 버튼과 `prepare_release_action`은 호출하지 않았다. 같은 대화를 reload하면 5초 skeleton 뒤 약 30초 안에 동일 권한 상태와 exact proposal 제출 timeline으로 복구됐고, durable tool quota는 read-only 1회, proposal 상태·delivery·protected-action audit와 GitHub 열린 PR 수는 모두 그대로였다. 이는 author-only publication UI/권한 경로의 hosted 증거이지 실제 GitHub publication 증거는 아니다.
 
-인프라 교체 가능성은 이제 별도 품질 계약입니다. `docs/infrastructure-swapability-matrix.json`은 DB·Dataset Storage·Compute·Event Stream·Workflow·Search·Media Storage·Auth·Secret·Release Source·Release Deployment 11개 핵심 인프라군의 port, 선택 지점, 대체 구현, contract test, cutover 상태를 고정합니다. 배포 application 계층은 특정 공급자 이름이나 Render의 `autoDeploy` DTO를 알지 않고, `releaseMode`, `triggerMode`, `sourceBinding`, `workloadKind`만 사용합니다. composition root는 `FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER`·`FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER`와 각 adapter factory registry로 소스 제어와 배포 구현을 따로 고르며, 공급자 신원이 registry key와 다르면 시작을 거부합니다. `quality:infrastructure-swapability`는 전체 matrix와 GitLab/Kubernetes-shaped 대체 adapter 회귀를 함께 고정합니다. 현재 기본 내장 공급자는 GitHub와 Render이고, 실제 GitLab/Kubernetes adapter와 상태형 데이터의 cutover/RPO/RTO 리허설은 아직 완료되지 않았습니다.
+인프라 교체 가능성은 이제 별도 품질 계약입니다. `docs/infrastructure-swapability-matrix.json`은 DB·Dataset Storage·Compute·Event Stream·Workflow·Search·Media Storage·Auth·Secret·Release Source·Release Deployment 11개 핵심 인프라군의 port, 선택 지점, 대체 구현, contract test, cutover 상태를 고정합니다. 배포 application 계층은 특정 공급자 이름이나 Render의 `autoDeploy` DTO를 알지 않고, `releaseMode`, `triggerMode`, `sourceBinding`, `workloadKind`만 사용합니다. composition root는 `FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER`·`FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER`와 각 adapter factory registry로 소스 제어와 배포 구현을 따로 고르며, 공급자 신원이 registry key와 다르면 시작을 거부합니다. 현재 내장 배포 공급자는 Render와 Kubernetes입니다. Kubernetes 공급자는 deterministic `FoundryDeployment` CR을 만들고 controller가 exact commit의 immutable digest·OCI revision·서명을 확인한 뒤 지정 namespace의 Deployment만 갱신합니다. `quality:infrastructure-swapability`와 `quality:kubernetes-packaging`은 이 계약을 함께 고정합니다. 실제 GitLab source adapter와 상태형 데이터의 교차 공급자 cutover/RPO/RTO live 리허설은 아직 완료되지 않았습니다.
 
 ## 아직 아닌 것
 
@@ -133,17 +133,17 @@ Governed Release와 Ontology/Pipeline proposal은 **검토 담당 배정과 사�
 
 | 아직 future 또는 partial인 것 | 현재 의미 |
 | --- | --- |
-| Kubernetes/Helm, one-click production deploy, managed cloud operations | 로컬/CI proof와 adapter profile은 있지만 운영 패키징은 별도 작업입니다. |
+| one-click production과 managed cloud operations | 범용 Helm chart, 제한 RBAC/NetworkPolicy/PDB, ARM64 digest 이미지 공급망, Kubernetes release controller, 격리 실행 Job, Mac mini 설치·장애·백업·소크 도구는 repository package로 구현돼 있습니다. 다만 실제 Mac mini 배포·복구·24시간 소크가 통과하기 전에는 production-ready나 24/7 SLA라고 부르지 않습니다. |
 | hosted ChatGPT SaaS + external IdP + 실제 GitHub/Render 계정의 write live E2E | GitHub exact PR/rules/CI/merge 어댑터와 Render exact-commit deploy/live observation/rollback 어댑터, durable outcome ledger, 보호 프로필 fail-closed 설정은 로컬 계약 테스트로 구현·검증했습니다. 아직 이 checkout에는 실제 GitHub/Render secretRef와 IdP/public HTTPS 설정이 없으므로, hosted ChatGPT에서 배정된 사람이 승인하고 실제 PR과 Render 서비스가 바뀌는 최종 live 증거는 없습니다. |
 | Governed Release의 강제 범위와 recovery edge | MCP app-only visibility는 준수 host가 버튼을 모델에서 숨기고 사람에게만 보여준다는 UI 계약이지, 물리적 click의 암호학적 증명은 아닙니다. 보호 프로필의 지원 Ontology/Pipeline release mutation은 direct REST/SDK 호출도 exact Governed Release action 증거가 없으면 거절하지만, local/demo/test의 개발용 direct admin/IaC, 아직 분류되지 않은 다른 mutation, raw repository/DB 자격 증명, hostile in-process 호출까지 막는 보안 샌드박스는 아닙니다. deterministic key는 응답 유실·재로드 exact replay에 사용합니다. mutation 전 admission/precondition 실패로 `knownNotCommitted`와 `safeToRetry`가 함께 남은 exact failed run만 새 app-only token, quota, CAS, fenced attempt를 거쳐 재개하며 tokenless·succeeded·running·outcome-unknown·분류 불가 실패는 reopen하지 않습니다. |
 | full visual product UI | Foundry SPA는 핵심 route와 여러 실제 업무 흐름을 E2E로 검증하지만, production-grade 운영자용 SPA 전체가 완성됐다는 뜻은 아닙니다. |
-| Pipeline Builder의 cluster 운영 패키징과 아직 foundation인 output plane | Temporal 분산 DAG, browser 실행 이력/SSE/retry/takeover/cancel/partial evidence, no-commit preview, Dataset·Media Set 다중 output commit은 current입니다. Kubernetes/Helm/HPA/PDB, multi-region Temporal 운영, Virtual Table·Ontology serving output, hot-stream DAG 엔진과 data/logic trigger DSL은 아직 future입니다. |
+| Pipeline Builder의 완전한 cluster 운영과 아직 foundation인 output plane | Temporal 분산 DAG, browser 실행 이력/SSE/retry/takeover/cancel/partial evidence, no-commit preview, Dataset·Media Set 다중 output commit 및 Kubernetes worker packaging/PDB는 current repository proof입니다. HPA, multi-node·multi-region Temporal 운영, Virtual Table·Ontology serving output, hot-stream DAG 엔진과 data/logic trigger DSL은 아직 future입니다. |
 | full Palantir Action Types + consumer Ontology MCP parity | Action v3, EditPlan, multi-object/link atomic commit, Function-backed Action, governed effect, 12/18 capability axes, advanced Builder, Python/TypeScript OSDK, runtime UI와 consumer Ontology MCP는 실제 제품 경로에 있습니다. PostgreSQL+Temporal two-worker gate는 kill/takeover·취소·dispatch 복구·exact-one commit을, `quality:ontology-mcp-live`는 공식 MCP `ClientSession`+별도 Uvicorn+PostgreSQL에서 object 조회와 고위험 Action 승인 분기를 증명합니다. 다만 hosted ChatGPT SaaS tenant, production cloud KMS, live ClamAV, virtual Ontology log link·Workshop timeline, effect/revert/branch 전용 multi-process race는 남았습니다. 자세한 경계는 [Action Types 비교표](docs/action-types-parity-matrix.json)와 [Agent-Native Operations PRD](docs/palantir-action-mcp-prd-ko.md)를 따릅니다. |
 | S62 visual dataset browser/preview grid/version pin/lineage graph UX | Datasets 화면의 catalog 선택, preview grid, manifest/schema evidence, version tab, quality tab, lineage handoff는 `tests/e2e-foundry/datasets-explorer-flow.spec.ts`로 current입니다. 대용량/다중 데이터셋 비교, Dataset 화면 안의 완전한 interactive lineage graph, production-scale browser UX는 future입니다. |
 | S63 evidence panel UI, S63 action execution orchestration | Approvals 화면의 Insight action queue, evidence panel, assign/approve/reject, AIP-approved `executeApprovedAction` 실행 흐름은 `tests/e2e-foundry/aip-approval-flow.spec.ts`로 current입니다. model diff UI, approval-policy builder, autonomous orchestration, full managed review workspace는 future입니다. |
 | vendor-specific SAP/NetSuite/OAuth connectors | Generic REST, webhook, CDC proof는 있지만 production vendor-specific packaged connector 범위는 future입니다. |
 | production scheduler operations beyond bounded UI | Data Connection의 Source scheduler preview/tick UI, Code의 Transform scheduler tick UI, Source managed sync schedule API/SDK/`worker:source-scheduler`, transform scheduler API/SDK/`worker:transform-scheduler` proof는 있지만 브라우저에서 데몬을 직접 운영하는 UI와 Kubernetes lease/fencing 운영 패키징은 future입니다. |
-| cloud Vault, full secret rotation, live OIDC discovery lifecycle | local JWT/OIDC and SecretProvider proof는 있지만 cloud-grade lifecycle은 future입니다. |
+| cloud Vault와 full identity lifecycle | 외부 HTTPS discovery/JWKS의 issuer 고정, redirect 차단, 응답 크기·timeout 제한, TTL refresh와 retired-key grace 및 Keycloak Authorization Code+PKCE/DCR 정책 패키지는 current repository proof입니다. IdP introspection, refresh-token revocation, 조직 group/role governance, cloud Vault/KMS와 전체 secret rotation은 future입니다. |
 | automatic restore smoke, full production restore rehearsal, rich recovery dashboard | Operations Recovery 화면의 recovery overview와 backup/restore preflight 실행은 `tests/e2e-foundry/operations-maintenance-recovery-flow.spec.ts`로 current입니다. automatic smoke, production restore rehearsal, alert timeline과 full recovery dashboard는 future입니다. |
 | managed compensation daemon and full approval workflow | external writeback retryable/outcome-unknown/compensation-required, reconciliation proof와 bounded writeback reconciliation worker proof, sensitive/high-risk writeback의 `operator_approval_required` skip 및 backend approval-release API/SDK/audit proof와 Foundry Operations approval-release UI proof, AI direct vendor/API tool denial proof는 있지만 automatic retry/reissue worker, 상시 managed daemon, ERP-specific reverse/compensation executor, connector-backed vendor tool release policy, full managed approval workflow/queue UI는 future입니다. |
 | object detection counts and bounding boxes in video | media visual search and CLIP scene-frame proof는 있지만 custom CV/VLM object detection 제품 범위는 future입니다. |
@@ -158,8 +158,8 @@ Governed Release와 Ontology/Pipeline proposal은 **검토 담당 배정과 사�
 FOUNDRY_LITE_RUNTIME_PROFILE=production
 FOUNDRY_LITE_AUTH_PROFILE=oidc
 FOUNDRY_LITE_OIDC_ISSUER=https://identity.example.com
-FOUNDRY_LITE_OIDC_AUDIENCE=foundry-lite
-FOUNDRY_LITE_OIDC_JWKS_JSON={"keys":[...]}
+FOUNDRY_LITE_OIDC_DISCOVERY_URL=https://identity.example.com/.well-known/openid-configuration
+FOUNDRY_LITE_OIDC_AUDIENCE=https://foundry.example.com/mcp/release/foundry-lite
 FOUNDRY_LITE_OIDC_CLIENT_ID_CLAIM=azp
 FOUNDRY_LITE_OIDC_ALLOWED_CLIENT_IDS_JSON=["https://chatgpt.com/oauth/client.json"]
 FOUNDRY_LITE_OIDC_SESSION_CLAIM=sid
@@ -168,6 +168,8 @@ FOUNDRY_LITE_OIDC_HUMAN_GRANT_VALUE=authorization_code
 FOUNDRY_LITE_MCP_AUTHORIZATION_SERVER=https://identity.example.com
 FOUNDRY_LITE_MCP_PUBLIC_BASE_URL=https://foundry.example.com
 ```
+
+Keycloak 26.7 QA profile은 현재 OAuth `resource` parameter를 직접 audience로 처리하지 못하는 경계를 보완하기 위해 opt-in `mcp-audience:<exact-resource-uri>` parameterized scope를 token `aud`로 매핑합니다. 이 기능은 기본 외부 IdP 계약을 바꾸지 않으며, 실제 hosted DCR 뒤에는 생성된 public client id를 `FOUNDRY_LITE_OIDC_ALLOWED_CLIENT_IDS_JSON`에 정확히 등록하고 token의 `azp`, `aud`, `sid`, 사람 grant claim을 다시 확인해야 합니다.
 
 `CLIENT_ID`, `SESSION`, `HUMAN_GRANT` claim 이름과 값은 IdP 계약에 맞춰야 합니다. `FOUNDRY_LITE_OIDC_ALLOWED_CLIENT_IDS_JSON`에는 실제 IdP 토큰의 `azp`/`client_id`와 정확히 일치하는 ChatGPT OAuth client만 넣습니다. allowlist가 비었거나 다른 앱의 client ID가 들어오면 운영 서버는 시작 또는 인증 단계에서 차단합니다. IdP는 ChatGPT가 보낸 `resource`를 access token의 정확한 단일 `aud`로 돌려주고, Authorization Code + PKCE와 ChatGPT callback allowlist를 지원해야 합니다. Release application과 `osdk:connector:governed_release:execute` grant는 Foundry-lite에서 active여야 합니다. 외부 세션은 raw `sid`를 저장하지 않고 issuer·client·session의 hash로 승인 receipt에 묶입니다. 이 설정 계약은 로컬 회귀 검증을 통과하지만, 실제 IdP 상호운용/hosted ChatGPT write live proof를 뜻하지는 않습니다.
 
@@ -201,6 +203,12 @@ Hosted golden run은 [manifest 예시](examples/governed-release-golden-manifest
 `deploy/render/Dockerfile.api`와 `deploy/render/render.staging-bootstrap.yaml`은 non-root API image, Render `PORT` binding, singleton-lock pre-deploy migration, `autoDeployTrigger: off`, PostgreSQL, persistent state disk, `/readyz` health gate를 고정합니다. 보호 프로필은 이제 PostgreSQL이 아니거나 `FOUNDRY_LITE_HOME`이 실제 `FOUNDRY_LITE_DURABLE_STATE_MOUNT` 아래에 있지 않으면 시작 전에 차단합니다. Blueprint의 provider endpoint·token·OIDC/JWKS·digest-pinned execution image는 `sync: false`이므로 저장소에 비밀 기본값이 없습니다.
 
 이 패키지는 **single-instance protected staging bootstrap**입니다. 적용하면 비용이 발생할 수 있어 자동으로 Render에 동기화하지 않습니다. S3, Elasticsearch, Kafka, Temporal, ClamAV, OIDC, Anthropic과 별도 Docker-compatible 격리 실행 plane은 실제 managed dependency로 연결해야 합니다. 현재 local prompt/backup/OAuth signing state가 persistent disk를 사용하므로 재시작 유실은 막지만, 다중 instance·zero-downtime production을 증명하지 않습니다. 전체 준비 조건과 남은 production gap은 [Hosted staging 배포 runbook](./docs/governed-release-hosted-staging-runbook.md)에 정리되어 있습니다. 저장소 내부 계약은 `pnpm --silent quality:hosted-deployment-packaging`으로 확인합니다.
+
+### Kubernetes와 Mac mini Enterprise QA 패키지
+
+`deploy/helm/foundry-lite`는 API/Web 각 2개, migration/bootstrap Job, outbox·scheduler·pipeline·action worker, release controller, Kubernetes 격리 실행 broker와 기본 deny network policy를 배포합니다. 기본 profile은 PostgreSQL·S3·Kafka·Temporal·검색·OIDC를 외부 서비스로 받고, `values.macmini-qa.yaml`만 단일노드 QA 의존성을 켭니다. 보호 profile은 S3 prompt/backup store, 외부 OIDC, cursor signing secret, exact governed-release audience가 없으면 시작되지 않습니다.
+
+현재 확인된 증거는 Helm lint/template, Kubernetes schema, ARM64 exact digest, Keycloak realm import/start, controller·Job·S3·OIDC·운영 script 계약까지입니다. 실제 `sean1234@ongleam-macmini` 설치, 장애 주입, recovery namespace 복원, hosted ChatGPT write E2E와 24시간 소크 결과는 아직 별도 실행 전입니다. 절차와 합격 기준은 [Mac mini Enterprise QA runbook](./docs/macmini-enterprise-qa-runbook.md)을 따릅니다. 단일 Mac mini는 Pod·process·VM restart 복구를 보여줄 수 있지만 다중 물리 node/AZ 장애 무중단은 증명하지 못합니다.
 
 ## Data pattern 상태
 
@@ -407,6 +415,7 @@ pnpm worker:pipeline-control
 | [foundry_lite_sprint_breakdown_ko.md](foundry_lite_sprint_breakdown_ko.md) | 스프린트별 목표, acceptance, Done/Partial/Future 상태를 관리하는 계획표입니다. |
 | [docs/data-platform-expansion-sprint-plan-ko.md](docs/data-platform-expansion-sprint-plan-ko.md) | S46 이후 데이터 플랫폼 확장 계획과 sprint-by-sprint 체크리스트를 담은 상세 roadmap입니다. |
 | [docs/quality-gate-roadmap.md](docs/quality-gate-roadmap.md) | 품질 게이트가 왜 있고 어떤 위험을 막는지, release/runtime lane에서 어떻게 운영되는지 설명합니다. |
+| [docs/macmini-enterprise-qa-runbook.md](docs/macmini-enterprise-qa-runbook.md) | `sean1234` 전용 Colima/k3s에서 안전하게 설치·장애·복구·24시간 소크·Funnel 종료까지 수행하는 운영 절차입니다. |
 | [docs/documentation-map.md](docs/documentation-map.md) | 문서별 역할, source-of-truth 규칙, update order, README 검증 규칙을 관리하는 문서 운영 지도입니다. |
 | [docs/commit-point-risk-register.md](docs/commit-point-risk-register.md) | commit point, retry, idempotency, partial failure, cleanup 위험을 추적하는 위험 장부입니다. |
 | [docs/infra-ratchet.md](docs/infra-ratchet.md) | 새 인프라 profile을 추가할 때 self proof와 active composition proof를 어떻게 쌓는지 설명합니다. |

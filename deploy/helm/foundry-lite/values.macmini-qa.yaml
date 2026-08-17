@@ -1,0 +1,33 @@
+global:
+  protectedProfile: true
+  storageClass: local-path
+  imagePullSecrets: [foundry-lite-ghcr]
+
+qaDependencies:
+  enabled: true
+  keycloak:
+    publicBaseUrl: https://identity.invalid
+    service: {type: NodePort, nodePort: 30444}
+
+external:
+  database: {host: foundry-lite-postgresql, port: 5432}
+  objectStorage: {endpoint: http://foundry-lite-minio:9000, bucket: foundry-lite}
+  kafka: {bootstrapServers: foundry-lite-redpanda:9092}
+  temporal: {endpoint: foundry-lite-temporal:7233}
+  search: {endpoint: http://foundry-lite-elasticsearch:9200}
+  clamav: {endpoint: foundry-lite-clamav:3310}
+  oidc:
+    issuer: https://identity.invalid/realms/foundry-lite
+    discoveryUrl: https://identity.invalid/realms/foundry-lite/.well-known/openid-configuration
+    audience: https://foundry.invalid/mcp/release/foundry-lite
+  telemetry: {otlpEndpoint: http://foundry-lite-tempo:4318}
+
+api:
+  replicas: 2
+web:
+  replicas: 2
+  service: {type: NodePort, nodePort: 30443}
+
+mcp:
+  publicBaseUrl: https://foundry.invalid
+  authorizationServer: https://identity.invalid/realms/foundry-lite

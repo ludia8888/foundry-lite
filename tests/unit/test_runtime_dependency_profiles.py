@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from foundry_lite.application.dependencies import RuntimeProfile
+from foundry_lite.infrastructure import artifact_store_composition as artifact_composition
 from foundry_lite.infrastructure import local_runtime as runtime
 from foundry_lite.infrastructure.action_runtime_dependencies import action_file_scanner_adapter
 from foundry_lite.infrastructure.adapters import (
@@ -288,6 +289,39 @@ def test_runtime_optional_adapter_profiles_build_from_environment(
     external_config = runtime._s3_external_media_reader_config()
     assert s3_config.bucket == "bucket"
     assert external_config.region_name == "us-east-1"
+
+
+def test_runtime_artifact_backends_are_explicitly_swappable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", "artifact-bucket")
+    monkeypatch.setenv("FOUNDRY_LITE_PROMPT_ARTIFACT_BACKEND", "s3")
+    monkeypatch.setenv("FOUNDRY_LITE_BACKUP_ARTIFACT_BACKEND", "s3")
+    monkeypatch.setattr(artifact_composition, "S3PromptArtifactStore", lambda config, provider: (config, provider))
+    monkeypatch.setattr(artifact_composition, "S3BackupArtifactStore", lambda config: config)
+    provider = SimpleNamespace(profile_name="test-secret")
+
+    prompt_store, backup_config = artifact_composition.artifact_stores(tmp_path, tmp_path, provider)
+    prompt_config, configured_provider = prompt_store
+
+    assert prompt_config.bucket == "artifact-bucket"
+    assert prompt_config.prefix == "foundry-lite/prompt-artifacts"
+    assert configured_provider is provider
+    assert backup_config.bucket == "artifact-bucket"
+    assert backup_config.prefix == "foundry-lite/backup-artifacts"
+
+
+def test_protected_runtime_requires_s3_artifact_backends() -> None:
+    with pytest.raises(ValueError, match="durable S3 artifact backends"):
+        artifact_composition.reject_protected_local_artifact_backends({})
+
+    artifact_composition.reject_protected_local_artifact_backends(
+        {
+            "FOUNDRY_LITE_PROMPT_ARTIFACT_BACKEND": "s3",
+            "FOUNDRY_LITE_BACKUP_ARTIFACT_BACKEND": "s3",
+        }
+    )
 
 
 def test_schema_mutation_policy_follows_runtime_profile(

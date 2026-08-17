@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1.7
+
+FROM docker.io/library/node@sha256:253da19867dd03e2f817f433d7782adefd2a2bac8729fcd4ebc6770665167a24 AS build
+
+WORKDIR /workspace
+RUN corepack enable && corepack prepare pnpm@10.18.2 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/foundry/package.json ./apps/foundry/package.json
+COPY packages/sdk-ts/package.json ./packages/sdk-ts/package.json
+COPY packages/restaurant-reservation-osdk/package.json ./packages/restaurant-reservation-osdk/package.json
+RUN pnpm install --frozen-lockfile
+
+COPY apps/foundry ./apps/foundry
+COPY packages/sdk-ts ./packages/sdk-ts
+COPY packages/restaurant-reservation-osdk ./packages/restaurant-reservation-osdk
+RUN pnpm --filter @foundry-lite/foundry build
+
+FROM public.ecr.aws/nginx/nginx-unprivileged@sha256:025de0b541bcc6cfbf508e4201aaa37b51d34daaf6d52e5e2753e29a8ddaa869
+
+ARG FOUNDRY_LITE_RUNTIME_SOURCE_SHA=unknown
+LABEL org.opencontainers.image.revision="${FOUNDRY_LITE_RUNTIME_SOURCE_SHA}" \
+      org.opencontainers.image.source="https://github.com/ludia8888/foundry-lite"
+
+COPY --from=build /workspace/apps/foundry/dist /usr/share/nginx/html
+
+USER 101:101
+EXPOSE 8080

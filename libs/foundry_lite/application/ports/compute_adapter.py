@@ -38,9 +38,14 @@ class TransformDeadLetterRecord:
 
 @dataclass(frozen=True)
 class TransformExecutionResult:
-    """Adapter result metadata that is durable only after application persistence."""
+    """Adapter result metadata that is durable only after application persistence.
+
+    ``runtime_evidence`` is operator-safe metadata only. Adapters must never place raw tokens,
+    source, input rows, stdout, or stderr in this mapping.
+    """
 
     dead_letters: tuple[TransformDeadLetterRecord, ...] = ()
+    runtime_evidence: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)

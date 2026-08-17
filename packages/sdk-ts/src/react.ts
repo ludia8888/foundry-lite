@@ -9324,7 +9324,7 @@ export function foundryLiteFunctionExecuteLockKey(
 /**
  * Execute a governed ontology function (`client.functions.generic.execute`)
  * as a mutation, exposing the run evidence (`logicRunId`, `resultHash`,
- * `output`) as `execution`.
+ * `runtimeEvidence`, `output`) as `execution`.
  */
 export function useFoundryLiteFunctionExecute(
   client: Pick<FoundryLiteGeneratedClient, "functions">,

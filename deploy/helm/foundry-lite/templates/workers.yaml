@@ -1,0 +1,68 @@
+{{- $root := . -}}
+{{- range $name := list "outbox" "scheduler" "pipeline" "action" }}
+{{- $worker := index $root.Values.workers $name }}
+{{- if $worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "foundry-lite.fullname" $root }}-worker-{{ $name }}
+  labels:
+    {{- include "foundry-lite.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: worker-{{ $name }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "foundry-lite.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: worker-{{ $name }}
+  template:
+    metadata:
+      labels:
+        {{- include "foundry-lite.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: worker-{{ $name }}
+      annotations:
+        foundry-lite.io/revision: {{ $root.Values.global.revision | quote }}
+    spec:
+      serviceAccountName: {{ include "foundry-lite.fullname" $root }}-api
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext: {{- include "foundry-lite.podSecurityContext" $root | nindent 8 }}
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "foundry-lite.image" (list $root.Values.images.api $root) }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/foundry-lite-venv/bin/python
+            - -m
+            - foundry_lite_worker.kubernetes_worker_supervisor
+            - --module
+            - {{ $worker.module }}
+            - --interval-seconds
+            - "5"
+          securityContext: {{- include "foundry-lite.containerSecurityContext" $root | nindent 12 }}
+          envFrom:
+            - configMapRef: {name: {{ include "foundry-lite.fullname" $root }}-runtime}
+            - secretRef: {name: {{ $root.Values.secrets.applicationExistingSecret }}}
+          resources: {{- toYaml $root.Values.workers.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: runtime, mountPath: /var/data}
+            - {name: oauth-signing, mountPath: /var/run/foundry-lite/oauth, readOnly: true}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+        - name: runtime
+          persistentVolumeClaim: {claimName: {{ include "foundry-lite.fullname" $root }}-runtime}
+        - name: oauth-signing
+          secret:
+            secretName: {{ $root.Values.secrets.oauthSigningExistingSecret }}
+            defaultMode: 0400
+---
+{{- end }}
+{{- end }}
