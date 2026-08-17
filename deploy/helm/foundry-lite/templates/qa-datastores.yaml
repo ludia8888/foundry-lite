@@ -35,8 +35,8 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ .Values.qaDependencies.credentialsExistingSecret }}, key: POSTGRES_PASSWORD}}
             - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
           ports: [{name: postgresql, containerPort: 5432}]
-          readinessProbe: {exec: {command: [/usr/local/bin/pg_isready, -U, postgres]}, initialDelaySeconds: 10, periodSeconds: 5}
-          livenessProbe: {exec: {command: [/usr/local/bin/pg_isready, -U, postgres]}, initialDelaySeconds: 30, periodSeconds: 10}
+          readinessProbe: {exec: {command: [/usr/bin/pg_isready, -U, postgres]}, initialDelaySeconds: 10, periodSeconds: 5}
+          livenessProbe: {exec: {command: [/usr/bin/pg_isready, -U, postgres]}, initialDelaySeconds: 30, periodSeconds: 10}
           resources:
             requests: {cpu: 250m, memory: 512Mi}
             limits: {cpu: "2", memory: 2Gi}

@@ -106,9 +106,11 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /usr/share/elasticsearch/data}
             - {name: config, mountPath: /usr/share/elasticsearch/config}
+            - {name: logs, mountPath: /usr/share/elasticsearch/logs}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - {name: config, emptyDir: {sizeLimit: 64Mi}}
+        - {name: logs, emptyDir: {sizeLimit: 1Gi}}
         - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
   volumeClaimTemplates:
     - metadata: {name: data}
@@ -178,10 +180,12 @@ spec:
           volumeMounts:
             - {name: signatures, mountPath: /var/lib/clamav}
             - {name: config, mountPath: /etc/clamav}
+            - {name: logs, mountPath: /var/log/clamav}
             - {name: run, mountPath: /run/clamav}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - {name: config, emptyDir: {sizeLimit: 16Mi}}
+        - {name: logs, emptyDir: {sizeLimit: 256Mi}}
         - {name: run, emptyDir: {sizeLimit: 16Mi}}
         - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
   volumeClaimTemplates:

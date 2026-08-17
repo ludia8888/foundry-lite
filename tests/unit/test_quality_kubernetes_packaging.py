@@ -154,11 +154,20 @@ def test_qa_dependencies_keep_read_only_roots_with_explicit_writable_runtime_mou
         "mountPath: /etc/redpanda",
         "mountPath: /etc/temporal/config",
         "mountPath: /usr/share/elasticsearch/config",
+        "mountPath: /usr/share/elasticsearch/logs",
+        "mountPath: /var/log/clamav",
         "mountPath: /run/clamav",
         "mountPath: /opt/keycloak/lib/quarkus",
     ):
         assert writable_mount in templates
     assert "command: [clamd]" in templates
+
+
+def test_postgresql_probes_use_the_digest_image_binary_path() -> None:
+    datastores = (ROOT / "deploy/helm/foundry-lite/templates/qa-datastores.yaml").read_text(encoding="utf-8")
+
+    assert datastores.count("/usr/bin/pg_isready") == 2
+    assert "/usr/local/bin/pg_isready" not in datastores
 
 
 def _copy_gate_tree(target: Path) -> None:
