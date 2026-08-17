@@ -5,10 +5,12 @@ from __future__ import annotations
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.ontology_proposal_governance import (
     require_assigned_decider,
     require_decidable,
+    require_distinct_reviewer,
     require_execution_approval,
 )
 from foundry_lite.application.services.ontology_proposal_payloads import (
@@ -54,10 +56,11 @@ _RESOURCE_TYPE = "ontology_proposal"
 class OntologyProposalService(CoreService):
     """Submit, review, and apply ontology change proposals with drift protection."""
 
-    required_dependencies = ("engine", "policy", "insight_review_repository")
+    required_dependencies = ("engine", "policy", "profile", "insight_review_repository")
     required_collaborators = ("ontology_service", "runtime_service")
     ontology_service: OntologyService
     runtime_service: OntologyRuntimeBoundary
+    profile: RuntimeProfile
 
     def submit_proposal(
         self,
@@ -110,6 +113,7 @@ class OntologyProposalService(CoreService):
         key = f"{proposal_id}:assign:{reviewer}"
         with self.engine.begin() as conn:
             before = self._require_proposal_row(conn, ctx, proposal_id)
+            require_distinct_reviewer(before, reviewer, is_separate_reviewer_required=self.profile.is_protected)
             if before.get("assignment_idempotency_key") == key:
                 return proposal_payload(before)
             after = self.insight_review_repository.assign_review(
@@ -150,7 +154,7 @@ class OntologyProposalService(CoreService):
         with self.engine.begin() as conn:
             row = self._require_proposal_row(conn, ctx, proposal_id)
             require_fingerprint_match(row, expected_fingerprint)
-            require_assigned_decider(row, ctx)
+            require_assigned_decider(row, ctx, is_separate_reviewer_required=self.profile.is_protected)
             replay = decision_replay(row, parsed, comment)
             if replay is not None:
                 return replay
@@ -293,7 +297,7 @@ class OntologyProposalService(CoreService):
         )
         with self.engine.begin() as conn:
             before = self._require_proposal_row(conn, ctx, proposal_id)
-            require_assigned_decider(before, ctx)
+            require_assigned_decider(before, ctx, is_separate_reviewer_required=self.profile.is_protected)
             after = self.insight_review_repository.decide_review(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -335,7 +339,7 @@ class OntologyProposalService(CoreService):
             row = self._require_proposal_row(conn, ctx, proposal_id)
             require_fingerprint_match(row, expected_fingerprint)
             if row["status"] == "approved":
-                require_execution_approval(row)
+                require_execution_approval(row, is_separate_reviewer_required=self.profile.is_protected)
             if row["execution_status"] == "executed":
                 return proposal_payload(row), ""
             if row["execution_status"] == "executing":

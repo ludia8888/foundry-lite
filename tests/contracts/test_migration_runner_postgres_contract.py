@@ -4,6 +4,7 @@ import json
 import threading
 from pathlib import Path
 
+from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
@@ -61,6 +62,7 @@ def test_postgres_migration_runner_commits_alembic_upgrade(_postgres_url: str, t
                 assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
                 assert inspector.has_table("action_runs")
                 assert inspector.has_table("datasets")
+                _assert_jsonb_object_store_migration(connection)
         finally:
             verify_engine.dispose()
     finally:
@@ -70,6 +72,170 @@ def test_postgres_migration_runner_commits_alembic_upgrade(_postgres_url: str, t
                 connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
         finally:
             cleanup_engine.dispose()
+
+
+def test_existing_json_object_rows_upgrade_to_jsonb_without_breaking_old_writers(_postgres_url: str) -> None:
+    server_url = make_url(_postgres_url)
+    database_name = "object_store_jsonb_upgrade_contract"
+    _recreate_database(server_url, database_name)
+    target_url = server_url.set(database=database_name).render_as_string(hide_password=False)
+    config = _alembic_config(target_url)
+    engine = create_engine(target_url, future=True)
+    try:
+        command.upgrade(config, "f2d4b6e8a0c3")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO object_records (
+                      id, tenant_id, object_type_id, object_type_api_name, object_id,
+                      index_version, is_active, properties, base_properties, edit_properties,
+                      property_versions, source_dataset_version_id, source_hash, object_version,
+                      object_change_sequence, deleted, deletion_reason, created_at, updated_at
+                    ) VALUES (
+                      'legacy-1', 'tenant-legacy', 'ot-order', 'Order', 'O-1',
+                      'active', true, CAST(:initial_properties AS json),
+                      CAST(:initial_properties AS json), CAST(:empty_document AS json),
+                      CAST(:property_versions AS json), 'dsv-1', 'hash-1', 1, 1,
+                      false, NULL, '2026-08-18T00:00:00Z', '2026-08-18T00:00:00Z'
+                    )
+                    """
+                ),
+                {
+                    "initial_properties": '{"status":"PENDING","amount":12}',
+                    "empty_document": "{}",
+                    "property_versions": '{"status":1,"amount":1}',
+                },
+            )
+
+        command.upgrade(config, "head")
+
+        with engine.begin() as connection:
+            column_type, properties = connection.execute(
+                text("SELECT pg_typeof(properties)::text, properties FROM object_records WHERE id = 'legacy-1'")
+            ).one()
+            assert column_type == "jsonb"
+            assert properties == {"status": "PENDING", "amount": 12}
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO object_records (
+                      id, tenant_id, object_type_id, object_type_api_name, object_id,
+                      index_version, is_active, properties, base_properties, edit_properties,
+                      property_versions, source_dataset_version_id, source_hash, object_version,
+                      object_change_sequence, deleted, deletion_reason, created_at, updated_at
+                    ) VALUES (
+                      'legacy-writer-2', 'tenant-legacy', 'ot-order', 'Order', 'O-2',
+                      'active', true, CAST(:properties AS json), CAST(:properties AS json),
+                      CAST(:empty_document AS json), CAST(:legacy_versions AS json), 'dsv-2', 'hash-2',
+                      1, 2, false, NULL, '2026-08-18T00:00:00Z', '2026-08-18T00:00:00Z'
+                    )
+                    """
+                ),
+                {
+                    "properties": '{"status":"APPROVED"}',
+                    "empty_document": "{}",
+                    "legacy_versions": '{"status":1}',
+                },
+            )
+            stored = connection.execute(
+                text("SELECT properties FROM object_records WHERE id = 'legacy-writer-2'")
+            ).scalar_one()
+            assert stored == {"status": "APPROVED"}
+    finally:
+        engine.dispose()
+        _drop_database(server_url, database_name)
+
+
+def _alembic_config(database_url: str) -> Config:
+    root = Path(__file__).resolve().parents[2]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def _recreate_database(server_url, database_name: str) -> None:
+    admin_engine = create_engine(server_url.set(database="postgres"), future=True, isolation_level="AUTOCOMMIT")
+    try:
+        with admin_engine.connect() as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}"'))
+            connection.execute(text(f'CREATE DATABASE "{database_name}"'))
+    finally:
+        admin_engine.dispose()
+
+
+def _drop_database(server_url, database_name: str) -> None:
+    cleanup_engine = create_engine(server_url.set(database="postgres"), future=True, isolation_level="AUTOCOMMIT")
+    try:
+        with cleanup_engine.connect() as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
+    finally:
+        cleanup_engine.dispose()
+
+
+def _assert_jsonb_object_store_migration(connection) -> None:
+    jsonb_columns = connection.execute(
+        text(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND udt_name = 'jsonb'
+              AND table_name = ANY(:table_names)
+            """
+        ),
+        {
+            "table_names": [
+                "object_records",
+                "object_record_versions",
+                "object_links",
+                "object_edits",
+                "object_conflicts",
+                "object_sets",
+            ]
+        },
+    ).all()
+    assert len(jsonb_columns) == 15
+    object_security = connection.execute(
+        text(
+            """
+            SELECT count(*)
+            FROM pg_class
+            WHERE relname = ANY(:table_names)
+              AND relrowsecurity
+              AND relforcerowsecurity
+            """
+        ),
+        {
+            "table_names": [
+                "object_records",
+                "object_record_versions",
+                "object_links",
+                "object_edits",
+                "object_conflicts",
+                "object_sets",
+                "object_change_counters",
+                "object_index_row_hashes",
+                "object_index_versions",
+            ]
+        },
+    ).scalar_one()
+    assert object_security == 9
+    index_names = {
+        row[0]
+        for row in connection.execute(
+            text(
+                """
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND tablename IN ('object_records', 'object_links')
+                """
+            )
+        )
+    }
+    assert {"ix_object_records_properties_gin", "ix_object_links_properties_gin"} <= index_names
 
 
 def test_postgres_migration_runner_allows_one_live_advisory_lock_winner(

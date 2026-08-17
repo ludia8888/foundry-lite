@@ -19,6 +19,7 @@ def _current_payload() -> dict[str, object]:
                             "type": "String",
                         }
                     ],
+                    "indexes": [],
                     "name": "tenants",
                     "unique_constraints": [],
                 }
@@ -74,6 +75,7 @@ def test_schema_revision_guard_flags_schema_snapshot_mismatch(tmp_path: Path) ->
             "tables": [
                 {
                     "columns": [],
+                    "indexes": [],
                     "name": "tenants",
                     "unique_constraints": [],
                 }
@@ -122,3 +124,8 @@ def test_schema_revision_guard_builds_real_metadata_snapshot() -> None:
     assert current["schema_fingerprint"]
     assert current["summary"]["table_count"] > 0
     assert "datasets" in current["summary"]["table_names"]
+    tables = {table["name"]: table for table in current["schema"]["tables"]}
+    object_records = tables["object_records"]
+    properties = next(column for column in object_records["columns"] if column["name"] == "properties")
+    assert properties["type"] == {"base": "JSON", "variants": {"postgresql": "JSONB"}}
+    assert "ix_object_records_properties_gin" in {index["name"] for index in object_records["indexes"]}

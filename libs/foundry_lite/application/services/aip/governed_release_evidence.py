@@ -10,22 +10,35 @@ from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 JsonObject = Mapping[str, object]
 
 
-def release_candidate(kind: str, proposal: JsonObject, ctx: RequestContext) -> dict[str, object]:
+def release_candidate(
+    kind: str,
+    proposal: JsonObject,
+    ctx: RequestContext,
+) -> dict[str, object]:
     candidate = dict(proposal)
-    if not isinstance(candidate.get("reviewPolicy"), Mapping):
+    policy = candidate.get("reviewPolicy")
+    is_separate_reviewer_required = isinstance(policy, Mapping) and policy.get("requiresSeparateReviewer") is True
+    if not isinstance(policy, Mapping):
         candidate["reviewPolicy"] = {
             "requiresAssignment": True,
-            "requiresSeparateReviewer": False,
+            "requiresSeparateReviewer": is_separate_reviewer_required,
             "blocksStaleProposal": True,
         }
-    if kind == "ontology":
-        assignee = candidate.get("assigneeUserId")
-        candidate["canCurrentUserReview"] = assignee == ctx.actor_user_id
-    else:
-        assignee = candidate.get("assignedTo")
-        candidate["canCurrentUserReview"] = assignee == ctx.actor_user_id
-    candidate["canCurrentUserClaim"] = assignee is None
+    assignee, author = _review_coordinates(kind, candidate)
+    can_review = _can_review(author, ctx.actor_user_id, is_separate_reviewer_required)
+    candidate["canCurrentUserReview"] = assignee == ctx.actor_user_id and can_review
+    candidate["canCurrentUserClaim"] = assignee is None and can_review
     return candidate
+
+
+def _review_coordinates(kind: str, candidate: JsonObject) -> tuple[object, object]:
+    if kind == "ontology":
+        return candidate.get("assigneeUserId"), candidate.get("submittedByUserId")
+    return candidate.get("assignedTo"), candidate.get("createdBy")
+
+
+def _can_review(author: object, actor_user_id: str, is_separate_reviewer_required: bool) -> bool:
+    return not is_separate_reviewer_required or author != actor_user_id
 
 
 def require_proposal_identity(proposal: JsonObject, proposal_id: str) -> None:

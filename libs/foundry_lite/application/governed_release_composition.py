@@ -58,6 +58,7 @@ def build_governed_release_workspace(
     workflow_service = GovernedReleaseWorkflowService(
         ontology=OntologyReleaseWorkflow(services.ontology.branches, services.ontology.proposals),
         pipelines=services.pipelines.entrypoint,
+        is_separate_reviewer_required=services.runtime_evidence.profile.is_protected,
     )
     security = GovernedReleaseSecurityLedger(
         builder_mcp.engine,

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "libs"))
 
 import foundry_lite.infrastructure.schema as db  # noqa: E402
-from sqlalchemy import MetaData, UniqueConstraint  # noqa: E402
+from sqlalchemy import Index, MetaData, UniqueConstraint  # noqa: E402
 
 DEFAULT_REVISION_DIR = ROOT / "infra" / "schema_revisions"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "schema_revision_guard.json"
@@ -53,6 +53,28 @@ def _unique_constraint_sort_key(item: Mapping[str, object]) -> tuple[str, str]:
     return str(item.get("name")), column_key
 
 
+def _column_type_snapshot(column_type: object) -> str | dict[str, object]:
+    base_name = column_type.__class__.__name__
+    variants = getattr(column_type, "_variant_mapping", {})
+    if not isinstance(variants, Mapping) or not variants:
+        return base_name
+    return {
+        "base": base_name,
+        "variants": {
+            str(dialect): variant.__class__.__name__
+            for dialect, variant in sorted(variants.items(), key=lambda item: str(item[0]))
+        },
+    }
+
+
+def _index_snapshot(index: Index) -> dict[str, object]:
+    return {
+        "columns": [getattr(expression, "name", str(expression)) for expression in index.expressions],
+        "name": index.name,
+        "unique": bool(index.unique),
+    }
+
+
 def _table_snapshot(metadata: MetaData) -> dict[str, object]:
     tables: list[dict[str, object]] = []
     for table in sorted(metadata.tables.values(), key=lambda item: item.name):
@@ -61,7 +83,7 @@ def _table_snapshot(metadata: MetaData) -> dict[str, object]:
                 "name": column.name,
                 "nullable": bool(column.nullable),
                 "primary_key": bool(column.primary_key),
-                "type": column.type.__class__.__name__,
+                "type": _column_type_snapshot(column.type),
             }
             for column in table.columns
         ]
@@ -76,9 +98,11 @@ def _table_snapshot(metadata: MetaData) -> dict[str, object]:
             ),
             key=_unique_constraint_sort_key,
         )
+        indexes = sorted((_index_snapshot(index) for index in table.indexes), key=lambda item: str(item["name"]))
         tables.append(
             {
                 "columns": columns,
+                "indexes": indexes,
                 "name": table.name,
                 "unique_constraints": unique_constraints,
             }

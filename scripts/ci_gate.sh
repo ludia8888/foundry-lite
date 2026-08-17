@@ -466,6 +466,8 @@ run_runtime_dynamic_steps() {
 
   run_runtime_step "schema migration PostgreSQL contention" pnpm --silent quality:schema-migration-runner-live
 
+  run_runtime_step "PostgreSQL JSONB object store indexes and RLS" pnpm --silent quality:postgres-object-store-live
+
   RUNTIME_GATE_STEP="runtime diagnostics"
   echo "== Dynamic: ${RUNTIME_GATE_STEP} =="
   rm -rf .foundry-lite-diagnostics

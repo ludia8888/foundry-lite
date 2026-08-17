@@ -234,7 +234,8 @@ def _template_findings(root: Path) -> list[KubernetesPackagingFinding]:
         '"protocolMapper": "oidc-parameterized-scope-mapper"',
         '"claim.name": "aud"',
         "bootstrap_keycloak_qa_user.py",
-        "KEYCLOAK_QA_USER_PASSWORD",
+        "KEYCLOAK_QA_AUTHOR_USER_PASSWORD",
+        "KEYCLOAK_QA_REVIEWER_USER_PASSWORD",
     )
     identity_text = identity + identity_runtime
     for term in identity_terms:

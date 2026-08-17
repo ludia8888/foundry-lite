@@ -267,7 +267,7 @@ def test_local_or_caller_supplied_typed_claim_cannot_authorize_attestation() -> 
     assert "server_collection_authority_required" in result.blockers
 
 
-def test_same_human_and_oauth_session_can_satisfy_assigned_review_contract() -> None:
+def test_same_human_and_oauth_session_cannot_satisfy_production_review_contract() -> None:
     claim = _claim()
     actions = tuple(
         replace(
@@ -287,9 +287,11 @@ def test_same_human_and_oauth_session_can_satisfy_assigned_review_contract() -> 
         )
     )
 
-    assert result.is_authoritative is True
-    assert result.is_attestation_eligible is True
-    assert result.blockers == ()
+    assert result.is_authoritative is False
+    assert result.is_attestation_eligible is False
+    assert "submitter_reviewer_subjects_must_be_distinct" in result.blockers
+    assert "submitter_reviewer_oauth_sessions_must_be_distinct" in result.blockers
+    assert "submitter_reviewer_mcp_sessions_overlap" in result.blockers
 
 
 def test_missing_action_cannot_satisfy_authoritative_golden_set() -> None:

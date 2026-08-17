@@ -7,6 +7,7 @@ from typing import Any, cast
 import yaml
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.aip.governed_release_outcomes import (
     GovernedReleaseMutationOutcomeUnknown,
 )
@@ -177,6 +178,41 @@ def test_submitter_may_be_assigned_and_approve_own_proposal(foundry, tmp_path) -
             decision="approve",
             expected_fingerprint=_fingerprint(proposal),
             ctx=REVIEWER,
+        )
+
+
+def test_protected_runtime_rejects_self_assignment_and_legacy_self_approval_execution(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry, key="protected-reviewer-separation")
+    proposal_service = foundry._services.ontology.proposals
+    proposal_service.profile = RuntimeProfile.from_value("production")
+
+    with raises(PermissionDenied, match="reviewer other than"):
+        foundry.ontology.assign_proposal(
+            str(proposal["id"]),
+            reviewer_user_id=SUBMITTER.actor_user_id,
+            ctx=SUBMITTER,
+        )
+
+    proposal_service.profile = RuntimeProfile.from_value("local")
+    foundry.ontology.assign_proposal(
+        str(proposal["id"]),
+        reviewer_user_id=SUBMITTER.actor_user_id,
+        ctx=SUBMITTER,
+    )
+    foundry.ontology.decide_proposal(
+        str(proposal["id"]),
+        decision="approve",
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=SUBMITTER,
+    )
+    proposal_service.profile = RuntimeProfile.from_value("production")
+
+    with raises(PermissionDenied, match="approval evidence"):
+        foundry.ontology.execute_proposal(
+            str(proposal["id"]),
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=SUBMITTER,
         )
 
 

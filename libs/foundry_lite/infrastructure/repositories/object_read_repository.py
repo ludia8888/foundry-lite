@@ -22,6 +22,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy import cast as sa_cast
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports import (
@@ -442,6 +443,9 @@ def _property_eq_condition(
     sql_value = _filter_sql_value(value, data_type)
     if sql_value is INVALID_SQL_VALUE:
         return literal(False)
+    if dialect_name == "postgresql" and data_type != "timestamp" and not _is_number_type(data_type):
+        document = literal({property_name: sql_value}, type_=JSONB())
+        return db.object_records.c.properties.op("@>")(document)
     return _property_value_expression(property_name, data_type, dialect_name) == sql_value
 
 
@@ -454,9 +458,7 @@ def _property_in_condition(
     items = _filter_sequence(value)
     if items is None:
         return literal(False)
-    expr = _property_value_expression(property_name, data_type, dialect_name)
-    conditions = _null_in_conditions(property_name, dialect_name, items)
-    conditions.extend(expr == item for item in _valid_sql_values(items, data_type))
+    conditions = [_property_eq_condition(property_name, data_type, item, dialect_name) for item in items]
     if not conditions:
         return literal(False)
     return or_(*conditions)
@@ -466,17 +468,6 @@ def _filter_sequence(value: object) -> Sequence[object] | None:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return None
     return value
-
-
-def _null_in_conditions(property_name: str, dialect_name: str, items: Sequence[object]) -> list[Any]:
-    if not any(item is None for item in items):
-        return []
-    return [_property_is_null_condition(property_name, dialect_name)]
-
-
-def _valid_sql_values(items: Sequence[object], data_type: str) -> list[object]:
-    values = (_filter_sql_value(item, data_type) for item in items if item is not None)
-    return [item for item in values if item is not INVALID_SQL_VALUE]
 
 
 def _property_range_condition(
@@ -549,7 +540,7 @@ def _property_is_null_condition(property_name: str, dialect_name: str) -> Any:
 
 def _json_type_expression(property_name: str, dialect_name: str) -> Any:
     if dialect_name == "postgresql":
-        return func.json_typeof(db.object_records.c.properties[property_name])
+        return func.jsonb_typeof(db.object_records.c.properties[property_name])
     escaped_name = property_name.replace('"', '\\"')
     raw_type = func.json_type(db.object_records.c.properties, f'$."{escaped_name}"')
     return case(

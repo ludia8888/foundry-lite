@@ -9,6 +9,7 @@ from typing import Any
 import foundry_lite.application.services.pipeline_deployment_service as pipeline_deployment_module
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.pipeline_deployment_admission import PipelineDeploymentOutcomeUnknown
 from foundry_lite.application.services.pipeline_graph_model import pipeline_graph_fingerprint
 from foundry_lite.application.services.pipeline_graph_normalizer import normalize_pipeline_graph
@@ -529,6 +530,44 @@ def test_pipeline_proposal_allows_author_review_but_blocks_unassigned_and_stale_
     assert withdrawn["status"] == "withdrawn"
     assert current_branch["baseVersionId"] == winner_version["id"]
     assert current_branch["graphFingerprint"] == winner_version["graphFingerprint"]
+
+
+def test_protected_pipeline_proposal_rejects_author_assignment_and_reports_policy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(
+            db_url=f"sqlite:///{tmp_path / 'protected-reviewer.db'}",
+            storage_root=tmp_path / "flite",
+        )
+    )
+    ctx = demo_admin_context()
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(api_main.app)
+    creator_headers = _context_headers(ctx.actor_user_id, ctx.tenant_id, ctx.roles)
+    candidate = _create_graph_branch(
+        client,
+        creator_headers,
+        pipeline_id="protected_reviewer_pipeline",
+        name="candidate",
+        branch_key="protected-reviewer-candidate",
+        output_ref="clean.protected_reviewer_candidate",
+    )
+    proposal = _propose(client, creator_headers, candidate, "protected-reviewer-proposal")
+    foundry._services.pipelines.governance.profile = RuntimeProfile.from_value("production")
+
+    self_assignment = client.post(
+        f"/api/pipelines/proposals/{proposal['id']}/assign",
+        json={"assigneeUserId": ctx.actor_user_id},
+        headers=creator_headers,
+    )
+    assert self_assignment.status_code == 403
+    assert "reviewer other than" in self_assignment.text
+
+    assigned = _assign(client, creator_headers, proposal, "reviewer-api")
+    assert assigned["reviewPolicy"]["requiresSeparateReviewer"] is True
+    assert assigned["canCurrentUserReview"] is False
 
 
 def test_pipeline_rebase_three_way_merges_independent_changes_and_reports_conflicts(

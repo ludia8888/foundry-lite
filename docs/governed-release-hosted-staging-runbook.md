@@ -12,13 +12,13 @@
 | DB migration | 패키징됨 | 매 배포 전에 `deploy/render/predeploy_migrate.sh`가 singleton-lock Alembic runner로 `head`를 적용한다. |
 | readiness | 구성 확인 가능 | `/readyz`는 실제 API composition과 metadata DB `SELECT 1`을 확인한다. 단순 생존 확인인 `/healthz`와 목적이 다르다. |
 | GPT 내 MCP App UI | hosted branch·read-only reload slice 실증 | `ui://foundry-lite/governed-release-v9-87ac4aeadd8c.html`은 MCP Apps `2026-01-26` JSON-RPC `postMessage` bridge를 기본으로 사용하고 `window.openai`는 기존 host 호환 fallback으로만 사용한다. 2026-08-12 hosted ChatGPT에서 workspace open → exact widget branch create → Builder handoff와 read-only inbox 재접속 복구를 실증했다. |
-| 외부 OIDC | 입력 및 live 검증 필요 | Authorization Code + PKCE를 지원하는 IdP client와 정확한 audience/scope/claim/JWKS가 필요하다. 작성자와 검토자가 서로 다른 principal일 필요는 없다. |
+| 외부 OIDC | 입력 및 live 검증 필요 | Authorization Code + PKCE를 지원하는 IdP client와 정확한 audience/scope/claim/JWKS가 필요하다. 보호 프로필에서는 작성자와 검토자가 서로 다른 IdP `subject`와 OAuth session을 사용해야 한다. |
 | GitHub·Render write path | 입력 및 live 검증 필요 | exact repository/service token과 live policy preflight가 모두 통과해야 한다. |
 | 정상 릴리스 운영 완료 | 서버 projection 구현, hosted 실행 미검증 | exact Render deploy가 terminal success이면 `operationalCompletion`이 정상 운영 완료를 표시한다. 이 판정에는 rollback이 필요하지 않다. |
 | rollback rehearsal/live attestation | 서버 경로 구현, hosted 실행 미검증 | 서버가 exact 현재 OAuth 검토자에게만 두 workflow root를 `completionCoordinates`로 제시하고, 사용자가 app-only 확인을 하면 `verify_release_completion`이 PostgreSQL·GitHub·Render를 재조회해 별도의 rollback rehearsal DB attestation을 남긴다. 외부 계정에 대한 실제 성공 증거는 아직 없다. |
 | 전체 production topology | 아직 미완료 | 아래 외부 managed dependency와 격리 실행 plane이 실제로 연결됐다는 증거가 없다. |
 
-검토 담당 배정과 사람의 위젯 승인은 필수지만, 작성자와 검토자가 서로 다른 계정일 필요는 없다. 따라서 한 ChatGPT/OAuth 사용자가 제안을 작성하고 검토 담당을 self-claim한 뒤 승인할 수 있다. 별도 리뷰어가 필요한 GitHub ruleset이 있으면 그 저장소 정책은 추가 조건으로 적용된다.
+검토 담당 배정과 사람의 위젯 승인은 필수다. 보호 프로필에서는 작성자와 검토자의 IdP `subject`가 반드시 달라야 하고, live attestation은 OAuth session과 MCP session set의 겹침도 거절한다. 따라서 작성자는 자신의 제안을 self-claim하거나 승인할 수 없다. 계정 공유 금지는 IdP/조직 운영정책으로 함께 강제하며, GitHub ruleset의 reviewer 조건은 추가 조건으로 적용된다.
 
 2026-08-12 부분 실증은 공개 HTTPS tunnel과 Foundry-lite local Authorization Code OAuth server를 사용했다. ChatGPT가 prepare와 action 사이에서 MCP transport session ID와 짧은 수명의 access-token 발급·만료 시각을 바꿨지만, 서버는 같은 human OAuth session을 다시 확인한 뒤 `qa-gpt-mcp-20260812-131500` 브랜치를 정확히 한 번 만들고 `ontology-branch:ontbranch_3ca76bb7c2a644d9bba8cc5d39400ffd` Builder workspace를 대화에 전달했다. 이는 MCP App 호스트·OAuth 회전·one-time confirmation·branch 생성 구간의 live 증거이며, 외부 IdP 상호운용, GitHub 병합, Render 배포·관찰·rollback의 증거는 아니다.
 

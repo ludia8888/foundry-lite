@@ -231,7 +231,11 @@ def test_result_payload(row: PipelineTestResultRow) -> JsonObject:
     }
 
 
-def branch_payload(row: PipelineBranchRow) -> JsonObject:
+def branch_payload(
+    row: PipelineBranchRow,
+    *,
+    is_separate_reviewer_required: bool = False,
+) -> JsonObject:
     return {
         "id": row["id"],
         "pipelineId": row["pipeline_id"],
@@ -248,7 +252,7 @@ def branch_payload(row: PipelineBranchRow) -> JsonObject:
         "mergedVersionId": row["merged_version_id"],
         "protection": {
             "requiresProposal": True,
-            "requiresSeparateReviewer": False,
+            "requiresSeparateReviewer": is_separate_reviewer_required,
             "blocksStaleProposal": True,
         },
     }

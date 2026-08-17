@@ -25,7 +25,7 @@ def test_bootstrap_generates_all_protected_runtime_signing_material(monkeypatch)
         "_apply_registry_secret",
         lambda _args, name, value: registry.setdefault(name, value),
     )
-    monkeypatch.setattr(subject, "_write_keycloak_login", lambda _password: None)
+    monkeypatch.setattr(subject, "_write_keycloak_logins", lambda _author, _reviewer: None)
 
     receipt = subject.bootstrap(
         Namespace(
@@ -50,6 +50,8 @@ def test_bootstrap_generates_all_protected_runtime_signing_material(monkeypatch)
     assert dependencies["GRAFANA_ADMIN_USER"] == "foundry-qa-admin"
     assert len(dependencies["GRAFANA_ADMIN_PASSWORD"]) >= 36
     assert dependencies["GRAFANA_ADMIN_PASSWORD"] != dependencies["KEYCLOAK_ADMIN_PASSWORD"]
+    assert dependencies["KEYCLOAK_QA_AUTHOR_USER"] != dependencies["KEYCLOAK_QA_REVIEWER_USER"]
+    assert dependencies["KEYCLOAK_QA_AUTHOR_USER_PASSWORD"] != dependencies["KEYCLOAK_QA_REVIEWER_USER_PASSWORD"]
     referenced_dependency_keys: set[str] = set()
     for template in Path("deploy/helm/foundry-lite/templates").glob("*.yaml"):
         for line in template.read_text(encoding="utf-8").splitlines():

@@ -114,10 +114,20 @@ class _Pipelines:
 def _service(
     ontology_proposals: list[Mapping[str, object]] | None = None,
     pipeline_proposals: list[Mapping[str, object]] | None = None,
+    *,
+    is_separate_reviewer_required: bool = False,
 ) -> tuple[GovernedReleaseWorkflowService, _Ontology, _Pipelines]:
     ontology = _Ontology(ontology_proposals or [])
     pipelines = _Pipelines(pipeline_proposals)
-    return GovernedReleaseWorkflowService(ontology=ontology, pipelines=pipelines), ontology, pipelines
+    return (
+        GovernedReleaseWorkflowService(
+            ontology=ontology,
+            pipelines=pipelines,
+            is_separate_reviewer_required=is_separate_reviewer_required,
+        ),
+        ontology,
+        pipelines,
+    )
 
 
 def _reviewer() -> RequestContext:
@@ -341,4 +351,51 @@ def test_reviewer_claim_is_self_only_allows_submitter_and_blocks_reassignment() 
         service.assign_reviewer(
             _reviewer(),
             {"releaseKind": "ontology", "proposalId": "assigned", "idempotencyKey": "claim-3"},
+        )
+
+
+@pytest.mark.parametrize("release_kind", ["ontology", "pipeline"])
+def test_protected_inbox_hides_author_proposals_and_rejects_direct_self_claim(release_kind: str) -> None:
+    ontology_proposals = [
+        {
+            "id": "own",
+            "status": "submitted",
+            "submittedByUserId": "reviewer-1",
+            "assigneeUserId": None,
+        },
+        {
+            "id": "other-author",
+            "status": "submitted",
+            "submittedByUserId": "author-2",
+            "assigneeUserId": None,
+        },
+    ]
+    pipeline_proposals = [
+        {
+            "id": "own",
+            "status": "submitted",
+            "createdBy": "reviewer-1",
+            "assignedTo": None,
+        },
+        {
+            "id": "other-author",
+            "status": "submitted",
+            "createdBy": "author-2",
+            "assignedTo": None,
+        },
+    ]
+    service, _, _ = _service(
+        ontology_proposals=ontology_proposals,
+        pipeline_proposals=pipeline_proposals,
+        is_separate_reviewer_required=True,
+    )
+
+    view = service.list_inbox(_reviewer(), {"releaseKind": release_kind})
+
+    assert [item["id"] for item in _inbox_items(view)] == ["other-author"]
+    assert _mapping(view["candidate"])["reviewPolicy"]["requiresSeparateReviewer"] is True
+    with pytest.raises(PermissionDenied, match="reviewer other than"):
+        service.assign_reviewer(
+            _reviewer(),
+            {"releaseKind": release_kind, "proposalId": "own", "idempotencyKey": "claim-own"},
         )

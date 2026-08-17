@@ -38,7 +38,8 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
     minio_user = "foundryqa"
     minio_password = secrets.token_urlsafe(36)
     keycloak_admin_password = secrets.token_urlsafe(36)
-    keycloak_qa_password = secrets.token_urlsafe(24)
+    keycloak_author_password = secrets.token_urlsafe(24)
+    keycloak_reviewer_password = secrets.token_urlsafe(24)
     database_url = _database_url(postgres_password)
     application = {
         "FOUNDRY_LITE_DB_URL": database_url,
@@ -61,14 +62,16 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
         "GRAFANA_ADMIN_PASSWORD": secrets.token_urlsafe(36),
         "KEYCLOAK_ADMIN": "foundry-qa-admin",
         "KEYCLOAK_ADMIN_PASSWORD": keycloak_admin_password,
-        "KEYCLOAK_QA_USER": "sean1234",
-        "KEYCLOAK_QA_USER_PASSWORD": keycloak_qa_password,
+        "KEYCLOAK_QA_AUTHOR_USER": "sean1234-author",
+        "KEYCLOAK_QA_AUTHOR_USER_PASSWORD": keycloak_author_password,
+        "KEYCLOAK_QA_REVIEWER_USER": "sean1234-reviewer",
+        "KEYCLOAK_QA_REVIEWER_USER_PASSWORD": keycloak_reviewer_password,
     }
     _apply_secret(args, "foundry-lite-application", application)
     _apply_secret(args, "foundry-lite-qa-dependencies", dependencies)
     _apply_secret(args, "foundry-lite-backup-age", {"recipient": recipient})
     _apply_registry_secret(args, "foundry-lite-ghcr", registry_config)
-    _write_keycloak_login(keycloak_qa_password)
+    _write_keycloak_logins(keycloak_author_password, keycloak_reviewer_password)
     return _receipt("created")
 
 
@@ -177,12 +180,14 @@ def _recipient(path: str) -> str:
     return value
 
 
-def _write_keycloak_login(password: str) -> None:
-    path = QA_ROOT / "state" / "keycloak-qa-login.txt"
+def _write_keycloak_logins(author_password: str, reviewer_password: str) -> None:
+    path = QA_ROOT / "state" / "keycloak-qa-principals.txt"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write("username=sean1234\n")
-        stream.write(f"password={password}\n")
+        stream.write("author_username=sean1234-author\n")
+        stream.write(f"author_password={author_password}\n")
+        stream.write("reviewer_username=sean1234-reviewer\n")
+        stream.write(f"reviewer_password={reviewer_password}\n")
 
 
 def _kubectl(args: argparse.Namespace, operation: tuple[str, ...]) -> tuple[str, ...]:

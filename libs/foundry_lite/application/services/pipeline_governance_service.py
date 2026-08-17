@@ -11,6 +11,7 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineRepository,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_graph_model import validate_pipeline_graph
 from foundry_lite.application.services.pipeline_payloads import (
@@ -48,11 +49,12 @@ _RESOURCE_TYPE = "pipeline_proposal"
 class PipelineGovernanceService(CoreService):
     """Review workflow for Pipeline Builder branches."""
 
-    required_dependencies = ("engine", "policy", "pipeline_repository", "runtime_repository")
+    required_dependencies = ("engine", "policy", "profile", "pipeline_repository", "runtime_repository")
     required_collaborators = ("runtime_service",)
     pipeline_repository: PipelineRepository
     runtime_repository: RuntimeRepository
     runtime_service: RuntimeEvidenceBoundary
+    profile: RuntimeProfile
 
     def propose_branch(
         self,
@@ -146,6 +148,7 @@ class PipelineGovernanceService(CoreService):
         assignee = required_text(assignee_user_id, "assigneeUserId")
         with self.engine.begin() as conn:
             before = self._require_proposal(conn, ctx, proposal_id)
+            self._require_distinct_reviewer(before, assignee)
             if before["assigned_to"] == assignee and before["status"] in {"submitted", "in_review"}:
                 return self._proposal_view(conn, ctx, before)
             after = self.pipeline_repository.update_proposal_assignment(
@@ -179,16 +182,15 @@ class PipelineGovernanceService(CoreService):
         status = decision_status(decision)
         with self.engine.begin() as conn:
             before = self._require_proposal(conn, ctx, proposal_id)
-            if is_decision_replay(before, ctx, status, decision, comment):
+            if self._is_decision_replay(before, ctx, status, decision, comment):
                 return self._proposal_view(conn, ctx, before)
             require_proposal_status(before, ("submitted", "in_review"))
-            require_assigned_reviewer(before, ctx)
-            if status == "approved":
-                self._require_fresh_proposal(conn, ctx, before)
-                require_approvable_change_diff(
-                    proposal_change_diff(before["description"], str(before["graph_fingerprint"]))
-                )
-                require_approvable_test_receipt(self._test_receipt(conn, ctx, before))
+            require_assigned_reviewer(
+                before,
+                ctx,
+                is_separate_reviewer_required=self.profile.is_protected,
+            )
+            self._require_approvable_decision(conn, ctx, before, status)
             after = self.pipeline_repository.update_proposal_decision(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -203,6 +205,38 @@ class PipelineGovernanceService(CoreService):
                 self._raise_proposal_conflict(conn, ctx, proposal_id)
             self._audit(conn, ctx, status, after, before=before)
             return self._proposal_view(conn, ctx, after)
+
+    def _require_approvable_decision(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        proposal: PipelineProposalRow,
+        status: str,
+    ) -> None:
+        if status != "approved":
+            return
+        self._require_fresh_proposal(conn, ctx, proposal)
+        require_approvable_change_diff(
+            proposal_change_diff(proposal["description"], str(proposal["graph_fingerprint"]))
+        )
+        require_approvable_test_receipt(self._test_receipt(conn, ctx, proposal))
+
+    def _is_decision_replay(
+        self,
+        proposal: PipelineProposalRow,
+        ctx: RequestContext,
+        status: str,
+        decision: str,
+        comment: str | None,
+    ) -> bool:
+        return is_decision_replay(
+            proposal,
+            ctx,
+            status,
+            decision,
+            comment,
+            is_separate_reviewer_required=self.profile.is_protected,
+        )
 
     def execute_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         ctx = ctx or RequestContext()
@@ -268,7 +302,11 @@ class PipelineGovernanceService(CoreService):
             resource_type=_RESOURCE_TYPE,
             resource_id=str(proposal["id"]),
         )
-        if not has_execution_approval(proposal, event):
+        if not has_execution_approval(
+            proposal,
+            event,
+            is_separate_reviewer_required=self.profile.is_protected,
+        ):
             raise PermissionDenied(
                 "pipeline proposal lacks assigned human-reviewer approval evidence",
                 details={"proposalId": proposal["id"]},
@@ -396,10 +434,13 @@ class PipelineGovernanceService(CoreService):
         stale_reasons = self._proposal_stale_reasons(conn, ctx, proposal)
         payload["isStale"] = bool(stale_reasons)
         payload["staleReasons"] = stale_reasons
-        payload["canCurrentUserReview"] = proposal["assigned_to"] == ctx.actor_user_id
+        is_author_assignee = proposal["assigned_to"] == proposal["created_by"]
+        payload["canCurrentUserReview"] = proposal["assigned_to"] == ctx.actor_user_id and not (
+            self.profile.is_protected and is_author_assignee
+        )
         payload["reviewPolicy"] = {
             "requiresAssignment": True,
-            "requiresSeparateReviewer": False,
+            "requiresSeparateReviewer": self.profile.is_protected,
             "blocksStaleProposal": True,
         }
         review_evidence = proposal_change_diff(proposal["description"], str(proposal["graph_fingerprint"]))
@@ -407,6 +448,13 @@ class PipelineGovernanceService(CoreService):
         payload["diffCompleteness"] = review_evidence.get("completeness")
         payload["testReceipt"] = self._test_receipt(conn, ctx, proposal)
         return payload
+
+    def _require_distinct_reviewer(self, proposal: PipelineProposalRow, reviewer_user_id: str) -> None:
+        if self.profile.is_protected and reviewer_user_id == proposal["created_by"]:
+            raise PermissionDenied(
+                "protected pipeline releases require a reviewer other than the proposal author",
+                details={"proposalId": proposal["id"]},
+            )
 
     def _test_receipt(
         self,

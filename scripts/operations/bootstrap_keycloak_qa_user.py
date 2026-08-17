@@ -1,4 +1,4 @@
-"""Idempotently bootstrap the private QA user without exposing credentials in Helm."""
+"""Idempotently bootstrap distinct private QA release principals."""
 
 from __future__ import annotations
 
@@ -13,26 +13,44 @@ from collections.abc import Mapping
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _REALM = "foundry-lite"
 _ROLES = ("admin", "data_engineer", "ops_manager", "finance", "reviewer")
+_QA_PRINCIPALS = (
+    ("author", "KEYCLOAK_QA_AUTHOR_USER", "KEYCLOAK_QA_AUTHOR_USER_PASSWORD"),
+    ("reviewer", "KEYCLOAK_QA_REVIEWER_USER", "KEYCLOAK_QA_REVIEWER_USER_PASSWORD"),
+)
 
 
 def bootstrap(base_url: str, environment: Mapping[str, str] = os.environ) -> dict[str, object]:
     origin = _validated_origin(base_url)
     admin = _required(environment, "KEYCLOAK_ADMIN")
     admin_password = _required(environment, "KEYCLOAK_ADMIN_PASSWORD")
-    username = _required(environment, "KEYCLOAK_QA_USER")
-    password = _required(environment, "KEYCLOAK_QA_USER_PASSWORD")
+    principals = [
+        (role, _required(environment, user_key), _required(environment, password_key))
+        for role, user_key, password_key in _QA_PRINCIPALS
+    ]
+    if len({username for _, username, _ in principals}) != len(principals):
+        raise ValueError("keycloak_bootstrap_principals_must_be_distinct")
     token = _admin_token(origin, admin, admin_password)
+    results = [_bootstrap_principal(origin, token, role, username, password) for role, username, password in principals]
+    return {
+        "schemaVersion": 2,
+        "status": "created" if any(result["status"] == "created" for result in results) else "updated",
+        "realm": _REALM,
+        "principals": results,
+        "distinctSubjectsRequired": True,
+        "passwordStoredInReceipt": False,
+        "tokenStoredInReceipt": False,
+    }
+
+
+def _bootstrap_principal(origin: str, token: str, role: str, username: str, password: str) -> dict[str, object]:
     user_id, was_created = _ensure_user(origin, token, username)
     _reset_password(origin, token, user_id, password)
     _assign_roles(origin, token, user_id)
     return {
-        "schemaVersion": 1,
-        "status": "created" if was_created else "updated",
-        "realm": _REALM,
+        "role": role,
         "username": username,
+        "status": "created" if was_created else "updated",
         "roles": list(_ROLES),
-        "passwordStoredInReceipt": False,
-        "tokenStoredInReceipt": False,
     }
 
 
