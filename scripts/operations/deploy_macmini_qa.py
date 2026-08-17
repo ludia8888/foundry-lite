@@ -122,6 +122,7 @@ def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Pa
         {
             "api": {"replicas": 0},
             "web": {"replicas": 0},
+            "runtimePersistence": {"enabled": False},
             "executionBroker": {"enabled": False},
             "releaseController": {"enabled": False},
             "migrations": {"enabled": False},

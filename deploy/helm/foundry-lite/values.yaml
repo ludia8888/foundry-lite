@@ -182,4 +182,5 @@ backup:
   evidencePvcSize: 10Gi
 
 runtimePersistence:
+  enabled: true
   size: 5Gi

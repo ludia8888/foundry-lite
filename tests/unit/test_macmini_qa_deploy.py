@@ -64,6 +64,7 @@ def test_foundation_phase_disables_application_until_migration(tmp_path: Path, m
     assert immutable["global"]["revision"] == "a" * 40
     assert phase["api"]["replicas"] == 0
     assert phase["web"]["replicas"] == 0
+    assert phase["runtimePersistence"]["enabled"] is False
     assert phase["migrations"]["enabled"] is False
     assert all(not config["enabled"] for config in phase["workers"].values())
     assert override.stat().st_mode & 0o077 == 0

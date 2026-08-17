@@ -180,6 +180,14 @@ def test_keycloak_waits_for_postgresql_before_starting() -> None:
     assert 'args: [--host, {{ include "foundry-lite.fullname" . }}-postgresql, --port, "5432"' in keycloak
 
 
+def test_runtime_pvc_can_be_deferred_until_a_consumer_exists() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    runtime_pvc = (ROOT / "deploy/helm/foundry-lite/templates/runtime-pvc.yaml").read_text(encoding="utf-8")
+
+    assert values["runtimePersistence"]["enabled"] is True
+    assert runtime_pvc.startswith("{{- if .Values.runtimePersistence.enabled }}")
+
+
 def _copy_gate_tree(target: Path) -> None:
     for relative in REQUIRED_PATHS:
         source = ROOT / relative
