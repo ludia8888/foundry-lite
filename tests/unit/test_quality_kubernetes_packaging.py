@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from scripts.quality.check_kubernetes_packaging import REQUIRED_PATHS, ROOT, collect_findings, main
+from scripts.quality.check_kubernetes_packaging import REQUIRED_PATHS, ROOT, _is_digest_image, collect_findings, main
 
 
 def test_kubernetes_packaging_gate_accepts_current_protected_chart() -> None:
@@ -25,6 +25,12 @@ def test_kubernetes_packaging_gate_rejects_mutable_dependency_image(tmp_path: Pa
     findings = collect_findings(tmp_path)
 
     assert any(item.code == "mutable_dependency_image" and item.detail == "postgresql" for item in findings)
+
+
+def test_digest_image_parser_rejects_oversized_adversarial_repository() -> None:
+    value = "!/" * 100_000 + "image@sha256:" + "a" * 64
+
+    assert _is_digest_image(value) is False
 
 
 def test_kubernetes_packaging_gate_rejects_api_secret_permission(tmp_path: Path) -> None:

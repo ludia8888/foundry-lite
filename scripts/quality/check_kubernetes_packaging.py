@@ -58,8 +58,9 @@ REQUIRED_PATHS = (
     Path("apps/worker/foundry_lite_worker/outbox_publisher.py"),
     Path("apps/worker/foundry_lite_worker/source_scheduler.py"),
 )
-_DIGEST_IMAGE = re.compile(r"^[^\s:@]+(?:/[^\s:@]+)+@sha256:[0-9a-f]{64}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IMAGE_COMPONENT_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
+_IMAGE_EDGE_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789")
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +113,7 @@ def _values_findings(root: Path) -> list[KubernetesPackagingFinding]:
         "keycloak",
     ):
         image = _mapping(dependencies.get(name)).get("image")
-        if not isinstance(image, str) or not _DIGEST_IMAGE.fullmatch(image):
+        if not isinstance(image, str) or not _is_digest_image(image):
             findings.append(_finding("mutable_dependency_image", path, name))
     images = _mapping(_yaml_mapping(root / (CHART_ROOT / "values.ci.yaml")).get("images"))
     for name in ("api", "web", "controller", "codeExecution", "nodeCodeExecution", "trainedModel"):
@@ -122,6 +123,24 @@ def _values_findings(root: Path) -> list[KubernetesPackagingFinding]:
     if dependencies.get("enabled") is not False:
         findings.append(_finding("qa_dependencies_default_on", path, "generic chart must use external infrastructure"))
     return findings
+
+
+def _is_digest_image(value: str) -> bool:
+    if len(value) > 2048 or value.count("@") != 1:
+        return False
+    repository, digest = value.split("@", 1)
+    components = repository.split("/")
+    if not _DIGEST.fullmatch(digest) or len(components) < 2:
+        return False
+    return all(_is_image_component(component) for component in components)
+
+
+def _is_image_component(value: str) -> bool:
+    if not value or len(value) > 128:
+        return False
+    if value[0] not in _IMAGE_EDGE_CHARACTERS or value[-1] not in _IMAGE_EDGE_CHARACTERS:
+        return False
+    return all(character in _IMAGE_COMPONENT_CHARACTERS for character in value)
 
 
 def _dockerfile_findings(root: Path) -> list[KubernetesPackagingFinding]:
