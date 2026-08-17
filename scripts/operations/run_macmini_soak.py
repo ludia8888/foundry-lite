@@ -33,6 +33,7 @@ class SoakMetrics:
     availability: float
     unexpected_restarts: int
     unexpected_replacements: int
+    business_executions: int
     business_failures: int
     oom_count: int
     memory_percent: int | float
@@ -48,6 +49,7 @@ class SoakMetrics:
             all(value >= 0.999 for value in self.probe_availability.values()),
             self.unexpected_restarts == 0,
             self.unexpected_replacements == 0,
+            self.business_executions > 0,
             self.business_failures == 0,
             self.oom_count == 0,
             self.memory_percent < 85,
@@ -156,13 +158,62 @@ def _business_probe(command_json: str, timeout_seconds: float) -> dict[str, obje
         )
     except (OSError, subprocess.TimeoutExpired):
         return {"status": "failed", "reason": "unavailable_or_timeout"}
+    receipt = _safe_business_receipt(result.stdout)
     return {
-        "status": "passed" if result.returncode == 0 else "failed",
+        "status": "passed" if result.returncode == 0 and receipt is not None else "failed",
         "returnCode": result.returncode,
         "durationMs": int((time.monotonic() - started) * 1000),
         "stdoutSha256": "sha256:" + hashlib.sha256(result.stdout).hexdigest(),
         "stderrSha256": "sha256:" + hashlib.sha256(result.stderr).hexdigest(),
+        "receipt": receipt,
     }
+
+
+def _safe_business_receipt(raw: bytes) -> dict[str, object] | None:
+    if not raw or len(raw) > 64 * 1024:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schemaVersion") != 1 or payload.get("status") != "passed":
+        return None
+    receipt: dict[str, object] = {key: payload.get(key) for key in _business_receipt_fields()}
+    if not _valid_business_receipt(receipt):
+        return None
+    return receipt
+
+
+def _business_receipt_fields() -> tuple[str, ...]:
+    return (
+        "schemaVersion",
+        "status",
+        "observedAt",
+        "actionRunId",
+        "idempotentReplay",
+        "materializationVersionId",
+        "materializationRowCount",
+        "objectVersion",
+        "datasetPreviewMatched",
+        "objectQueryMatched",
+    )
+
+
+def _valid_business_receipt(receipt: Mapping[str, object]) -> bool:
+    text_fields = ("observedAt", "actionRunId", "materializationVersionId")
+    boolean_fields = ("idempotentReplay", "datasetPreviewMatched", "objectQueryMatched")
+    integer_fields = ("materializationRowCount", "objectVersion")
+    return (
+        receipt.get("schemaVersion") == 1
+        and receipt.get("status") == "passed"
+        and all(isinstance(receipt.get(field), str) and 0 < len(str(receipt[field])) <= 200 for field in text_fields)
+        and all(receipt.get(field) is True for field in boolean_fields)
+        and all(_is_positive_integer(receipt.get(field)) for field in integer_fields)
+    )
+
+
+def _is_positive_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _kubectl_json(
@@ -230,7 +281,9 @@ def _summarize(
         "availabilityByProbe": metrics.probe_availability,
         "maximumObservedRestartCount": metrics.unexpected_restarts,
         "unexpectedPodReplacementCount": metrics.unexpected_replacements,
+        "businessProbeExecutions": metrics.business_executions,
         "businessProbeFailures": metrics.business_failures,
+        "lastBusinessProbeReceipt": _last_business_receipt(eligible),
         "oomCount": metrics.oom_count,
         "maximumNodeMemoryPercent": metrics.memory_percent,
         "maximumNodeDiskPercent": metrics.disk_percent,
@@ -254,6 +307,7 @@ def _soak_metrics(
         availability=available / len(probe_results) if probe_results else 0.0,
         unexpected_restarts=_unexpected_restart_increments(samples, fault_windows),
         unexpected_replacements=_unexpected_pod_replacements(samples, fault_windows),
+        business_executions=_business_probe_executions(eligible),
         business_failures=_business_probe_failures(eligible),
         oom_count=_maximum_pod_value(samples, "oomCount"),
         memory_percent=_maximum_section_value(samples, "nodeMetrics", "memoryPercent"),
@@ -266,6 +320,18 @@ def _soak_metrics(
 
 def _business_probe_failures(samples: list[dict[str, object]]) -> int:
     return sum(1 for sample in samples if _business_probe_failed(sample))
+
+
+def _business_probe_executions(samples: list[dict[str, object]]) -> int:
+    return sum(1 for sample in samples if isinstance(sample.get("businessProbe"), dict))
+
+
+def _last_business_receipt(samples: list[dict[str, object]]) -> dict[str, object] | None:
+    for sample in reversed(samples):
+        probe = sample.get("businessProbe")
+        if isinstance(probe, dict) and isinstance(probe.get("receipt"), dict):
+            return probe["receipt"]
+    return None
 
 
 def _business_probe_failed(sample: dict[str, object]) -> bool:

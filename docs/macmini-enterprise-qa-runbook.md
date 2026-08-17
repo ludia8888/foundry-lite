@@ -70,6 +70,18 @@ Funnel을 열기 전에 tailnet에서 다음을 모두 실제 배포에 대해 �
 
 HTTP 200만으로 합격시키지 않는다. DB transaction, dataset/object version, action run, audit/outbox, downstream 결과 hash를 함께 대조한다.
 
+현재 실행처럼 Tailscale 장비 owner가 `sean1234`가 아니라면 Serve/Funnel을 변경하지 않는다. 이 경우 SSH 세션 안에서 API NodePort `http://127.0.0.1:30443`과 Web NodePort `http://127.0.0.1:30444`를 사용해 내부 폐루프를 검증하고, 공개 hosted 단계는 `blocked`로 기록한다. 이는 제품 실패가 아니라 다른 사용자의 네트워크 설정을 건드리지 않기 위한 안전 경계다.
+
+24시간 검증용 전용 객체와 Action은 실제 배포 API를 통해 한 번 bootstrap한다. 이 명령은 CSV Source commit, Ontology activation, Object reindex, Object query, Action 실행과 동일 요청 replay, Action Log materialization과 Dataset preview를 수행하고 이후 replay에 필요한 정확한 초기 object version을 `0600` config에 고정한다.
+
+```bash
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_business_probe.py \
+  bootstrap --base-url http://127.0.0.1:30443 \
+  --config /Users/sean1234/foundry-qa/state/business-probe.json
+```
+
+외부 OIDC 단계에서는 같은 명령에 `--bearer-token-file /Users/sean1234/foundry-qa/state/operator-token`을 추가한다. token 파일은 `0600`이어야 하며 token 원문은 stdout, config, 소크 sample, 최종 summary 어디에도 기록하지 않는다.
+
 ## 6. Keycloak과 hosted ChatGPT
 
 1차 내장 OAuth 검증 뒤 2차 Keycloak issuer로 바꾼다. Keycloak QA realm은 Authorization Code, PKCE S256, consent, public DCR, HTTPS ChatGPT/OpenAI redirect host, client ceiling과 protocol-mapper 제한을 적용한다.
@@ -116,16 +128,19 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
   --run-id "$RUN_ID" \
   --kubeconfig /Users/sean1234/.colima/foundry-qa/kubeconfig \
   --duration-seconds 86400 --interval-seconds 60 \
-  --probe healthz=https://FOUNDRY_TAILNET_HOST/healthz \
-  --probe readyz=https://FOUNDRY_TAILNET_HOST/readyz \
-  --probe osdk=https://FOUNDRY_TAILNET_HOST/api/objects/health-probe
+  --probe healthz=http://127.0.0.1:30443/healthz \
+  --probe readyz=http://127.0.0.1:30443/readyz \
+  --business-probe-every 5 \
+  --business-probe-command-json \
+  '["/Users/sean1234/foundry-qa/bin/uv","run","python","scripts/operations/run_macmini_business_probe.py","probe","--config","/Users/sean1234/foundry-qa/state/business-probe.json"]'
 ```
 
-실제 endpoint와 authenticated OSDK business probe는 배포 영수증에서 정한 값으로 치환한다. probe별 availability를 따로 계산하며 하나의 성공 probe가 다른 실패를 숨길 수 없다. 선언된 fault window는 baseline을 재설정하지만 그 밖의 restart 증가나 장기 Pod replacement는 실패다.
+Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승인된 tailnet URL로 치환한다. 소크는 business probe의 종료 코드뿐 아니라 secret-free JSON receipt도 검증한다. receipt에는 동일 `actionRunId`, `idempotentReplay=true`, materialization version/row count, Dataset preview 및 Object query 일치만 남기고 원문 데이터·parameter·token은 제외한다. probe별 availability를 따로 계산하며 하나의 성공 probe가 다른 실패를 숨길 수 없다. 선언된 fault window는 baseline을 재설정하지만 그 밖의 restart 증가나 장기 Pod replacement는 실패다.
 
 Acceptance는 다음과 같다.
 
 - 선언된 장애 구간 밖 각 API/OSDK probe availability 99.9% 이상
+- business probe 실행 1회 이상, 실패 0, 마지막 Action replay·materialization·Object query receipt 모두 일치
 - OOM 0, 예상 밖 restart/replacement 0
 - committed 데이터 손실·중복 0
 - node memory 85% 미만, disk 80% 미만
