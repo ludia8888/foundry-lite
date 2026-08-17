@@ -230,7 +230,7 @@ GOVERNED_RELEASE_TOOLS = (
     ),
     GovernedReleaseToolSpec(
         "assign_release_reviewer",
-        "Claim one unassigned proposal as the current human reviewer; the proposal author may self-claim.",
+        "Claim one unassigned proposal as the current human reviewer; protected releases reject author self-claim.",
         _assign_schema(),
         False,
         True,

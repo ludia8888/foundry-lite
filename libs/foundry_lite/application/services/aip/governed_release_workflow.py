@@ -83,15 +83,18 @@ class GovernedReleaseWorkflowService:
     required_collaborators: tuple[str, ...] = ()
     ontology: OntologyReleaseWorkflowBoundary
     pipelines: PipelineReleaseWorkflowBoundary
+    is_separate_reviewer_required: bool
 
     def __init__(
         self,
         *,
         ontology: OntologyReleaseWorkflowBoundary,
         pipelines: PipelineReleaseWorkflowBoundary,
+        is_separate_reviewer_required: bool = False,
     ) -> None:
         self.ontology = ontology
         self.pipelines = pipelines
+        self.is_separate_reviewer_required = is_separate_reviewer_required
 
     def open_workspace(self, ctx: RequestContext, arguments: JsonObject) -> dict[str, object]:
         del ctx
@@ -120,16 +123,34 @@ class GovernedReleaseWorkflowService:
         kind = _release_kind(arguments)
         limit = _bounded_limit(arguments.get("limit"))
         proposals = self._reviewable_proposals(ctx, kind, limit)
-        items = [_inbox_item(kind, proposal, ctx) for proposal in proposals]
+        items = [
+            _inbox_item(
+                kind,
+                proposal,
+                ctx,
+                is_separate_reviewer_required=self.is_separate_reviewer_required,
+            )
+            for proposal in proposals
+        ]
         selected = next((item for item in items if item["canCurrentUserReview"] is True), None)
         selected = selected or next((item for item in items if item["canCurrentUserClaim"] is True), None)
-        return _inbox_view(kind, items, selected)
+        return _inbox_view(
+            kind,
+            items,
+            selected,
+            is_separate_reviewer_required=self.is_separate_reviewer_required,
+        )
 
     def assign_reviewer(self, ctx: RequestContext, arguments: JsonObject) -> dict[str, object]:
         kind = _release_kind(arguments)
         proposal_id = _required_text(arguments, "proposalId")
         proposal = self._proposal(ctx, kind, proposal_id)
-        _require_claimable(proposal, kind, ctx)
+        _require_claimable(
+            proposal,
+            kind,
+            ctx,
+            is_separate_reviewer_required=self.is_separate_reviewer_required,
+        )
         if kind == "ontology":
             return self.ontology.assign_proposal(
                 proposal_id,
@@ -167,7 +188,12 @@ class GovernedReleaseWorkflowService:
         if kind == "ontology":
             return self._visible_ontology_proposals(ctx, status, limit)
         payload = self.pipelines.list_proposals(status=status, limit=_PIPELINE_INBOX_SCAN_LIMIT, ctx=ctx)
-        return _visible_items(payload, kind, ctx)[:limit]
+        return _visible_items(
+            payload,
+            kind,
+            ctx,
+            is_separate_reviewer_required=self.is_separate_reviewer_required,
+        )[:limit]
 
     def _visible_ontology_proposals(
         self,
@@ -184,7 +210,14 @@ class GovernedReleaseWorkflowService:
                 limit=_INBOX_SCAN_PAGE_SIZE,
                 ctx=ctx,
             )
-            visible.extend(_visible_items(payload, "ontology", ctx))
+            visible.extend(
+                _visible_items(
+                    payload,
+                    "ontology",
+                    ctx,
+                    is_separate_reviewer_required=self.is_separate_reviewer_required,
+                )
+            )
             cursor = _next_cursor(payload)
             if len(visible) >= limit or cursor is None:
                 break
@@ -227,8 +260,23 @@ def _items(payload: JsonObject) -> list[Mapping[str, object]]:
     return [row for row in value if isinstance(row, Mapping)] if isinstance(value, list) else []
 
 
-def _visible_items(payload: JsonObject, kind: str, ctx: RequestContext) -> list[Mapping[str, object]]:
-    return [row for row in _items(payload) if _is_visible_review_handoff(row, kind, ctx)]
+def _visible_items(
+    payload: JsonObject,
+    kind: str,
+    ctx: RequestContext,
+    *,
+    is_separate_reviewer_required: bool,
+) -> list[Mapping[str, object]]:
+    return [
+        row
+        for row in _items(payload)
+        if _is_visible_review_handoff(
+            row,
+            kind,
+            ctx,
+            is_separate_reviewer_required=is_separate_reviewer_required,
+        )
+    ]
 
 
 def _next_cursor(payload: JsonObject) -> str | None:
@@ -289,12 +337,26 @@ def _review_identity(proposal: JsonObject, kind: str) -> tuple[object, object]:
     return proposal.get("createdBy"), proposal.get("assignedTo")
 
 
-def _is_visible_review_handoff(proposal: JsonObject, kind: str, ctx: RequestContext) -> bool:
-    _, assignee = _review_identity(proposal, kind)
+def _is_visible_review_handoff(
+    proposal: JsonObject,
+    kind: str,
+    ctx: RequestContext,
+    *,
+    is_separate_reviewer_required: bool,
+) -> bool:
+    submitter, assignee = _review_identity(proposal, kind)
+    if is_separate_reviewer_required and submitter == ctx.actor_user_id:
+        return False
     return assignee is None or assignee == ctx.actor_user_id
 
 
-def _inbox_item(kind: str, proposal: JsonObject, ctx: RequestContext) -> dict[str, object]:
+def _inbox_item(
+    kind: str,
+    proposal: JsonObject,
+    ctx: RequestContext,
+    *,
+    is_separate_reviewer_required: bool,
+) -> dict[str, object]:
     submitter, assignee = _review_identity(proposal, kind)
     fingerprint = proposal.get("fingerprint") if kind == "ontology" else proposal.get("graphFingerprint")
     return {
@@ -311,7 +373,7 @@ def _inbox_item(kind: str, proposal: JsonObject, ctx: RequestContext) -> dict[st
         "canCurrentUserReview": assignee == ctx.actor_user_id,
         "reviewPolicy": {
             "requiresAssignment": True,
-            "requiresSeparateReviewer": False,
+            "requiresSeparateReviewer": is_separate_reviewer_required,
             "blocksStaleProposal": True,
         },
     }
@@ -321,12 +383,17 @@ def _inbox_view(
     kind: str,
     items: list[dict[str, object]],
     selected: dict[str, object] | None,
+    *,
+    is_separate_reviewer_required: bool,
 ) -> dict[str, object]:
     candidate = selected or {
         "id": "empty-inbox",
         "title": "검토할 제안이 없습니다",
         "description": "미배정 또는 나에게 배정된 검토 가능 제안만 표시됩니다.",
-        "reviewPolicy": {"requiresAssignment": True, "requiresSeparateReviewer": False},
+        "reviewPolicy": {
+            "requiresAssignment": True,
+            "requiresSeparateReviewer": is_separate_reviewer_required,
+        },
     }
     can_review = candidate.get("canCurrentUserReview") is True
     can_claim = candidate.get("canCurrentUserClaim") is True
@@ -342,8 +409,16 @@ def _inbox_view(
     }
 
 
-def _require_claimable(proposal: JsonObject, kind: str, ctx: RequestContext) -> None:
-    _, assignee = _review_identity(proposal, kind)
+def _require_claimable(
+    proposal: JsonObject,
+    kind: str,
+    ctx: RequestContext,
+    *,
+    is_separate_reviewer_required: bool,
+) -> None:
+    submitter, assignee = _review_identity(proposal, kind)
+    if is_separate_reviewer_required and submitter == ctx.actor_user_id:
+        raise PermissionDenied("protected releases require a reviewer other than the proposal author")
     if assignee not in {None, ctx.actor_user_id}:
         raise PermissionDenied("proposal is assigned to another human reviewer")
 

@@ -138,6 +138,58 @@ def test_loader_builds_frozen_server_claims_and_repeatable_database_fingerprint(
     assert runtime.calls[0][1:] == (("governed_release.action.succeeded",), 33)
 
 
+def test_loader_rejects_submitter_reviewer_subject_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        globals(),
+        "_principal",
+        lambda tool: (SUBMITTER, SUBMITTER_SESSION if tool == "publish_release_candidate" else REVIEWER_SESSION),
+    )
+    loader, _, _, _, workflow_ids = _harness()
+
+    with pytest.raises(ConflictDetected) as raised:
+        _load(loader, workflow_ids)
+
+    assert raised.value.details == {"reason": "action_submitter_reviewer_subject_overlap"}
+
+
+def test_loader_rejects_submitter_reviewer_oauth_session_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        globals(),
+        "_principal",
+        lambda tool: (SUBMITTER if tool == "publish_release_candidate" else REVIEWER, SUBMITTER_SESSION),
+    )
+    loader, _, _, _, workflow_ids = _harness()
+
+    with pytest.raises(ConflictDetected) as raised:
+        _load(loader, workflow_ids)
+
+    assert raised.value.details == {"reason": "action_submitter_reviewer_oauth_session_overlap"}
+
+
+def test_loader_rejects_submitter_reviewer_mcp_session_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = _binding
+
+    def shared_session_binding(
+        kind: str,
+        proposal_id: str,
+        tool: str,
+        actor: str,
+        oauth_session: str,
+        started: datetime,
+    ) -> dict[str, object]:
+        binding = original(kind, proposal_id, tool, actor, oauth_session, started)
+        binding["sessionId"] = "mcp-shared"
+        return binding
+
+    monkeypatch.setitem(globals(), "_binding", shared_session_binding)
+    loader, _, _, _, workflow_ids = _harness()
+
+    with pytest.raises(ConflictDetected) as raised:
+        _load(loader, workflow_ids)
+
+    assert raised.value.details == {"reason": "action_submitter_reviewer_mcp_session_overlap"}
+
+
 def test_duplicate_succeeded_audit_correlation_fails_closed() -> None:
     loader, _, _, runtime, workflow_ids = _harness()
     duplicate = dict(runtime.audits[0])

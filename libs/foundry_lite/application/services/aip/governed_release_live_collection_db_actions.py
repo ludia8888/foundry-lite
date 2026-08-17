@@ -69,6 +69,14 @@ def require_action_identities(values: Sequence[LoadedActionLedger]) -> None:
     reviewers = _role_identities(values, is_submitter=False)
     if len(submitters) != 1 or len(reviewers) != 1:
         conflict("action_principal_role_mismatch")
+    submitter = next(iter(submitters))
+    reviewer = next(iter(reviewers))
+    if submitter[0] == reviewer[0]:
+        conflict("action_submitter_reviewer_subject_overlap")
+    if submitter[1] == reviewer[1]:
+        conflict("action_submitter_reviewer_oauth_session_overlap")
+    if _role_mcp_sessions(values, is_submitter=True) & _role_mcp_sessions(values, is_submitter=False):
+        conflict("action_submitter_reviewer_mcp_session_overlap")
 
 
 def _role_identities(
@@ -78,6 +86,14 @@ def _role_identities(
 ) -> set[tuple[str, str]]:
     return {
         (value.claim.actor_subject_hash, value.claim.oauth_session_hash)
+        for value in values
+        if (value.claim.tool_name == "publish_release_candidate") is is_submitter
+    }
+
+
+def _role_mcp_sessions(values: Sequence[LoadedActionLedger], *, is_submitter: bool) -> set[str]:
+    return {
+        value.claim.mcp_session_id
         for value in values
         if (value.claim.tool_name == "publish_release_candidate") is is_submitter
     }

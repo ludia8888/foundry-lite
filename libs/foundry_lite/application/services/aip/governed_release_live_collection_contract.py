@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from foundry_lite.application.services.aip import governed_release_principal_policy
+
 ReleaseKind = Literal["ontology", "pipeline"]
 ReleaseTool = str
 DeliveryOperation = Literal["source_publish", "source_merge", "application_deploy", "application_rollback"]
@@ -217,6 +219,7 @@ def _context_blockers(claim: ServerLoadedCollectionClaim) -> tuple[str, ...]:
     )
     if not _hashes(*identity_hashes) or not claim.is_authorization_code_human_grant:
         blockers.append("issuer_authoritative_human_grants_required")
+    blockers.extend(governed_release_principal_policy.separation_blockers(claim))
     return tuple(blockers)
 
 

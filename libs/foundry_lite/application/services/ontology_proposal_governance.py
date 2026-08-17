@@ -18,7 +18,25 @@ def require_decidable(row: InsightReviewRow) -> None:
         )
 
 
-def require_assigned_decider(row: InsightReviewRow, ctx: RequestContext) -> None:
+def require_distinct_reviewer(
+    row: InsightReviewRow,
+    reviewer_user_id: str,
+    *,
+    is_separate_reviewer_required: bool,
+) -> None:
+    if is_separate_reviewer_required and reviewer_user_id == row["created_by_user_id"]:
+        raise PermissionDenied(
+            "protected ontology releases require a reviewer other than the proposal author",
+            details={"proposalId": row["id"]},
+        )
+
+
+def require_assigned_decider(
+    row: InsightReviewRow,
+    ctx: RequestContext,
+    *,
+    is_separate_reviewer_required: bool,
+) -> None:
     assignee = row["assignee_user_id"]
     if not isinstance(assignee, str) or not assignee:
         raise ValidationFailed(
@@ -30,22 +48,32 @@ def require_assigned_decider(row: InsightReviewRow, ctx: RequestContext) -> None
             "only the assigned human reviewer can decide this ontology proposal",
             details={"proposalId": row["id"], "assigneeUserId": assignee},
         )
+    if is_separate_reviewer_required and assignee == row["created_by_user_id"]:
+        raise PermissionDenied(
+            "protected ontology releases require a reviewer other than the proposal author",
+            details={"proposalId": row["id"]},
+        )
 
 
-def require_execution_approval(row: InsightReviewRow) -> None:
-    if not _has_execution_approval(row):
+def require_execution_approval(
+    row: InsightReviewRow,
+    *,
+    is_separate_reviewer_required: bool,
+) -> None:
+    if not _has_execution_approval(row, is_separate_reviewer_required=is_separate_reviewer_required):
         raise PermissionDenied(
             "ontology proposal lacks assigned human-reviewer approval evidence",
             details={"proposalId": row["id"]},
         )
 
 
-def _has_execution_approval(row: InsightReviewRow) -> bool:
+def _has_execution_approval(row: InsightReviewRow, *, is_separate_reviewer_required: bool) -> bool:
     decision = row["decision"]
     if row["status"] != "approved" or not isinstance(decision, Mapping):
         return False
     return (
         _has_assigned_approval(row, decision)
+        and (not is_separate_reviewer_required or row["assignee_user_id"] != row["created_by_user_id"])
         and decision.get("hasBlockedChanges") is False
         and _has_safe_migration_plan(decision)
     )
@@ -62,4 +90,9 @@ def _has_safe_migration_plan(decision: Mapping[str, object]) -> bool:
     return isinstance(migration_plan, Mapping) and not bool(migration_plan.get("blockedChanges"))
 
 
-__all__ = ["require_assigned_decider", "require_decidable", "require_execution_approval"]
+__all__ = [
+    "require_assigned_decider",
+    "require_decidable",
+    "require_distinct_reviewer",
+    "require_execution_approval",
+]

@@ -12,10 +12,13 @@ from foundry_lite.domain.errors import ValidationFailed
 def has_execution_approval(
     proposal: PipelineProposalRow,
     event: Mapping[str, object] | None,
+    *,
+    is_separate_reviewer_required: bool,
 ) -> bool:
     return (
         _has_approved_decision(proposal)
         and _has_assigned_reviewer(proposal)
+        and (not is_separate_reviewer_required or proposal["assigned_to"] != proposal["created_by"])
         and _has_matching_approval_event(proposal, event)
     )
 
@@ -29,7 +32,12 @@ def decision_status(decision: str) -> str:
     raise ValidationFailed("unsupported pipeline proposal decision", details={"decision": decision})
 
 
-def require_assigned_reviewer(proposal: PipelineProposalRow, ctx: RequestContext) -> None:
+def require_assigned_reviewer(
+    proposal: PipelineProposalRow,
+    ctx: RequestContext,
+    *,
+    is_separate_reviewer_required: bool,
+) -> None:
     if proposal["assigned_to"] is None:
         raise ValidationFailed(
             "pipeline proposal must be assigned before review",
@@ -40,6 +48,11 @@ def require_assigned_reviewer(proposal: PipelineProposalRow, ctx: RequestContext
             "only the assigned human reviewer can decide this pipeline proposal",
             details={"proposalId": proposal["id"]},
         )
+    if is_separate_reviewer_required and proposal["assigned_to"] == proposal["created_by"]:
+        raise ValidationFailed(
+            "protected pipeline releases require a reviewer other than the proposal author",
+            details={"proposalId": proposal["id"]},
+        )
 
 
 def is_decision_replay(
@@ -48,10 +61,16 @@ def is_decision_replay(
     status: str,
     decision: str,
     comment: str | None,
+    *,
+    is_separate_reviewer_required: bool,
 ) -> bool:
     if proposal["status"] != status:
         return False
-    require_assigned_reviewer(proposal, ctx)
+    require_assigned_reviewer(
+        proposal,
+        ctx,
+        is_separate_reviewer_required=is_separate_reviewer_required,
+    )
     normalized = decision.strip().lower()
     stored = str(proposal["decision"] or "").strip().lower()
     return normalized in {stored, status} and proposal["decision_comment"] == comment

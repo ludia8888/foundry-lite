@@ -11,6 +11,7 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineVersionRow,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_graph_model import (
     pipeline_graph_fingerprint,
@@ -41,10 +42,11 @@ _RESOURCE_TYPE = "pipeline_branch"
 class PipelineDefinitionService(CoreService):
     """Create and edit Pipeline Builder graph branches."""
 
-    required_dependencies = ("engine", "policy", "pipeline_repository")
+    required_dependencies = ("engine", "policy", "profile", "pipeline_repository")
     required_collaborators = ("runtime_service",)
     pipeline_repository: PipelineRepository
     runtime_service: RuntimeEvidenceBoundary
+    profile: RuntimeProfile
 
     def create_branch(
         self,
@@ -77,13 +79,13 @@ class PipelineDefinitionService(CoreService):
             if row is None:
                 return self._replay_or_reject_create(conn, ctx, clean_pipeline_id, clean_name)
             self._audit(conn, ctx, "created", row)
-            return branch_payload(row)
+            return self._branch_payload(row)
 
     def get_branch(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "pipeline:read")
         with self.engine.begin() as conn:
-            return branch_payload(self._require_branch(conn, ctx, branch_id))
+            return self._branch_payload(self._require_branch(conn, ctx, branch_id))
 
     def list_branches(
         self,
@@ -101,7 +103,7 @@ class PipelineDefinitionService(CoreService):
                 status=status,
                 limit=bounded_pipeline_limit(limit),
             )
-        return {"items": [branch_payload(row) for row in rows], "nextCursor": None}
+        return {"items": [self._branch_payload(row) for row in rows], "nextCursor": None}
 
     def update_graph(
         self,
@@ -132,7 +134,7 @@ class PipelineDefinitionService(CoreService):
                 self._raise_graph_update_conflict(before, expected_fingerprint)
             assert after is not None
             self._audit(conn, ctx, "graph.updated", after, before=before)
-            return branch_payload(after)
+            return self._branch_payload(after)
 
     def diff_branch(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         ctx = ctx or RequestContext()
@@ -191,7 +193,7 @@ class PipelineDefinitionService(CoreService):
                 self._raise_graph_update_conflict(before, expected_fingerprint)
             assert after is not None
             self._audit(conn, ctx, "rebased", after, before=before)
-            return branch_payload(after)
+            return self._branch_payload(after)
 
     def abandon_branch(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         ctx = ctx or RequestContext()
@@ -200,7 +202,7 @@ class PipelineDefinitionService(CoreService):
         with self.engine.begin() as conn:
             before = self._require_branch(conn, ctx, branch_id)
             if before["status"] == "abandoned":
-                return branch_payload(before)
+                return self._branch_payload(before)
             after = self.pipeline_repository.close_branch(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -212,7 +214,7 @@ class PipelineDefinitionService(CoreService):
             if after is None:
                 raise ConflictDetected("pipeline branch can no longer be abandoned", details={"branch_id": branch_id})
             self._audit(conn, ctx, "abandoned", after, before=before)
-            return branch_payload(after)
+            return self._branch_payload(after)
 
     def list_versions(
         self,
@@ -266,7 +268,7 @@ class PipelineDefinitionService(CoreService):
         )
         for row in rows:
             if row["pipeline_id"] == pipeline_id and row["name"] == name:
-                return branch_payload(row)
+                return self._branch_payload(row)
         raise ConflictDetected(
             "open pipeline branch name already exists",
             details={"pipeline_id": pipeline_id, "name": name},
@@ -283,6 +285,9 @@ class PipelineDefinitionService(CoreService):
                 },
             )
         raise ConflictDetected("pipeline branch changed concurrently", details={"branch_id": before["id"]})
+
+    def _branch_payload(self, row: PipelineBranchRow) -> dict[str, object]:
+        return dict(branch_payload(row, is_separate_reviewer_required=self.profile.is_protected))
 
     def _require_write_open(self, ctx: RequestContext, operation: str, resource_id: str) -> None:
         self.runtime_service._require_write_traffic_open(
