@@ -4,6 +4,7 @@ import json
 import subprocess
 from argparse import Namespace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -26,7 +27,7 @@ def test_runtime_receipt_exposes_exact_contract_without_credentials() -> None:
     assert receipt["rawCredentialsStored"] is False
 
 
-def test_collector_executes_only_the_protected_api_pod_and_stores_safe_evidence(
+def test_collector_uses_ephemeral_runtime_role_pod_and_stores_safe_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -37,9 +38,43 @@ def test_collector_executes_only_the_protected_api_pod_and_stores_safe_evidence(
     kubeconfig.chmod(0o600)
     observed: list[tuple[str, ...]] = []
 
-    def run(command: tuple[str, ...], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+    deployment = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "api",
+                            "image": "ghcr.io/ludia8888/foundry-lite-api@sha256:" + "a" * 64,
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    def run(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         observed.append(command)
-        return subprocess.CompletedProcess(command, 0, json.dumps(_runtime_evidence()).encode(), b"")
+        operation = command[5:]
+        if operation == ("get", "deployment", "foundry-lite", "-o", "json"):
+            return subprocess.CompletedProcess(command, 0, json.dumps(deployment).encode(), b"")
+        if operation == ("create", "-f", "-"):
+            manifest = json.loads(cast(bytes, kwargs["input"]))
+            assert manifest["spec"]["containers"][0]["envFrom"] == [
+                {"secretRef": {"name": "foundry-lite-runtime-application"}}
+            ]
+            assert manifest["spec"]["containers"][0]["command"][-4:] == [
+                "--tenant-id",
+                "tenant-demo",
+                "--expected-role",
+                "foundry_lite_app",
+            ]
+            return subprocess.CompletedProcess(command, 0, b"created", b"")
+        if operation == ("get", "pod/foundry-lite-postgres-object-store-run-1", "-o", "json"):
+            return subprocess.CompletedProcess(command, 0, b'{"status":{"phase":"Succeeded"}}', b"")
+        if operation == ("logs", "pod/foundry-lite-postgres-object-store-run-1", "-c", "verifier"):
+            return subprocess.CompletedProcess(command, 0, json.dumps(_runtime_evidence()).encode(), b"")
+        return subprocess.CompletedProcess(command, 0, b"deleted", b"")
 
     monkeypatch.setattr(collector, "QA_ROOT", tmp_path)
     monkeypatch.setattr(collector, "assert_host_boundary", lambda: None)
@@ -62,9 +97,12 @@ def test_collector_executes_only_the_protected_api_pod_and_stores_safe_evidence(
     receipt = collector.collect(args)
 
     assert receipt["status"] == "passed"
+    assert receipt["verifierPodDeleted"] is True
     assert receipt["otherNamespacesMutated"] is False
     assert observed[0][:5] == ("kubectl", "--kubeconfig", str(kubeconfig), "--namespace", "foundry-qa")
-    assert observed[0][5:10] == ("exec", "deployment/foundry-lite", "-c", "api", "--")
+    assert all("exec" not in command for command in observed)
+    assert any(command[5:] == ("create", "-f", "-") for command in observed)
+    assert any(command[5] == "delete" for command in observed)
     assert (tmp_path / "evidence/run-1/postgres-object-store-live.json").is_file()
 
 
