@@ -356,19 +356,7 @@ def _foundation_values(temporary: Path) -> Path:
 
 def _ensure_recovery_runtime_pvc(args: argparse.Namespace, release_values: Path) -> None:
     values = json.loads(release_values.read_text(encoding="utf-8"))
-    global_values = values.get("global") if isinstance(values, dict) else None
-    runtime = values.get("runtimePersistence") if isinstance(values, dict) else None
-    storage_class = global_values.get("storageClass") if isinstance(global_values, dict) else None
-    size = runtime.get("size") if isinstance(runtime, dict) else None
-    if (
-        not isinstance(runtime, dict)
-        or runtime.get("enabled") is not True
-        or not isinstance(storage_class, str)
-        or _KUBERNETES_NAME.fullmatch(storage_class) is None
-        or not isinstance(size, str)
-        or _STORAGE_SIZE.fullmatch(size) is None
-    ):
-        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    storage_class, size = _runtime_pvc_coordinates(values)
     manifest = _runtime_pvc_manifest(args.recovery_namespace, storage_class, size)
     result = _kubectl_input(
         args,
@@ -379,6 +367,29 @@ def _ensure_recovery_runtime_pvc(args: argparse.Namespace, release_values: Path)
     )
     if result.returncode != 0:
         raise RuntimeError("macmini_restore_runtime_pvc_apply_failed")
+
+
+def _runtime_pvc_coordinates(values: object) -> tuple[str, str]:
+    root = _runtime_pvc_mapping(values)
+    global_values = _runtime_pvc_mapping(root.get("global"))
+    runtime = _runtime_pvc_mapping(root.get("runtimePersistence"))
+    if runtime.get("enabled") is not True:
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    storage_class = _runtime_pvc_value(global_values.get("storageClass"), _KUBERNETES_NAME)
+    size = _runtime_pvc_value(runtime.get("size"), _STORAGE_SIZE)
+    return storage_class, size
+
+
+def _runtime_pvc_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    return value
+
+
+def _runtime_pvc_value(value: object, pattern: re.Pattern[str]) -> str:
+    if not isinstance(value, str) or pattern.fullmatch(value) is None:
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    return value
 
 
 def _runtime_pvc_manifest(namespace: str, storage_class: str, size: str) -> dict[str, object]:

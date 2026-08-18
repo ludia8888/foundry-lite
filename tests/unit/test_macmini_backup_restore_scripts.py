@@ -375,6 +375,32 @@ def test_restore_creates_helm_owned_runtime_pvc_before_temporary_api(
     assert manifest["spec"]["storageClassName"] == "local-path"  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    "runtime,storage_class",
+    [
+        ({"enabled": False, "size": "5Gi"}, "local-path"),
+        ({"enabled": True, "size": "unbounded"}, "local-path"),
+        ({"enabled": True, "size": "5Gi"}, "../shared"),
+    ],
+)
+def test_restore_rejects_unsafe_runtime_pvc_values(
+    tmp_path: Path,
+    runtime: dict[str, object],
+    storage_class: str,
+) -> None:
+    release_values = _exact_release_values()
+    release_values["global"]["storageClass"] = storage_class  # type: ignore[index]
+    release_values["runtimePersistence"] = runtime
+    path = tmp_path / "values.json"
+    path.write_text(json.dumps(release_values), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="runtime_pvc_values_invalid"):
+        restore_subject._ensure_recovery_runtime_pvc(
+            argparse.Namespace(recovery_namespace="foundry-qa-recovery"),
+            path,
+        )
+
+
 def test_restore_helm_install_uses_exact_values_in_two_phases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
