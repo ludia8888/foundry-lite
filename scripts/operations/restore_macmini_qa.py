@@ -139,20 +139,21 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
                 f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
                 {"validationId": f"recovery-{args.run_id}"},
             )
-        source_validation = _api_post(
-            args.source_api_base_url,
-            token,
-            f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
-            {"validationId": f"source-{args.run_id}"},
-        )
-        if source_validation.get("status") != "passed":
-            raise RuntimeError("macmini_restore_source_validation_failed")
-        source_resume = _api_post(
-            args.source_api_base_url,
-            token,
-            f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
-            {"validationId": f"source-{args.run_id}"},
-        )
+        with _port_forward(args, args.source_namespace, 18082):
+            source_validation = _api_post(
+                "http://127.0.0.1:18082",
+                token,
+                f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
+                {"validationId": f"source-{args.run_id}"},
+            )
+            if source_validation.get("status") != "passed":
+                raise RuntimeError("macmini_restore_source_validation_failed")
+            source_resume = _api_post(
+                "http://127.0.0.1:18082",
+                token,
+                f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
+                {"validationId": f"source-{args.run_id}"},
+            )
         _hibernate_recovery(args)
         _restore_source_capacity(args, source_capacity)
         _resume_source_workers(args, payload)
@@ -600,6 +601,8 @@ def _resume_source_workers(args: argparse.Namespace, payload: Path) -> None:
         if not isinstance(replicas, int) or isinstance(replicas, bool) or replicas < 0 or replicas > 10:
             raise RuntimeError("macmini_restore_worker_receipt_invalid")
         _scale_named(args, args.source_namespace, item["name"], replicas)
+        if replicas > 0:
+            _wait_deployment(args, args.source_namespace, item["name"], 300)
 
 
 @contextmanager

@@ -131,6 +131,43 @@ def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.M
     assert ("foundry-qa", "statefulset", "foundry-lite-keycloak") in waited
 
 
+def test_restore_waits_for_each_resumed_source_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "paused-workers.json").write_text(
+        json.dumps(
+            [
+                {"name": "foundry-lite-worker-action", "replicasBefore": 1},
+                {"name": "foundry-lite-worker-outbox", "replicasBefore": 0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    scaled: list[tuple[str, str, int]] = []
+    waited: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(
+        restore_subject,
+        "_scale_named",
+        lambda _args, namespace, name, replicas: scaled.append((namespace, name, replicas)),
+    )
+    monkeypatch.setattr(
+        restore_subject,
+        "_wait_deployment",
+        lambda _args, namespace, name, timeout: waited.append((namespace, name, timeout)),
+    )
+
+    restore_subject._resume_source_workers(argparse.Namespace(source_namespace="foundry-qa"), payload)
+
+    assert scaled == [
+        ("foundry-qa", "foundry-lite-worker-action", 1),
+        ("foundry-qa", "foundry-lite-worker-outbox", 0),
+    ]
+    assert waited == [("foundry-qa", "foundry-lite-worker-action", 300)]
+
+
 def test_backup_freezes_commit_point_after_platform_evidence_mutations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
