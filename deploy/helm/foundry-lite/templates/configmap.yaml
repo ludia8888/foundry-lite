@@ -31,6 +31,7 @@ data:
   FOUNDRY_LITE_S3_BUCKET: {{ .Values.external.objectStorage.bucket | quote }}
   FOUNDRY_LITE_S3_CREATE_BUCKET: "0"
   FOUNDRY_LITE_KAFKA_BOOTSTRAP_SERVERS: {{ .Values.external.kafka.bootstrapServers | quote }}
+  FOUNDRY_LITE_KAFKA_SUBSCRIPTIONS_JSON: {{ .Values.external.kafka.subscriptionsJson | quote }}
   FOUNDRY_LITE_TEMPORAL_ADDRESS: {{ .Values.external.temporal.endpoint | quote }}
   FOUNDRY_LITE_TEMPORAL_NAMESPACE: default
   FOUNDRY_LITE_ELASTICSEARCH_URL: {{ .Values.external.search.endpoint | quote }}

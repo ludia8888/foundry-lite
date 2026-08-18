@@ -12,7 +12,9 @@ qaDependencies:
 external:
   database: {host: foundry-lite-postgresql, port: 5432}
   objectStorage: {endpoint: http://foundry-lite-minio:9000, bucket: foundry-lite}
-  kafka: {bootstrapServers: foundry-lite-redpanda:9092}
+  kafka:
+    bootstrapServers: foundry-lite-redpanda:9092
+    subscriptionsJson: '[{"streamName":"foundry-lite-outbox","topic":"foundry-lite-outbox","partition":0,"defaultTenantId":"tenant-demo"}]'
   temporal: {endpoint: foundry-lite-temporal:7233}
   search: {endpoint: http://foundry-lite-elasticsearch:9200}
   clamav: {endpoint: foundry-lite-clamav:3310}
