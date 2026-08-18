@@ -84,8 +84,10 @@ def test_backup_and_restore_scaling_preserve_helm_field_ownership(monkeypatch: p
     backup_subject._pause_workers(argparse.Namespace())
     restore_subject._scale_named(argparse.Namespace(), "foundry-qa-recovery", "foundry-lite", 1)
 
-    assert backup_commands[-1][-1] == "--field-manager=helm"
-    assert restore_commands[-1][-1] == "--field-manager=helm"
+    assert "--subresource=scale" in backup_commands[-1]
+    assert "--field-manager=helm" in backup_commands[-1]
+    assert "--subresource=scale" in restore_commands[-1]
+    assert "--field-manager=helm" in restore_commands[-1]
 
 
 def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.MonkeyPatch) -> None:

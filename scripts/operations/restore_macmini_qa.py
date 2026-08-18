@@ -409,10 +409,24 @@ def _scale_named(args: argparse.Namespace, namespace: str, name: str, replicas: 
 
 
 def _scale_workload(args: argparse.Namespace, namespace: str, kind: str, name: str, replicas: int) -> None:
-    operation = ("scale", kind, name, f"--replicas={replicas}", "--field-manager=helm")
+    operation = _replica_patch(kind, name, replicas)
     result = _kubectl(args, namespace, operation, 30)
     if result.returncode != 0:
         raise RuntimeError("macmini_restore_scale_failed")
+
+
+def _replica_patch(kind: str, name: str, replicas: int) -> tuple[str, ...]:
+    payload = json.dumps({"spec": {"replicas": replicas}}, separators=(",", ":"))
+    return (
+        "patch",
+        kind,
+        name,
+        "--subresource=scale",
+        "--type=merge",
+        "--field-manager=helm",
+        "-p",
+        payload,
+    )
 
 
 def _workload_replicas(args: argparse.Namespace, namespace: str, kind: str, name: str) -> int:
