@@ -5,6 +5,7 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
+from foundry_lite.application.dependencies import RuntimeProfile
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.services.pipeline_preview_recovery import (
     PipelinePreviewRecoveryCursor,
@@ -118,6 +119,27 @@ def test_installed_rls_hook_uses_current_request_tenant(postgres_fixture) -> Non
     assert demo_rows == ["dataset-demo"]
     assert no_tenant_rows == []
     assert other_rows == ["dataset-other"]
+
+
+def test_protected_bootstrap_is_idempotent_under_runtime_rls_role(postgres_fixture, tmp_path: Path) -> None:
+    engine = postgres_fixture.engine
+    role_name = f"foundry_lite_bootstrap_rls_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(
+            db_url=engine.url.render_as_string(hide_password=False),
+            storage_root=tmp_path / "protected-bootstrap",
+        )
+    )
+    foundry.runtime_profile = RuntimeProfile.from_value("production")
+    event.listen(foundry.engine, "begin", _set_rls_test_role(role_name))
+
+    try:
+        foundry.bootstrap()
+    finally:
+        cast(Engine, foundry.engine).dispose()
+
+    assert _visible_values(engine, role_name, "tenant-demo", db.users.c.id) == ["user-demo"]
 
 
 def test_preview_recovery_enumerates_tenants_and_binds_rls_context(postgres_fixture) -> None:

@@ -116,8 +116,9 @@ class FoundryLite:
         ``initialize_schema`` raises ``SchemaMutationDisabledError``. Calling it
         unconditionally meant constructing ``FoundryLite`` under a production or
         staging profile always raised, before ``bootstrap()`` ever ran — the API,
-        CLI, and every worker failed at startup. Only the schema call is gated;
-        the tenant/user bootstrap writes below are ordinary inserts.
+        CLI, and every worker failed at startup. Bootstrap remains idempotent, but
+        binds its tenant explicitly so protected PostgreSQL RLS can authorize its
+        tenant-scoped inserts without granting the runtime role schema ownership.
         """
         if self.runtime_profile.is_protected:
             return
@@ -365,6 +366,10 @@ class FoundryLite:
         self.bootstrap()
 
     def bootstrap(self) -> None:
+        with FoundryRuntimeLifecycle.bootstrap_tenant_context(DEFAULT_TENANT_ID):
+            self._bootstrap_default_tenant()
+
+    def _bootstrap_default_tenant(self) -> None:
         now = _now()
         self.metadata_repository.ensure_tenant(
             tenant_id=DEFAULT_TENANT_ID,
@@ -378,6 +383,9 @@ class FoundryLite:
             roles=["admin", "data_engineer", "ops_manager", "finance"],
             created_at=now,
         )
+        self._seed_default_model_registry(now)
+
+    def _seed_default_model_registry(self, now: str) -> None:
         try:
             self._ensure_demo_model_registry(now)
         except Exception:
