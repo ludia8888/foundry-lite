@@ -188,28 +188,65 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/restore_
 
 Dataset inventory, active object index, action/materialization run, row/object/hash가 원본 백업 시점과 일치해야 recovery와 source의 resume approval을 허용한다. 목표는 RTO 30분 이내, backup commit point 기준 RPO 0이다.
 
-## 9. 24시간 소크
+## 9. 24시간 복합 장애 캠페인
+
+최종 합격 소크는 health check만 반복하는 단순 소크가 아니다. `run_macmini_enterprise_campaign.py`가 시작 전에
+절대 시각 기준 plan과 fault window를 먼저 고정하고, 내부 `run_macmini_soak.py` sampler를 5초 간격으로 실행한다.
+모든 business closed loop는 Action idempotent replay, materialization, Dataset preview, Object query를 다시 확인한다.
+운영 probe는 PostgreSQL connection 수, pending outbox 수와 최고 지연, dead-letter 증가를 분 단위로 남긴다.
+최종 soak summary는 전체 집계 외에도 9개 단계별 sample 수, availability, HTTP/business p50·p95·p99,
+memory/disk/DB connection p50·p95·p99, outbox 최고치와 최종치를 별도로 남긴다. quiet 마지막 10% 구간은
+baseline p95 대비 memory `+10%p`, disk `+5%p`, DB connection `max(+5, +20%)` 안으로 복귀해야 하며,
+outbox 수와 oldest lag가 모두 0이고 business failure가 없어야 통과한다. baseline 또는 quiet sample이 10개보다
+적어도 fail-closed한다.
+
+| 경과 시간 | 단계 | 실제 주입 및 검증 |
+|---|---|---|
+| 00~02h | baseline | closed loop, HTTP/business p50·p95·p99, memory, DB connection, outbox lag, disk |
+| 02~05h | compute | API·worker·controller Pod delete, PID 1 SIGTERM/SIGKILL, worker `OOMKilled`와 원래 command 복원 |
+| 05~08h | dependencies | PostgreSQL, MinIO, Temporal, Redpanda, Elasticsearch, ClamAV scale-down과 bounded recovery |
+| 08~11h | network | 전용 Colima `cni0`의 latency·packet loss·TCP reset·DNS reject·full partition과 NetworkPolicy isolation |
+| 11~14h | multi-tenant | Tenant A flood 중 Tenant B closed loop, 선행 cross-tenant 404, JSONB/index/FORCE RLS, durable MCP quota 분리 |
+| 14~17h | security/time | deployed image 안에서 JWKS rotation grace/retirement, expired·revoked token, lease·cursor expiry와 key rotation |
+| 17~20h | release | same-digest rolling restart, bad image/config/migration rejection, controller-verified signed digest rollback/forward |
+| 20~22h | DR | encrypted checkpoint, `foundry-qa-recovery` 비파괴 restore, RTO/RPO와 semantic validation |
+| 22~24h | quiet | 새 장애 중단, backlog drain, resource baseline 복귀, 최종 invariant scan |
+
+실제 external issuer/JWKS network path는 승인된 public/tailnet owner와 issuer가 연결된 경우에만 별도 통과할 수 있다.
+그 경로가 없으면 내부 deployed-image rotation proof와 혼동하지 않고 `blocked`로 남긴다. 단일 노드이므로
+multi-node·multi-AZ는 항상 `notProven`이다.
 
 ```bash
-PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_soak.py \
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_enterprise_campaign.py \
   --run-id "$RUN_ID" \
   --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
-  --duration-seconds 86400 --interval-seconds 60 \
-  --probe healthz=http://127.0.0.1:30443/healthz \
-  --probe readyz=http://127.0.0.1:30443/readyz \
-  --business-probe-every 5 \
-  --business-probe-command-json \
-  '["/Users/sean1234/foundry-qa/bin/uv","run","python","scripts/operations/run_macmini_business_probe.py","probe","--config","/Users/sean1234/foundry-qa/state/business-probe.json"]'
+  --business-probe-config /Users/sean1234/foundry-qa/state/business-probe.json \
+  --operator-token-file /Users/sean1234/foundry-qa/state/operator-token \
+  --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt \
+  --age-identity-file /Users/sean1234/foundry-qa/state/age-identity.txt \
+  --current-commit "$CURRENT_SHA" \
+  --rollback-commit "$PREVIOUS_VERIFIED_SHA"
 ```
 
-Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승인된 tailnet URL로 치환한다. 소크는 business probe의 종료 코드뿐 아니라 secret-free JSON receipt도 검증한다. receipt에는 동일 `actionRunId`, `idempotentReplay=true`, materialization version/row count, Dataset preview 및 Object query 일치만 남기고 원문 데이터·parameter·token은 제외한다. probe별 availability를 따로 계산하며 하나의 성공 probe가 다른 실패를 숨길 수 없다. 선언된 fault window는 baseline을 재설정하지만 그 밖의 restart 증가나 장기 Pod replacement는 실패다.
+Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승인된 tailnet URL로 치환한다. campaign은 각
+이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. 복구가 실패하면
+남은 mutation을 중지하고 quiet observation만 유지한다. 네트워크 fault는 다른 macOS 계정이나 Docker Desktop이
+아니라 전용 `foundry-qa` Colima VM의 `cni0`에만 적용하며, 기존 qdisc가 있으면 덮어쓰지 않고 중단한다. 모든
+qdisc/iptables/Deployment command 변경은 `finally`에서 exact 원상복구한다.
+
+sampler receipt에는 동일 `actionRunId`, `idempotentReplay=true`, materialization version/row count, Dataset preview 및
+Object query 일치만 남기고 원문 데이터·parameter·token은 제외한다. probe별 availability와 p50·p95·p99를 따로
+계산하며 하나의 성공 probe가 다른 실패를 숨길 수 없다. 선언된 fault window는 restart/OOM/replacement baseline을
+재설정하지만 그 밖의 증가는 실패다. fault window 안의 메트릭 수집 실패는 허용하되, window 밖 resource metrics는
+완전해야 한다.
 
 Acceptance는 다음과 같다.
 
 - 선언된 장애 구간 밖 각 API/OSDK probe availability 99.9% 이상
 - business probe 실행 1회 이상, 실패 0, 마지막 Action replay·materialization·Object query receipt 모두 일치
-- OOM 0, 예상 밖 restart/replacement 0
+- 선언 밖 OOM/restart/replacement 0; 선언된 worker OOM은 `OOMKilled` 실제 관측과 exact command 복원 필수
 - committed 데이터 손실·중복 0
+- 최종 pending outbox 0, dead-letter 증가 0
 - node memory 85% 미만, disk 80% 미만
 - warm-up 이후 지속적 memory/disk 증가 없음
 - 모든 fault와 restore 결과가 `passed`, `failed`, `blocked`, `notProven` 중 하나로 분류됨
