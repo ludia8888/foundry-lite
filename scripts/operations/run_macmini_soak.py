@@ -12,19 +12,30 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, TypeGuard
 
-from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, assert_namespace
+from scripts.operations.macmini_qa_guard import (
+    QA_ROOT,
+    assert_host_boundary,
+    assert_namespace,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class Probe:
     name: str
     url: str
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseWindow:
+    phase_id: str
+    started_at: datetime
+    ended_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,9 +46,14 @@ class SoakMetrics:
     unexpected_replacements: int
     business_executions: int
     business_failures: int
-    oom_count: int
+    unexpected_ooms: int
     memory_percent: int | float
     disk_percent: int | float
+    operations_executions: int
+    operations_failures: int
+    is_operations_probe_required: bool
+    final_outbox_pending_count: int | None
+    dead_letter_increment_count: int
     is_resource_metrics_complete: bool
     is_memory_growth_sustained: bool
     is_disk_growth_sustained: bool
@@ -51,9 +67,13 @@ class SoakMetrics:
             self.unexpected_replacements == 0,
             self.business_executions > 0,
             self.business_failures == 0,
-            self.oom_count == 0,
+            self.unexpected_ooms == 0,
             self.memory_percent < 85,
             self.disk_percent < 80,
+            not self.is_operations_probe_required or self.operations_executions > 0,
+            not self.is_operations_probe_required or self.operations_failures == 0,
+            not self.is_operations_probe_required or self.final_outbox_pending_count == 0,
+            not self.is_operations_probe_required or self.dead_letter_increment_count == 0,
             self.is_resource_metrics_complete,
             not self.is_memory_growth_sustained,
             not self.is_disk_growth_sustained,
@@ -72,8 +92,11 @@ def run_soak(args: argparse.Namespace) -> dict[str, object]:
     _bounded_float(args.http_timeout_seconds, 0.1, 30.0, "http_timeout")
     _bounded(args.business_probe_every, 1, 1440, "business_probe_every")
     _bounded_float(args.business_probe_timeout_seconds, 0.1, 300.0, "business_probe_timeout")
+    _bounded(args.operations_probe_every, 1, 1440, "operations_probe_every")
+    _bounded_float(args.operations_probe_timeout_seconds, 0.1, 300.0, "operations_probe_timeout")
     token = _read_token(args.bearer_token_file)
     fault_windows = _fault_windows(args.fault_windows_file)
+    phase_windows = _phase_windows(args.phase_windows_file)
     target = _soak_directory(args.run_id)
     samples_path = target / "samples.ndjson"
     started = time.monotonic()
@@ -89,7 +112,13 @@ def run_soak(args: argparse.Namespace) -> dict[str, object]:
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(min(interval, remaining))
-    summary = _summarize(samples_path, duration, _fault_windows(args.fault_windows_file))
+    summary = _summarize(
+        samples_path,
+        duration,
+        _fault_windows(args.fault_windows_file),
+        phase_windows,
+        is_operations_probe_required=args.require_operations_probe,
+    )
     _write_new_json(target / "summary.json", summary)
     return summary
 
@@ -109,6 +138,9 @@ def _sample(
     business = None
     if args.business_probe_command_json and sample_index % args.business_probe_every == 0:
         business = _business_probe(args.business_probe_command_json, args.business_probe_timeout_seconds)
+    operations = None
+    if args.operations_probe_command_json and sample_index % args.operations_probe_every == 0:
+        operations = _operations_probe(args.operations_probe_command_json, args.operations_probe_timeout_seconds)
     return {
         "schemaVersion": 1,
         "sampledAt": sampled_at,
@@ -118,11 +150,15 @@ def _sample(
         "nodeMetrics": node_metrics,
         "disk": disk,
         "businessProbe": business,
+        "operationsProbe": operations,
     }
 
 
 def _http_probe(probe: Probe, token: str | None, timeout_seconds: float) -> dict[str, object]:
-    headers = {"accept": "application/json", "user-agent": "Foundry-lite-enterprise-QA/1"}
+    headers = {
+        "accept": "application/json",
+        "user-agent": "Foundry-lite-enterprise-QA/1",
+    }
     if token:
         headers["authorization"] = f"Bearer {token}"
     request = urllib.request.Request(probe.url, headers=headers)
@@ -160,13 +196,73 @@ def _business_probe(command_json: str, timeout_seconds: float) -> dict[str, obje
         return {"status": "failed", "reason": "unavailable_or_timeout"}
     receipt = _safe_business_receipt(result.stdout)
     return {
-        "status": "passed" if result.returncode == 0 and receipt is not None else "failed",
+        "status": ("passed" if result.returncode == 0 and receipt is not None else "failed"),
         "returnCode": result.returncode,
         "durationMs": int((time.monotonic() - started) * 1000),
         "stdoutSha256": "sha256:" + hashlib.sha256(result.stdout).hexdigest(),
         "stderrSha256": "sha256:" + hashlib.sha256(result.stderr).hexdigest(),
         "receipt": receipt,
     }
+
+
+def _operations_probe(command_json: str, timeout_seconds: float) -> dict[str, object]:
+    command = _validated_probe_command(command_json, "macmini_soak_operations_probe_invalid")
+    started = time.monotonic()
+    try:
+        result = subprocess.run(  # nosec B603 - JSON argv is bounded and shell-free; remove if string commands appear.
+            command, check=False, capture_output=True, timeout=timeout_seconds
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"status": "failed", "reason": "unavailable_or_timeout"}
+    receipt = _safe_operations_receipt(result.stdout)
+    return {
+        "status": ("passed" if result.returncode == 0 and receipt is not None else "failed"),
+        "returnCode": result.returncode,
+        "durationMs": int((time.monotonic() - started) * 1000),
+        "stdoutSha256": "sha256:" + hashlib.sha256(result.stdout).hexdigest(),
+        "stderrSha256": "sha256:" + hashlib.sha256(result.stderr).hexdigest(),
+        "receipt": receipt,
+    }
+
+
+def _validated_probe_command(command_json: str, reason: str) -> list[str]:
+    command = json.loads(command_json)
+    if not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command):
+        raise ValueError(reason)
+    return command
+
+
+def _safe_operations_receipt(raw: bytes) -> dict[str, object] | None:
+    if not raw or len(raw) > 64 * 1024:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    fields = (
+        "schemaVersion",
+        "status",
+        "observedAt",
+        "databaseConnections",
+        "outboxPendingCount",
+        "oldestOutboxPendingSeconds",
+        "deadLetterCount",
+    )
+    receipt: dict[str, object] = {field: payload.get(field) for field in fields}
+    if not _valid_operations_receipt(receipt, fields[3:]):
+        return None
+    return receipt
+
+
+def _valid_operations_receipt(receipt: dict[str, object], numeric_fields: tuple[str, ...]) -> bool:
+    return (
+        receipt.get("schemaVersion") == 1
+        and receipt.get("status") == "passed"
+        and isinstance(receipt.get("observedAt"), str)
+        and all(_is_nonnegative_number(receipt.get(field)) for field in numeric_fields)
+    )
 
 
 def _safe_business_receipt(raw: bytes) -> dict[str, object] | None:
@@ -216,13 +312,24 @@ def _is_positive_integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _is_nonnegative_number(value: object) -> TypeGuard[int | float]:
+    return isinstance(value, int | float) and not isinstance(value, bool) and value >= 0
+
+
 def _kubectl_json(
     kubectl: str,
     kubeconfig: str,
     namespace: str,
     operation: tuple[str, ...],
 ) -> object:
-    command = (kubectl, "--kubeconfig", kubeconfig, "--namespace", namespace, *operation)
+    command = (
+        kubectl,
+        "--kubeconfig",
+        kubeconfig,
+        "--namespace",
+        namespace,
+        *operation,
+    )
     try:
         result = subprocess.run(  # nosec B603 - namespace-bound kubectl argv; remove if shell or free argv appears.
             command, check=False, capture_output=True, timeout=15
@@ -267,13 +374,23 @@ def _summarize(
     path: Path,
     requested_duration_seconds: int,
     fault_windows: tuple[tuple[datetime, datetime], ...] = (),
+    phase_windows: tuple[PhaseWindow, ...] = (),
+    *,
+    is_operations_probe_required: bool = False,
 ) -> dict[str, object]:
     samples = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     eligible = [sample for sample in samples if not _is_declared_fault(str(sample["sampledAt"]), fault_windows)]
-    metrics = _soak_metrics(samples, eligible, fault_windows)
+    metrics = _soak_metrics(
+        samples,
+        eligible,
+        fault_windows,
+        is_operations_probe_required=is_operations_probe_required,
+    )
+    phase_metrics = _phase_metrics(samples, phase_windows)
+    baseline_return = _baseline_return(samples, phase_windows, phase_metrics)
     return {
         "schemaVersion": 1,
-        "status": "passed" if metrics.is_passed else "failed",
+        "status": ("passed" if metrics.is_passed and baseline_return["status"] != "failed" else "failed"),
         "requestedDurationSeconds": requested_duration_seconds,
         "sampleCount": len(samples),
         "eligibleSampleCount": len(eligible),
@@ -285,21 +402,136 @@ def _summarize(
         "businessProbeExecutions": metrics.business_executions,
         "businessProbeFailures": metrics.business_failures,
         "lastBusinessProbeReceipt": _last_business_receipt(eligible),
-        "oomCount": metrics.oom_count,
+        "httpLatencyMs": _latency_percentiles(_http_results(sample) for sample in eligible),
+        "businessLatencyMs": _latency_percentiles(
+            [sample.get("businessProbe")] for sample in eligible if isinstance(sample.get("businessProbe"), dict)
+        ),
+        "maximumObservedOomCount": _maximum_pod_value(samples, "oomCount"),
+        "unexpectedOomIncrementCount": metrics.unexpected_ooms,
+        "operationsProbeRequired": metrics.is_operations_probe_required,
+        "operationsProbeExecutions": metrics.operations_executions,
+        "operationsProbeFailures": metrics.operations_failures,
+        "lastOperationsProbeReceipt": _last_operations_receipt(eligible),
+        "maximumDatabaseConnections": _maximum_operations_value(eligible, "databaseConnections"),
+        "maximumOutboxPendingCount": _maximum_operations_value(eligible, "outboxPendingCount"),
+        "maximumOldestOutboxPendingSeconds": _maximum_operations_value(eligible, "oldestOutboxPendingSeconds"),
+        "finalOutboxPendingCount": metrics.final_outbox_pending_count,
+        "deadLetterIncrementCount": metrics.dead_letter_increment_count,
         "maximumNodeMemoryPercent": metrics.memory_percent,
         "maximumNodeDiskPercent": metrics.disk_percent,
         "resourceMetricsComplete": metrics.is_resource_metrics_complete,
         "isSustainedMemoryGrowth": metrics.is_memory_growth_sustained,
         "isSustainedDiskGrowth": metrics.is_disk_growth_sustained,
+        "phaseMetrics": phase_metrics,
+        "baselineReturn": baseline_return,
         "hostPhysicalFailureTolerance": "notProven",
         "multiNodeAvailability": "notProven",
     }
+
+
+def _phase_metrics(samples: list[dict[str, object]], windows: tuple[PhaseWindow, ...]) -> dict[str, object]:
+    return {window.phase_id: _phase_metric(_samples_in_phase(samples, window)) for window in windows}
+
+
+def _phase_metric(samples: list[dict[str, object]]) -> dict[str, object]:
+    probes = [probe for sample in samples for probe in _http_results(sample)]
+    availability = _probe_availability(probes)
+    return {
+        "sampleCount": len(samples),
+        "availabilityByProbe": availability,
+        "httpLatencyMs": _latency_percentiles(_http_results(sample) for sample in samples),
+        "businessExecutions": _business_probe_executions(samples),
+        "businessFailures": _business_probe_failures(samples),
+        "businessLatencyMs": _latency_percentiles(
+            [sample.get("businessProbe")] for sample in samples if isinstance(sample.get("businessProbe"), dict)
+        ),
+        "nodeMemoryPercent": _section_percentiles(samples, "nodeMetrics", "memoryPercent"),
+        "diskUsedPercent": _section_percentiles(samples, "disk", "usedPercent"),
+        "databaseConnections": _operations_percentiles(samples, "databaseConnections"),
+        "maximumOutboxPendingCount": _maximum_operations_value(samples, "outboxPendingCount"),
+        "maximumOldestOutboxPendingSeconds": _maximum_operations_value(samples, "oldestOutboxPendingSeconds"),
+        "finalOutboxPendingCount": _last_operations_value(samples, "outboxPendingCount"),
+    }
+
+
+def _baseline_return(
+    samples: list[dict[str, object]],
+    windows: tuple[PhaseWindow, ...],
+    phase_metrics: dict[str, object],
+) -> dict[str, object]:
+    if not windows:
+        return {"status": "notRequired"}
+    baseline = _phase_samples(samples, windows, "baseline")
+    quiet = _phase_samples(samples, windows, "quiet")
+    if len(baseline) < 10 or len(quiet) < 10:
+        return {"status": "failed", "reason": "insufficient_phase_samples"}
+    quiet_tail = quiet[-max(10, len(quiet) // 10) :]
+    checks = _baseline_return_checks(baseline, quiet_tail)
+    return {
+        "status": "passed" if all(checks.values()) else "failed",
+        "checks": checks,
+        "baseline": phase_metrics.get("baseline"),
+        "quietTail": _phase_metric(quiet_tail),
+    }
+
+
+def _baseline_return_checks(baseline: list[dict[str, object]], quiet_tail: list[dict[str, object]]) -> dict[str, bool]:
+    baseline_memory = _section_percentile(baseline, "nodeMetrics", "memoryPercent", 0.95)
+    quiet_memory = _section_percentile(quiet_tail, "nodeMetrics", "memoryPercent", 0.95)
+    baseline_disk = _section_percentile(baseline, "disk", "usedPercent", 0.95)
+    quiet_disk = _section_percentile(quiet_tail, "disk", "usedPercent", 0.95)
+    baseline_db = _operations_percentile(baseline, "databaseConnections", 0.95)
+    quiet_db = _operations_percentile(quiet_tail, "databaseConnections", 0.95)
+    return {
+        "memoryReturned": _within_delta(baseline_memory, quiet_memory, 10),
+        "diskReturned": _within_delta(baseline_disk, quiet_disk, 5),
+        "databaseConnectionsReturned": _database_connections_returned(baseline_db, quiet_db),
+        "outboxDrained": _last_operations_value(quiet_tail, "outboxPendingCount") == 0,
+        "queueLagDrained": _last_operations_value(quiet_tail, "oldestOutboxPendingSeconds") == 0,
+        "quietBusinessSucceeded": _business_probe_executions(quiet_tail) > 0
+        and _business_probe_failures(quiet_tail) == 0,
+        "quietAvailabilityRecovered": all(
+            value >= 0.999
+            for value in _probe_availability(
+                [probe for sample in quiet_tail for probe in _http_results(sample)]
+            ).values()
+        ),
+    }
+
+
+def _within_delta(baseline: int | None, observed: int | None, allowed_delta: int) -> bool:
+    return baseline is not None and observed is not None and observed <= baseline + allowed_delta
+
+
+def _database_connections_returned(baseline: int | None, observed: int | None) -> bool:
+    if baseline is None or observed is None:
+        return False
+    return observed <= max(baseline + 5, math.ceil(baseline * 1.2))
+
+
+def _phase_samples(
+    samples: list[dict[str, object]],
+    windows: tuple[PhaseWindow, ...],
+    phase_id: str,
+) -> list[dict[str, object]]:
+    window = next((item for item in windows if item.phase_id == phase_id), None)
+    return _samples_in_phase(samples, window) if window is not None else []
+
+
+def _samples_in_phase(samples: list[dict[str, object]], window: PhaseWindow) -> list[dict[str, object]]:
+    return [
+        sample
+        for sample in samples
+        if window.started_at <= datetime.fromisoformat(str(sample["sampledAt"])) < window.ended_at
+    ]
 
 
 def _soak_metrics(
     samples: list[dict[str, object]],
     eligible: list[dict[str, object]],
     fault_windows: tuple[tuple[datetime, datetime], ...],
+    *,
+    is_operations_probe_required: bool,
 ) -> SoakMetrics:
     probe_results = [probe for sample in eligible for probe in _http_results(sample)]
     available = sum(1 for probe in probe_results if probe["isAvailable"])
@@ -310,10 +542,15 @@ def _soak_metrics(
         unexpected_replacements=_unexpected_pod_replacements(samples, fault_windows),
         business_executions=_business_probe_executions(eligible),
         business_failures=_business_probe_failures(eligible),
-        oom_count=_maximum_pod_value(samples, "oomCount"),
-        memory_percent=_maximum_section_value(samples, "nodeMetrics", "memoryPercent"),
-        disk_percent=_maximum_section_value(samples, "disk", "usedPercent"),
-        is_resource_metrics_complete=_resource_metrics_complete(samples),
+        unexpected_ooms=_unexpected_pod_value_increments(samples, fault_windows, "oomCount"),
+        memory_percent=_maximum_section_value(eligible, "nodeMetrics", "memoryPercent"),
+        disk_percent=_maximum_section_value(eligible, "disk", "usedPercent"),
+        operations_executions=_operations_probe_executions(eligible),
+        operations_failures=_operations_probe_failures(eligible),
+        is_operations_probe_required=is_operations_probe_required,
+        final_outbox_pending_count=_last_operations_value(eligible, "outboxPendingCount"),
+        dead_letter_increment_count=_operations_counter_increment(eligible, "deadLetterCount"),
+        is_resource_metrics_complete=_resource_metrics_complete(eligible),
         is_memory_growth_sustained=_sustained_growth(eligible, "nodeMetrics", "memoryPercent", minimum_delta=10),
         is_disk_growth_sustained=_sustained_growth(eligible, "disk", "usedPercent", minimum_delta=5),
     )
@@ -327,12 +564,134 @@ def _business_probe_executions(samples: list[dict[str, object]]) -> int:
     return sum(1 for sample in samples if isinstance(sample.get("businessProbe"), dict))
 
 
-def _last_business_receipt(samples: list[dict[str, object]]) -> dict[str, object] | None:
+def _last_business_receipt(
+    samples: list[dict[str, object]],
+) -> dict[str, object] | None:
     for sample in reversed(samples):
         probe = sample.get("businessProbe")
         if isinstance(probe, dict) and isinstance(probe.get("receipt"), dict):
             return probe["receipt"]
     return None
+
+
+def _last_operations_receipt(
+    samples: list[dict[str, object]],
+) -> dict[str, object] | None:
+    for sample in reversed(samples):
+        probe = sample.get("operationsProbe")
+        if isinstance(probe, dict) and isinstance(probe.get("receipt"), dict):
+            return probe["receipt"]
+    return None
+
+
+def _operations_probe_executions(samples: list[dict[str, object]]) -> int:
+    return sum(1 for sample in samples if isinstance(sample.get("operationsProbe"), dict))
+
+
+def _operations_probe_failures(samples: list[dict[str, object]]) -> int:
+    return sum(
+        1
+        for sample in samples
+        if isinstance((probe := sample.get("operationsProbe")), dict) and probe.get("status") != "passed"
+    )
+
+
+def _operations_receipts(samples: list[dict[str, object]]) -> list[dict[str, object]]:
+    receipts: list[dict[str, object]] = []
+    for sample in samples:
+        probe = sample.get("operationsProbe")
+        receipt = probe.get("receipt") if isinstance(probe, dict) else None
+        if isinstance(receipt, dict):
+            receipts.append(receipt)
+    return receipts
+
+
+def _maximum_operations_value(samples: list[dict[str, object]], field: str) -> int | float | None:
+    numeric: list[int | float] = []
+    for receipt in _operations_receipts(samples):
+        value = receipt.get(field)
+        if _is_nonnegative_number(value):
+            numeric.append(value)
+    return max(numeric) if numeric else None
+
+
+def _last_operations_value(samples: list[dict[str, object]], field: str) -> int | None:
+    receipts = _operations_receipts(samples)
+    value = receipts[-1].get(field) if receipts else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _operations_counter_increment(samples: list[dict[str, object]], field: str) -> int:
+    values = [receipt.get(field) for receipt in _operations_receipts(samples)]
+    counters = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
+    return max(0, max(counters) - counters[0]) if counters else 0
+
+
+def _operations_percentiles(samples: list[dict[str, object]], field: str) -> dict[str, int | None]:
+    values = _operations_values(samples, field)
+    return _numeric_percentiles(values)
+
+
+def _operations_percentile(samples: list[dict[str, object]], field: str, quantile: float) -> int | None:
+    return _nearest_rank(_operations_values(samples, field), quantile)
+
+
+def _operations_values(samples: list[dict[str, object]], field: str) -> list[int]:
+    values = [receipt.get(field) for receipt in _operations_receipts(samples)]
+    return sorted(int(value) for value in values if _is_nonnegative_number(value))
+
+
+def _section_percentiles(samples: list[dict[str, object]], section: str, field: str) -> dict[str, int | None]:
+    return _numeric_percentiles(_section_values(samples, section, field))
+
+
+def _section_percentile(
+    samples: list[dict[str, object]],
+    section: str,
+    field: str,
+    quantile: float,
+) -> int | None:
+    return _nearest_rank(_section_values(samples, section, field), quantile)
+
+
+def _section_values(samples: list[dict[str, object]], section: str, field: str) -> list[int]:
+    return sorted(
+        int(value)
+        for sample in samples
+        if isinstance((payload := sample.get(section)), dict) and _is_nonnegative_number(value := payload.get(field))
+    )
+
+
+def _numeric_percentiles(values: list[int]) -> dict[str, int | None]:
+    return {
+        "p50": _nearest_rank(values, 0.50),
+        "p95": _nearest_rank(values, 0.95),
+        "p99": _nearest_rank(values, 0.99),
+    }
+
+
+def _latency_percentiles(groups: Iterable[object]) -> dict[str, int | None]:
+    values: list[int] = []
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        values.extend(
+            int(item["durationMs"])
+            for item in group
+            if isinstance(item, dict)
+            and isinstance(item.get("durationMs"), int)
+            and not isinstance(item.get("durationMs"), bool)
+            and int(item["durationMs"]) >= 0
+        )
+    values.sort()
+    return _numeric_percentiles(values)
+
+
+def _nearest_rank(values: list[int], quantile: float) -> int | None:
+    if not values:
+        return None
+    index = max(0, math.ceil(quantile * len(values)) - 1)
+    return values[index]
 
 
 def _business_probe_failed(sample: dict[str, object]) -> bool:
@@ -384,6 +743,14 @@ def _unexpected_restart_increments(
     samples: list[dict[str, object]],
     fault_windows: tuple[tuple[datetime, datetime], ...],
 ) -> int:
+    return _unexpected_pod_value_increments(samples, fault_windows, "restarts")
+
+
+def _unexpected_pod_value_increments(
+    samples: list[dict[str, object]],
+    fault_windows: tuple[tuple[datetime, datetime], ...],
+    field: str,
+) -> int:
     previous: dict[str, int] = {}
     previous_at: datetime | None = None
     unexpected = 0
@@ -394,7 +761,7 @@ def _unexpected_restart_increments(
         ):
             previous = {}
         else:
-            current = _pod_restart_map(sample)
+            current = _pod_value_map(sample, field)
             if previous:
                 unexpected += sum(max(0, count - previous[name]) for name, count in current.items() if name in previous)
             previous = current
@@ -423,24 +790,32 @@ def _unexpected_pod_replacements(
     return replacements
 
 
-def _pod_restart_map(sample: dict[str, object]) -> dict[str, int]:
+def _pod_value_map(sample: dict[str, object], field: str) -> dict[str, int]:
     pods = _mapping_or_empty(sample.get("pods")).get("items")
     if not isinstance(pods, list):
         return {}
     return {
-        str(pod["name"]): int(pod["restarts"])
+        str(pod["name"]): int(pod[field])
         for pod in pods
-        if isinstance(pod, dict) and isinstance(pod.get("name"), str) and isinstance(pod.get("restarts"), int)
+        if isinstance(pod, dict)
+        and isinstance(pod.get("name"), str)
+        and isinstance(pod.get(field), int)
+        and not isinstance(pod.get(field), bool)
     }
 
 
-def _long_running_pods(sample: dict[str, object]) -> dict[tuple[str, str], frozenset[str]]:
+def _long_running_pods(
+    sample: dict[str, object],
+) -> dict[tuple[str, str], frozenset[str]]:
     pods = _mapping_or_empty(sample.get("pods")).get("items")
     grouped: dict[tuple[str, str], set[str]] = {}
     if not isinstance(pods, list):
         return {}
     for pod in pods:
-        if not isinstance(pod, dict) or pod.get("ownerKind") not in {"ReplicaSet", "StatefulSet"}:
+        if not isinstance(pod, dict) or pod.get("ownerKind") not in {
+            "ReplicaSet",
+            "StatefulSet",
+        }:
             continue
         owner_name, pod_name = pod.get("ownerName"), pod.get("name")
         if isinstance(owner_name, str) and isinstance(pod_name, str):
@@ -476,7 +851,10 @@ def _pod_owner(value: object) -> tuple[str | None, str | None]:
     for owner in value:
         if isinstance(owner, dict) and owner.get("controller") is True:
             kind, name = owner.get("kind"), owner.get("name")
-            return (kind if isinstance(kind, str) else None, name if isinstance(name, str) else None)
+            return (
+                kind if isinstance(kind, str) else None,
+                name if isinstance(name, str) else None,
+            )
     return None, None
 
 
@@ -491,7 +869,10 @@ def _crosses_fault(
 def _parse_probe(value: str) -> Probe:
     name, separator, url = value.partition("=")
     parsed = urllib.parse.urlsplit(url)
-    is_loopback_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+    is_loopback_http = parsed.scheme == "http" and parsed.hostname in {
+        "127.0.0.1",
+        "localhost",
+    }
     if (
         not separator
         or not name
@@ -575,7 +956,13 @@ def _colima_disk_metrics() -> dict[str, object]:
     if len(fields) < 5 or not fields[4].endswith("%"):
         return {"status": "invalid"}
     try:
-        return {"status": "ok", "usedPercent": int(fields[4].removesuffix("%"))}
+        return {
+            "status": "ok",
+            "totalKiB": int(fields[1]),
+            "usedKiB": int(fields[2]),
+            "availableKiB": int(fields[3]),
+            "usedPercent": int(fields[4].removesuffix("%")),
+        }
     except ValueError:
         return {"status": "invalid"}
 
@@ -596,6 +983,46 @@ def _fault_windows(path: str | None) -> tuple[tuple[datetime, datetime], ...]:
             raise ValueError("macmini_soak_fault_windows_invalid")
         windows.append((start, end))
     return tuple(windows)
+
+
+def _phase_windows(path: str | None) -> tuple[PhaseWindow, ...]:
+    if path is None:
+        return ()
+    phases = _phase_payload(path)
+    windows = tuple(_phase_window(item) for item in phases)
+    if not _valid_phase_sequence(windows):
+        raise ValueError("macmini_soak_phase_windows_invalid")
+    return windows
+
+
+def _phase_payload(path: str) -> list[object]:
+    raw = Path(path).read_bytes()
+    if not raw or len(raw) > 256 * 1024:
+        raise ValueError("macmini_soak_phase_windows_invalid")
+    payload = json.loads(raw)
+    phases = payload.get("phases") if isinstance(payload, dict) else None
+    if not isinstance(phases, list):
+        raise ValueError("macmini_soak_phase_windows_invalid")
+    return phases
+
+
+def _valid_phase_sequence(windows: tuple[PhaseWindow, ...]) -> bool:
+    has_unique_ids = len({window.phase_id for window in windows}) == len(windows)
+    is_contiguous = not any(
+        left.ended_at != right.started_at for left, right in zip(windows, windows[1:], strict=False)
+    )
+    return bool(windows) and has_unique_ids and is_contiguous
+
+
+def _phase_window(value: object) -> PhaseWindow:
+    if not isinstance(value, dict):
+        raise ValueError("macmini_soak_phase_windows_invalid")
+    phase_id = value.get("phase_id")
+    start = datetime.fromisoformat(str(value.get("startedAt")))
+    end = datetime.fromisoformat(str(value.get("endedAt")))
+    if not isinstance(phase_id, str) or not phase_id or start.tzinfo is None or end.tzinfo is None or end <= start:
+        raise ValueError("macmini_soak_phase_windows_invalid")
+    return PhaseWindow(phase_id, start, end)
 
 
 def _is_declared_fault(sampled_at: str, windows: tuple[tuple[datetime, datetime], ...]) -> bool:
@@ -638,7 +1065,15 @@ def _bounded_float(value: float, minimum: float, maximum: float, name: str) -> f
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request: object, fp: object, code: int, msg: str, headers: object, url: str) -> None:
+    def redirect_request(
+        self,
+        request: object,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        url: str,
+    ) -> None:
         raise RuntimeError("macmini_soak_redirect_not_allowed")
 
 
@@ -656,7 +1091,12 @@ def main() -> int:
     parser.add_argument("--business-probe-command-json")
     parser.add_argument("--business-probe-every", type=int, default=5)
     parser.add_argument("--business-probe-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--operations-probe-command-json")
+    parser.add_argument("--operations-probe-every", type=int, default=12)
+    parser.add_argument("--operations-probe-timeout-seconds", type=float, default=60.0)
+    parser.add_argument("--require-operations-probe", action="store_true")
     parser.add_argument("--fault-windows-file")
+    parser.add_argument("--phase-windows-file")
     summary = run_soak(parser.parse_args())
     print(json.dumps(summary, sort_keys=True))
     return 0 if summary["status"] == "passed" else 1
