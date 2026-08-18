@@ -103,6 +103,7 @@ external:
     bucket: foundry-lite
   kafka:
     bootstrapServers: kafka.example.invalid:9092
+    subscriptionsJson: '[{"streamName":"foundry-lite-outbox","topic":"foundry-lite-outbox","partition":0}]'
   temporal:
     endpoint: temporal.example.invalid:7233
   search:

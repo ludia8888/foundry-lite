@@ -163,6 +163,20 @@ def test_otlp_http_trace_endpoint_includes_the_collector_path() -> None:
     assert macmini["external"]["telemetry"]["otlpEndpoint"] == ("http://foundry-lite-tempo:4318/v1/traces")
 
 
+def test_kafka_outbox_subscription_is_packaged_for_runtime_and_macmini() -> None:
+    base = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    macmini = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))
+    configmap = (ROOT / "deploy/helm/foundry-lite/templates/configmap.yaml").read_text(encoding="utf-8")
+
+    base_subscriptions = json.loads(base["external"]["kafka"]["subscriptionsJson"])
+    macmini_subscriptions = json.loads(macmini["external"]["kafka"]["subscriptionsJson"])
+
+    assert base_subscriptions == [{"streamName": "foundry-lite-outbox", "topic": "foundry-lite-outbox", "partition": 0}]
+    assert macmini_subscriptions[0]["defaultTenantId"] == "tenant-demo"
+    assert "FOUNDRY_LITE_KAFKA_SUBSCRIPTIONS_JSON" in configmap
+    assert ".Values.external.kafka.subscriptionsJson" in configmap
+
+
 def test_runtime_and_migration_database_principals_are_separate() -> None:
     values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
     jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
