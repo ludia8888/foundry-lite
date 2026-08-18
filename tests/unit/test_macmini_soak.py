@@ -41,18 +41,29 @@ def test_soak_summary_requires_999_and_zero_restarts(tmp_path: Path) -> None:
     assert summary["multiNodeAvailability"] == "notProven"
 
 
-def test_soak_summary_fails_on_unexpected_restart(tmp_path: Path) -> None:
+def test_soak_summary_fails_on_restart_increment_after_baseline(tmp_path: Path) -> None:
     samples = tmp_path / "samples.ndjson"
-    sample = {
-        "sampledAt": "2026-08-17T00:00:00+00:00",
-        "http": [{"name": "ready", "isAvailable": True}],
-        "pods": {"items": [{"name": "api", "restarts": 1, "ownerKind": "ReplicaSet", "ownerName": "api-rs"}]},
-        "businessProbe": None,
-        "nodeMetrics": {"status": "ok", "memoryPercent": 40},
-        "disk": {"status": "ok", "usedPercent": 30},
-    }
-    samples.write_text(json.dumps(sample) + "\n", encoding="utf-8")
-    assert _summarize(samples, 60)["status"] == "failed"
+    before = _soak_sample("2026-08-17T00:00:00+00:00", restarts=0)
+    after = _soak_sample("2026-08-17T00:01:00+00:00", restarts=1)
+    samples.write_text(json.dumps(before) + "\n" + json.dumps(after) + "\n", encoding="utf-8")
+
+    summary = _summarize(samples, 60)
+
+    assert summary["status"] == "failed"
+    assert summary["unexpectedRestartIncrementCount"] == 1
+
+
+def test_soak_summary_treats_existing_restart_count_as_baseline(tmp_path: Path) -> None:
+    samples = tmp_path / "samples.ndjson"
+    before = _soak_sample("2026-08-17T00:00:00+00:00", restarts=4)
+    after = _soak_sample("2026-08-17T00:01:00+00:00", restarts=4)
+    samples.write_text(json.dumps(before) + "\n" + json.dumps(after) + "\n", encoding="utf-8")
+
+    summary = _summarize(samples, 60)
+
+    assert summary["status"] == "passed"
+    assert summary["maximumObservedRestartCount"] == 4
+    assert summary["unexpectedRestartIncrementCount"] == 0
 
 
 def test_soak_availability_is_calculated_per_probe() -> None:
@@ -117,6 +128,27 @@ def _valid_business_receipt() -> dict[str, object]:
         "objectVersion": 2,
         "datasetPreviewMatched": True,
         "objectQueryMatched": True,
+    }
+
+
+def _soak_sample(sampled_at: str, *, restarts: int) -> dict[str, object]:
+    return {
+        "sampledAt": sampled_at,
+        "http": [{"name": "ready", "isAvailable": True}],
+        "pods": {
+            "items": [
+                {
+                    "name": "api",
+                    "restarts": restarts,
+                    "ownerKind": "ReplicaSet",
+                    "ownerName": "api-rs",
+                    "oomCount": 0,
+                }
+            ]
+        },
+        "businessProbe": {"status": "passed"},
+        "nodeMetrics": {"status": "ok", "memoryPercent": 40},
+        "disk": {"status": "ok", "usedPercent": 30},
     }
 
 
