@@ -51,7 +51,6 @@ def backup(args: argparse.Namespace) -> dict[str, object]:
     if mode.get("status") != "paused":
         raise RuntimeError("macmini_backup_restore_mode_not_active")
     workers = _pause_workers(args)
-    before = _postgres_inventory(args)
     release_values = _helm_release_values(args)
     _package_release_chart(args, target, release_values)
     preflight = _api_json(
@@ -66,6 +65,7 @@ def backup(args: argparse.Namespace) -> dict[str, object]:
         "/api/operations/backup-restore/artifacts",
         {"backupId": args.run_id},
     )
+    before = _postgres_inventory(args)
     _pg_dump(args, target / "postgres.dump")
     _s3_manifest(args, target / "s3-manifest.json")
     _s3_archive(args, target / "s3-versions.tar")
@@ -125,7 +125,7 @@ def _pause_workers(args: argparse.Namespace) -> list[dict[str, object]]:
         if identity is None:
             continue
         name, replicas = identity
-        scaled = _kubectl(args, ("scale", "deployment", name, "--replicas=0"), 30)
+        scaled = _kubectl(args, _replica_patch("deployment", name, 0), 30)
         if scaled.returncode != 0:
             raise RuntimeError("macmini_backup_worker_pause_failed")
         receipts.append({"name": name, "replicasBefore": replicas, "replicasAfter": 0})
@@ -150,6 +150,19 @@ def _worker_identity(value: object) -> tuple[str, int] | None:
     if not isinstance(name, str) or not isinstance(replicas, int) or isinstance(replicas, bool):
         raise RuntimeError("macmini_backup_worker_inventory_invalid")
     return name, replicas
+
+
+def _replica_patch(kind: str, name: str, replicas: int) -> tuple[str, ...]:
+    payload = json.dumps({"spec": {"replicas": replicas}}, separators=(",", ":"))
+    return (
+        "patch",
+        kind,
+        name,
+        "--type=merge",
+        "--field-manager=helm",
+        "-p",
+        payload,
+    )
 
 
 def _postgres_inventory(args: argparse.Namespace) -> object:

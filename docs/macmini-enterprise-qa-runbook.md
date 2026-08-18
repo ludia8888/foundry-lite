@@ -176,6 +176,8 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/backup_m
 
 복원은 원본을 덮지 않고 `foundry-qa-recovery` namespace에 수행한다. source namespace에서 애플리케이션 설정, OAuth signing key, QA dependency credential, age recipient, GHCR pull credential Secret을 recovery namespace에 직접 복제하되, Secret 내용은 백업 archive나 영수증에 기록하지 않는다. 먼저 API/Web/worker/controller/broker를 끈 foundation phase로 PostgreSQL·MinIO와 기반 서비스만 준비하고 PostgreSQL을 복원한다. 그 뒤 recovery 내부에서만 API 하나를 잠시 켜 S3 version archive를 복원하고 DB inventory를 비교한다. 마지막 atomic Helm phase에서 백업에 고정된 exact chart package와 release values를 다시 적용한 다음 전체 deployment를 기다린다. 현재 checkout의 chart/default values나 mutable image tag로 대체하지 않는다.
 
+단일 6 CPU/16 GiB 노드에서는 source와 recovery 전체 stack을 동시에 상주시킬 수 없으므로 restore mode 안에서 bounded capacity handoff를 수행한다. source PostgreSQL·MinIO와 API 1개는 검증용으로 유지하고 Web, execution broker, release controller, Temporal, 검색·관측·인증 보조 workload만 원래 replica를 기록한 뒤 일시 축소한다. recovery 전체 release와 post-restore validation을 통과하면 recovery workload를 0 replica로 hibernate하고 source의 기록된 replica와 worker를 복원한다. 모든 scale은 Helm 4 server-side apply와 충돌하지 않도록 `--field-manager=helm`을 사용하며, recovery PVC는 보존한다. 이는 두 stack을 축소된 resource 값으로 동시에 실행하는 검사가 아니라, exact release values를 순차적으로 검증하는 단일노드 cold-restore rehearsal이다.
+
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/restore_macmini_qa.py \
   --run-id "$RUN_ID" \

@@ -47,6 +47,175 @@ def test_backup_pauses_only_worker_component_deployments() -> None:
     assert _worker_identity(api) is None
 
 
+def test_backup_and_restore_scaling_preserve_helm_field_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    backup_commands: list[tuple[str, ...]] = []
+    restore_commands: list[tuple[str, ...]] = []
+    inventory = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "foundry-lite-worker-action",
+                    "labels": {"app.kubernetes.io/component": "worker-action"},
+                },
+                "spec": {"replicas": 1},
+            }
+        ]
+    }
+
+    def backup_kubectl(
+        _args: argparse.Namespace, operation: tuple[str, ...], _timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        backup_commands.append(operation)
+        stdout = json.dumps(inventory).encode() if operation[0] == "get" else b""
+        return subprocess.CompletedProcess(operation, 0, stdout, b"")
+
+    def restore_kubectl(
+        _args: argparse.Namespace,
+        _namespace: str,
+        operation: tuple[str, ...],
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        restore_commands.append(operation)
+        return subprocess.CompletedProcess(operation, 0, b"", b"")
+
+    monkeypatch.setattr(backup_subject, "_kubectl", backup_kubectl)
+    monkeypatch.setattr(restore_subject, "_kubectl", restore_kubectl)
+
+    backup_subject._pause_workers(argparse.Namespace())
+    restore_subject._scale_named(argparse.Namespace(), "foundry-qa-recovery", "foundry-lite", 1)
+
+    assert "--subresource=scale" not in backup_commands[-1]
+    assert "--field-manager=helm" in backup_commands[-1]
+    assert "--subresource=scale" not in restore_commands[-1]
+    assert "--field-manager=helm" in restore_commands[-1]
+
+
+def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    scaled: list[tuple[str, str, str, int]] = []
+    waited: list[tuple[str, str, str]] = []
+
+    def replicas(_args: argparse.Namespace, _namespace: str, kind: str, name: str) -> int:
+        return 2 if kind == "deployment" and name in {"foundry-lite", "foundry-lite-web"} else 1
+
+    def scale(
+        _args: argparse.Namespace,
+        namespace: str,
+        kind: str,
+        name: str,
+        count: int,
+    ) -> None:
+        scaled.append((namespace, kind, name, count))
+
+    def wait(
+        _args: argparse.Namespace,
+        namespace: str,
+        kind: str,
+        name: str,
+        _timeout: int,
+    ) -> None:
+        waited.append((namespace, kind, name))
+
+    monkeypatch.setattr(restore_subject, "_workload_replicas", replicas)
+    monkeypatch.setattr(restore_subject, "_scale_workload", scale)
+    monkeypatch.setattr(restore_subject, "_wait_workload", wait)
+    args = argparse.Namespace(source_namespace="foundry-qa", recovery_namespace="foundry-qa-recovery")
+
+    receipt = restore_subject._handoff_source_capacity(args)
+    restore_subject._hibernate_recovery(args)
+    restore_subject._restore_source_capacity(args, receipt)
+
+    assert ("foundry-qa", "deployment", "foundry-lite", 1) in scaled
+    assert ("foundry-qa-recovery", "statefulset", "foundry-lite-postgresql", 0) in scaled
+    assert ("foundry-qa-recovery", "deployment", "foundry-lite-worker-action", 0) in scaled
+    assert ("foundry-qa", "deployment", "foundry-lite", 2) in scaled
+    assert ("foundry-qa", "statefulset", "foundry-lite-keycloak") in waited
+
+
+def test_restore_waits_for_each_resumed_source_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "paused-workers.json").write_text(
+        json.dumps(
+            [
+                {"name": "foundry-lite-worker-action", "replicasBefore": 1},
+                {"name": "foundry-lite-worker-outbox", "replicasBefore": 0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    scaled: list[tuple[str, str, int]] = []
+    waited: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(
+        restore_subject,
+        "_scale_named",
+        lambda _args, namespace, name, replicas: scaled.append((namespace, name, replicas)),
+    )
+    monkeypatch.setattr(
+        restore_subject,
+        "_wait_deployment",
+        lambda _args, namespace, name, timeout: waited.append((namespace, name, timeout)),
+    )
+
+    restore_subject._resume_source_workers(argparse.Namespace(source_namespace="foundry-qa"), payload)
+
+    assert scaled == [
+        ("foundry-qa", "foundry-lite-worker-action", 1),
+        ("foundry-qa", "foundry-lite-worker-outbox", 0),
+    ]
+    assert waited == [("foundry-qa", "foundry-lite-worker-action", 300)]
+
+
+def test_backup_freezes_commit_point_after_platform_evidence_mutations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    target = tmp_path / "backup"
+    target.mkdir()
+
+    def api_json(_base: str, _token: str, path: str, _payload: object) -> dict[str, object]:
+        events.append(path)
+        return {"status": "paused"} if path.endswith("/start") else {}
+
+    class CommitPointCaptured(RuntimeError):
+        pass
+
+    def postgres_inventory(_args: argparse.Namespace) -> object:
+        events.append("postgres-inventory")
+        raise CommitPointCaptured
+
+    monkeypatch.setattr(backup_subject, "assert_host_boundary", lambda: None)
+    monkeypatch.setattr(backup_subject, "assert_namespace", lambda _namespace: None)
+    monkeypatch.setattr(backup_subject, "_private_text", lambda _path: "operator-token")
+    monkeypatch.setattr(backup_subject, "_age_recipient", lambda _path: "age1recipient")
+    monkeypatch.setattr(backup_subject, "_backup_directory", lambda _run_id: target)
+    monkeypatch.setattr(backup_subject, "_api_json", api_json)
+    monkeypatch.setattr(backup_subject, "_pause_workers", lambda _args: [])
+    monkeypatch.setattr(backup_subject, "_helm_release_values", lambda _args: _exact_release_values())
+    monkeypatch.setattr(backup_subject, "_package_release_chart", lambda *_args: target / "helm-chart.tgz")
+    monkeypatch.setattr(backup_subject, "_postgres_inventory", postgres_inventory)
+    args = argparse.Namespace(
+        namespace="foundry-qa",
+        bearer_token_file=str(tmp_path / "token"),
+        age_recipient_file=str(tmp_path / "recipient"),
+        run_id="run-1",
+        api_base_url="http://127.0.0.1:30443",
+    )
+
+    with pytest.raises(CommitPointCaptured):
+        backup_subject.backup(args)
+
+    assert events == [
+        "/api/operations/backup-restore/restore-mode/start",
+        "/api/operations/backup-restore/preflight",
+        "/api/operations/backup-restore/artifacts",
+        "postgres-inventory",
+    ]
+
+
 def test_restore_safe_extract_rejects_links(tmp_path: Path) -> None:
     archive_path = tmp_path / "payload.tar"
     with tarfile.open(archive_path, mode="w") as archive:
@@ -174,6 +343,64 @@ def test_restore_requires_a_bounded_archived_release_chart(tmp_path: Path) -> No
         restore_subject._archived_release_chart(tmp_path)
 
 
+def test_restore_creates_helm_owned_runtime_pvc_before_temporary_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_values = _exact_release_values()
+    release_values["global"]["storageClass"] = "local-path"  # type: ignore[index]
+    release_values["runtimePersistence"] = {"enabled": True, "size": "5Gi"}
+    path = tmp_path / "values.json"
+    path.write_text(json.dumps(release_values), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def kubectl_input(
+        _args: argparse.Namespace,
+        namespace: str,
+        operation: tuple[str, ...],
+        payload: bytes,
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        captured.update({"namespace": namespace, "operation": operation, "manifest": json.loads(payload)})
+        return subprocess.CompletedProcess(operation, 0, b"", b"")
+
+    monkeypatch.setattr(restore_subject, "_kubectl_input", kubectl_input)
+    args = argparse.Namespace(recovery_namespace="foundry-qa-recovery")
+
+    restore_subject._ensure_recovery_runtime_pvc(args, path)
+
+    manifest = captured["manifest"]
+    assert captured["namespace"] == "foundry-qa-recovery"
+    assert manifest["metadata"]["annotations"]["meta.helm.sh/release-name"] == "foundry-lite"  # type: ignore[index]
+    assert manifest["spec"]["storageClassName"] == "local-path"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "runtime,storage_class",
+    [
+        ({"enabled": False, "size": "5Gi"}, "local-path"),
+        ({"enabled": True, "size": "unbounded"}, "local-path"),
+        ({"enabled": True, "size": "5Gi"}, "../shared"),
+    ],
+)
+def test_restore_rejects_unsafe_runtime_pvc_values(
+    tmp_path: Path,
+    runtime: dict[str, object],
+    storage_class: str,
+) -> None:
+    release_values = _exact_release_values()
+    release_values["global"]["storageClass"] = storage_class  # type: ignore[index]
+    release_values["runtimePersistence"] = runtime
+    path = tmp_path / "values.json"
+    path.write_text(json.dumps(release_values), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="runtime_pvc_values_invalid"):
+        restore_subject._ensure_recovery_runtime_pvc(
+            argparse.Namespace(recovery_namespace="foundry-qa-recovery"),
+            path,
+        )
+
+
 def test_restore_helm_install_uses_exact_values_in_two_phases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -201,5 +428,11 @@ def test_restore_helm_install_uses_exact_values_in_two_phases(
     assert all(str(chart) in command for command in commands)
     assert all(str(archived) in command for command in commands)
     assert all("--atomic" in command and "--wait-for-jobs" in command for command in commands)
+    assert "--force-conflicts" not in commands[0]
+    assert "--force-conflicts" in commands[1]
     assert str(tmp_path / "recovery-foundation.json") in commands[0]
     assert str(tmp_path / "recovery-foundation.json") not in commands[1]
+    foundation = json.loads((tmp_path / "recovery-foundation.json").read_text(encoding="utf-8"))
+    assert foundation["migrations"] == {"enabled": False}
+    assert foundation["runtimePersistence"] == {"enabled": False}
+    assert foundation["secrets"] == {"bootstrapOauthSigningSecret": False}

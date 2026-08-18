@@ -279,7 +279,8 @@ def _summarize(
         "eligibleSampleCount": len(eligible),
         "availability": metrics.availability,
         "availabilityByProbe": metrics.probe_availability,
-        "maximumObservedRestartCount": metrics.unexpected_restarts,
+        "maximumObservedRestartCount": _maximum_pod_value(samples, "restarts"),
+        "unexpectedRestartIncrementCount": metrics.unexpected_restarts,
         "unexpectedPodReplacementCount": metrics.unexpected_replacements,
         "businessProbeExecutions": metrics.business_executions,
         "businessProbeFailures": metrics.business_failures,
@@ -385,7 +386,6 @@ def _unexpected_restart_increments(
 ) -> int:
     previous: dict[str, int] = {}
     previous_at: datetime | None = None
-    should_ignore_new_baseline = False
     unexpected = 0
     for sample in samples:
         sampled_at = datetime.fromisoformat(str(sample["sampledAt"]))
@@ -393,15 +393,11 @@ def _unexpected_restart_increments(
             previous_at, sampled_at, fault_windows
         ):
             previous = {}
-            should_ignore_new_baseline = True
         else:
             current = _pod_restart_map(sample)
             if previous:
                 unexpected += sum(max(0, count - previous[name]) for name, count in current.items() if name in previous)
-            elif not should_ignore_new_baseline:
-                unexpected += sum(current.values())
             previous = current
-            should_ignore_new_baseline = False
         previous_at = sampled_at
     return unexpected
 

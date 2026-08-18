@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess  # nosec B404 - fixed age/Helm/kubectl only; remove if arbitrary commands are introduced.
 import tarfile
@@ -18,6 +19,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 from scripts.operations.backup_macmini_qa import _validated_release_values
 from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, assert_namespace
@@ -42,7 +44,48 @@ _APP_DEPLOYMENTS = (
     ("foundry-lite-worker-pipeline", 1),
     ("foundry-lite-worker-action", 1),
 )
+_SOURCE_CAPACITY_HANDOFF = (
+    ("statefulset", "foundry-lite-clamav", 0),
+    ("statefulset", "foundry-lite-elasticsearch", 0),
+    ("statefulset", "foundry-lite-grafana", 0),
+    ("statefulset", "foundry-lite-keycloak", 0),
+    ("statefulset", "foundry-lite-prometheus", 0),
+    ("statefulset", "foundry-lite-redpanda", 0),
+    ("statefulset", "foundry-lite-tempo", 0),
+    ("deployment", "foundry-lite-temporal", 0),
+    ("deployment", "foundry-lite-web", 0),
+    ("deployment", "foundry-lite-execution-broker", 0),
+    ("deployment", "foundry-lite-release-controller", 0),
+    ("deployment", "foundry-lite", 1),
+)
+_RECOVERY_HIBERNATE = (
+    *(("deployment", name) for name, _replicas in _APP_DEPLOYMENTS),
+    ("deployment", "foundry-lite-temporal"),
+    *(
+        ("statefulset", f"foundry-lite-{name}")
+        for name in (
+            "clamav",
+            "elasticsearch",
+            "grafana",
+            "keycloak",
+            "minio",
+            "postgresql",
+            "prometheus",
+            "redpanda",
+            "tempo",
+        )
+    ),
+)
 _MAX_API_BYTES = 2 * 1024 * 1024
+_KUBERNETES_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
+_STORAGE_SIZE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi)$")
+
+
+class CapacityReceipt(TypedDict):
+    kind: str
+    name: str
+    replicasBefore: int
+    replicasDuringRecovery: int
 
 
 def restore(args: argparse.Namespace) -> dict[str, object]:
@@ -58,6 +101,7 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
     _verify_encrypted_archive(args.run_id, archive)
     temporary = Path(tempfile.mkdtemp(prefix="restore-", dir=QA_ROOT / "state"))
     os.chmod(temporary, 0o700)
+    source_capacity: list[CapacityReceipt] = []
     try:
         payload = _decrypt_and_extract(args.age, identity, archive, temporary, args.run_id)
         _verify_manifest(payload)
@@ -66,8 +110,10 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
             _copy_secret(args, secret)
         release_values = _archived_release_values(payload)
         release_chart = _archived_release_chart(payload)
+        source_capacity = _handoff_source_capacity(args)
         _install_recovery(args, temporary, release_values, release_chart, is_foundation=True)
         _restore_postgresql(args, payload / "postgres.dump")
+        _ensure_recovery_runtime_pvc(args, release_values)
         _scale_named(args, args.recovery_namespace, "foundry-lite", 1)
         _wait_deployment(args, args.recovery_namespace, "foundry-lite", 300)
         _restore_s3(args, payload / "s3-versions.tar")
@@ -93,20 +139,23 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
                 f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
                 {"validationId": f"recovery-{args.run_id}"},
             )
-        source_validation = _api_post(
-            args.source_api_base_url,
-            token,
-            f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
-            {"validationId": f"source-{args.run_id}"},
-        )
-        if source_validation.get("status") != "passed":
-            raise RuntimeError("macmini_restore_source_validation_failed")
-        source_resume = _api_post(
-            args.source_api_base_url,
-            token,
-            f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
-            {"validationId": f"source-{args.run_id}"},
-        )
+        with _port_forward(args, args.source_namespace, 18082):
+            source_validation = _api_post(
+                "http://127.0.0.1:18082",
+                token,
+                f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
+                {"validationId": f"source-{args.run_id}"},
+            )
+            if source_validation.get("status") != "passed":
+                raise RuntimeError("macmini_restore_source_validation_failed")
+            source_resume = _api_post(
+                "http://127.0.0.1:18082",
+                token,
+                f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
+                {"validationId": f"source-{args.run_id}"},
+            )
+        _hibernate_recovery(args)
+        _restore_source_capacity(args, source_capacity)
         _resume_source_workers(args, payload)
         elapsed = int(time.monotonic() - started)
         receipt = {
@@ -125,10 +174,17 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
             "recoveryResumeStatus": recovery_resume.get("status"),
             "sourceResumeStatus": source_resume.get("status"),
             "sourceWorkersResumed": True,
+            "sourceCapacityHandoff": source_capacity,
+            "sourceCapacityRestored": True,
+            "recoveryHibernatedAfterValidation": True,
             "originalNamespaceOverwritten": False,
         }
         _write_receipt(args.run_id, receipt)
         return receipt
+    except BaseException:
+        if source_capacity:
+            _best_effort_capacity_recovery(args, source_capacity)
+        raise
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 
@@ -242,6 +298,8 @@ def _install_recovery(
     if is_foundation:
         foundation = _foundation_values(temporary)
         command.extend(("--values", str(foundation)))
+    else:
+        command.append("--force-conflicts")
     command.extend(
         (
             "--atomic",
@@ -284,6 +342,9 @@ def _foundation_values(temporary: Path) -> Path:
                 "web": {"replicas": 0},
                 "executionBroker": {"enabled": False},
                 "releaseController": {"enabled": False},
+                "migrations": {"enabled": False},
+                "runtimePersistence": {"enabled": False},
+                "secrets": {"bootstrapOauthSigningSecret": False},
                 "workers": {name: {"enabled": False} for name in ("outbox", "scheduler", "pipeline", "action")},
             }
         ),
@@ -293,10 +354,157 @@ def _foundation_values(temporary: Path) -> Path:
     return path
 
 
+def _ensure_recovery_runtime_pvc(args: argparse.Namespace, release_values: Path) -> None:
+    values = json.loads(release_values.read_text(encoding="utf-8"))
+    storage_class, size = _runtime_pvc_coordinates(values)
+    manifest = _runtime_pvc_manifest(args.recovery_namespace, storage_class, size)
+    result = _kubectl_input(
+        args,
+        args.recovery_namespace,
+        ("apply", "-f", "-"),
+        json.dumps(manifest, separators=(",", ":")).encode(),
+        30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("macmini_restore_runtime_pvc_apply_failed")
+
+
+def _runtime_pvc_coordinates(values: object) -> tuple[str, str]:
+    root = _runtime_pvc_mapping(values)
+    global_values = _runtime_pvc_mapping(root.get("global"))
+    runtime = _runtime_pvc_mapping(root.get("runtimePersistence"))
+    if runtime.get("enabled") is not True:
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    storage_class = _runtime_pvc_value(global_values.get("storageClass"), _KUBERNETES_NAME)
+    size = _runtime_pvc_value(runtime.get("size"), _STORAGE_SIZE)
+    return storage_class, size
+
+
+def _runtime_pvc_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    return value
+
+
+def _runtime_pvc_value(value: object, pattern: re.Pattern[str]) -> str:
+    if not isinstance(value, str) or pattern.fullmatch(value) is None:
+        raise RuntimeError("macmini_restore_runtime_pvc_values_invalid")
+    return value
+
+
+def _runtime_pvc_manifest(namespace: str, storage_class: str, size: str) -> dict[str, object]:
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": "foundry-lite-runtime",
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": "foundry-lite",
+                "app.kubernetes.io/instance": "foundry-lite",
+                "app.kubernetes.io/managed-by": "Helm",
+            },
+            "annotations": {
+                "meta.helm.sh/release-name": "foundry-lite",
+                "meta.helm.sh/release-namespace": namespace,
+                "helm.sh/resource-policy": "keep",
+            },
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": storage_class,
+            "resources": {"requests": {"storage": size}},
+        },
+    }
+
+
 def _scale_named(args: argparse.Namespace, namespace: str, name: str, replicas: int) -> None:
-    result = _kubectl(args, namespace, ("scale", "deployment", name, f"--replicas={replicas}"), 30)
+    _scale_workload(args, namespace, "deployment", name, replicas)
+
+
+def _scale_workload(args: argparse.Namespace, namespace: str, kind: str, name: str, replicas: int) -> None:
+    operation = _replica_patch(kind, name, replicas)
+    result = _kubectl(args, namespace, operation, 30)
     if result.returncode != 0:
         raise RuntimeError("macmini_restore_scale_failed")
+
+
+def _replica_patch(kind: str, name: str, replicas: int) -> tuple[str, ...]:
+    payload = json.dumps({"spec": {"replicas": replicas}}, separators=(",", ":"))
+    return (
+        "patch",
+        kind,
+        name,
+        "--type=merge",
+        "--field-manager=helm",
+        "-p",
+        payload,
+    )
+
+
+def _workload_replicas(args: argparse.Namespace, namespace: str, kind: str, name: str) -> int:
+    operation = ("get", kind, name, "-o", "jsonpath={.spec.replicas}")
+    result = _kubectl(args, namespace, operation, 30)
+    try:
+        replicas = int(result.stdout.decode().strip())
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError("macmini_restore_replica_inventory_failed") from exc
+    if result.returncode != 0 or replicas < 0 or replicas > 10:
+        raise RuntimeError("macmini_restore_replica_inventory_failed")
+    return replicas
+
+
+def _handoff_source_capacity(args: argparse.Namespace) -> list[CapacityReceipt]:
+    receipts: list[CapacityReceipt] = [
+        CapacityReceipt(
+            kind=kind,
+            name=name,
+            replicasBefore=_workload_replicas(args, args.source_namespace, kind, name),
+            replicasDuringRecovery=target,
+        )
+        for kind, name, target in _SOURCE_CAPACITY_HANDOFF
+    ]
+    for item in receipts:
+        _scale_workload(
+            args,
+            args.source_namespace,
+            item["kind"],
+            item["name"],
+            item["replicasDuringRecovery"],
+        )
+    return receipts
+
+
+def _restore_source_capacity(args: argparse.Namespace, receipts: list[CapacityReceipt]) -> None:
+    for item in receipts:
+        _scale_workload(
+            args,
+            args.source_namespace,
+            item["kind"],
+            item["name"],
+            item["replicasBefore"],
+        )
+    for item in receipts:
+        if item["replicasBefore"] > 0:
+            _wait_workload(args, args.source_namespace, item["kind"], item["name"], 300)
+
+
+def _hibernate_recovery(args: argparse.Namespace) -> None:
+    for kind, name in _RECOVERY_HIBERNATE:
+        _scale_workload(args, args.recovery_namespace, kind, name, 0)
+    for kind, name in _RECOVERY_HIBERNATE:
+        _wait_workload(args, args.recovery_namespace, kind, name, 300)
+
+
+def _best_effort_capacity_recovery(args: argparse.Namespace, receipts: list[CapacityReceipt]) -> None:
+    try:
+        _hibernate_recovery(args)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        pass
+    try:
+        _restore_source_capacity(args, receipts)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        pass
 
 
 def _restore_postgresql(args: argparse.Namespace, dump: Path) -> None:
@@ -383,7 +591,11 @@ def _wait_all_recovery(args: argparse.Namespace) -> None:
 
 
 def _wait_deployment(args: argparse.Namespace, namespace: str, name: str, timeout: int) -> None:
-    operation = ("rollout", "status", f"deployment/{name}", f"--timeout={timeout}s")
+    _wait_workload(args, namespace, "deployment", name, timeout)
+
+
+def _wait_workload(args: argparse.Namespace, namespace: str, kind: str, name: str, timeout: int) -> None:
+    operation = ("rollout", "status", f"{kind}/{name}", f"--timeout={timeout}s")
     result = _kubectl(args, namespace, operation, timeout + 20)
     if result.returncode != 0:
         raise RuntimeError("macmini_restore_rollout_failed")
@@ -400,6 +612,8 @@ def _resume_source_workers(args: argparse.Namespace, payload: Path) -> None:
         if not isinstance(replicas, int) or isinstance(replicas, bool) or replicas < 0 or replicas > 10:
             raise RuntimeError("macmini_restore_worker_receipt_invalid")
         _scale_named(args, args.source_namespace, item["name"], replicas)
+        if replicas > 0:
+            _wait_deployment(args, args.source_namespace, item["name"], 300)
 
 
 @contextmanager
