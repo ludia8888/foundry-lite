@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from threading import Lock
 
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class FoundryRuntimeLifecycle:
@@ -27,6 +30,14 @@ class FoundryRuntimeLifecycle:
         self._is_stream_closed = False
         self._is_engine_closed = False
         self._is_closed = False
+
+    @staticmethod
+    @contextmanager
+    def bootstrap_tenant_context(tenant_id: str) -> Generator[None]:
+        """Bind one explicit tenant while idempotent runtime bootstrap executes."""
+
+        with tenant_context(tenant_id):
+            yield
 
     def close(
         self,
