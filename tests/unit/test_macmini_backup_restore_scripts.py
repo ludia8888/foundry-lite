@@ -84,9 +84,9 @@ def test_backup_and_restore_scaling_preserve_helm_field_ownership(monkeypatch: p
     backup_subject._pause_workers(argparse.Namespace())
     restore_subject._scale_named(argparse.Namespace(), "foundry-qa-recovery", "foundry-lite", 1)
 
-    assert "--subresource=scale" in backup_commands[-1]
+    assert "--subresource=scale" not in backup_commands[-1]
     assert "--field-manager=helm" in backup_commands[-1]
-    assert "--subresource=scale" in restore_commands[-1]
+    assert "--subresource=scale" not in restore_commands[-1]
     assert "--field-manager=helm" in restore_commands[-1]
 
 
@@ -365,6 +365,8 @@ def test_restore_helm_install_uses_exact_values_in_two_phases(
     assert all(str(chart) in command for command in commands)
     assert all(str(archived) in command for command in commands)
     assert all("--atomic" in command and "--wait-for-jobs" in command for command in commands)
+    assert "--force-conflicts" not in commands[0]
+    assert "--force-conflicts" in commands[1]
     assert str(tmp_path / "recovery-foundation.json") in commands[0]
     assert str(tmp_path / "recovery-foundation.json") not in commands[1]
     foundation = json.loads((tmp_path / "recovery-foundation.json").read_text(encoding="utf-8"))

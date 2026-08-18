@@ -297,6 +297,8 @@ def _install_recovery(
     if is_foundation:
         foundation = _foundation_values(temporary)
         command.extend(("--values", str(foundation)))
+    else:
+        command.append("--force-conflicts")
     command.extend(
         (
             "--atomic",
@@ -421,7 +423,6 @@ def _replica_patch(kind: str, name: str, replicas: int) -> tuple[str, ...]:
         "patch",
         kind,
         name,
-        "--subresource=scale",
         "--type=merge",
         "--field-manager=helm",
         "-p",

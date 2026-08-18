@@ -158,7 +158,6 @@ def _replica_patch(kind: str, name: str, replicas: int) -> tuple[str, ...]:
         "patch",
         kind,
         name,
-        "--subresource=scale",
         "--type=merge",
         "--field-manager=helm",
         "-p",
