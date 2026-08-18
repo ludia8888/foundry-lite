@@ -29,23 +29,22 @@ def test_supervisor_rejects_unregistered_module() -> None:
         supervise("arbitrary.module", interval_seconds=1, max_cycles=1)
 
 
-def test_supervisor_reports_failed_cycle_and_sleeps_between_cycles(
+def test_supervisor_exits_on_failed_cycle_so_kubernetes_observes_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     sleeps: list[float] = []
-    return_codes = iter((1, 0))
 
     def run(arguments: tuple[str, ...], *, check: bool, shell: bool) -> CompletedProcess[str]:
-        return CompletedProcess(arguments, next(return_codes), "", "")
+        return CompletedProcess(arguments, 1, "", "")
 
     monkeypatch.setattr(supervisor.subprocess, "run", run)
     monkeypatch.setattr(supervisor.time, "sleep", sleeps.append)
 
-    assert supervise("foundry_lite_worker.action_control", interval_seconds=2, max_cycles=2) == 0
+    assert supervise("foundry_lite_worker.action_control", interval_seconds=2, max_cycles=2) == 1
     events = [__import__("json").loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [event["event"] for event in events] == ["worker_cycle_failed", "worker_cycle_complete"]
-    assert sleeps == [2]
+    assert [event["event"] for event in events] == ["worker_cycle_failed"]
+    assert sleeps == []
 
 
 @pytest.mark.parametrize(("interval_seconds", "max_cycles"), [(0, 1), (301, 1), (1, -1)])

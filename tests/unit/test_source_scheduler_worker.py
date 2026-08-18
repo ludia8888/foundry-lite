@@ -4,7 +4,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_worker import source_scheduler
 from foundry_lite_worker.source_scheduler import (
     SourceSchedulerWorkerConfig,
@@ -26,6 +28,17 @@ class _FakeSources:
         return self._ticks.pop(0)
 
 
+def _initialize_worker_schema(config: SourceSchedulerWorkerConfig) -> None:
+    # Production workers consume schema installed by the migration/bootstrap Jobs.
+    runtime = FoundryLite(
+        dependencies=create_local_core_dependencies(
+            db_url=config.db_url,
+            storage_root=config.storage_root,
+        )
+    )
+    runtime.close()
+
+
 def test_source_scheduler_worker_daemon_stops_after_empty_tick_and_writes_evidence(tmp_path) -> None:
     evidence_path = tmp_path / "scheduler-evidence.json"
     config = SourceSchedulerWorkerConfig(
@@ -36,6 +49,7 @@ def test_source_scheduler_worker_daemon_stops_after_empty_tick_and_writes_eviden
         is_continuous=True,
         evidence_path=evidence_path,
     )
+    _initialize_worker_schema(config)
 
     result = run_source_scheduler_daemon(config)
 
@@ -56,6 +70,7 @@ def test_source_scheduler_worker_daemon_can_run_until_stop_callback(tmp_path) ->
         tick_interval_seconds=0,
         is_continuous=True,
     )
+    _initialize_worker_schema(config)
 
     def should_stop() -> bool:
         nonlocal checks
@@ -166,6 +181,22 @@ def test_source_scheduler_worker_closes_runtime_when_first_tick_raises(monkeypat
         run_source_scheduler_once(SourceSchedulerWorkerConfig(storage_root=tmp_path))
 
     assert close_calls == ["close"]
+
+
+def test_source_scheduler_worker_never_runs_schema_ddl(monkeypatch, tmp_path) -> None:
+    dependencies = object()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(source_scheduler, "create_runtime_core_dependencies", lambda **_kwargs: dependencies)
+
+    def foundry_lite(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(source_scheduler, "FoundryLite", foundry_lite)
+
+    source_scheduler._build_foundry(SourceSchedulerWorkerConfig(storage_root=tmp_path))
+
+    assert captured == {"dependencies": dependencies, "should_initialize_schema": False}
 
 
 def test_source_scheduler_worker_config_from_env_and_cli_success(monkeypatch, capsys, tmp_path) -> None:

@@ -13,7 +13,11 @@ def test_outbox_worker_uses_runtime_composition_root(monkeypatch, tmp_path: Path
         "create_runtime_core_dependencies",
         lambda **kwargs: captured.append(kwargs) or dependencies,
     )
-    monkeypatch.setattr(outbox_publisher, "FoundryLite", lambda *, dependencies: dependencies)
+    monkeypatch.setattr(
+        outbox_publisher,
+        "FoundryLite",
+        lambda *, dependencies, should_initialize_schema: dependencies if not should_initialize_schema else None,
+    )
 
     result = outbox_publisher._build_foundry(
         outbox_publisher.OutboxPublisherWorkerConfig(
@@ -41,7 +45,11 @@ def test_source_scheduler_uses_runtime_composition_root(monkeypatch, tmp_path: P
         "create_runtime_core_dependencies",
         lambda **kwargs: captured.append(kwargs) or dependencies,
     )
-    monkeypatch.setattr(source_scheduler, "FoundryLite", lambda *, dependencies: dependencies)
+    monkeypatch.setattr(
+        source_scheduler,
+        "FoundryLite",
+        lambda *, dependencies, should_initialize_schema: dependencies if not should_initialize_schema else None,
+    )
 
     result = source_scheduler._build_foundry(
         source_scheduler.SourceSchedulerWorkerConfig(

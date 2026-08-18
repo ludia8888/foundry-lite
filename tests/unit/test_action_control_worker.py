@@ -8,6 +8,34 @@ import pytest
 from foundry_lite_worker import action_control
 
 
+def test_action_control_uses_runtime_home_without_schema_ddl(monkeypatch, tmp_path) -> None:
+    stop = Event()
+    stop.set()
+    dependencies = object()
+    captured_dependencies: dict[str, object] = {}
+    captured_foundry: dict[str, object] = {}
+    close_calls: list[str] = []
+
+    def create_dependencies(**kwargs: object) -> object:
+        captured_dependencies.update(kwargs)
+        return dependencies
+
+    def foundry_lite(**kwargs: object) -> object:
+        captured_foundry.update(kwargs)
+        return SimpleNamespace(close=lambda: close_calls.append("close"))
+
+    monkeypatch.setenv("FOUNDRY_LITE_HOME", str(tmp_path / "runtime"))
+    monkeypatch.setenv("FOUNDRY_LITE_DB_URL", "postgresql://database.invalid/foundry_lite")
+    monkeypatch.setattr(action_control, "create_runtime_core_dependencies", create_dependencies)
+    monkeypatch.setattr(action_control, "FoundryLite", foundry_lite)
+
+    action_control.run_control_loop(stop)
+
+    assert captured_dependencies["storage_root"] == str(tmp_path / "runtime")
+    assert captured_foundry == {"dependencies": dependencies, "should_initialize_schema": False}
+    assert close_calls == ["close"]
+
+
 def test_action_control_worker_recovers_runs_and_publishes_monitoring_alerts(monkeypatch) -> None:
     stop = Event()
     calls: list[tuple[str, object]] = []

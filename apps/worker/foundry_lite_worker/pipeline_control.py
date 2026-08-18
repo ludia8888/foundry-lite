@@ -20,8 +20,9 @@ def run_control_loop(stop_event: Event | None = None) -> None:
     foundry = FoundryLite(
         dependencies=create_runtime_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
-            storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT"),
-        )
+            storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+        ),
+        should_initialize_schema=False,
     )
     try:
         interval = max(1.0, float(os.getenv("FOUNDRY_LITE_PIPELINE_CONTROL_INTERVAL_SECONDS", "5")))

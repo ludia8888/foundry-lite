@@ -191,7 +191,7 @@ def _build_foundry(config: SourceSchedulerWorkerConfig) -> FoundryLite:
         storage_root=config.storage_root,
         adapter_profile=config.adapter_profile,
     )
-    return FoundryLite(dependencies=dependencies)
+    return FoundryLite(dependencies=dependencies, should_initialize_schema=False)
 
 
 def _write_evidence(config: SourceSchedulerWorkerConfig, result: SourceSchedulerWorkerResult) -> None:

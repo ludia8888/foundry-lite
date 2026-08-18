@@ -90,6 +90,22 @@ def test_outbox_publisher_worker_config_from_env(tmp_path: Path) -> None:
     assert config.evidence_path == tmp_path / "evidence.json"
 
 
+def test_outbox_worker_never_runs_schema_ddl(monkeypatch, tmp_path: Path) -> None:
+    dependencies = object()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(outbox_publisher, "create_runtime_core_dependencies", lambda **_kwargs: dependencies)
+
+    def foundry_lite(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(outbox_publisher, "FoundryLite", foundry_lite)
+
+    outbox_publisher._build_foundry(OutboxPublisherWorkerConfig(storage_root=tmp_path))
+
+    assert captured == {"dependencies": dependencies, "should_initialize_schema": False}
+
+
 def test_outbox_publisher_worker_closes_runtime_when_publish_raises(monkeypatch, tmp_path: Path) -> None:
     class FailingOperations:
         def publish_pending_outbox(self, **_kwargs: object) -> object:

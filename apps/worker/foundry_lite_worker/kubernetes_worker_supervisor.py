@@ -20,23 +20,38 @@ _ALLOWED_MODULES: Final = frozenset(
 
 
 def supervise(module: str, *, interval_seconds: float, max_cycles: int = 0) -> int:
+    _validate_configuration(module, interval_seconds=interval_seconds, max_cycles=max_cycles)
+    cycle = 0
+    while _should_run_cycle(cycle, max_cycles=max_cycles):
+        cycle += 1
+        exit_code = _run_cycle(module, cycle=cycle)
+        if exit_code != 0:
+            return exit_code
+        if _should_run_cycle(cycle, max_cycles=max_cycles):
+            time.sleep(interval_seconds)
+    return 0
+
+
+def _validate_configuration(module: str, *, interval_seconds: float, max_cycles: int) -> None:
     if module not in _ALLOWED_MODULES:
         raise ValueError("worker_module_not_allowed")
     if interval_seconds <= 0 or interval_seconds > 300 or max_cycles < 0:
         raise ValueError("worker_supervisor_configuration_invalid")
-    cycle = 0
-    while max_cycles == 0 or cycle < max_cycles:
-        cycle += 1
-        completed = subprocess.run(  # nosec B603 - fixed argv, no shell; remove if arguments become unbounded.
-            (sys.executable, "-m", module),
-            check=False,
-            shell=False,
-        )
-        event = "worker_cycle_complete" if completed.returncode == 0 else "worker_cycle_failed"
-        print(json.dumps({"event": event, "module": module, "cycle": cycle, "exitCode": completed.returncode}))
-        if max_cycles == 0 or cycle < max_cycles:
-            time.sleep(interval_seconds)
-    return 0
+
+
+def _should_run_cycle(cycle: int, *, max_cycles: int) -> bool:
+    return max_cycles == 0 or cycle < max_cycles
+
+
+def _run_cycle(module: str, *, cycle: int) -> int:
+    completed = subprocess.run(  # nosec B603 - fixed argv, no shell; remove if arguments become unbounded.
+        (sys.executable, "-m", module),
+        check=False,
+        shell=False,
+    )
+    event = "worker_cycle_complete" if completed.returncode == 0 else "worker_cycle_failed"
+    print(json.dumps({"event": event, "module": module, "cycle": cycle, "exitCode": completed.returncode}))
+    return completed.returncode
 
 
 def main(argv: list[str] | None = None) -> int:
