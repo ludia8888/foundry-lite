@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from scripts.operations import inject_macmini_fault as subject
-from scripts.operations.inject_macmini_fault import _isolated_internal_selector, _validate_duration
+from scripts.operations.inject_macmini_fault import (
+    _isolated_internal_selector,
+    _validate_duration,
+)
 
 
 def test_fault_network_partition_removes_api_from_existing_internal_allow_policy() -> None:
@@ -30,7 +33,9 @@ def test_fault_duration_is_bounded() -> None:
         _validate_duration(61)
 
 
-def test_network_partition_restores_original_allow_selector_when_fault_wait_fails(monkeypatch) -> None:
+def test_network_partition_restores_original_allow_selector_when_fault_wait_fails(
+    monkeypatch,
+) -> None:
     original = {"matchExpressions": [{"key": "sandbox", "operator": "DoesNotExist"}]}
     calls: list[tuple[str, ...]] = []
 
@@ -38,12 +43,19 @@ def test_network_partition_restores_original_allow_selector_when_fault_wait_fail
         calls.append(operation)
         if operation[:3] == ("get", "networkpolicy", "foundry-lite-internal"):
             return subprocess.CompletedProcess(
-                operation, 0, json.dumps({"spec": {"podSelector": original}}).encode(), b""
+                operation,
+                0,
+                json.dumps({"spec": {"podSelector": original}}).encode(),
+                b"",
             )
         return subprocess.CompletedProcess(operation, 0, b"", b"")
 
     monkeypatch.setattr(subject, "_kubectl", kubectl)
-    monkeypatch.setattr(subject.time, "sleep", lambda _duration: (_ for _ in ()).throw(RuntimeError("injected")))
+    monkeypatch.setattr(
+        subject.time,
+        "sleep",
+        lambda _duration: (_ for _ in ()).throw(RuntimeError("injected")),
+    )
 
     with pytest.raises(RuntimeError, match="injected"):
         subject._network_partition(Namespace(namespace="foundry-qa", duration_seconds=1))
@@ -63,7 +75,11 @@ def test_dependency_fault_scales_back_up_when_fault_wait_fails(monkeypatch) -> N
             calls.append(operation) or subprocess.CompletedProcess(operation, 0, b"", b"")
         ),
     )
-    monkeypatch.setattr(subject.time, "sleep", lambda _duration: (_ for _ in ()).throw(RuntimeError("injected")))
+    monkeypatch.setattr(
+        subject.time,
+        "sleep",
+        lambda _duration: (_ for _ in ()).throw(RuntimeError("injected")),
+    )
 
     with pytest.raises(RuntimeError, match="injected"):
         subject._dependency_fault(Namespace(duration_seconds=1), "postgresql")
@@ -72,10 +88,95 @@ def test_dependency_fault_scales_back_up_when_fault_wait_fails(monkeypatch) -> N
     assert ("scale", "statefulset", "foundry-lite-postgresql", "--replicas=1") in calls
 
 
-def test_invalid_image_fault_restores_exact_digest_after_rejected_rollout(monkeypatch) -> None:
+def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
+    monkeypatch.setattr(subject, "_first_pod", lambda _args, _selector: "worker-1")
+    monkeypatch.setattr(subject, "_pod_restart_count", lambda _args, _pod: 3)
+    monkeypatch.setattr(subject, "_wait_for_pod_restart", lambda _args, _pod, _before, _timeout: True)
+    monkeypatch.setattr(
+        subject,
+        "_kubectl",
+        lambda _args, operation, _timeout: subprocess.CompletedProcess(operation, 0, b"", b""),
+    )
+
+    receipt = subject._signal_fault(
+        Namespace(),
+        subject._POD_SELECTORS["worker-pod"],
+        "worker",
+        "KILL",
+        "deployment/foundry-lite-worker-action",
+    )
+
+    assert receipt["status"] == "passed"
+    assert receipt["signal"] == "SIGKILL"
+    assert receipt["containerRestartObserved"] is True
+
+
+def test_worker_oom_always_restores_original_command(monkeypatch) -> None:
+    original = ("python", "-m", "worker")
+    patches: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        subject,
+        "_named_deployment_snapshot",
+        lambda _args, _deployment: {
+            "spec": {"template": {"spec": {"containers": [{"name": "worker", "command": list(original)}]}}}
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "_patch_deployment_command",
+        lambda _args, _deployment, command, _reason: patches.append(command),
+    )
+    monkeypatch.setattr(subject, "_wait_for_oom_killed", lambda _args, _selector, _duration: True)
+    monkeypatch.setattr(
+        subject,
+        "_kubectl",
+        lambda _args, operation, _timeout: subprocess.CompletedProcess(operation, 0, b"", b""),
+    )
+
+    receipt = subject._worker_oom_fault(Namespace(duration_seconds=10))
+
+    assert receipt["status"] == "passed"
+    assert patches[-1] == original
+    assert receipt["oomKilledObserved"] is True
+
+
+def test_network_netem_restores_qdisc_when_wait_fails(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(subject, "_require_clean_network_qdisc", lambda: None)
+    monkeypatch.setattr(
+        subject,
+        "_colima_root_command",
+        lambda operation, _timeout: calls.append(operation) or subprocess.CompletedProcess(operation, 0, b"", b""),
+    )
+    monkeypatch.setattr(
+        subject.time,
+        "sleep",
+        lambda _duration: (_ for _ in ()).throw(RuntimeError("injected")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected"):
+        subject._network_netem_fault(Namespace(duration_seconds=1), ("loss", "20%"))
+
+    assert calls[-1] == ("tc", "qdisc", "del", "dev", "cni0", "root")
+
+
+def test_dns_fault_rules_cover_udp_and_tcp() -> None:
+    rules = subject._dns_reject_rules()
+
+    assert {rule[3] for rule in rules} == {"udp", "tcp"}
+    assert all("53" in rule for rule in rules)
+
+
+def test_invalid_image_fault_restores_exact_digest_after_rejected_rollout(
+    monkeypatch,
+) -> None:
     original = "ghcr.io/ludia8888/foundry-lite-api@sha256:" + ("a" * 64)
     snapshots = iter(
-        (_deployment(original, 2), _deployment(subject._invalid_image_reference(original), 2), _deployment(original, 2))
+        (
+            _deployment(original, 2),
+            _deployment(subject._invalid_image_reference(original), 2),
+            _deployment(original, 2),
+        )
     )
     calls: list[tuple[str, ...]] = []
 
@@ -96,23 +197,74 @@ def test_invalid_image_fault_restores_exact_digest_after_rejected_rollout(monkey
     assert calls[-3] == ("set", "image", "deployment/foundry-lite", f"api={original}")
 
 
+def test_rolling_restart_preserves_exact_image_digest(monkeypatch) -> None:
+    original = "ghcr.io/ludia8888/foundry-lite-api@sha256:" + ("e" * 64)
+    snapshots = iter((_deployment(original, 2), _deployment(original, 2)))
+    monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: next(snapshots))
+    monkeypatch.setattr(
+        subject,
+        "_kubectl",
+        lambda _args, operation, _timeout: subprocess.CompletedProcess(operation, 0, b"", b""),
+    )
+
+    receipt = subject._rolling_restart_fault(Namespace())
+
+    assert receipt["status"] == "passed"
+    assert receipt["imageDigestUnchanged"] is True
+    assert receipt["sameDigestRollingRestart"] is True
+
+
+def test_bad_config_is_rejected_without_helm_revision_or_image_change(
+    monkeypatch,
+) -> None:
+    original = "ghcr.io/ludia8888/foundry-lite-api@sha256:" + ("f" * 64)
+    statuses = iter(
+        (
+            {"version": 8, "info": {"status": "deployed"}},
+            {"version": 8, "info": {"status": "deployed"}},
+        )
+    )
+    monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
+    monkeypatch.setattr(subject, "_helm_status", lambda _args: next(statuses))
+    monkeypatch.setattr(
+        subject,
+        "_command",
+        lambda command, _timeout: subprocess.CompletedProcess(command, 1, b"", b"protected config rejected"),
+    )
+
+    receipt = subject._bad_config_fault(Namespace(helm="helm", namespace="foundry-qa"))
+
+    assert receipt["status"] == "passed"
+    assert receipt["invalidProtectedConfigRejected"] is True
+    assert receipt["helmRevisionUnchanged"] is True
+
+
 def test_migration_failure_uses_atomic_helm_and_keeps_live_image(monkeypatch) -> None:
     original = "ghcr.io/ludia8888/foundry-lite-api@sha256:" + ("b" * 64)
     created: list[dict[str, object]] = []
     deleted: list[tuple[str, str]] = []
     helm_statuses = iter(
-        ({"version": 2, "info": {"status": "deployed"}}, {"version": 2, "info": {"status": "deployed"}})
+        (
+            {"version": 2, "info": {"status": "deployed"}},
+            {"version": 2, "info": {"status": "deployed"}},
+        )
     )
     monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
     monkeypatch.setattr(subject, "_helm_status", lambda _args: next(helm_statuses))
-    monkeypatch.setattr(subject, "_create_fault_resource", lambda _args, value, _reason: created.append(value))
+    monkeypatch.setattr(
+        subject,
+        "_create_fault_resource",
+        lambda _args, value, _reason: created.append(value),
+    )
     monkeypatch.setattr(
         subject,
         "_delete_fault_resource",
         lambda _args, kind, name, _reason: deleted.append((kind, name)),
     )
     monkeypatch.setattr(
-        subject, "_delete_fault_resource_optional", lambda _args, kind, name: deleted.append((kind, name))
+        subject,
+        "_delete_fault_resource_optional",
+        lambda _args, kind, name: deleted.append((kind, name)),
     )
     monkeypatch.setattr(
         subject,
@@ -128,6 +280,24 @@ def test_migration_failure_uses_atomic_helm_and_keeps_live_image(monkeypatch) ->
     assert created[0]["immutable"] is True
     name = subject._fault_resource_name("migration", "enterprise-qa")
     assert deleted == [("job", "foundry-lite-migrate-3"), ("secret", name)]
+
+
+def test_verified_rollback_resource_is_controller_owned_and_immutable() -> None:
+    payload = subject._foundry_deployment(
+        "qa-rollback",
+        "a" * 40,
+        "ghcr.io/ludia8888/foundry-lite-api",
+        "rollback",
+        "qa-old-live",
+    )
+
+    spec = payload["spec"]
+    assert isinstance(spec, dict)
+    assert spec["operation"] == "rollback"
+    assert spec["rollbackTargetDeployId"] == "qa-old-live"
+    assert spec["commitId"] == "a" * 40
+    assert len(str(spec["idempotencyKeyHash"])) == 64
+    assert "imageDigest" not in spec
 
 
 def test_faulting_helm_upgrade_reuses_values_and_is_atomic(tmp_path: Path, monkeypatch) -> None:
@@ -161,7 +331,11 @@ def test_pvc_disk_pressure_stops_at_threshold_and_cleans_resources(monkeypatch) 
     disk_samples = iter((10_000_000, 9_900_000, 9_900_001, 9_999_000))
     sleeps: list[float] = []
     monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
-    monkeypatch.setattr(subject, "_create_fault_resource", lambda _args, value, _reason: created.append(value))
+    monkeypatch.setattr(
+        subject,
+        "_create_fault_resource",
+        lambda _args, value, _reason: created.append(value),
+    )
     monkeypatch.setattr(subject, "_cleanup_disk_fault", lambda _args, name: cleaned.append(name))
     monkeypatch.setattr(subject, "_colima_available_kib", lambda: next(disk_samples))
     monkeypatch.setattr(subject.time, "sleep", sleeps.append)
@@ -218,16 +392,36 @@ def test_fault_command_prepends_private_tools_for_colima_restart(tmp_path: Path,
     assert result.returncode == 0
     environment = observed["env"]
     assert isinstance(environment, dict)
-    assert environment["PATH"].split(":") == [str(qa_root / "bin"), "/opt/homebrew/bin", "/usr/bin", "/bin"]
+    assert environment["PATH"].split(":") == [
+        str(qa_root / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+    ]
 
 
 def test_workload_pod_inventory_excludes_completed_and_failed_jobs() -> None:
     payload = {
         "items": [
-            {"metadata": {"name": "api-1", "ownerReferences": [{"kind": "ReplicaSet"}]}},
-            {"metadata": {"name": "postgres-0", "ownerReferences": [{"kind": "StatefulSet"}]}},
+            {
+                "metadata": {
+                    "name": "api-1",
+                    "ownerReferences": [{"kind": "ReplicaSet"}],
+                }
+            },
+            {
+                "metadata": {
+                    "name": "postgres-0",
+                    "ownerReferences": [{"kind": "StatefulSet"}],
+                }
+            },
             {"metadata": {"name": "migration-1", "ownerReferences": [{"kind": "Job"}]}},
-            {"metadata": {"name": "oauth-failed", "ownerReferences": [{"kind": "Job"}]}},
+            {
+                "metadata": {
+                    "name": "oauth-failed",
+                    "ownerReferences": [{"kind": "Job"}],
+                }
+            },
         ]
     }
 
