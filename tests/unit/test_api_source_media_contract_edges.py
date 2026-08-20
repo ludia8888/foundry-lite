@@ -1423,16 +1423,16 @@ def test_outbox_worker_failure_and_empty_batch_edges(monkeypatch, tmp_path) -> N
         {"requested": 1, "published": 1, "failed": 0, "skipped": 0, "eventIds": ["event-1"], "deadLetterEventIds": []},
     ]
 
-    class Operations:
-        def publish_pending_outbox(self, **_kwargs):
-            return batches.pop(0)
+    class OutboxPublisher:
+        def publish_all_pending_outbox(self, **_kwargs):
+            return {**batches.pop(0), "tenantResults": []}
 
     close_calls: list[str] = []
     monkeypatch.setattr(
         outbox_publisher,
         "_build_foundry",
         lambda _config: SimpleNamespace(
-            operations=Operations(),
+            _services=SimpleNamespace(outbox_publisher=OutboxPublisher()),
             close=lambda: close_calls.append("close"),
         ),
     )
@@ -1456,13 +1456,6 @@ def test_outbox_worker_failure_and_empty_batch_edges(monkeypatch, tmp_path) -> N
     assert value_payload["trace"]["request_id"] == "req-worker:batch-1"
     assert domain_payload["trace"]["adapter"] == "outbox_publisher_worker"
     assert outbox_publisher._failure_trace(None) == {"adapter": "outbox_publisher_worker"}
-    assert outbox_publisher._failure_context(None) is None
-    assert (
-        outbox_publisher._failure_context(
-            outbox_publisher.OutboxPublisherWorkerConfig(storage_root=tmp_path, request_id=" ")
-        )
-        is None
-    )
 
     monkeypatch.setattr(
         outbox_publisher, "publish_outbox_batches", lambda _config: (_ for _ in ()).throw(ValueError("x"))

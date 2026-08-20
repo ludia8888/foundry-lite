@@ -15,7 +15,11 @@ def test_operational_probe_returns_only_bounded_metrics(
     payload = {
         "databaseConnections": 6,
         "outboxPendingCount": 0,
+        "outboxEnqueuedCount": 12,
+        "outboxPublishedCount": 12,
         "oldestOutboxPendingSeconds": 0,
+        "outboxPendingTenantCount": 0,
+        "outboxPendingByTenant": [],
         "deadLetterCount": 4,
     }
     monkeypatch.setattr(subject, "assert_host_boundary", lambda: None)
@@ -37,9 +41,19 @@ def test_operational_probe_returns_only_bounded_metrics(
 
     assert receipt["status"] == "passed"
     assert receipt["outboxPendingCount"] == 0
+    assert receipt["outboxPendingByTenant"] == []
     assert "databaseUrl" not in receipt
 
 
 def test_operational_probe_rejects_negative_or_non_integer_metrics() -> None:
     with pytest.raises(RuntimeError, match="postgresql_invalid"):
         subject._validated_payload(b'{"databaseConnections":-1}')
+
+
+def test_operational_probe_rejects_unbounded_or_invalid_tenant_breakdown() -> None:
+    assert subject._is_pending_by_tenant([]) is True
+    assert (
+        subject._is_pending_by_tenant([{"tenantId": "tenant-a", "pendingCount": 1, "oldestPendingSeconds": 5}]) is True
+    )
+    assert subject._is_pending_by_tenant([{"tenantId": "", "pendingCount": 1, "oldestPendingSeconds": 5}]) is False
+    assert subject._is_pending_by_tenant([{}] * 101) is False

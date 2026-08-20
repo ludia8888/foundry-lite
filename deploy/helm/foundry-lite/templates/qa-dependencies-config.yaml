@@ -39,6 +39,10 @@ data:
           protocols:
             http:
               endpoint: 0.0.0.0:4318
+    ingester:
+      max_block_bytes: {{ .Values.qaDependencies.tempo.ingester.maxBlockBytes }}
+      max_block_duration: {{ .Values.qaDependencies.tempo.ingester.maxBlockDuration }}
+      complete_block_timeout: {{ .Values.qaDependencies.tempo.ingester.completeBlockTimeout }}
     storage:
       trace:
         backend: local

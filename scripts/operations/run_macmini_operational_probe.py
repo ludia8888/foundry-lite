@@ -21,10 +21,33 @@ SELECT json_build_object(
   'outboxPendingCount', (
     SELECT count(*) FROM outbox_events WHERE status = 'pending' AND published_at IS NULL
   ),
+  'outboxEnqueuedCount', (SELECT count(*) FROM outbox_events),
+  'outboxPublishedCount', (
+    SELECT count(*) FROM outbox_events WHERE status = 'published' AND published_at IS NOT NULL
+  ),
   'oldestOutboxPendingSeconds', COALESCE((
     SELECT greatest(0, extract(epoch FROM (now() - min(created_at::timestamptz))))::bigint
     FROM outbox_events WHERE status = 'pending' AND published_at IS NULL
   ), 0),
+  'outboxPendingTenantCount', (
+    SELECT count(DISTINCT tenant_id)
+    FROM outbox_events WHERE status = 'pending' AND published_at IS NULL
+  ),
+  'outboxPendingByTenant', COALESCE((
+    SELECT json_agg(pending_tenant)
+    FROM (
+      SELECT
+        tenant_id AS "tenantId",
+        count(*)::bigint AS "pendingCount",
+        greatest(0, extract(epoch FROM (now() - min(created_at::timestamptz))))::bigint
+          AS "oldestPendingSeconds"
+      FROM outbox_events
+      WHERE status = 'pending' AND published_at IS NULL
+      GROUP BY tenant_id
+      ORDER BY tenant_id
+      LIMIT 100
+    ) AS pending_tenant
+  ), '[]'::json),
   'deadLetterCount', (SELECT count(*) FROM dead_letter_events)
 );
 """.strip()
@@ -70,7 +93,7 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def _validated_payload(raw: bytes) -> dict[str, int]:
+def _validated_payload(raw: bytes) -> dict[str, object]:
     try:
         payload = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -78,16 +101,43 @@ def _validated_payload(raw: bytes) -> dict[str, int]:
     fields = (
         "databaseConnections",
         "outboxPendingCount",
+        "outboxEnqueuedCount",
+        "outboxPublishedCount",
         "oldestOutboxPendingSeconds",
+        "outboxPendingTenantCount",
         "deadLetterCount",
     )
     if not isinstance(payload, dict) or not all(_is_nonnegative_integer(payload.get(field)) for field in fields):
         raise RuntimeError("macmini_operational_probe_postgresql_invalid")
-    return {field: int(payload[field]) for field in fields}
+    pending_by_tenant = payload.get("outboxPendingByTenant")
+    if not _is_pending_by_tenant(pending_by_tenant):
+        raise RuntimeError("macmini_operational_probe_postgresql_invalid")
+    return {
+        **{field: int(payload[field]) for field in fields},
+        "outboxPendingByTenant": pending_by_tenant,
+    }
 
 
 def _is_nonnegative_integer(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_pending_by_tenant(value: object) -> bool:
+    if not isinstance(value, list) or len(value) > 100:
+        return False
+    return all(_is_pending_tenant(item) for item in value)
+
+
+def _is_pending_tenant(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    tenant_id = value.get("tenantId")
+    return (
+        isinstance(tenant_id, str)
+        and 0 < len(tenant_id) <= 200
+        and _is_nonnegative_integer(value.get("pendingCount"))
+        and _is_nonnegative_integer(value.get("oldestPendingSeconds"))
+    )
 
 
 def main() -> int:

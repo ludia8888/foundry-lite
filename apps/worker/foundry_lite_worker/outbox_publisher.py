@@ -11,10 +11,9 @@ from typing import Literal
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.services.outbox_publisher_service import (
     DEFAULT_OUTBOX_STREAM_NAME,
-    OutboxPublishBatchResult,
+    OutboxPublishAllResult,
 )
 from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
-from foundry_lite.domain.context import DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
 from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 
@@ -28,19 +27,12 @@ class OutboxPublisherWorkerConfig:
     limit: int = 100
     max_batches: int = 1
     max_empty_batches: int = 1
-    tenant_id: str = DEFAULT_TENANT_ID
     actor_user_id: str = "worker-outbox-publisher"
     request_id: str = "req-worker-outbox-publisher"
     evidence_path: Path | None = None
 
-    def request_context(self, *, batch_number: int) -> RequestContext:
-        request_id = f"{_required_value('request_id', self.request_id)}:batch-{batch_number}"
-        return RequestContext(
-            tenant_id=_required_value("tenant_id", self.tenant_id),
-            actor_user_id=_required_value("actor_user_id", self.actor_user_id),
-            request_id=request_id,
-            roles=DEMO_ADMIN_ROLES,
-        )
+    def batch_request_id(self, *, batch_number: int) -> str:
+        return f"{_required_value('request_id', self.request_id)}:batch-{batch_number}"
 
 
 @dataclass(frozen=True)
@@ -56,6 +48,7 @@ class OutboxPublisherWorkerResult:
     skipped: int
     event_ids: tuple[str, ...]
     dead_letter_event_ids: tuple[str, ...]
+    tenant_ids: tuple[str, ...]
 
 
 def publish_outbox_batches(config: OutboxPublisherWorkerConfig) -> OutboxPublisherWorkerResult:
@@ -70,8 +63,9 @@ def _publish_batches(runtime: FoundryLite, config: OutboxPublisherWorkerConfig) 
     accumulator = _OutboxAccumulator(config.stream_name)
     empty_batches = 0
     for batch_number in range(1, _positive(config.max_batches) + 1):
-        result = runtime.operations.publish_pending_outbox(
-            ctx=config.request_context(batch_number=batch_number),
+        result = runtime._services.outbox_publisher.publish_all_pending_outbox(
+            actor_user_id=_required_value("actor_user_id", config.actor_user_id),
+            request_id=config.batch_request_id(batch_number=batch_number),
             stream_name=config.stream_name,
             limit=_positive(config.limit),
         )
@@ -95,7 +89,6 @@ def config_from_env(env: Mapping[str, str] | None = None) -> OutboxPublisherWork
         limit=_env_int(values, "FOUNDRY_LITE_OUTBOX_LIMIT", 100),
         max_batches=_env_int(values, "FOUNDRY_LITE_OUTBOX_MAX_BATCHES", 1),
         max_empty_batches=_env_int(values, "FOUNDRY_LITE_OUTBOX_MAX_EMPTY_BATCHES", 1),
-        tenant_id=values.get("FOUNDRY_LITE_TENANT_ID", DEFAULT_TENANT_ID),
         actor_user_id=values.get("FOUNDRY_LITE_WORKER_ACTOR_USER_ID", "worker-outbox-publisher"),
         request_id=values.get("FOUNDRY_LITE_WORKER_REQUEST_ID", "req-worker-outbox-publisher"),
         evidence_path=_optional_path(values, "FOUNDRY_LITE_OUTBOX_EVIDENCE_PATH"),
@@ -125,8 +118,9 @@ class _OutboxAccumulator:
         self.skipped = 0
         self.event_ids: list[str] = []
         self.dead_letter_event_ids: list[str] = []
+        self.tenant_ids: list[str] = []
 
-    def add(self, result: OutboxPublishBatchResult) -> None:
+    def add(self, result: OutboxPublishAllResult) -> None:
         self.iterations += 1
         self.requested += result["requested"]
         self.published += result["published"]
@@ -134,6 +128,10 @@ class _OutboxAccumulator:
         self.skipped += result["skipped"]
         self.event_ids.extend(result["eventIds"])
         self.dead_letter_event_ids.extend(result["deadLetterEventIds"])
+        for tenant_result in result["tenantResults"]:
+            tenant_id = tenant_result["tenantId"]
+            if tenant_id not in self.tenant_ids:
+                self.tenant_ids.append(tenant_id)
 
 
 def _build_foundry(config: OutboxPublisherWorkerConfig) -> FoundryLite:
@@ -164,6 +162,7 @@ def _finalize(
         skipped=accumulator.skipped,
         event_ids=tuple(accumulator.event_ids),
         dead_letter_event_ids=tuple(accumulator.dead_letter_event_ids),
+        tenant_ids=tuple(accumulator.tenant_ids),
     )
     _write_evidence(config, result)
     return result
@@ -219,6 +218,7 @@ def _result_json(result: OutboxPublisherWorkerResult) -> str:
             "skipped": result.skipped,
             "eventIds": list(result.event_ids),
             "deadLetterEventIds": list(result.dead_letter_event_ids),
+            "tenantIds": list(result.tenant_ids),
         },
         sort_keys=True,
     )
@@ -238,32 +238,27 @@ def _failure_payload(exc: Exception, config: OutboxPublisherWorkerConfig | None)
         if trace := _failure_trace(config):
             payload["trace"] = trace
         return payload
-    return runtime_error_payload(exc, _failure_context(config), adapter="outbox_publisher_worker")
+    payload = runtime_error_payload(exc, adapter="outbox_publisher_worker")
+    payload["trace"] = _failure_trace(config)
+    return payload
 
 
 def _failure_trace(config: OutboxPublisherWorkerConfig | None) -> Mapping[str, str]:
-    ctx = _failure_context(config)
-    if ctx is None:
-        return {"adapter": "outbox_publisher_worker"}
-    return {
-        "tenant_id": ctx.tenant_id,
-        "actor_user_id": ctx.actor_user_id,
-        "request_id": ctx.request_id,
-        "correlation_id": ctx.request_id,
-        "adapter": "outbox_publisher_worker",
-    }
-
-
-def _failure_context(config: OutboxPublisherWorkerConfig | None) -> RequestContext | None:
     if config is None:
-        return None
+        return {"adapter": "outbox_publisher_worker"}
     try:
-        return config.request_context(batch_number=1)
+        request_id = config.batch_request_id(batch_number=1)
+        return {
+            "actor_user_id": _required_value("actor_user_id", config.actor_user_id),
+            "request_id": request_id,
+            "correlation_id": request_id,
+            "adapter": "outbox_publisher_worker",
+        }
     except ValueError:
-        return None
+        return {"adapter": "outbox_publisher_worker"}
 
 
-def _is_empty_batch(result: OutboxPublishBatchResult) -> bool:
+def _is_empty_batch(result: OutboxPublishAllResult) -> bool:
     return result["requested"] == 0
 
 

@@ -90,8 +90,35 @@ def test_dependency_fault_scales_back_up_when_fault_wait_fails(monkeypatch) -> N
 
 def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
     monkeypatch.setattr(subject, "_first_pod", lambda _args, _selector: "worker-1")
-    monkeypatch.setattr(subject, "_pod_restart_count", lambda _args, _pod: 3)
-    monkeypatch.setattr(subject, "_wait_for_pod_restart", lambda _args, _pod, _before, _timeout: True)
+    snapshots = iter(
+        (
+            {
+                "containerId": "containerd://before",
+                "restartCount": 3,
+                "isReady": True,
+                "startedAt": "2026-08-20T00:00:00Z",
+                "lastTermination": {"reason": None, "exitCode": None, "signal": None, "finishedAt": None},
+            },
+            {
+                "containerId": "containerd://after",
+                "restartCount": 4,
+                "isReady": True,
+                "startedAt": "2026-08-20T00:00:01Z",
+                "lastTermination": {
+                    "reason": "Error",
+                    "exitCode": 137,
+                    "signal": 9,
+                    "finishedAt": "2026-08-20T00:00:01Z",
+                },
+            },
+        )
+    )
+    monkeypatch.setattr(subject, "_container_lifecycle_snapshot", lambda _args, _pod, _container: next(snapshots))
+    monkeypatch.setattr(
+        subject,
+        "_pid_one_identity",
+        lambda _args, _pod, _container: {"observed": True, "pid": 1, "commandSha256": "a" * 64},
+    )
     monkeypatch.setattr(
         subject,
         "_kubectl",
@@ -109,6 +136,9 @@ def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
     assert receipt["status"] == "passed"
     assert receipt["signal"] == "SIGKILL"
     assert receipt["containerRestartObserved"] is True
+    assert receipt["terminationSignalObserved"] is True
+    assert receipt["containerIdChanged"] is True
+    assert receipt["targetProcessBefore"] == {"observed": True, "pid": 1, "commandSha256": "a" * 64}
 
 
 def test_worker_oom_always_restores_original_command(monkeypatch) -> None:

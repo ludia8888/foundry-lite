@@ -157,7 +157,11 @@ def test_operations_receipt_is_strict_and_secret_free() -> None:
         "observedAt": "2026-08-17T00:00:00+00:00",
         "databaseConnections": 7,
         "outboxPendingCount": 0,
+        "outboxEnqueuedCount": 12,
+        "outboxPublishedCount": 12,
         "oldestOutboxPendingSeconds": 0,
+        "outboxPendingTenantCount": 0,
+        "outboxPendingByTenant": [],
         "deadLetterCount": 2,
         "databaseUrl": "must-not-leak",
     }
@@ -166,7 +170,23 @@ def test_operations_receipt_is_strict_and_secret_free() -> None:
 
     assert receipt is not None
     assert receipt["databaseConnections"] == 7
+    assert receipt["outboxPendingByTenant"] == []
     assert "databaseUrl" not in receipt
+
+
+def test_operations_receipt_rejects_invalid_tenant_outbox_breakdown() -> None:
+    receipt = {
+        "schemaVersion": 1,
+        "status": "passed",
+        "observedAt": "2026-08-17T00:00:00+00:00",
+        "databaseConnections": 5,
+        "outboxPendingCount": 1,
+        "oldestOutboxPendingSeconds": 0,
+        "deadLetterCount": 0,
+    }
+    receipt["outboxPendingByTenant"] = [{"tenantId": "", "pendingCount": 1, "oldestPendingSeconds": 0}]
+
+    assert _safe_operations_receipt(json.dumps(receipt).encode()) is None
 
 
 def test_required_operations_probe_fails_when_final_backlog_is_not_drained(

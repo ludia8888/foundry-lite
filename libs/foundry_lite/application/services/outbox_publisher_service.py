@@ -20,7 +20,8 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.runtime_service import RuntimeService
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.context import DEMO_ADMIN_ROLES, RequestContext
+from foundry_lite.security.tenant_context import tenant_context
 
 DEFAULT_OUTBOX_STREAM_NAME = "foundry-lite-outbox"
 MAX_OUTBOX_PUBLISH_BATCH_SIZE = 500
@@ -46,12 +47,42 @@ class OutboxPublishBatchResult(TypedDict):
     deadLetterEventIds: list[str]
 
 
+class OutboxTenantPublishBatchResult(OutboxPublishBatchResult):
+    tenantId: str
+
+
+class OutboxPublishAllResult(OutboxPublishBatchResult):
+    tenantResults: list[OutboxTenantPublishBatchResult]
+
+
 class OutboxPublisherService(CoreService):
     """Publish pending runtime outbox rows through the configured stream adapter."""
 
-    required_dependencies = ("engine", "runtime_repository", "stream_adapter")
+    required_dependencies = ("engine", "metadata_repository", "runtime_repository", "stream_adapter")
     required_collaborators = ("runtime_service",)
     runtime_service: RuntimeService
+
+    def publish_all_pending_outbox(
+        self,
+        *,
+        actor_user_id: str,
+        request_id: str,
+        stream_name: str = DEFAULT_OUTBOX_STREAM_NAME,
+        limit: int = 100,
+    ) -> OutboxPublishAllResult:
+        """Run one bounded publish pass for every known tenant under its own RLS context."""
+
+        results = [
+            self._publish_pending_for_tenant(
+                tenant_id=tenant_id,
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+                stream_name=stream_name,
+                limit=limit,
+            )
+            for tenant_id in self.metadata_repository.list_tenant_ids()
+        ]
+        return _all_tenant_result(stream_name=stream_name, tenant_results=results)
 
     def publish_pending_outbox(
         self,
@@ -69,6 +100,20 @@ class OutboxPublisherService(CoreService):
         for row in pending:
             self._publish_one(row=row, ctx=resolved_ctx, stream_name=stream_name, result=result)
         return result
+
+    def _publish_pending_for_tenant(
+        self,
+        *,
+        tenant_id: str,
+        actor_user_id: str,
+        request_id: str,
+        stream_name: str,
+        limit: int,
+    ) -> OutboxTenantPublishBatchResult:
+        ctx = _worker_context(tenant_id=tenant_id, actor_user_id=actor_user_id, request_id=request_id)
+        with tenant_context(tenant_id):
+            result = self.publish_pending_outbox(ctx=ctx, stream_name=stream_name, limit=limit)
+        return {"tenantId": tenant_id, **result}
 
     def _reclaim_stale_publishing(self, ctx: RequestContext) -> int:
         with self.engine.begin() as conn:
@@ -257,6 +302,33 @@ def _empty_result(*, stream_name: str, requested: int) -> OutboxPublishBatchResu
         "eventIds": [],
         "deadLetterEventIds": [],
     }
+
+
+def _all_tenant_result(
+    *,
+    stream_name: str,
+    tenant_results: list[OutboxTenantPublishBatchResult],
+) -> OutboxPublishAllResult:
+    return {
+        "status": "completed",
+        "streamName": stream_name,
+        "requested": sum(result["requested"] for result in tenant_results),
+        "published": sum(result["published"] for result in tenant_results),
+        "failed": sum(result["failed"] for result in tenant_results),
+        "skipped": sum(result["skipped"] for result in tenant_results),
+        "eventIds": [event_id for result in tenant_results for event_id in result["eventIds"]],
+        "deadLetterEventIds": [event_id for result in tenant_results for event_id in result["deadLetterEventIds"]],
+        "tenantResults": tenant_results,
+    }
+
+
+def _worker_context(*, tenant_id: str, actor_user_id: str, request_id: str) -> RequestContext:
+    return RequestContext(
+        tenant_id=tenant_id,
+        actor_user_id=actor_user_id,
+        request_id=f"{request_id}:tenant:{tenant_id}",
+        roles=DEMO_ADMIN_ROLES,
+    )
 
 
 def _stream_request(row: RuntimeRow, *, ctx: RequestContext, stream_name: str) -> StreamPublishRequest:
