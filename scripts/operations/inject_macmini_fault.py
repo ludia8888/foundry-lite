@@ -73,6 +73,7 @@ _DISK_RECLAIM_INTERVAL_SECONDS = 1.0
 _COLIMA_PVC_STORAGE_PATH = "/var/lib/rancher/k3s/storage"
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_RUNTIME_CONTAINER_ID = re.compile(r"^(?P<runtime>docker)://(?P<identifier>[0-9a-f]{64})$")
 
 
 def inject(args: argparse.Namespace) -> dict[str, object]:
@@ -172,32 +173,24 @@ def _signal_fault(
     pod = _first_pod(args, selector)
     before = _container_lifecycle_snapshot(args, pod, container)
     process_before = _pid_one_identity(args, pod, container)
+    runtime_before = _runtime_container_target(before)
     expected_signal = _signal_number(signal_name)
-    program = f"import os; os.kill(1, {expected_signal})"
-    signalled = _kubectl(
-        args,
-        (
-            "exec",
-            pod,
-            "-c",
-            container,
-            "--",
-            "/opt/foundry-lite-venv/bin/python",
-            "-c",
-            program,
-        ),
-        30,
-    )
+    injected_at = datetime.now(UTC).isoformat()
+    signalled = _runtime_docker_kill(runtime_before, signal_name)
     after = _wait_for_container_restart(args, pod, container, before, 60)
     rollout = _kubectl(args, ("rollout", "status", resource, "--timeout=120s"), 140)
     process_after = _pid_one_identity(args, pod, container)
+    runtime_after = _runtime_container_target(after)
     restarted = _restart_observed(before, after)
     terminated = _termination_observed(after, expected_signal)
     container_id_changed = before["containerId"] != after["containerId"]
     is_passed = (
-        restarted
+        signalled.returncode == 0
+        and restarted
         and terminated
         and container_id_changed
+        and runtime_before["observed"]
+        and runtime_after["observed"]
         and process_before["observed"]
         and process_after["observed"]
         and rollout.returncode == 0
@@ -208,10 +201,14 @@ def _signal_fault(
         "targetContainer": container,
         "signal": f"SIG{signal_name}",
         "expectedTerminationSignal": expected_signal,
-        "signalCommandReturnCode": signalled.returncode,
-        "signalTransportDisconnected": signalled.returncode != 0,
+        "signalTransport": "docker-runtime",
+        "signalInjectedAt": injected_at,
+        "runtimeKillReturnCode": signalled.returncode,
+        "runtimeKillAccepted": signalled.returncode == 0,
         "targetProcessBefore": process_before,
         "targetProcessAfter": process_after,
+        "runtimeTargetBefore": runtime_before,
+        "runtimeTargetAfter": runtime_after,
         "containerLifecycleBefore": before,
         "containerLifecycleAfter": after,
         "containerRestartObserved": restarted,
@@ -292,7 +289,7 @@ def _wait_for_container_restart(
     while time.monotonic() < deadline:
         try:
             latest = _container_lifecycle_snapshot(args, pod, container)
-            if _restart_observed(before, latest):
+            if _restart_observed(before, latest) and latest["isReady"] is True:
                 return latest
         except RuntimeError:
             pass
@@ -321,6 +318,43 @@ def _pid_one_identity(args: argparse.Namespace, pod: str, container: str) -> dic
     if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
         return {"observed": False, "pid": None, "commandSha256": None}
     return {"observed": True, "pid": 1, "commandSha256": digest}
+
+
+def _runtime_container_target(snapshot: dict[str, object]) -> dict[str, object]:
+    container_id = snapshot.get("containerId")
+    if not isinstance(container_id, str):
+        return _unobserved_runtime_target()
+    match = _RUNTIME_CONTAINER_ID.fullmatch(container_id)
+    if match is None:
+        return _unobserved_runtime_target()
+    identifier = match.group("identifier")
+    inspected = _colima_root_command(("docker", "inspect", "--format", "{{.State.Pid}}", identifier), 30)
+    if inspected.returncode != 0:
+        return _unobserved_runtime_target()
+    try:
+        pid = int(inspected.stdout.decode().strip())
+    except (UnicodeDecodeError, ValueError):
+        return _unobserved_runtime_target()
+    if pid <= 0:
+        return _unobserved_runtime_target()
+    return {
+        "observed": True,
+        "runtime": match.group("runtime"),
+        "containerId": container_id,
+        "runtimeContainerId": identifier,
+        "hostPid": pid,
+    }
+
+
+def _unobserved_runtime_target() -> dict[str, object]:
+    return {"observed": False, "runtime": None, "containerId": None, "runtimeContainerId": None, "hostPid": None}
+
+
+def _runtime_docker_kill(target: dict[str, object], signal_name: str) -> subprocess.CompletedProcess[bytes]:
+    runtime_id = target.get("runtimeContainerId")
+    if not isinstance(runtime_id, str) or _SHA256.fullmatch(runtime_id) is None:
+        return subprocess.CompletedProcess(("docker", "kill"), 1, b"", b"invalid runtime container id")
+    return _colima_root_command(("docker", "kill", "--signal", signal_name, runtime_id), 30)
 
 
 def _signal_number(signal_name: str) -> int:

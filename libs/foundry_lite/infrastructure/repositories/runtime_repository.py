@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, desc, insert, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -855,6 +857,7 @@ class SqlAlchemyRuntimeRepository:
         )
 
     def insert_outbox_event(self, *, transaction: Any, record: OutboxEventRecord) -> bool:
+        self._ensure_outbox_tenant_registered(transaction, record)
         # PostgreSQL aborts the whole transaction on IntegrityError, unlike
         # SQLite which lets the caller keep using the same connection. To make
         # the duplicate-insert path safe on both backends we wrap the attempt
@@ -886,6 +889,31 @@ class SqlAlchemyRuntimeRepository:
             raise
         savepoint.commit()
         return True
+
+    def _ensure_outbox_tenant_registered(self, transaction: Any, record: OutboxEventRecord) -> None:
+        """Keep the publisher's tenant inventory complete in the caller transaction."""
+        statement = _tenant_insert_if_absent(record, transaction.dialect.name)
+        if statement is not None:
+            transaction.execute(statement)
+            return
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(
+                insert(db.tenants).values(
+                    id=record.tenant_id,
+                    name=record.tenant_id,
+                    created_at=record.created_at,
+                )
+            )
+        except IntegrityError:
+            savepoint.rollback()
+            winner = transaction.execute(
+                select(db.tenants.c.id).where(db.tenants.c.id == record.tenant_id)
+            ).scalar_one_or_none()
+            if winner is None:
+                raise
+        else:
+            savepoint.commit()
 
     def insert_dead_letter_event(self, *, transaction: Any, record: DeadLetterEventRecord) -> None:
         transaction.execute(
@@ -978,6 +1006,15 @@ class SqlAlchemyRuntimeRepository:
 
 # Run tables that lineage edges attribute work to (``created_by_run_id``).
 _LINEAGE_RUN_TYPES: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization", "ai")
+
+
+def _tenant_insert_if_absent(record: OutboxEventRecord, dialect_name: str) -> Any | None:
+    values = {"id": record.tenant_id, "name": record.tenant_id, "created_at": record.created_at}
+    if dialect_name == "postgresql":
+        return postgresql_insert(db.tenants).values(values).on_conflict_do_nothing(index_elements=("id",))
+    if dialect_name == "sqlite":
+        return sqlite_insert(db.tenants).values(values).on_conflict_do_nothing(index_elements=("id",))
+    return None
 
 
 def _folded_catalog_edges(

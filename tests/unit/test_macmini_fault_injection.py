@@ -93,14 +93,14 @@ def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
     snapshots = iter(
         (
             {
-                "containerId": "containerd://before",
+                "containerId": "docker://" + ("a" * 64),
                 "restartCount": 3,
                 "isReady": True,
                 "startedAt": "2026-08-20T00:00:00Z",
                 "lastTermination": {"reason": None, "exitCode": None, "signal": None, "finishedAt": None},
             },
             {
-                "containerId": "containerd://after",
+                "containerId": "docker://" + ("b" * 64),
                 "restartCount": 4,
                 "isReady": True,
                 "startedAt": "2026-08-20T00:00:01Z",
@@ -119,6 +119,33 @@ def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
         "_pid_one_identity",
         lambda _args, _pod, _container: {"observed": True, "pid": 1, "commandSha256": "a" * 64},
     )
+    runtime_targets = iter(
+        (
+            {
+                "observed": True,
+                "runtime": "docker",
+                "containerId": "docker://" + ("a" * 64),
+                "runtimeContainerId": "a" * 64,
+                "hostPid": 101,
+            },
+            {
+                "observed": True,
+                "runtime": "docker",
+                "containerId": "docker://" + ("b" * 64),
+                "runtimeContainerId": "b" * 64,
+                "hostPid": 102,
+            },
+        )
+    )
+    monkeypatch.setattr(subject, "_runtime_container_target", lambda _snapshot: next(runtime_targets))
+    kill_calls: list[tuple[dict[str, object], str]] = []
+    monkeypatch.setattr(
+        subject,
+        "_runtime_docker_kill",
+        lambda target, signal: (
+            kill_calls.append((target, signal)) or subprocess.CompletedProcess(("docker", "kill"), 0, b"", b"")
+        ),
+    )
     monkeypatch.setattr(
         subject,
         "_kubectl",
@@ -135,10 +162,31 @@ def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
 
     assert receipt["status"] == "passed"
     assert receipt["signal"] == "SIGKILL"
+    assert receipt["signalTransport"] == "docker-runtime"
+    assert receipt["runtimeKillAccepted"] is True
     assert receipt["containerRestartObserved"] is True
     assert receipt["terminationSignalObserved"] is True
     assert receipt["containerIdChanged"] is True
     assert receipt["targetProcessBefore"] == {"observed": True, "pid": 1, "commandSha256": "a" * 64}
+    assert kill_calls == [
+        (
+            {
+                "observed": True,
+                "runtime": "docker",
+                "containerId": "docker://" + ("a" * 64),
+                "runtimeContainerId": "a" * 64,
+                "hostPid": 101,
+            },
+            "KILL",
+        )
+    ]
+
+
+def test_runtime_signal_target_fails_closed_when_kubernetes_does_not_report_docker_id() -> None:
+    target = subject._runtime_container_target({"containerId": "containerd://" + ("a" * 64)})
+
+    assert target["observed"] is False
+    assert subject._runtime_docker_kill(target, "KILL").returncode == 1
 
 
 def test_worker_oom_always_restores_original_command(monkeypatch) -> None:

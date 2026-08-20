@@ -132,8 +132,6 @@ def test_outbox_publisher_worker_closes_runtime_when_publish_raises(monkeypatch,
 def test_outbox_publisher_worker_publishes_pending_rows_for_every_tenant(tmp_path: Path) -> None:
     foundry, db_url, storage_root = _seeded_foundry(tmp_path, "outbox_demo")
     dependencies = create_local_core_dependencies(db_url=db_url, storage_root=storage_root)
-    _ensure_tenant(dependencies, "tenant-a")
-    _ensure_tenant(dependencies, "tenant-b")
     _insert_outbox(dependencies, event_id="outbox_a", request_id="req-a", tenant_id="tenant-a")
     _insert_outbox(dependencies, event_id="outbox_b", request_id="req-b", tenant_id="tenant-b")
 
@@ -145,6 +143,55 @@ def test_outbox_publisher_worker_publishes_pending_rows_for_every_tenant(tmp_pat
     assert result.tenant_ids == ("tenant-a", "tenant-b", "tenant-demo")
     assert _outbox_rows(foundry, tenant_id="tenant-a")["outbox_a"]["status"] == "published"
     assert _outbox_rows(foundry, tenant_id="tenant-b")["outbox_b"]["status"] == "published"
+
+
+def test_outbox_event_registers_an_unseen_tenant_before_publisher_scans(tmp_path: Path) -> None:
+    foundry, db_url, storage_root = _seeded_foundry(tmp_path)
+    dependencies = create_local_core_dependencies(db_url=db_url, storage_root=storage_root)
+    _insert_outbox(
+        dependencies,
+        event_id="outbox_unseen_tenant",
+        request_id="req-unseen",
+        tenant_id="tenant-unseen",
+    )
+
+    result = publish_outbox_batches(
+        OutboxPublisherWorkerConfig(db_url=db_url, storage_root=storage_root, max_batches=1)
+    )
+
+    assert "tenant-unseen" in dependencies.metadata_repository.list_tenant_ids()
+    assert result.tenant_ids == ("tenant-demo", "tenant-unseen")
+    assert _outbox_rows(foundry, tenant_id="tenant-unseen")["outbox_unseen_tenant"]["status"] == "published"
+
+
+def test_outbox_tenant_registration_rolls_back_with_the_event(tmp_path: Path) -> None:
+    dependencies = create_local_core_dependencies(
+        db_url=f"sqlite:///{tmp_path / 'runtime.db'}",
+        storage_root=tmp_path / "runtime",
+    )
+    FoundryLite(dependencies=dependencies)
+    with dependencies.engine.connect() as connection:
+        transaction = connection.begin()
+        dependencies.runtime_repository.insert_outbox_event(
+            transaction=connection,
+            record=OutboxEventRecord(
+                event_id="outbox_rolled_back",
+                tenant_id="tenant-rolled-back",
+                event_type="dataset.version.committed",
+                aggregate_type="dataset_version",
+                aggregate_id="dsv-rolled-back",
+                payload={},
+                status="pending",
+                attempts=0,
+                idempotency_key="outbox_rolled_back",
+                correlation_id="req-rolled-back",
+                created_at="2026-06-10T00:00:00Z",
+                published_at=None,
+            ),
+        )
+        transaction.rollback()
+
+    assert "tenant-rolled-back" not in dependencies.metadata_repository.list_tenant_ids()
 
 
 def _seeded_foundry(tmp_path: Path, *event_ids: str) -> tuple[FoundryLite, str, Path]:
@@ -189,14 +236,6 @@ def _insert_outbox(
                 published_at=None,
             ),
         )
-
-
-def _ensure_tenant(dependencies: CoreDependencies, tenant_id: str) -> None:
-    dependencies.metadata_repository.ensure_tenant(
-        tenant_id=tenant_id,
-        name=tenant_id,
-        created_at="2026-06-10T00:00:00Z",
-    )
 
 
 def _admin_context(tenant_id: str) -> RequestContext:
