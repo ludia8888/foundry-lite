@@ -165,6 +165,7 @@ qaDependencies:
   tempo:
     image: docker.io/grafana/tempo@sha256:0f168afdf979b3796c01f26786bce250f4b9d3293b3e640a8199fe90d48e5c3a
     storage: 5Gi
+    gcMemoryLimit: 1536MiB
     resources:
       requests: {cpu: 100m, memory: 512Mi}
       limits: {cpu: "1", memory: 2Gi}
@@ -172,6 +173,12 @@ qaDependencies:
       maxBlockBytes: 33554432
       maxBlockDuration: 5m
       completeBlockTimeout: 5m
+    limits:
+      rateLimitBytes: 4194304
+      burstSizeBytes: 8388608
+      maxTracesPerUser: 2000
+      maxAttributeBytes: 2048
+      maxBytesPerTrace: 5242880
   grafana:
     image: docker.io/grafana/grafana@sha256:bde5c7baab9cae482cf7ef7a4c4e6b52d035e4e7a4f9784fca3a875c8a459291
     storage: 3Gi

@@ -205,6 +205,65 @@ def test_helm_applies_base_then_initial_auth_then_immutable_overrides(tmp_path: 
     ]
 
 
+def test_upgrade_prepulls_images_before_running_atomic_helm_upgrade(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
+    monkeypatch.setattr(subject, "assert_host_boundary", lambda: None)
+    monkeypatch.setattr(subject, "assert_namespace", lambda _namespace: None)
+    monkeypatch.setattr(subject, "ensure_qa_directories", lambda: None)
+    (tmp_path / "state").mkdir()
+    chart = tmp_path / "chart"
+    chart.mkdir()
+    values = tmp_path / "values.yaml"
+    values.write_text("{}\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path)
+    token = tmp_path / "token"
+    token.write_text("registry-token", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(subject, "_assert_deployed_release", lambda _args: calls.append("release"))
+    monkeypatch.setattr(
+        subject,
+        "_prepull_images",
+        lambda _manifest, _token: calls.append("prepull") or {"status": "passed"},
+    )
+    monkeypatch.setattr(subject, "_helm_upgrade", lambda *_args: calls.append("helm") or {"returnCode": 0})
+    monkeypatch.setattr(subject, "_collect_evidence", lambda _args: {"helmRevision": 3})
+    monkeypatch.setattr(subject, "write_json_receipt", lambda _path, _receipt: calls.append("receipt"))
+
+    subject.upgrade(
+        Namespace(
+            run_id="upgrade-1",
+            namespace="foundry-qa",
+            chart=str(chart),
+            values=str(values),
+            image_manifest=str(manifest),
+            registry_token_file=str(token),
+        )
+    )
+
+    assert calls == ["release", "prepull", "helm", "receipt"]
+
+
+def test_helm_upgrade_cannot_install_a_missing_release(monkeypatch, tmp_path: Path) -> None:
+    command: list[str] = []
+
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        command.extend(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subject.subprocess, "run", run)
+
+    subject._helm_upgrade(
+        Namespace(helm="helm", namespace="foundry-qa"),
+        tmp_path,
+        (tmp_path / "values.yaml",),
+        tmp_path / "images.json",
+    )
+
+    assert command[:3] == ["helm", "upgrade", "foundry-lite"]
+    assert "--install" not in command
+    assert command[-4:] == ["--wait", "--wait-for-jobs", "--timeout", "30m"]
+
+
 def test_migration_evidence_requires_observed_idempotent_receipt(monkeypatch) -> None:
     output = b'first migration output\n{"status":"passed","runs":2,"isIdempotent":true}\n'
     monkeypatch.setattr(

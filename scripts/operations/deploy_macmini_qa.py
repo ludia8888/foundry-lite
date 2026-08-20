@@ -84,6 +84,28 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
     return receipt
 
 
+def upgrade(args: argparse.Namespace) -> dict[str, object]:
+    assert_host_boundary()
+    assert_namespace(args.namespace)
+    if _RUN_ID.fullmatch(args.run_id) is None:
+        raise ValueError("macmini_qa_run_id_invalid")
+    ensure_qa_directories()
+    chart = _qa_input_path(args.chart, is_directory=True)
+    values = _qa_input_path(args.values, is_directory=False)
+    manifest = _load_manifest(_qa_input_path(args.image_manifest, is_directory=False))
+    token = _qa_input_path(args.registry_token_file, is_directory=False)
+    _assert_deployed_release(args)
+    image_prepull = _prepull_images(manifest, token)
+    override = _write_runtime_override(args.run_id, manifest)
+    helm_result = _helm_upgrade(args, chart, (values,), override)
+    evidence = _collect_evidence(args)
+    receipt = _upgrade_receipt(args, manifest, values, override, image_prepull, helm_result, evidence)
+    target = QA_ROOT / "evidence" / args.run_id / "upgrade-receipt.json"
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    write_json_receipt(target, receipt)
+    return receipt
+
+
 def _load_manifest(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or not _REVISION.fullmatch(str(value.get("revision", ""))):
@@ -250,10 +272,9 @@ def _validate_initial_auth_values(path: Path) -> None:
 
 
 def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Path]:
+    override = _write_runtime_override(run_id, manifest)
     state = QA_ROOT / "state"
-    override = state / f"{run_id}-immutable-images.json"
     foundation = state / f"{run_id}-foundation.json"
-    _write_private_json(override, {"global": {"revision": manifest["revision"]}, "images": manifest["images"]})
     _write_private_json(
         foundation,
         {
@@ -267,6 +288,12 @@ def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Pa
         },
     )
     return override, foundation
+
+
+def _write_runtime_override(run_id: str, manifest: dict[str, object]) -> Path:
+    override = QA_ROOT / "state" / f"{run_id}-immutable-images.json"
+    _write_private_json(override, {"global": {"revision": manifest["revision"]}, "images": manifest["images"]})
+    return override
 
 
 def _helm(
@@ -296,6 +323,24 @@ def _helm(
     if completed.returncode != 0:
         raise RuntimeError("macmini_qa_helm_deploy_failed")
     return {"phase": "foundation" if phase_override else "runtime", "returnCode": 0}
+
+
+def _helm_upgrade(
+    args: argparse.Namespace,
+    chart: Path,
+    value_files: tuple[Path, ...],
+    override: Path,
+) -> dict[str, object]:
+    command = [args.helm, "upgrade", _RELEASE, str(chart), "--namespace", args.namespace]
+    for path in (*value_files, override):
+        command.extend(("--values", str(path)))
+    command.extend(("--atomic", "--wait", "--wait-for-jobs", "--timeout", "30m"))
+    completed = subprocess.run(  # nosec B603 - validated Helm argv; remove if shell or free argv appears.
+        command, check=False, capture_output=True, timeout=1900
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("macmini_qa_helm_upgrade_failed")
+    return {"phase": "upgrade", "returnCode": 0}
 
 
 def _collect_evidence(args: argparse.Namespace) -> dict[str, object]:
@@ -397,6 +442,32 @@ def _receipt(
     }
 
 
+def _upgrade_receipt(
+    args: argparse.Namespace,
+    manifest: dict[str, object],
+    values: Path,
+    override: Path,
+    image_prepull: dict[str, object],
+    helm_result: dict[str, object],
+    evidence: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "status": "passed",
+        "runId": args.run_id,
+        "recordedAt": utc_now(),
+        "namespace": args.namespace,
+        "gitRevision": manifest["revision"],
+        "images": manifest["images"],
+        "valuesSha256": _hash_paths((values, override)),
+        "imagePrepull": image_prepull,
+        "upgrade": helm_result,
+        "evidence": evidence,
+        "rawSecretsStored": False,
+        "otherNamespacesMutated": False,
+    }
+
+
 def _ensure_namespace(args: argparse.Namespace) -> None:
     get = _kubectl(args, ("get", "namespace", args.namespace, "-o", "name"), 30)
     if get.returncode == 0:
@@ -415,6 +486,24 @@ def _assert_fresh_release(args: argparse.Namespace) -> None:
     )
     if status.returncode == 0:
         raise RuntimeError("macmini_qa_initial_deploy_release_exists")
+
+
+def _assert_deployed_release(args: argparse.Namespace) -> None:
+    status = subprocess.run(  # nosec B603 - fixed Helm status argv; remove if shell or free argv appears.
+        (args.helm, "status", _RELEASE, "--namespace", args.namespace, "--output", "json"),
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )
+    if status.returncode != 0:
+        raise RuntimeError("macmini_qa_upgrade_release_missing")
+    try:
+        payload = json.loads(status.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("macmini_qa_upgrade_release_missing") from exc
+    info = payload.get("info") if isinstance(payload, dict) else None
+    if not isinstance(info, dict) or info.get("status") != "deployed":
+        raise RuntimeError("macmini_qa_upgrade_release_not_deployed")
 
 
 def _json_command(args: argparse.Namespace, operation: tuple[str, ...], reason: str) -> object:
@@ -496,6 +585,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--age-recipient-file", required=True)
     parser.add_argument("--registry-token-file", required=True)
     deploy(parser.parse_args(argv))
+    print('{"receiptStored": true, "status": "passed"}')
+    return 0
+
+
+def main_upgrade(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--namespace", default="foundry-qa")
+    parser.add_argument("--kubeconfig", required=True)
+    parser.add_argument("--kubectl", default=str(QA_ROOT / "bin" / "kubectl"))
+    parser.add_argument("--helm", default=str(QA_ROOT / "bin" / "helm"))
+    parser.add_argument("--chart", required=True)
+    parser.add_argument("--values", required=True)
+    parser.add_argument("--image-manifest", required=True)
+    parser.add_argument("--registry-token-file", required=True)
+    upgrade(parser.parse_args(argv))
     print('{"receiptStored": true, "status": "passed"}')
     return 0
 

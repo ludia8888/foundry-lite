@@ -43,6 +43,15 @@ data:
       max_block_bytes: {{ .Values.qaDependencies.tempo.ingester.maxBlockBytes }}
       max_block_duration: {{ .Values.qaDependencies.tempo.ingester.maxBlockDuration }}
       complete_block_timeout: {{ .Values.qaDependencies.tempo.ingester.completeBlockTimeout }}
+    overrides:
+      defaults:
+        ingestion:
+          rate_limit_bytes: {{ .Values.qaDependencies.tempo.limits.rateLimitBytes }}
+          burst_size_bytes: {{ .Values.qaDependencies.tempo.limits.burstSizeBytes }}
+          max_traces_per_user: {{ .Values.qaDependencies.tempo.limits.maxTracesPerUser }}
+          max_attribute_bytes: {{ .Values.qaDependencies.tempo.limits.maxAttributeBytes }}
+        global:
+          max_bytes_per_trace: {{ .Values.qaDependencies.tempo.limits.maxBytesPerTrace }}
     storage:
       trace:
         backend: local

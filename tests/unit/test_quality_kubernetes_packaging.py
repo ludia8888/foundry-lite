@@ -170,6 +170,7 @@ def test_tempo_qa_profile_bounds_ingester_memory_and_declares_its_resources() ->
 
     tempo = values["qaDependencies"]["tempo"]
     assert tempo["resources"]["limits"]["memory"] == "2Gi"
+    assert tempo["gcMemoryLimit"] == "1536MiB"
     assert tempo["ingester"] == {
         "maxBlockBytes": 33554432,
         "maxBlockDuration": "5m",
@@ -179,6 +180,17 @@ def test_tempo_qa_profile_bounds_ingester_memory_and_declares_its_resources() ->
     assert "max_block_bytes: {{ .Values.qaDependencies.tempo.ingester.maxBlockBytes }}" in config
     assert "max_block_duration: {{ .Values.qaDependencies.tempo.ingester.maxBlockDuration }}" in config
     assert "complete_block_timeout: {{ .Values.qaDependencies.tempo.ingester.completeBlockTimeout }}" in config
+    assert "name: GOMEMLIMIT" in identity
+    assert ".Values.qaDependencies.tempo.gcMemoryLimit | quote" in identity
+    assert tempo["limits"] == {
+        "rateLimitBytes": 4194304,
+        "burstSizeBytes": 8388608,
+        "maxTracesPerUser": 2000,
+        "maxAttributeBytes": 2048,
+        "maxBytesPerTrace": 5242880,
+    }
+    assert "rate_limit_bytes: {{ .Values.qaDependencies.tempo.limits.rateLimitBytes }}" in config
+    assert "max_bytes_per_trace: {{ .Values.qaDependencies.tempo.limits.maxBytesPerTrace }}" in config
 
 
 def test_kafka_outbox_subscription_is_packaged_for_runtime_and_macmini() -> None:
