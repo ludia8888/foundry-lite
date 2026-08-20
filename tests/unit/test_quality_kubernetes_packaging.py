@@ -163,6 +163,24 @@ def test_otlp_http_trace_endpoint_includes_the_collector_path() -> None:
     assert macmini["external"]["telemetry"]["otlpEndpoint"] == ("http://foundry-lite-tempo:4318/v1/traces")
 
 
+def test_tempo_qa_profile_bounds_ingester_memory_and_declares_its_resources() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    identity = (ROOT / "deploy/helm/foundry-lite/templates/qa-observability-identity.yaml").read_text(encoding="utf-8")
+    config = (ROOT / "deploy/helm/foundry-lite/templates/qa-dependencies-config.yaml").read_text(encoding="utf-8")
+
+    tempo = values["qaDependencies"]["tempo"]
+    assert tempo["resources"]["limits"]["memory"] == "2Gi"
+    assert tempo["ingester"] == {
+        "maxBlockBytes": 33554432,
+        "maxBlockDuration": "5m",
+        "completeBlockTimeout": "5m",
+    }
+    assert "toYaml .Values.qaDependencies.tempo.resources" in identity
+    assert "max_block_bytes: {{ .Values.qaDependencies.tempo.ingester.maxBlockBytes }}" in config
+    assert "max_block_duration: {{ .Values.qaDependencies.tempo.ingester.maxBlockDuration }}" in config
+    assert "complete_block_timeout: {{ .Values.qaDependencies.tempo.ingester.completeBlockTimeout }}" in config
+
+
 def test_kafka_outbox_subscription_is_packaged_for_runtime_and_macmini() -> None:
     base = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
     macmini = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))

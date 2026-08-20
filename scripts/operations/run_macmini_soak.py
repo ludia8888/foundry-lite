@@ -241,7 +241,7 @@ def _safe_operations_receipt(raw: bytes) -> dict[str, object] | None:
         return None
     if not isinstance(payload, dict):
         return None
-    fields = (
+    required_fields = (
         "schemaVersion",
         "status",
         "observedAt",
@@ -250,8 +250,17 @@ def _safe_operations_receipt(raw: bytes) -> dict[str, object] | None:
         "oldestOutboxPendingSeconds",
         "deadLetterCount",
     )
-    receipt: dict[str, object] = {field: payload.get(field) for field in fields}
-    if not _valid_operations_receipt(receipt, fields[3:]):
+    optional_fields = (
+        "outboxEnqueuedCount",
+        "outboxPublishedCount",
+        "outboxPendingTenantCount",
+        "outboxPendingByTenant",
+    )
+    receipt: dict[str, object] = {field: payload.get(field) for field in required_fields}
+    receipt.update({field: payload[field] for field in optional_fields if field in payload})
+    if not _valid_operations_receipt(receipt, required_fields[3:]):
+        return None
+    if not _valid_optional_operations_receipt(receipt):
         return None
     return receipt
 
@@ -262,6 +271,31 @@ def _valid_operations_receipt(receipt: dict[str, object], numeric_fields: tuple[
         and receipt.get("status") == "passed"
         and isinstance(receipt.get("observedAt"), str)
         and all(_is_nonnegative_number(receipt.get(field)) for field in numeric_fields)
+    )
+
+
+def _valid_optional_operations_receipt(receipt: Mapping[str, object]) -> bool:
+    numeric_fields = ("outboxEnqueuedCount", "outboxPublishedCount", "outboxPendingTenantCount")
+    return all(field not in receipt or _is_nonnegative_number(receipt.get(field)) for field in numeric_fields) and (
+        "outboxPendingByTenant" not in receipt or _valid_pending_by_tenant(receipt["outboxPendingByTenant"])
+    )
+
+
+def _valid_pending_by_tenant(value: object) -> bool:
+    if not isinstance(value, list) or len(value) > 100:
+        return False
+    return all(_valid_pending_tenant(item) for item in value)
+
+
+def _valid_pending_tenant(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    tenant_id = value.get("tenantId")
+    return (
+        isinstance(tenant_id, str)
+        and 0 < len(tenant_id) <= 200
+        and _is_nonnegative_number(value.get("pendingCount"))
+        and _is_nonnegative_number(value.get("oldestPendingSeconds"))
     )
 
 
@@ -416,6 +450,7 @@ def _summarize(
         "maximumOutboxPendingCount": _maximum_operations_value(eligible, "outboxPendingCount"),
         "maximumOldestOutboxPendingSeconds": _maximum_operations_value(eligible, "oldestOutboxPendingSeconds"),
         "finalOutboxPendingCount": metrics.final_outbox_pending_count,
+        "finalOutboxPendingByTenant": _last_operations_value(eligible, "outboxPendingByTenant"),
         "deadLetterIncrementCount": metrics.dead_letter_increment_count,
         "maximumNodeMemoryPercent": metrics.memory_percent,
         "maximumNodeDiskPercent": metrics.disk_percent,
@@ -451,6 +486,7 @@ def _phase_metric(samples: list[dict[str, object]]) -> dict[str, object]:
         "maximumOutboxPendingCount": _maximum_operations_value(samples, "outboxPendingCount"),
         "maximumOldestOutboxPendingSeconds": _maximum_operations_value(samples, "oldestOutboxPendingSeconds"),
         "finalOutboxPendingCount": _last_operations_value(samples, "outboxPendingCount"),
+        "finalOutboxPendingByTenant": _last_operations_value(samples, "outboxPendingByTenant"),
     }
 
 

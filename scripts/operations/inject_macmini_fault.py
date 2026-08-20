@@ -72,6 +72,7 @@ _DISK_RECLAIM_ATTEMPTS = 30
 _DISK_RECLAIM_INTERVAL_SECONDS = 1.0
 _COLIMA_PVC_STORAGE_PATH = "/var/lib/rancher/k3s/storage"
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def inject(args: argparse.Namespace) -> dict[str, object]:
@@ -169,8 +170,10 @@ def _signal_fault(
     resource: str,
 ) -> dict[str, object]:
     pod = _first_pod(args, selector)
-    before_restarts = _pod_restart_count(args, pod)
-    program = f"import os,signal; os.kill(1, signal.SIG{signal_name})"
+    before = _container_lifecycle_snapshot(args, pod, container)
+    process_before = _pid_one_identity(args, pod, container)
+    expected_signal = _signal_number(signal_name)
+    program = f"import os; os.kill(1, {expected_signal})"
     signalled = _kubectl(
         args,
         (
@@ -185,14 +188,35 @@ def _signal_fault(
         ),
         30,
     )
-    restarted = _wait_for_pod_restart(args, pod, before_restarts, 60)
+    after = _wait_for_container_restart(args, pod, container, before, 60)
     rollout = _kubectl(args, ("rollout", "status", resource, "--timeout=120s"), 140)
+    process_after = _pid_one_identity(args, pod, container)
+    restarted = _restart_observed(before, after)
+    terminated = _termination_observed(after, expected_signal)
+    container_id_changed = before["containerId"] != after["containerId"]
+    is_passed = (
+        restarted
+        and terminated
+        and container_id_changed
+        and process_before["observed"]
+        and process_after["observed"]
+        and rollout.returncode == 0
+    )
     return {
-        "status": "passed" if restarted and rollout.returncode == 0 else "failed",
+        "status": "passed" if is_passed else "failed",
         "target": pod,
+        "targetContainer": container,
         "signal": f"SIG{signal_name}",
+        "expectedTerminationSignal": expected_signal,
+        "signalCommandReturnCode": signalled.returncode,
         "signalTransportDisconnected": signalled.returncode != 0,
+        "targetProcessBefore": process_before,
+        "targetProcessAfter": process_after,
+        "containerLifecycleBefore": before,
+        "containerLifecycleAfter": after,
         "containerRestartObserved": restarted,
+        "containerIdChanged": container_id_changed,
+        "terminationSignalObserved": terminated,
         "recoveryTargetSeconds": 120,
         "recoveryObserved": rollout.returncode == 0,
     }
@@ -209,7 +233,11 @@ def _first_pod(args: argparse.Namespace, selector: str) -> str:
     return names[0]
 
 
-def _pod_restart_count(args: argparse.Namespace, pod: str) -> int:
+def _container_lifecycle_snapshot(
+    args: argparse.Namespace,
+    pod: str,
+    container: str,
+) -> dict[str, object]:
     payload = _json_output(
         _kubectl(args, ("get", "pod", pod, "-o", "json"), 30),
         "macmini_fault_pod_status_failed",
@@ -218,23 +246,118 @@ def _pod_restart_count(args: argparse.Namespace, pod: str) -> int:
     containers = status.get("containerStatuses") if isinstance(status, dict) else None
     if not isinstance(containers, list):
         raise RuntimeError("macmini_fault_pod_status_failed")
-    values = [item.get("restartCount") for item in containers if isinstance(item, dict)]
-    counts = [value for value in values if isinstance(value, int) and not isinstance(value, bool)]
-    if not counts:
+    matched = next(
+        (item for item in containers if isinstance(item, dict) and item.get("name") == container),
+        None,
+    )
+    if not isinstance(matched, dict):
         raise RuntimeError("macmini_fault_pod_status_failed")
-    return sum(counts)
+    return _container_lifecycle_values(matched)
 
 
-def _wait_for_pod_restart(args: argparse.Namespace, pod: str, before: int, timeout_seconds: int) -> bool:
+def _container_lifecycle_values(status: dict[str, object]) -> dict[str, object]:
+    running = status.get("state")
+    running_state = running.get("running") if isinstance(running, dict) else None
+    last_state = status.get("lastState")
+    terminated = last_state.get("terminated") if isinstance(last_state, dict) else None
+    return {
+        "containerId": _optional_text(status.get("containerID")),
+        "restartCount": _optional_int(status.get("restartCount"), default=0),
+        "isReady": status.get("ready") is True,
+        "startedAt": _optional_text(running_state.get("startedAt")) if isinstance(running_state, dict) else None,
+        "lastTermination": _termination_values(terminated),
+    }
+
+
+def _termination_values(terminated: object) -> dict[str, object]:
+    if not isinstance(terminated, dict):
+        return {"reason": None, "exitCode": None, "signal": None, "finishedAt": None}
+    return {
+        "reason": _optional_text(terminated.get("reason")),
+        "exitCode": _optional_int(terminated.get("exitCode"), default=None),
+        "signal": _optional_int(terminated.get("signal"), default=None),
+        "finishedAt": _optional_text(terminated.get("finishedAt")),
+    }
+
+
+def _wait_for_container_restart(
+    args: argparse.Namespace,
+    pod: str,
+    container: str,
+    before: dict[str, object],
+    timeout_seconds: int,
+) -> dict[str, object]:
+    latest = before
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
-            if _pod_restart_count(args, pod) > before:
-                return True
+            latest = _container_lifecycle_snapshot(args, pod, container)
+            if _restart_observed(before, latest):
+                return latest
         except RuntimeError:
             pass
         time.sleep(1)
-    return False
+    return latest
+
+
+def _pid_one_identity(args: argparse.Namespace, pod: str, container: str) -> dict[str, object]:
+    program = (
+        "import hashlib,json;"
+        "raw=open('/proc/1/cmdline','rb').read();"
+        "print(json.dumps({'pid':1,'commandSha256':hashlib.sha256(raw).hexdigest()}))"
+    )
+    result = _kubectl(
+        args,
+        ("exec", pod, "-c", container, "--", "/opt/foundry-lite-venv/bin/python", "-c", program),
+        30,
+    )
+    if result.returncode != 0:
+        return {"observed": False, "pid": None, "commandSha256": None}
+    try:
+        payload = json.loads(result.stdout.decode())
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"observed": False, "pid": None, "commandSha256": None}
+    digest = payload.get("commandSha256") if isinstance(payload, dict) else None
+    if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+        return {"observed": False, "pid": None, "commandSha256": None}
+    return {"observed": True, "pid": 1, "commandSha256": digest}
+
+
+def _signal_number(signal_name: str) -> int:
+    values = {"TERM": 15, "KILL": 9}
+    value = values.get(signal_name)
+    if value is None:
+        raise RuntimeError("macmini_fault_signal_not_supported")
+    return value
+
+
+def _restart_observed(before: dict[str, object], after: dict[str, object]) -> bool:
+    after_count = after.get("restartCount")
+    before_count = before.get("restartCount")
+    return (
+        isinstance(after_count, int)
+        and not isinstance(after_count, bool)
+        and isinstance(before_count, int)
+        and not isinstance(before_count, bool)
+        and after_count > before_count
+    )
+
+
+def _termination_observed(snapshot: dict[str, object], expected_signal: int) -> bool:
+    terminal = snapshot.get("lastTermination")
+    if not isinstance(terminal, dict):
+        return False
+    signal = _optional_int(terminal.get("signal"), default=None)
+    exit_code = _optional_int(terminal.get("exitCode"), default=None)
+    return signal == expected_signal or exit_code == 128 + expected_signal
+
+
+def _optional_text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _optional_int(value: object, *, default: int | None) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def _worker_oom_fault(args: argparse.Namespace) -> dict[str, object]:

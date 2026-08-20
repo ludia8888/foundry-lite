@@ -80,8 +80,7 @@ spec:
           readinessProbe: {httpGet: {path: /ready, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
           livenessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 15, periodSeconds: 10}
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {cpu: "1", memory: 1Gi}
+            {{- toYaml .Values.qaDependencies.tempo.resources | nindent 12 }}
           volumeMounts:
             - {name: config, mountPath: /etc/tempo, readOnly: true}
             - {name: data, mountPath: /var/tempo}

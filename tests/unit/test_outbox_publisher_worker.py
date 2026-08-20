@@ -9,7 +9,7 @@ import pytest
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import OutboxEventRecord
-from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.domain.context import DEMO_ADMIN_ROLES, RequestContext, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_worker import outbox_publisher
 from foundry_lite_worker.outbox_publisher import (
@@ -45,6 +45,7 @@ def test_outbox_publisher_worker_publishes_until_empty_batch(tmp_path: Path) -> 
     assert rows["outbox_worker_2"]["published_at"] is not None
     assert evidence["published"] == 2
     assert evidence["stopReason"] == "empty_batches"
+    assert evidence["tenantIds"] == ["tenant-demo"]
 
 
 def test_outbox_publisher_worker_main_prints_operator_summary(tmp_path: Path, capsys) -> None:
@@ -66,6 +67,7 @@ def test_outbox_publisher_worker_main_prints_operator_summary(tmp_path: Path, ca
     assert payload["status"] == "STOPPED"
     assert payload["published"] == 1
     assert payload["eventIds"] == ["outbox_worker_cli"]
+    assert payload["tenantIds"] == ["tenant-demo"]
 
 
 def test_outbox_publisher_worker_config_from_env(tmp_path: Path) -> None:
@@ -107,21 +109,42 @@ def test_outbox_worker_never_runs_schema_ddl(monkeypatch, tmp_path: Path) -> Non
 
 
 def test_outbox_publisher_worker_closes_runtime_when_publish_raises(monkeypatch, tmp_path: Path) -> None:
-    class FailingOperations:
-        def publish_pending_outbox(self, **_kwargs: object) -> object:
+    class FailingOutboxPublisher:
+        def publish_all_pending_outbox(self, **_kwargs: object) -> object:
             raise RuntimeError("injected publish failure")
 
     close_calls: list[str] = []
     monkeypatch.setattr(
         outbox_publisher,
         "_build_foundry",
-        lambda _config: SimpleNamespace(operations=FailingOperations(), close=lambda: close_calls.append("close")),
+        lambda _config: SimpleNamespace(
+            _services=SimpleNamespace(outbox_publisher=FailingOutboxPublisher()),
+            close=lambda: close_calls.append("close"),
+        ),
     )
 
     with pytest.raises(RuntimeError, match="injected publish failure"):
         publish_outbox_batches(OutboxPublisherWorkerConfig(storage_root=tmp_path))
 
     assert close_calls == ["close"]
+
+
+def test_outbox_publisher_worker_publishes_pending_rows_for_every_tenant(tmp_path: Path) -> None:
+    foundry, db_url, storage_root = _seeded_foundry(tmp_path, "outbox_demo")
+    dependencies = create_local_core_dependencies(db_url=db_url, storage_root=storage_root)
+    _ensure_tenant(dependencies, "tenant-a")
+    _ensure_tenant(dependencies, "tenant-b")
+    _insert_outbox(dependencies, event_id="outbox_a", request_id="req-a", tenant_id="tenant-a")
+    _insert_outbox(dependencies, event_id="outbox_b", request_id="req-b", tenant_id="tenant-b")
+
+    result = publish_outbox_batches(
+        OutboxPublisherWorkerConfig(db_url=db_url, storage_root=storage_root, max_batches=1)
+    )
+
+    assert result.published == 3
+    assert result.tenant_ids == ("tenant-a", "tenant-b", "tenant-demo")
+    assert _outbox_rows(foundry, tenant_id="tenant-a")["outbox_a"]["status"] == "published"
+    assert _outbox_rows(foundry, tenant_id="tenant-b")["outbox_b"]["status"] == "published"
 
 
 def _seeded_foundry(tmp_path: Path, *event_ids: str) -> tuple[FoundryLite, str, Path]:
@@ -135,19 +158,25 @@ def _seeded_foundry(tmp_path: Path, *event_ids: str) -> tuple[FoundryLite, str, 
     return foundry, db_url, storage_root
 
 
-def _outbox_rows(foundry: FoundryLite) -> dict[str, dict[str, object]]:
-    snapshot = foundry.operations.list_runs(ctx=demo_admin_context())
+def _outbox_rows(foundry: FoundryLite, *, tenant_id: str = "tenant-demo") -> dict[str, dict[str, object]]:
+    snapshot = foundry.operations.list_runs(ctx=_admin_context(tenant_id))
     rows = cast(list[dict[str, object]], snapshot["outboxEvents"])
     return {str(row["id"]): row for row in rows}
 
 
-def _insert_outbox(dependencies: CoreDependencies, *, event_id: str, request_id: str) -> None:
+def _insert_outbox(
+    dependencies: CoreDependencies,
+    *,
+    event_id: str,
+    request_id: str,
+    tenant_id: str = "tenant-demo",
+) -> None:
     with dependencies.engine.begin() as transaction:
         dependencies.runtime_repository.insert_outbox_event(
             transaction=transaction,
             record=OutboxEventRecord(
                 event_id=event_id,
-                tenant_id="tenant-demo",
+                tenant_id=tenant_id,
                 event_type="dataset.version.committed",
                 aggregate_type="dataset_version",
                 aggregate_id=f"dsv_{event_id}",
@@ -160,3 +189,19 @@ def _insert_outbox(dependencies: CoreDependencies, *, event_id: str, request_id:
                 published_at=None,
             ),
         )
+
+
+def _ensure_tenant(dependencies: CoreDependencies, tenant_id: str) -> None:
+    dependencies.metadata_repository.ensure_tenant(
+        tenant_id=tenant_id,
+        name=tenant_id,
+        created_at="2026-06-10T00:00:00Z",
+    )
+
+
+def _admin_context(tenant_id: str) -> RequestContext:
+    return RequestContext(
+        tenant_id=tenant_id,
+        actor_user_id="user-demo-admin",
+        roles=DEMO_ADMIN_ROLES,
+    )
