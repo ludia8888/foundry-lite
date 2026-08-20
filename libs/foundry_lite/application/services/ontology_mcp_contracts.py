@@ -112,6 +112,16 @@ class OntologyMcpObjectRuntime(Protocol):
         ctx: RequestContext | None = None,
     ) -> Sequence[Mapping[str, object]]: ...
 
+    def search_around(
+        self,
+        from_object_type_api_name: str,
+        link_types: Sequence[str],
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        include_items: bool = True,
+    ) -> Mapping[str, object]: ...
+
 
 class OntologyMcpActionRuntime(Protocol):
     def get(self, action_api_name: str, *, ctx: RequestContext | None = None) -> ActionCatalogItem: ...

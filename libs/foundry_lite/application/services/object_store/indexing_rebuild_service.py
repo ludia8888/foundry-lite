@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
-    IndexRunSourceRef,
     ObjectIndexRebuildResult,
     ObjectIndexRepository,
     ObjectIndexRowHashRepository,
@@ -20,14 +19,14 @@ from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.indexing_changelog import (
     ChangelogRefreshPlan,
-    changelog_source_ref_updates,
+    index_source_ref_updates,
     load_stored_row_hashes,
     persist_row_hashes,
     plan_changelog_refresh,
     source_rows_from_dataset_rows,
 )
 from foundry_lite.application.services.object_store.indexing_link_service import ObjectLinkIndexingService
-from foundry_lite.application.services.object_store.indexing_multi_source import read_merged_source_rows
+from foundry_lite.application.services.object_store.indexing_multi_source import read_index_source_rows
 from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexDatasetRegistry,
     IndexDatasetTransactionFiles,
@@ -38,9 +37,9 @@ from foundry_lite.application.services.object_store.indexing_protocols import (
 )
 from foundry_lite.application.services.object_store.indexing_record_factory import new_object_record_insert
 from foundry_lite.application.services.object_store.indexing_record_mutations import ObjectIndexRecordMutationService
-from foundry_lite.application.services.object_store.indexing_runs import (
-    _start_failed_index_replay_plan,
-    _start_index_rebuild_plan,
+from foundry_lite.application.services.object_store.indexing_replay import (
+    start_failed_index_replay_plan,
+    start_index_rebuild_plan,
 )
 from foundry_lite.application.services.object_store.indexing_shadow_service import ObjectIndexShadowService
 from foundry_lite.application.services.object_store.indexing_types import (
@@ -98,10 +97,15 @@ class ObjectIndexRebuildService(CoreService):
         ctx: RequestContext | None = None,
     ) -> ObjectIndexRebuildResult:
         ctx = ctx or RequestContext()
-        self._require_object_index(ctx, "object_type", object_type_api_name)
-        self._require_write_traffic(ctx, "index_rebuild", "object_type", object_type_api_name)
+        self.runtime_service._require_or_audit(ctx, "object:index", "object_type", object_type_api_name)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_rebuild",
+            resource_type="object_type",
+            resource_id=object_type_api_name,
+        )
         with self.engine.begin() as conn:
-            plan = _start_index_rebuild_plan(
+            plan = start_index_rebuild_plan(
                 conn=conn,
                 ctx=ctx,
                 object_type_api_name=object_type_api_name,
@@ -121,10 +125,15 @@ class ObjectIndexRebuildService(CoreService):
         expected_hash: str | None = None,
     ) -> ObjectIndexShadowRebuildResult:
         ctx = ctx or RequestContext()
-        self._require_object_index(ctx, "object_type", object_type_api_name)
-        self._require_write_traffic(ctx, "index_shadow_rebuild", "object_type", object_type_api_name)
+        self.runtime_service._require_or_audit(ctx, "object:index", "object_type", object_type_api_name)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_shadow_rebuild",
+            resource_type="object_type",
+            resource_id=object_type_api_name,
+        )
         with self.engine.begin() as conn:
-            plan = _start_index_rebuild_plan(
+            plan = start_index_rebuild_plan(
                 conn=conn,
                 ctx=ctx,
                 object_type_api_name=object_type_api_name,
@@ -143,11 +152,16 @@ class ObjectIndexRebuildService(CoreService):
         ctx: RequestContext | None = None,
     ) -> ObjectIndexRebuildResult:
         ctx = ctx or RequestContext()
-        self._require_object_index(ctx, "index_run", index_run_id)
         self.runtime_service._require_or_audit(ctx, "operations:retry", "index_run", index_run_id)
-        self._require_write_traffic(ctx, "index_replay_run", "index_run", index_run_id)
+        self.runtime_service._require_or_audit(ctx, "object:index", "index_run", index_run_id)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_replay_run",
+            resource_type="index_run",
+            resource_id=index_run_id,
+        )
         with self.engine.begin() as conn:
-            plan = _start_failed_index_replay_plan(
+            plan = start_failed_index_replay_plan(
                 conn=conn,
                 ctx=ctx,
                 index_run_id=index_run_id,
@@ -192,36 +206,12 @@ class ObjectIndexRebuildService(CoreService):
             self._fail_index_run(ctx, plan.run_id, exc)
             raise
 
-    def _require_object_index(self, ctx: RequestContext, resource_type: str, resource_id: str) -> None:
-        self.runtime_service._require_or_audit(ctx, "object:index", resource_type, resource_id)
-
-    def _require_write_traffic(
-        self,
-        ctx: RequestContext,
-        operation: str,
-        resource_type: str,
-        resource_id: str,
-    ) -> None:
-        self.runtime_service._require_write_traffic_open(
-            ctx,
-            operation=operation,
-            resource_type=resource_type,
-            resource_id=resource_id,
-        )
-
     def _read_index_source_rows(self, plan: ObjectIndexRebuildPlan) -> Sequence[TabularRow]:
-        if plan.multi_source is not None:
-            # Column-wise multi-datasource: read one parquet per segment and
-            # merge by primary key so downstream machinery sees single-dataset
-            # shaped rows (union of PKs; missing segment values stay null).
-            return read_merged_source_rows(
-                plan.object_type_api_name,
-                plan.multi_source,
-                version_file_path=self.dataset_transaction_service._version_file_path,
-                rows_from_parquet=self.compute_adapter.rows_from_parquet,
-            )
-        parquet_path = self.dataset_transaction_service._version_file_path(plan.dataset_version)
-        return self.compute_adapter.rows_from_parquet(parquet_path)
+        return read_index_source_rows(
+            plan,
+            version_file_path=self.dataset_transaction_service._version_file_path,
+            rows_from_parquet=self.compute_adapter.rows_from_parquet,
+        )
 
     def _fail_index_run(
         self,
@@ -486,15 +476,9 @@ class ObjectIndexRebuildService(CoreService):
             ctx,
             plan.run_id,
             counts,
-            source_ref_updates=self._index_source_ref_updates(counts),
+            source_ref_updates=index_source_ref_updates(counts),
         )
         self._audit_index_rebuild(conn, ctx, plan, counts)
-
-    def _index_source_ref_updates(self, counts: ObjectIndexRebuildCounts) -> IndexRunSourceRef:
-        updates = changelog_source_ref_updates(counts)
-        if counts.link_source_dataset_version_ids:
-            updates["linkSourceDatasetVersionIds"] = dict(counts.link_source_dataset_version_ids)
-        return updates
 
     def _audit_index_rebuild(
         self,

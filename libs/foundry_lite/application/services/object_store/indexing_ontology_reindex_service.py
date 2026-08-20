@@ -24,7 +24,7 @@ from foundry_lite.application.services.object_store.indexing_protocols import (
 )
 from foundry_lite.application.services.object_store.indexing_rebuild_service import ObjectIndexRebuildService
 from foundry_lite.application.services.object_store.indexing_record_mutations import ObjectIndexRecordMutationService
-from foundry_lite.application.services.object_store.indexing_runs import _start_ontology_reindex_plan
+from foundry_lite.application.services.object_store.indexing_replay import start_ontology_reindex_plan
 from foundry_lite.application.services.object_store.indexing_types import ObjectIndexRebuildCounts
 from foundry_lite.domain.context import RequestContext
 
@@ -86,7 +86,7 @@ class ObjectOntologyReindexService(CoreService):
             )
             if replay is not None:
                 return replay
-            plan = _start_ontology_reindex_plan(
+            plan = start_ontology_reindex_plan(
                 conn=conn,
                 ctx=ctx,
                 object_type_api_name=object_type_api_name,

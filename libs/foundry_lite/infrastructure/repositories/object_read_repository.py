@@ -611,29 +611,46 @@ def _property_filter_condition(
 def _derived_filter_condition(spec: DerivedProperty, op: str, value: object) -> Any:
     expression = _derived_value_expression(spec)
     if op == "in":
-        items = _filter_sequence(value)
-        values = [] if items is None else [_filter_sql_value(item, spec.data_type) for item in items]
-        accepted = [item for item in values if item is not INVALID_SQL_VALUE]
-        return expression.in_(accepted) if accepted else literal(False)
-    if op == "eq" and value is None:
-        return expression.is_(None)
-    sql_value = _filter_sql_value(value, spec.data_type)
-    if sql_value is INVALID_SQL_VALUE:
-        return literal(False)
+        return _derived_in_condition(expression, spec.data_type, value)
     if op == "eq":
-        return expression == sql_value
-    if op == "gte":
-        return expression >= sql_value if spec.data_type != "boolean" else literal(False)
-    if op == "gt":
-        return expression > sql_value if spec.data_type != "boolean" else literal(False)
-    if op == "lte":
-        return expression <= sql_value if spec.data_type != "boolean" else literal(False)
-    if op == "lt":
-        return expression < sql_value if spec.data_type != "boolean" else literal(False)
-    if op == "contains" and spec.data_type == "string" and isinstance(value, str):
-        escaped = value.lower().replace("/", "//").replace("%", "/%").replace("_", "/_")
-        return func.lower(sa_cast(expression, String)).like(f"%{escaped}%", escape="/")
-    return literal(False)
+        return _derived_eq_condition(expression, spec.data_type, value)
+    if op == "contains":
+        return _derived_contains_condition(expression, spec.data_type, value)
+    return _derived_range_condition(expression, spec.data_type, op, value)
+
+
+def _derived_in_condition(expression: Any, data_type: str, value: object) -> Any:
+    items = _filter_sequence(value)
+    values = [] if items is None else [_filter_sql_value(item, data_type) for item in items]
+    accepted = [item for item in values if item is not INVALID_SQL_VALUE]
+    return expression.in_(accepted) if accepted else literal(False)
+
+
+def _derived_eq_condition(expression: Any, data_type: str, value: object) -> Any:
+    if value is None:
+        return expression.is_(None)
+    sql_value = _filter_sql_value(value, data_type)
+    return expression == sql_value if sql_value is not INVALID_SQL_VALUE else literal(False)
+
+
+def _derived_contains_condition(expression: Any, data_type: str, value: object) -> Any:
+    if data_type != "string" or not isinstance(value, str):
+        return literal(False)
+    escaped = value.lower().replace("/", "//").replace("%", "/%").replace("_", "/_")
+    return func.lower(sa_cast(expression, String)).like(f"%{escaped}%", escape="/")
+
+
+def _derived_range_condition(expression: Any, data_type: str, op: str, value: object) -> Any:
+    sql_value = _filter_sql_value(value, data_type)
+    if data_type == "boolean" or sql_value is INVALID_SQL_VALUE:
+        return literal(False)
+    comparisons = {
+        "gte": expression >= sql_value,
+        "gt": expression > sql_value,
+        "lte": expression <= sql_value,
+        "lt": expression < sql_value,
+    }
+    return comparisons.get(op, literal(False))
 
 
 def _property_eq_condition(

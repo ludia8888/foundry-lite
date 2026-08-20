@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from foundry_lite.application.ports import (
     IndexRunRow,
+    IndexRunSourceRef,
     ObjectIndexRepository,
     ObjectTypeRow,
     OntologyObjectReindexResult,
@@ -138,3 +139,18 @@ def _completed_changed_fields(completed: Mapping[str, object]) -> list[str]:
 def _source_ontology_version_id(config: Mapping[str, object]) -> str | None:
     value = config.get("sourceOntologyVersionId")
     return str(value) if isinstance(value, str) and value else None
+
+
+def ontology_reindex_source_ref(
+    config: Mapping[str, object],
+    operation: Mapping[str, object],
+    reindex_key: str,
+) -> IndexRunSourceRef:
+    source_ref: IndexRunSourceRef = {"ontologyReindexKey": reindex_key}
+    source_ontology_version_id = _source_ontology_version_id(config)
+    if source_ontology_version_id is not None:
+        source_ref["sourceOntologyVersionId"] = source_ontology_version_id
+    changed_fields = operation.get("changedFields")
+    if isinstance(changed_fields, list):
+        source_ref["changedFields"] = [str(item) for item in changed_fields]
+    return source_ref

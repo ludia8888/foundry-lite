@@ -11,6 +11,7 @@ from foundry_lite.application.services.aip.fde_application_tool_projections impo
     lineage_graph,
     pilot_generation_tool_result,
 )
+from foundry_lite.application.services.aip.fde_object_tools import search_around_ontology_objects
 from foundry_lite.application.services.aip.fde_pilot import FdePilotService
 from foundry_lite.application.services.aip.fde_platform_docs import (
     list_platform_sdk_apis,
@@ -201,16 +202,7 @@ class FdeApplicationToolService(CoreService):
 
     def _palantir_objects(self, ctx: RequestContext, request: FdePlatformToolRequest) -> dict[str, object]:
         if request.spec.tool_id == "search_around_ontology_objects":
-            link_types = _text_items(request.arguments.get("linkTypes"), "linkTypes")
-            return dict(
-                self.object_sets_service.resolve_search_around(
-                    required_text(request.arguments, "fromObjectType"),
-                    link_types,
-                    ctx=ctx,
-                    filter_ast=_optional_mapping_value(request.arguments.get("filter")),
-                    include_items=True,
-                )
-            )
+            return search_around_ontology_objects(self.object_sets_service, ctx, request)
         object_type = required_text(request.arguments, "objectType")
         if request.spec.tool_id == "traverse_ontology_object_links":
             link_type = required_text(request.arguments, "linkType")

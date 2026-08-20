@@ -176,6 +176,14 @@ def changelog_source_ref_updates(counts: ObjectIndexRebuildCounts) -> IndexRunSo
     }
 
 
+def index_source_ref_updates(counts: ObjectIndexRebuildCounts) -> IndexRunSourceRef:
+    """Add pinned many-to-many link source versions to changelog run evidence."""
+    updates = changelog_source_ref_updates(counts)
+    if counts.link_source_dataset_version_ids:
+        updates["linkSourceDatasetVersionIds"] = dict(counts.link_source_dataset_version_ids)
+    return updates
+
+
 def source_rows_from_dataset_rows(
     conn: TransactionContext,
     ontology_service: IndexOntologyLookup,

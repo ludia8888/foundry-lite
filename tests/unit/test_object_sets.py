@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ObjectQueryItem, ObjectQueryResult, ObjectRecordRow
-from foundry_lite.application.services.object_store import set_members
+from foundry_lite.application.services.object_store import set_members, set_validation
 from foundry_lite.application.services.object_store.set_members import (
     collect_dynamic_object_set_members,
     resolve_search_around_object_ids,
@@ -391,6 +391,23 @@ def test_object_set_definition_validation(foundry: FoundryLite) -> None:
             object_ids=["O-404"],
             ctx=ctx,
         )
+
+
+def test_object_set_definition_normalizer_is_directly_executable() -> None:
+    """The pure ObjectSet rule remains testable without starting the full runtime."""
+    normalized = set_validation.normalize_object_set_definition(
+        "Pending orders",
+        set_type="dynamic",
+        definition=None,
+        object_ids=None,
+        filter_ast={"property": "status", "op": "eq", "value": "PENDING"},
+        visibility="public",
+        access_scope=None,
+        lifecycle=None,
+        ttl_seconds=None,
+    )
+    assert normalized["definition"] == {"filter": {"property": "status", "op": "eq", "value": "PENDING"}}
+    assert normalized["visibility"] == "public"
 
 
 def test_search_around_object_set_changes_object_type_across_a_link(foundry: FoundryLite) -> None:

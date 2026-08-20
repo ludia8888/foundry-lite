@@ -32,6 +32,7 @@ from foundry_lite.application.services.object_store.indexing_protocols import (
 )
 from foundry_lite.application.services.object_store.indexing_types import (
     ObjectIndexMultiSourcePlan,
+    ObjectIndexRebuildPlan,
     ObjectIndexSourceSegment,
 )
 from foundry_lite.domain.context import RequestContext
@@ -47,6 +48,23 @@ from foundry_lite.domain.ontology.datasources import (
 
 VersionFilePath = Callable[[DatasetVersionRow], Path]
 RowsFromParquet = Callable[[Path], Sequence[TabularRow]]
+
+
+def read_index_source_rows(
+    plan: ObjectIndexRebuildPlan,
+    *,
+    version_file_path: VersionFilePath,
+    rows_from_parquet: RowsFromParquet,
+) -> Sequence[TabularRow]:
+    """Read the one source snapshot or merge all pinned datasource segments."""
+    if plan.multi_source is not None:
+        return read_merged_source_rows(
+            plan.object_type_api_name,
+            plan.multi_source,
+            version_file_path=version_file_path,
+            rows_from_parquet=rows_from_parquet,
+        )
+    return rows_from_parquet(version_file_path(plan.dataset_version))
 
 
 def resolve_multi_source_plan(

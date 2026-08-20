@@ -33,7 +33,7 @@ from foundry_lite.application.services.ontology_mcp_tools import (
 )
 from foundry_lite.application.services.ontology_mcp_unified_search import (
     OntologyMcpUnifiedSearchRuntime,
-    _unified_hit_payload,
+    execute_object_tool,
 )
 from foundry_lite.application.services.ontology_mcp_values import (
     ActionRequest as _ActionRequest,
@@ -43,9 +43,6 @@ from foundry_lite.application.services.ontology_mcp_values import (
 )
 from foundry_lite.application.services.ontology_mcp_values import (
     action_request as _action_request,
-)
-from foundry_lite.application.services.ontology_mcp_values import (
-    bounded_int as _bounded_int,
 )
 from foundry_lite.application.services.ontology_mcp_values import (
     can_autonomous_apply as _can_autonomous_apply,
@@ -75,19 +72,10 @@ from foundry_lite.application.services.ontology_mcp_values import (
     mcp_result as _mcp_result,
 )
 from foundry_lite.application.services.ontology_mcp_values import (
-    optional_mapping as _optional_mapping,
-)
-from foundry_lite.application.services.ontology_mcp_values import (
-    optional_text as _optional_text,
-)
-from foundry_lite.application.services.ontology_mcp_values import (
     parse_tool_name as _parse_tool_name,
 )
 from foundry_lite.application.services.ontology_mcp_values import (
     text as _text,
-)
-from foundry_lite.application.services.ontology_mcp_values import (
-    text_list as _text_list,
 )
 from foundry_lite.application.services.ontology_mcp_values import (
     tool_event_payload as _tool_event_payload,
@@ -285,51 +273,19 @@ class OntologyMcpGateway:
         operation: str,
         arguments: JsonObject,
     ) -> Mapping[str, object]:
+        return execute_object_tool(
+            objects=self.objects,
+            unified_search=self.unified_search,
+            require_object_read=self._require_object_read,
+            object_context=self._object_context,
+            ctx=ctx,
+            name=name,
+            operation=operation,
+            arguments=arguments,
+        )
+
+    def _require_object_read(self, ctx: RequestContext, name: str) -> None:
         self._require_scope(ctx, "object", name, "read")
-        object_ctx = self._object_context(ctx, name)
-        if operation == "get":
-            return self.objects.get(name, _text(arguments, "objectId"), ctx=object_ctx)
-        if operation == "search":
-            return self.objects.query(
-                name,
-                ctx=object_ctx,
-                filter_ast=_optional_mapping(arguments.get("filter")),
-                limit=_bounded_int(arguments.get("limit"), 20, 1, 50),
-                cursor=_optional_text(arguments.get("cursor")),
-                search_text=_optional_text(arguments.get("search")),
-                # The runtime has always accepted this; only the MCP surface withheld it, so an
-                # external agent could keyword-match but never search by meaning.
-                semantic_text=_optional_text(arguments.get("semanticText")),
-            )
-        if operation == "links":
-            link_type = _text(arguments, "linkType")
-            links = self.objects.links(
-                name,
-                _text(arguments, "objectId"),
-                link_type,
-                ctx=object_ctx,
-            )
-            return {"linkType": link_type, "links": [dict(link) for link in links]}
-        if operation == "searchAround":
-            link_types = _text_list(arguments, "linkTypes")
-            return dict(
-                self.objects.search_around(
-                    name,
-                    link_types,
-                    ctx=object_ctx,
-                    filter_ast=_optional_mapping(arguments.get("filter")),
-                )
-            )
-        if operation == "unifiedSearch":
-            hits = self.unified_search.unified_search(
-                object_ctx,
-                query_text=_text(arguments, "query"),
-                object_type=name,
-                filters=_optional_mapping(arguments.get("filter")),
-                limit=_bounded_int(arguments.get("limit"), 20, 1, 50),
-            )
-            return {"hits": [_unified_hit_payload(hit) for hit in hits]}
-        raise ValidationFailed("unsupported Ontology MCP object operation")
 
     def _object_context(self, ctx: RequestContext, name: str) -> RequestContext:
         if not is_client_credentials_service_principal(ctx):

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services import ontology_derived_property_validation as derived_property_validation
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -368,3 +369,30 @@ def test_derived_property_cannot_silently_chain_through_another_link_derived_pro
     with pytest.raises(ValidationFailed) as excinfo:
         _prepare(foundry, tmp_path, order_derived=derived)
     assert "another link-derived" in str(excinfo.value)
+
+
+def test_link_derived_property_validation_rule_is_directly_executable() -> None:
+    """The direct rule keeps Palantir's many-link aggregation requirement unit-testable."""
+    customer = {
+        "apiName": "Customer",
+        "primaryKey": "id",
+        "properties": [
+            {"apiName": "id", "type": "string"},
+            {
+                "apiName": "linkedOrderCount",
+                "type": "integer",
+                "derivation": {"link": "CustomerOrders", "aggregation": "count"},
+            },
+        ],
+    }
+    order = {"apiName": "Order", "primaryKey": "id", "properties": [{"apiName": "id", "type": "string"}]}
+    links = {
+        "CustomerOrders": {
+            "apiName": "CustomerOrders",
+            "from": "Customer",
+            "to": "Order",
+            "cardinality": "many_to_many",
+        }
+    }
+
+    derived_property_validation.validate_derived_properties(customer, {"Customer": customer, "Order": order}, links)

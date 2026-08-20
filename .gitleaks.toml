@@ -58,4 +58,9 @@ paths = [
   # contain redacted findings from a failed scan, which would otherwise make
   # the secret scanner recursively fail on its own report.
   '''^artifacts/quality/gitleaks\.json$''',
+  # `tmp/` is a Git-ignored local scratch area for manual QA drivers.  The
+  # working-tree scan must not fail a product change because a developer's
+  # private, untracked experiment is present there; tracked source remains
+  # subject to every default detection rule.
+  '''^tmp/.*''',
 ]

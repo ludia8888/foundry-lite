@@ -20,6 +20,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_row_policy_validation import validate_yaml_row_policies
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     mapping_sequence,
@@ -94,6 +95,18 @@ def validate_yaml_object_datasources(
         columns = dataset_columns_for_ref(conn, ctx, segment.dataset_ref)
         _validate_segment_primary_key(backing, segment, pk_column, columns)
         _validate_segment_property_columns(object_api_name, segment, assignments, columns)
+
+
+def validate_yaml_object_data_contracts(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_def: YamlObject,
+    property_defs: Mapping[str, YamlObject],
+    dataset_columns_for_ref: DatasetColumnsLookup,
+) -> None:
+    """Validate datasource mappings and row policies against one property catalog."""
+    validate_yaml_object_datasources(conn, ctx, object_def, property_defs, dataset_columns_for_ref)
+    validate_yaml_row_policies(object_def, property_defs)
 
 
 def validate_persisted_object_datasources(

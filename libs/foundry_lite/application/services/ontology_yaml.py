@@ -20,6 +20,7 @@ from foundry_lite.application.ports.ontology_repository import (
     PropertyDerivation,
 )
 from foundry_lite.application.services.materialization_types import OBJECT_SNAPSHOT_MODE
+from foundry_lite.application.services.ontology_derived_property_definition import property_derivation_from_value
 from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -245,21 +246,7 @@ def property_derivation(prop: YamlObject) -> PropertyDerivation | None:
     """Build optional property derivation metadata from YAML."""
     if "derivation" not in prop or prop["derivation"] is None:
         return None
-    derivation = required_mapping(prop, "derivation")
-    result: PropertyDerivation = {}
-    expression = optional_str(derivation, "expression")
-    if expression is not None:
-        result["expression"] = expression
-    link = optional_str(derivation, "link")
-    if link is not None:
-        result["link"] = link
-    aggregation = optional_str(derivation, "aggregation")
-    if aggregation is not None:
-        result["aggregation"] = aggregation
-    target_property = optional_str(derivation, "property")
-    if target_property is not None:
-        result["property"] = target_property
-    return result
+    return property_derivation_from_value(prop["derivation"])
 
 
 def action_parameter_schema(parameters: Sequence[YamlObject]) -> ActionParameterSchema:
