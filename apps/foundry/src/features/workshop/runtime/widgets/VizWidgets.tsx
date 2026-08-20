@@ -54,7 +54,7 @@ export function MetricCardWidget(props: WidgetRuntimeProps) {
   const { widget } = props;
   const { config } = widget;
   const objectApiName = config.objectApiName ?? null;
-  const { objects } = useWidgetObjects(
+  const { objects, isTruncated } = useWidgetObjects(
     objectApiName,
     widget.config.variableFilters,
   );
@@ -78,7 +78,9 @@ export function MetricCardWidget(props: WidgetRuntimeProps) {
     value: computeMetric(objects, spec.metric, spec.property),
     unit: spec.unit,
   }));
-  const sectionTitle = specs.length > 1 ? config.title : null;
+  const sectionTitle = specs.length > 1
+    ? `${config.title ?? ""}${isTruncated ? " (상한 표본)" : ""}`
+    : null;
 
   if (layout === "list") {
     return (
@@ -185,7 +187,7 @@ const CHART_TYPE_LABELS: Record<string, string> = {
 export function BarChartWidget(props: WidgetRuntimeProps) {
   const { widget } = props;
   const objectApiName = widget.config.objectApiName ?? null;
-  const { objects } = useWidgetObjects(
+  const { objects, isTruncated } = useWidgetObjects(
     objectApiName,
     widget.config.variableFilters,
   );
@@ -225,7 +227,7 @@ export function BarChartWidget(props: WidgetRuntimeProps) {
   return (
     <WidgetFrame
       title={title}
-      subtitle={`${CHART_TYPE_LABELS[chartType]} · ${yLabel}`}
+      subtitle={`${CHART_TYPE_LABELS[chartType]} · ${yLabel}${isTruncated ? " · 상한 표본" : ""}`}
       bodyClassName="p-3"
     >
       <ChartXY
@@ -242,7 +244,7 @@ export function BarChartWidget(props: WidgetRuntimeProps) {
 export function PieChartWidget(props: WidgetRuntimeProps) {
   const { widget } = props;
   const objectApiName = widget.config.objectApiName ?? null;
-  const { objects } = useWidgetObjects(
+  const { objects, isTruncated } = useWidgetObjects(
     objectApiName,
     widget.config.variableFilters,
   );
@@ -268,7 +270,7 @@ export function PieChartWidget(props: WidgetRuntimeProps) {
   return (
     <WidgetFrame
       title={title}
-      subtitle={metricLabel("count")}
+      subtitle={`${metricLabel("count")}${isTruncated ? " · 상한 표본" : ""}`}
       bodyClassName="p-3"
     >
       <PieChartMini buckets={buckets} />
@@ -292,7 +294,7 @@ function compareForTimeline(a: unknown, b: unknown): number {
 export function TimelineWidget(props: WidgetRuntimeProps) {
   const { widget } = props;
   const objectApiName = widget.config.objectApiName ?? null;
-  const { objects } = useWidgetObjects(
+  const { objects, isTruncated } = useWidgetObjects(
     objectApiName,
     widget.config.variableFilters,
   );
@@ -331,7 +333,11 @@ export function TimelineWidget(props: WidgetRuntimeProps) {
   }
 
   return (
-    <WidgetFrame title={title} bodyClassName="overflow-auto p-3">
+    <WidgetFrame
+      title={title}
+      subtitle={isTruncated ? "상한 표본" : undefined}
+      bodyClassName="overflow-auto p-3"
+    >
       <ol className="relative ml-1 border-l border-[#d5dce1]">
         {sorted.map((object) => (
           <TimelineItem

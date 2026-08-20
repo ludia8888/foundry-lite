@@ -31,6 +31,7 @@ from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexOntologyLookup,
 )
 from foundry_lite.application.services.object_store.indexing_types import (
+    ObjectIndexLinkSource,
     ObjectIndexMultiSourcePlan,
     ObjectIndexRebuildPlan,
 )
@@ -59,6 +60,15 @@ def _start_index_rebuild_plan(
         dataset_version_service=dataset_version_service,
         ontology_service=ontology_service,
     )
+    link_sources = _resolve_link_sources(
+        conn,
+        ctx,
+        object_type,
+        dataset_registry_service=dataset_registry_service,
+        dataset_version_service=dataset_version_service,
+        ontology_service=ontology_service,
+        object_index_repository=object_index_repository,
+    )
     return _rebuild_plan_with_run(
         conn=conn,
         ctx=ctx,
@@ -69,6 +79,7 @@ def _start_index_rebuild_plan(
         multi_source=multi_source,
         object_index_repository=object_index_repository,
         mode=mode,
+        link_sources=link_sources,
     )
 
 
@@ -93,6 +104,15 @@ def _start_ontology_reindex_plan(
         dataset_version_service=dataset_version_service,
         ontology_service=ontology_service,
     )
+    link_sources = _resolve_link_sources(
+        conn,
+        ctx,
+        object_type,
+        dataset_registry_service=dataset_registry_service,
+        dataset_version_service=dataset_version_service,
+        ontology_service=ontology_service,
+        object_index_repository=object_index_repository,
+    )
     return _start_full_plan_with_run(
         conn=conn,
         ctx=ctx,
@@ -104,7 +124,87 @@ def _start_ontology_reindex_plan(
         object_index_repository=object_index_repository,
         trigger_type="ontology_migration_reindex",
         source_ref=_ontology_reindex_source_ref(object_type["config"], operation, reindex_key),
+        link_sources=link_sources,
     )
+
+
+def _resolve_link_sources(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    *,
+    dataset_registry_service: IndexDatasetRegistry,
+    dataset_version_service: IndexDatasetVersions,
+    ontology_service: IndexOntologyLookup,
+    object_index_repository: ObjectIndexRepository,
+) -> dict[str, ObjectIndexLinkSource]:
+    """Pin the join datasource version behind every outbound many-to-many link.
+
+    Direct links read the object's own rows, so the object plan's source version already
+    describes them. A many-to-many link reads a separate join dataset that advances on its
+    own schedule, so the version it will read is fixed here — before the run row exists —
+    rather than at read time, where a concurrent upload would silently change the answer.
+    """
+    active = ontology_service._active_ontology_version(conn, ctx)
+    links = object_index_repository.link_types_for_object_type(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        ontology_version_id=active["id"],
+        from_object_type_id=object_type["id"],
+    )
+    sources: dict[str, ObjectIndexLinkSource] = {}
+    for link in links:
+        if link["cardinality"] != "many_to_many":
+            continue
+        dataset_ref = link["backing"].get("dataset")
+        if not isinstance(dataset_ref, str) or not dataset_ref:
+            raise ValidationFailed(
+                "many-to-many link backing dataset missing",
+                details={"linkType": link["api_name"]},
+            )
+        dataset = dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+        version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
+        sources[str(link["api_name"])] = ObjectIndexLinkSource(dataset_ref, version)
+    return sources
+
+
+def _replay_link_sources(
+    conn: TransactionContext,
+    failed_run: IndexRunRow,
+    *,
+    dataset_version_service: IndexDatasetVersions,
+) -> dict[str, ObjectIndexLinkSource]:
+    """Restore the exact join versions the failed run pinned, never today's latest.
+
+    Replaying against a newer join snapshot would produce a different link set under the
+    same run id, which is the one thing the pin exists to prevent.
+    """
+    source_ref = failed_run["source_ref"] if isinstance(failed_run["source_ref"], Mapping) else {}
+    version_ids = source_ref.get("linkSourceDatasetVersionIds")
+    dataset_refs = source_ref.get("linkSourceDatasetRefs")
+    if not isinstance(version_ids, Mapping):
+        return {}
+    refs = dataset_refs if isinstance(dataset_refs, Mapping) else {}
+    return {
+        str(api_name): ObjectIndexLinkSource(
+            str(refs.get(api_name, "")),
+            dataset_version_service._version_by_id(conn, str(version_id)),
+        )
+        for api_name, version_id in version_ids.items()
+    }
+
+
+def _link_source_ref(link_sources: Mapping[str, ObjectIndexLinkSource]) -> IndexRunSourceRef:
+    """Operator evidence: which join dataset and version each M:N link consumed."""
+    if not link_sources:
+        return {}
+    ref: IndexRunSourceRef = {
+        "linkSourceDatasetVersionIds": {
+            api_name: str(source.dataset_version["id"]) for api_name, source in link_sources.items()
+        },
+        "linkSourceDatasetRefs": {api_name: source.dataset_ref for api_name, source in link_sources.items()},
+    }
+    return ref
 
 
 def _resolve_plan_source(
@@ -144,6 +244,7 @@ def _rebuild_plan_with_run(
     multi_source: ObjectIndexMultiSourcePlan | None,
     object_index_repository: ObjectIndexRepository,
     mode: str,
+    link_sources: Mapping[str, ObjectIndexLinkSource],
 ) -> ObjectIndexRebuildPlan:
     """Record a plain (full/shadow) rebuild run and return its plan."""
     run_id = _new_id("index_run")
@@ -160,6 +261,7 @@ def _rebuild_plan_with_run(
         index_version=index_version,
         object_index_repository=object_index_repository,
         trigger_type=_rebuild_trigger_type(mode),
+        source_ref=_link_source_ref(link_sources) or None,
         multi_source=multi_source,
     )
     return _rebuild_plan(
@@ -172,6 +274,7 @@ def _rebuild_plan_with_run(
         index_version,
         active_index_version,
         multi_source,
+        link_sources,
     )
 
 
@@ -185,6 +288,7 @@ def _rebuild_plan(
     index_version: str,
     active_index_version: str,
     multi_source: ObjectIndexMultiSourcePlan | None,
+    link_sources: Mapping[str, ObjectIndexLinkSource],
 ) -> ObjectIndexRebuildPlan:
     return ObjectIndexRebuildPlan(
         run_id,
@@ -197,6 +301,7 @@ def _rebuild_plan(
         active_index_version,
         trigger_type=_rebuild_trigger_type(mode),
         multi_source=multi_source,
+        link_sources=link_sources,
     )
 
 
@@ -212,6 +317,7 @@ def _start_full_plan_with_run(
     object_index_repository: ObjectIndexRepository,
     trigger_type: str,
     source_ref: IndexRunSourceRef,
+    link_sources: Mapping[str, ObjectIndexLinkSource],
 ) -> ObjectIndexRebuildPlan:
     """Record a full-mode run for ontology-migration reindexes and failed-run replays."""
     run_id = _new_id("index_run")
@@ -227,7 +333,7 @@ def _start_full_plan_with_run(
         index_version=active_index_version,
         object_index_repository=object_index_repository,
         trigger_type=trigger_type,
-        source_ref=source_ref,
+        source_ref={**source_ref, **_link_source_ref(link_sources)},
         multi_source=multi_source,
     )
     return _full_rebuild_plan(
@@ -239,6 +345,7 @@ def _start_full_plan_with_run(
         active_index_version,
         trigger_type=trigger_type,
         multi_source=multi_source,
+        link_sources=link_sources,
     )
 
 
@@ -252,6 +359,7 @@ def _full_rebuild_plan(
     *,
     trigger_type: str,
     multi_source: ObjectIndexMultiSourcePlan | None,
+    link_sources: Mapping[str, ObjectIndexLinkSource],
 ) -> ObjectIndexRebuildPlan:
     return ObjectIndexRebuildPlan(
         run_id,
@@ -264,6 +372,7 @@ def _full_rebuild_plan(
         active_index_version,
         trigger_type=trigger_type,
         multi_source=multi_source,
+        link_sources=link_sources,
     )
 
 
@@ -300,6 +409,8 @@ def _start_failed_index_replay_plan(
         object_index_repository=object_index_repository,
         trigger_type="failed_run_replay",
         source_ref={"dataset_version_id": version_id, "replay_of_run_id": index_run_id},
+        # The failed run's own pins, not today's latest join snapshot.
+        link_sources=_replay_link_sources(conn, failed_run, dataset_version_service=dataset_version_service),
     )
 
 

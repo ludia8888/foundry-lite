@@ -62,6 +62,8 @@ def test_ontology_mcp_projects_only_app_resources_and_enforces_action_risk(
         "object.Order.get",
         "object.Order.search",
         "object.Order.unifiedSearch",
+        "object.Order.links",
+        "object.Order.searchAround",
         "action.ExpediteOrder.plan",
         "action.ExpediteOrder.apply",
         "action.ApproveOrder.plan",
@@ -363,7 +365,7 @@ def test_ontology_mcp_hub_configuration_is_replay_safe_and_disable_fails_closed(
 
     assert hub.status_code == 200
     assert hub.json()[0]["applicationId"] == app_id
-    assert hub.json()[0]["resourceCount"] == 3
+    assert hub.json()[0]["resourceCount"] == 4
     assert set(hub.json()[0]["authModes"]) == {"authorization_code_pkce", "client_credentials"}
     assert disabled.json()["status"] == "disabled"
     assert replay.json()["updated_at"] == disabled.json()["updated_at"]
@@ -839,6 +841,8 @@ def test_ontology_mcp_projects_effective_token_scopes_and_validates_advertised_s
         "object.Order.get",
         "object.Order.search",
         "object.Order.unifiedSearch",
+        "object.Order.links",
+        "object.Order.searchAround",
         "action.ExpediteOrder.plan",
     }
     assert hidden_apply.json()["error"]["data"]["type"] == "VALIDATION_FAILED"
@@ -1421,6 +1425,8 @@ def test_client_credentials_use_narrow_mcp_action_and_function_entrypoints(
         "object.Order.get",
         "object.Order.search",
         "object.Order.unifiedSearch",
+        "object.Order.links",
+        "object.Order.searchAround",
         "action.ExpediteOrder.plan",
         "action.ExpediteOrder.apply",
         "function.echoInputs.execute",
@@ -1576,6 +1582,8 @@ def test_validate_only_service_principal_plan_is_online_and_fail_closed(
         "object.Order.get",
         "object.Order.search",
         "object.Order.unifiedSearch",
+        "object.Order.links",
+        "object.Order.searchAround",
         "action.ExpediteOrder.plan",
     }
     assert planned["actionApiName"] == "ExpediteOrder"
@@ -1585,6 +1593,8 @@ def test_validate_only_service_principal_plan_is_online_and_fail_closed(
         "object.Order.get",
         "object.Order.search",
         "object.Order.unifiedSearch",
+        "object.Order.links",
+        "object.Order.searchAround",
     }
     assert revoked_call.json()["error"]["data"]["type"] == "VALIDATION_FAILED"
 
@@ -1672,6 +1682,8 @@ def _mcp_application(foundry: Any) -> str:
     resources = []
     for resource_type, name, operations in (
         ("object", "Order", ("read",)),
+        # Traversal is a separate grant from reading Order itself.
+        ("link", "OrderCustomer", ("read",)),
         ("action", "ExpediteOrder", ("validate", "execute")),
         ("action", "ApproveOrder", ("validate", "execute")),
     ):
@@ -1724,7 +1736,7 @@ def _user_mcp_headers(
         app_id,
         client_id=client_id,
         redirect_uris=(redirect_uri,),
-        allowed_scopes=_mcp_scopes(),
+        allowed_scopes=tuple({*_mcp_scopes(), *requested_scopes}),
         idempotency_key=f"{client_id}-public-client",
         ctx=MCP_USER,
     )
@@ -1938,3 +1950,152 @@ def _action_kwargs(arguments: dict[str, object]) -> dict[str, object]:
         "expected_object_version": arguments["expectedObjectVersion"],
         "params": arguments["params"],
     }
+
+
+def test_ontology_mcp_link_traversal_needs_its_own_grant_beyond_object_read(
+    foundry: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    """Reaching a neighbour is a separate grant from reading the object you started at.
+
+    Search and filters can only ask about an object's own columns, so without traversal an
+    external agent cannot answer "what is this connected to" at all. Exposing it re-uses the
+    link's read scope rather than riding on `object:read`, otherwise granting one object type
+    would silently hand over every relationship it participates in.
+    """
+    _prepare_v3_demo(foundry, tmp_path)
+    app_id = _mcp_application(foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+
+    granted = _user_mcp_headers(
+        foundry,
+        monkeypatch,
+        app_id,
+        scopes=(*_mcp_scopes(), "osdk:link:OrderCustomer:read"),
+        suffix="links-granted",
+    )
+    session = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=granted,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    request_headers = {**granted, "Mcp-Session-Id": session.headers["Mcp-Session-Id"]}
+    traversed = _call(
+        client,
+        app_id,
+        request_headers,
+        rpc_id="links-granted",
+        name="object.Order.links",
+        arguments={"objectId": "O-1001", "linkType": "OrderCustomer"},
+    )
+
+    assert "error" not in traversed, traversed
+    assert traversed["linkType"] == "OrderCustomer"
+    links = list(traversed["links"])  # type: ignore[call-overload]
+    assert links, traversed
+    assert {link["to"]["objectType"] for link in links} == {"Customer"}
+
+    withheld = _user_mcp_headers(
+        foundry,
+        monkeypatch,
+        app_id,
+        scopes=("osdk:object:Order:read",),
+        suffix="links-withheld",
+    )
+    denied_session = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=withheld,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    denied_headers = {**withheld, "Mcp-Session-Id": denied_session.headers["Mcp-Session-Id"]}
+    denied = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=denied_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "links-withheld",
+            "method": "tools/call",
+            "params": {
+                "name": "object.Order.links",
+                "arguments": {"objectId": "O-1001", "linkType": "OrderCustomer"},
+            },
+        },
+    )
+
+    body = denied.json()
+    assert "PERMISSION_DENIED" in str(body), body
+
+
+def test_ontology_mcp_search_around_lands_on_a_different_type_and_needs_every_hop_grant(
+    foundry: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    """Set-to-set traversal returns a type the caller never named in the request.
+
+    That is the point of `searchAround` — ask about Orders, get Customers back — and it is also
+    why the grant check matters more here than on a single-object link read: the result set is
+    made entirely of objects the caller did not select. Each hop is gated on its own link scope.
+    """
+    _prepare_v3_demo(foundry, tmp_path)
+    app_id = _mcp_application(foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+
+    granted = _user_mcp_headers(
+        foundry,
+        monkeypatch,
+        app_id,
+        scopes=(*_mcp_scopes(), "osdk:link:OrderCustomer:read"),
+        suffix="around-granted",
+    )
+    session = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=granted,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    request_headers = {**granted, "Mcp-Session-Id": session.headers["Mcp-Session-Id"]}
+    around = _call(
+        client,
+        app_id,
+        request_headers,
+        rpc_id="around-granted",
+        name="object.Order.searchAround",
+        arguments={"linkTypes": ["OrderCustomer"]},
+    )
+
+    assert "error" not in around, around
+    assert around["objectType"] == "Customer"
+    assert around["fromObjectType"] == "Order"
+    assert around["objectIds"], around
+
+    withheld = _user_mcp_headers(
+        foundry,
+        monkeypatch,
+        app_id,
+        scopes=("osdk:object:Order:read",),
+        suffix="around-withheld",
+    )
+    denied_session = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=withheld,
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    denied_headers = {**withheld, "Mcp-Session-Id": denied_session.headers["Mcp-Session-Id"]}
+    denied = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=denied_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "around-withheld",
+            "method": "tools/call",
+            "params": {
+                "name": "object.Order.searchAround",
+                "arguments": {"linkTypes": ["OrderCustomer"]},
+            },
+        },
+    )
+
+    assert "PERMISSION_DENIED" in str(denied.json()), denied.json()

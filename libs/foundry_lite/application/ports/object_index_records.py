@@ -23,6 +23,8 @@ class IndexRunSourceRef(TypedDict, total=False):
     # each segment's version id in datasource-declaration order; this map
     # carries the per-segment versions for operator evidence.
     segmentDatasetVersionIds: dict[str, str]
+    linkSourceDatasetVersionIds: dict[str, str]
+    linkSourceDatasetRefs: dict[str, str]
     replay_of_run_id: str
     ontologyReindexKey: str
     sourceOntologyVersionId: str

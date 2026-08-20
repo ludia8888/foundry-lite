@@ -46,6 +46,8 @@ class ObjectIndexHarness(Protocol):
 
     def object_record(self, record_id: str) -> dict[str, Any] | None: ...
 
+    def object_link(self, link_id: str) -> dict[str, Any] | None: ...
+
     def conflicts(self) -> list[dict[str, Any]]: ...
 
 
@@ -352,6 +354,7 @@ class FakeObjectIndexRepository:
         transaction: Any,
         tenant_id: str,
         object_type_id: str,
+        object_type_api_name: str,
         index_version: str,
         updated_at: str,
         expected_previous_index_version: str | None = None,
@@ -364,15 +367,36 @@ class FakeObjectIndexRepository:
         if expected_previous_index_version is not None and current != expected_previous_index_version:
             return False
         for row in self.object_records.values():
-            if row["tenant_id"] == tenant_id and row["object_type_id"] == object_type_id:
-                row["is_active"] = row["index_version"] == index_version
+            if row["tenant_id"] == tenant_id and row["object_type_api_name"] == object_type_api_name:
+                row["is_active"] = row["object_type_id"] == object_type_id and row["index_version"] == index_version
                 row["updated_at"] = updated_at
         for row in self.object_links.values():
-            if row["tenant_id"] == tenant_id and row["from_object_type_id"] == object_type_id:
-                row["is_active"] = row["index_version"] == index_version
+            if row["tenant_id"] == tenant_id and row["from_api_name"] == object_type_api_name:
+                row["is_active"] = (
+                    row["from_object_type_id"] == object_type_id and row["index_version"] == index_version
+                )
                 row["updated_at"] = updated_at
         self.active_index_versions[(tenant_id, object_type_id)] = index_version
         return True
+
+    def deactivate_superseded_object_type_index(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        object_type_api_name: str,
+        updated_at: str,
+    ) -> None:
+        del transaction
+        for row in self.object_records.values():
+            if row["tenant_id"] == tenant_id and row["object_type_api_name"] == object_type_api_name:
+                if row["object_type_id"] != object_type_id:
+                    row.update(is_active=False, updated_at=updated_at)
+        for row in self.object_links.values():
+            if row["tenant_id"] == tenant_id and row["from_api_name"] == object_type_api_name:
+                if row["from_object_type_id"] != object_type_id:
+                    row.update(is_active=False, updated_at=updated_at)
 
     def delete_inactive_index_version(
         self,
@@ -421,6 +445,11 @@ class FakeObjectIndexHarness:
         row = self.repository.object_records.get(record_id)
         return dict(row) if row else None
 
+    def object_link(self, link_id: str) -> dict[str, Any] | None:
+        assert isinstance(self.repository, FakeObjectIndexRepository)
+        row = self.repository.object_links.get(link_id)
+        return dict(row) if row else None
+
     def conflicts(self) -> list[dict[str, Any]]:
         assert isinstance(self.repository, FakeObjectIndexRepository)
         return [dict(row) for row in self.repository.object_conflicts]
@@ -452,6 +481,11 @@ class SqlAlchemyObjectIndexHarness:
     def object_record(self, record_id: str) -> dict[str, Any] | None:
         with self.engine.begin() as conn:
             row = conn.execute(select(db.object_records).where(db.object_records.c.id == record_id)).mappings().first()
+            return dict(row) if row else None
+
+    def object_link(self, link_id: str) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            row = conn.execute(select(db.object_links).where(db.object_links.c.id == link_id)).mappings().first()
             return dict(row) if row else None
 
     def conflicts(self) -> list[dict[str, Any]]:
@@ -566,6 +600,7 @@ def _conflict_record(conflict_id: str = "conflict_1") -> ObjectConflictRecord:
 def _link_insert_record(
     *,
     link_id: str = "olink_1",
+    from_object_type_id: str = "ot_order",
     from_object_id: str = "O-1",
     to_object_id: str = "C-1",
     deleted: bool = False,
@@ -578,7 +613,7 @@ def _link_insert_record(
         tenant_id="tenant-demo",
         link_type_id="lt_order_customer",
         link_type_api_name="OrderCustomer",
-        from_object_type_id="ot_order",
+        from_object_type_id=from_object_type_id,
         from_api_name="Order",
         from_object_id=from_object_id,
         to_object_type_id="ot_customer",
@@ -1072,6 +1107,7 @@ def test_object_index_repository_contract_switches_and_cleans_shadow_index(
             transaction=transaction,
             tenant_id="tenant-demo",
             object_type_id="ot_order",
+            object_type_api_name="Order",
             index_version="index_run_shadow",
             updated_at="2026-06-10T00:04:00Z",
         )
@@ -1094,6 +1130,54 @@ def test_object_index_repository_contract_switches_and_cleans_shadow_index(
     assert harness.object_record("obj_shadow") is not None
 
 
+def test_object_index_repository_contract_switch_retires_prior_ontology_type_id(
+    harness: ObjectIndexHarness,
+) -> None:
+    """A replacement ontology gives Order a new id, not a new logical identity."""
+    legacy = _object_insert_record("obj_order_v1", object_type_id="ot_order_v1", index_version="legacy")
+    replacement = _object_insert_record(
+        "obj_order_v2",
+        object_type_id="ot_order_v2",
+        index_version="index_run_shadow",
+        is_active=False,
+    )
+    legacy_link = _link_insert_record(
+        link_id="link_order_v1",
+        from_object_type_id="ot_order_v1",
+        index_version="legacy",
+    )
+    replacement_link = _link_insert_record(
+        link_id="link_order_v2",
+        from_object_type_id="ot_order_v2",
+        index_version="index_run_shadow",
+        is_active=False,
+    )
+
+    with harness.transaction() as transaction:
+        for record in (legacy, replacement):
+            harness.repository.insert_object_record(transaction=transaction, record=record)
+        for link in (legacy_link, replacement_link):
+            harness.repository.insert_object_link(transaction=transaction, record=link)
+        switched = harness.repository.switch_active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order_v2",
+            object_type_api_name="Order",
+            index_version="index_run_shadow",
+            updated_at="2026-08-20T00:00:00Z",
+        )
+
+    legacy_record = harness.object_record("obj_order_v1")
+    replacement_record = harness.object_record("obj_order_v2")
+    legacy_link_row = harness.object_link("link_order_v1")
+    replacement_link_row = harness.object_link("link_order_v2")
+    assert switched is True
+    assert legacy_record is not None and legacy_record["is_active"] is False
+    assert replacement_record is not None and replacement_record["is_active"] is True
+    assert legacy_link_row is not None and legacy_link_row["is_active"] is False
+    assert replacement_link_row is not None and replacement_link_row["is_active"] is True
+
+
 def test_object_index_repository_contract_persists_empty_shadow_active_pointer(
     harness: ObjectIndexHarness,
 ) -> None:
@@ -1107,6 +1191,7 @@ def test_object_index_repository_contract_persists_empty_shadow_active_pointer(
             transaction=transaction,
             tenant_id="tenant-demo",
             object_type_id="ot_order",
+            object_type_api_name="Order",
             index_version="index_run_empty",
             updated_at="2026-06-10T00:04:00Z",
         )
@@ -1129,6 +1214,7 @@ def test_object_index_repository_contract_rejects_stale_shadow_pointer_switch(
             transaction=transaction,
             tenant_id="tenant-demo",
             object_type_id="ot_order",
+            object_type_api_name="Order",
             index_version="index_run_first",
             updated_at="2026-06-10T00:04:00Z",
             expected_previous_index_version="active",
@@ -1137,6 +1223,7 @@ def test_object_index_repository_contract_rejects_stale_shadow_pointer_switch(
             transaction=transaction,
             tenant_id="tenant-demo",
             object_type_id="ot_order",
+            object_type_api_name="Order",
             index_version="index_run_second",
             updated_at="2026-06-10T00:05:00Z",
             expected_previous_index_version="active",
@@ -1165,6 +1252,7 @@ def test_object_index_repository_contract_concurrent_first_pointer_switch_has_on
                 transaction=transaction,
                 tenant_id="tenant-demo",
                 object_type_id="ot_order",
+                object_type_api_name="Order",
                 index_version=index_version,
                 updated_at="2026-06-10T00:04:00Z",
                 expected_previous_index_version="active",
@@ -1196,6 +1284,7 @@ def test_object_index_repository_contract_rejects_unsupported_pointer_upsert_dia
             transaction=UnsupportedTransaction(),
             tenant_id="tenant-demo",
             object_type_id="ot_order",
+            object_type_api_name="Order",
             index_version="index_run_first",
             updated_at="2026-06-10T00:04:00Z",
             expected_previous_index_version="active",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 from sqlalchemy import (
@@ -15,6 +16,7 @@ from sqlalchemy import (
     asc,
     case,
     desc,
+    distinct,
     extract,
     func,
     literal,
@@ -149,23 +151,35 @@ class SqlAlchemyObjectReadRepository:
             object_type_api_name,
             property_object_type_id or object_type_id,
         )
+        derived = self._derived_properties(
+            transaction,
+            tenant_id,
+            object_type_api_name,
+            property_object_type_id or object_type_id,
+        )
         dialect_name = self.engine.dialect.name
         _ensure_sqlite_timestamp_function(transaction, dialect_name)
-        sort_columns = _sort_columns(order_by, property_data_types, dialect_name)
+        sort_columns = _sort_columns(order_by, property_data_types, dialect_name, derived)
         conditions = _active_object_conditions(tenant_id, object_type_api_name, object_type_id)
         if filter_ast:
-            conditions.append(_filter_condition(filter_ast, property_data_types, dialect_name))
+            conditions.append(_filter_condition(filter_ast, property_data_types, dialect_name, derived))
         cursor_condition = _cursor_condition(sort_columns, cursor)
         if cursor_condition is not None:
             conditions.append(cursor_condition)
+        derived_columns = [
+            _derived_value_expression(spec).label(_DERIVED_LABEL_PREFIX + name) for name, spec in derived.items()
+        ]
         rows = (
             transaction.execute(
-                select(db.object_records).where(and_(*conditions)).order_by(*_order_terms(sort_columns)).limit(limit)
+                select(db.object_records, *derived_columns)
+                .where(and_(*conditions))
+                .order_by(*_order_terms(sort_columns))
+                .limit(limit)
             )
             .mappings()
             .all()
         )
-        return [cast(ObjectRecordRow, dict(row)) for row in rows]
+        return [_object_row_with_derived(row, derived) for row in rows]
 
     def aggregate_active_object_rows(
         self,
@@ -187,21 +201,32 @@ class SqlAlchemyObjectReadRepository:
             object_type_api_name,
             property_object_type_id or object_type_id,
         )
+        derived = self._derived_properties(
+            transaction,
+            tenant_id,
+            object_type_api_name,
+            property_object_type_id or object_type_id,
+        )
         dialect_name = self.engine.dialect.name
         _ensure_sqlite_timestamp_function(transaction, dialect_name)
         conditions = _active_object_conditions(tenant_id, object_type_api_name, object_type_id)
         if filter_ast:
-            conditions.append(_filter_condition(filter_ast, property_data_types, dialect_name))
+            conditions.append(_filter_condition(filter_ast, property_data_types, dialect_name, derived))
         key_columns = [
-            _property_value_expression(name, _require_property_data_type(property_data_types, name), dialect_name)
+            _property_value_expression(
+                name,
+                "float" if name in derived else _require_property_data_type(property_data_types, name),
+                dialect_name,
+                derived,
+            )
             for name in group_by
         ]
-        metric_columns = [_metric_expression(metric, property_data_types, dialect_name) for metric in metrics]
+        metric_columns = [_metric_expression(metric, property_data_types, dialect_name, derived) for metric in metrics]
         query = select(*key_columns, *metric_columns).where(and_(*conditions)).limit(group_limit)
         if key_columns:
             query = query.group_by(*key_columns)
         rows = transaction.execute(query).all()
-        return [_aggregation_group(tuple(row), group_by, metrics, property_data_types) for row in rows]
+        return [_aggregation_group(tuple(row), group_by, metrics, property_data_types, derived) for row in rows]
 
     def active_links_from(
         self,
@@ -312,6 +337,129 @@ class SqlAlchemyObjectReadRepository:
         ).mappings()
         return {str(row["api_name"]): str(row["data_type"]) for row in rows}
 
+    def _derived_properties(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_type_id: str | None = None,
+    ) -> dict[str, DerivedProperty]:
+        """Link-derived properties declared on this object type, keyed by api name."""
+        object_type_condition = (
+            db.object_types.c.id == object_type_id
+            if object_type_id is not None
+            else db.object_types.c.api_name == object_type_api_name
+        )
+        rows = transaction.execute(
+            select(
+                db.property_types.c.api_name,
+                db.property_types.c.data_type,
+                db.property_types.c.derivation,
+            )
+            .select_from(
+                db.property_types.join(
+                    db.object_types,
+                    db.property_types.c.object_type_id == db.object_types.c.id,
+                )
+            )
+            .where(and_(db.object_types.c.tenant_id == tenant_id, object_type_condition))
+        ).mappings()
+        derived: dict[str, DerivedProperty] = {}
+        for row in rows:
+            derivation = row["derivation"]
+            if not isinstance(derivation, Mapping) or "link" not in derivation:
+                continue
+            derived[str(row["api_name"])] = DerivedProperty(
+                link_type=str(derivation["link"]),
+                aggregation=str(derivation["aggregation"]) if derivation.get("aggregation") is not None else None,
+                target_property=(str(derivation["property"]) if derivation.get("property") is not None else None),
+                data_type=str(row["data_type"]),
+            )
+        return derived
+
+
+@dataclass(frozen=True)
+class DerivedProperty:
+    """One link-derived property: follow a link off this object and aggregate the far side."""
+
+    link_type: str
+    aggregation: str | None
+    target_property: str | None
+    data_type: str
+
+
+def _derived_value_expression(spec: DerivedProperty) -> Any:
+    """Correlated scalar subquery for a derived property.
+
+    Returning an expression rather than a precomputed value is what makes derived properties
+    behave like ordinary ones: the same expression can sit in SELECT, WHERE, GROUP BY and
+    ORDER BY, so filters and aggregations need no new syntax to reach across a link.
+    """
+    links = db.object_links
+    correlation = [
+        links.c.tenant_id == db.object_records.c.tenant_id,
+        links.c.link_type_api_name == spec.link_type,
+        links.c.from_api_name == db.object_records.c.object_type_api_name,
+        links.c.from_object_id == db.object_records.c.object_id,
+        links.c.is_active == True,  # noqa: E712
+        links.c.deleted == False,  # noqa: E712
+    ]
+    target = db.object_records.alias("derived_target")
+    target_conditions = (
+        *correlation,
+        target.c.tenant_id == links.c.tenant_id,
+        target.c.object_type_api_name == links.c.to_api_name,
+        target.c.object_id == links.c.to_object_id,
+        target.c.is_active == True,  # noqa: E712
+        target.c.deleted == False,  # noqa: E712
+    )
+    if spec.aggregation == "count":
+        return select(func.count(target.c.id)).where(and_(*target_conditions)).scalar_subquery()
+    value = _derived_target_value_expression(target, spec)
+    if spec.aggregation is None:
+        return select(value).where(and_(*target_conditions)).limit(1).scalar_subquery()
+    if spec.aggregation == "approximateCardinality":
+        # The portable runtime uses an exact count as a zero-error approximation. A scalable
+        # OSv2/HLL execution backend is a separate capability, not something to fake here.
+        aggregate: Any = lambda column: func.count(distinct(column))  # noqa: E731
+    else:
+        aggregate = {"sum": func.sum, "avg": func.avg, "min": func.min, "max": func.max}[spec.aggregation]
+    return select(aggregate(value)).where(and_(*target_conditions)).scalar_subquery()
+
+
+def _derived_target_value_expression(target: Any, spec: DerivedProperty) -> Any:
+    """Read a target property using the derived property's validated result type."""
+    property_value = target.c.properties[str(spec.target_property)]
+    if spec.aggregation == "approximateCardinality":
+        return property_value.as_string()
+    if spec.aggregation in {"sum", "avg", "min", "max"}:
+        return sa_cast(property_value.as_string(), Float)
+    if spec.data_type == "integer":
+        return sa_cast(property_value.as_string(), Integer)
+    if spec.data_type == "float":
+        return sa_cast(property_value.as_string(), Float)
+    if spec.data_type == "boolean":
+        return property_value.as_boolean()
+    return property_value.as_string()
+
+
+_DERIVED_LABEL_PREFIX = "__derived__"
+
+
+def _object_row_with_derived(row: Mapping[str, Any], derived: Mapping[str, DerivedProperty]) -> ObjectRecordRow:
+    """Fold computed link aggregates into the row's properties.
+
+    Callers must not be able to tell a derived property from a stored one; anything that can
+    tell them apart would leak the storage model into every consumer.
+    """
+    record = {key: value for key, value in row.items() if not key.startswith(_DERIVED_LABEL_PREFIX)}
+    if derived:
+        properties = dict(record.get("properties") or {})
+        for name in derived:
+            properties[name] = row[_DERIVED_LABEL_PREFIX + name]
+        record["properties"] = properties
+    return cast(ObjectRecordRow, record)
+
 
 def _active_object_conditions(
     tenant_id: str,
@@ -336,16 +484,21 @@ def _sort_columns(
     order_by: Sequence[ObjectOrderBy],
     property_data_types: Mapping[str, str],
     dialect_name: str = "sqlite",
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> list[tuple[Any, str, str]]:
-    return [_sort_column(order, property_data_types, dialect_name) for order in order_by]
+    return [_sort_column(order, property_data_types, dialect_name, derived) for order in order_by]
 
 
 def _sort_column(
     order: ObjectOrderBy,
     property_data_types: Mapping[str, str],
     dialect_name: str,
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> tuple[Any, str, str]:
     property_name = order["property"]
+    spec = (derived or {}).get(property_name)
+    if spec is not None:
+        return _derived_sort_column(spec, order["direction"])
     data_type = _require_property_data_type(property_data_types, property_name)
     if data_type == "integer":
         return (
@@ -381,18 +534,34 @@ def _sort_column(
     )
 
 
+def _derived_sort_column(spec: DerivedProperty, direction: str) -> tuple[Any, str, str]:
+    """Sort a runtime-derived scalar by its validated result type."""
+    expression = _derived_value_expression(spec)
+    if spec.data_type == "integer":
+        return func.coalesce(expression, INTEGER_MIN_VALUE - 1), direction, "integer"
+    if spec.data_type == "float":
+        return func.coalesce(expression, -1e308), direction, "float"
+    if spec.data_type == "boolean":
+        return case((expression.is_(True), 1), else_=0), direction, "boolean"
+    return func.coalesce(expression, ""), direction, spec.data_type
+
+
 def _filter_condition(
     filter_ast: Mapping[str, object],
     property_data_types: Mapping[str, str],
     dialect_name: str,
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> Any:
     if "and" in filter_ast:
         return and_(
-            *[_filter_condition(item, property_data_types, dialect_name) for item in _filter_group(filter_ast["and"])]
+            *[
+                _filter_condition(item, property_data_types, dialect_name, derived)
+                for item in _filter_group(filter_ast["and"])
+            ]
         )
     if "or" in filter_ast:
         return or_(
-            *[_filter_condition(item, property_data_types, dialect_name) for item in _filter_group(filter_ast["or"])]
+            *[_filter_condition(i, property_data_types, dialect_name, derived) for i in _filter_group(filter_ast["or"])]
         )
     return _property_filter_condition(
         str(filter_ast["property"]),
@@ -400,6 +569,7 @@ def _filter_condition(
         filter_ast["value"],
         property_data_types,
         dialect_name,
+        derived,
     )
 
 
@@ -413,7 +583,13 @@ def _property_filter_condition(
     value: object,
     property_data_types: Mapping[str, str],
     dialect_name: str,
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> Any:
+    spec = (derived or {}).get(property_name)
+    if spec is not None:
+        # Every derived aggregation yields a number, so the JSON-shape machinery the stored
+        # properties need does not apply — compare the subquery directly.
+        return _derived_filter_condition(spec, op, value)
     data_type = _require_property_data_type(property_data_types, property_name)
     if op == "eq":
         return _property_eq_condition(property_name, data_type, value, dialect_name)
@@ -429,6 +605,34 @@ def _property_filter_condition(
         return _property_strict_range_condition(property_name, data_type, value, dialect_name, is_lower_bound=False)
     if op == "contains":
         return _property_contains_condition(property_name, data_type, value, dialect_name)
+    return literal(False)
+
+
+def _derived_filter_condition(spec: DerivedProperty, op: str, value: object) -> Any:
+    expression = _derived_value_expression(spec)
+    if op == "in":
+        items = _filter_sequence(value)
+        values = [] if items is None else [_filter_sql_value(item, spec.data_type) for item in items]
+        accepted = [item for item in values if item is not INVALID_SQL_VALUE]
+        return expression.in_(accepted) if accepted else literal(False)
+    if op == "eq" and value is None:
+        return expression.is_(None)
+    sql_value = _filter_sql_value(value, spec.data_type)
+    if sql_value is INVALID_SQL_VALUE:
+        return literal(False)
+    if op == "eq":
+        return expression == sql_value
+    if op == "gte":
+        return expression >= sql_value if spec.data_type != "boolean" else literal(False)
+    if op == "gt":
+        return expression > sql_value if spec.data_type != "boolean" else literal(False)
+    if op == "lte":
+        return expression <= sql_value if spec.data_type != "boolean" else literal(False)
+    if op == "lt":
+        return expression < sql_value if spec.data_type != "boolean" else literal(False)
+    if op == "contains" and spec.data_type == "string" and isinstance(value, str):
+        escaped = value.lower().replace("/", "//").replace("%", "/%").replace("_", "/_")
+        return func.lower(sa_cast(expression, String)).like(f"%{escaped}%", escape="/")
     return literal(False)
 
 
@@ -512,7 +716,11 @@ def _property_value_expression(
     property_name: str,
     data_type: str,
     dialect_name: str = "sqlite",
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> Any:
+    spec = (derived or {}).get(property_name)
+    if spec is not None:
+        return _derived_value_expression(spec)
     prop = db.object_records.c.properties[property_name]
     if data_type == "boolean":
         return case(
@@ -675,11 +883,20 @@ def _metric_expression(
     metric: ObjectAggregationMetric,
     property_data_types: Mapping[str, str],
     dialect_name: str,
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> Any:
-    """Build the SQL aggregate for one metric over the JSON property extraction."""
+    """Build the SQL aggregate for one metric over the JSON property extraction.
+
+    A derived property is aggregable like any other: `avg(linkedConcernCount)` means average the
+    per-row link count. The row expression is a correlated subquery rather than a JSON extraction,
+    but from the aggregate's point of view it is just a number.
+    """
     if metric["function"] == "count":
         return func.count()
     property_name = str(metric["property"])
+    spec = (derived or {}).get(property_name)
+    if spec is not None:
+        return _METRIC_AGGREGATES[metric["function"]](_derived_value_expression(spec))
     data_type = _require_property_data_type(property_data_types, property_name)
     return _METRIC_AGGREGATES[metric["function"]](_number_expression(property_name, data_type, dialect_name))
 
@@ -689,15 +906,27 @@ def _aggregation_group(
     group_by: Sequence[str],
     metrics: Sequence[ObjectAggregationMetric],
     property_data_types: Mapping[str, str],
+    derived: Mapping[str, DerivedProperty] | None = None,
 ) -> ObjectAggregationGroup:
     key = {
-        name: _aggregation_key_value(row[index], _require_property_data_type(property_data_types, name))
+        name: _aggregation_key_value(row[index], _aggregation_key_data_type(name, property_data_types, derived))
         for index, name in enumerate(group_by)
     }
     values: dict[str, float | int | None] = {}
     for offset, metric in enumerate(metrics):
         values[metric["name"]] = _aggregation_metric_value(row[len(group_by) + offset], metric["function"])
     return {"key": key, "metrics": values}
+
+
+def _aggregation_key_data_type(
+    property_name: str,
+    property_data_types: Mapping[str, str],
+    derived: Mapping[str, DerivedProperty] | None,
+) -> str:
+    """A derived group key retains the runtime property's declared result type."""
+    if property_name in (derived or {}):
+        return (derived or {})[property_name].data_type
+    return _require_property_data_type(property_data_types, property_name)
 
 
 def _aggregation_key_value(value: object, data_type: str) -> object:

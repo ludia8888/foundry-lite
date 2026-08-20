@@ -10,7 +10,13 @@ from foundry_lite.domain.platform.scopes import resource_scope
 def object_tools(name: str, scopes: tuple[str, ...]) -> list[dict[str, object]]:
     if resource_scope("object", name, "read") not in scopes:
         return []
-    return [_object_get_tool(name), _object_unified_search_tool(name), _object_search_tool(name)]
+    return [
+        _object_get_tool(name),
+        _object_unified_search_tool(name),
+        _object_search_tool(name),
+        _object_links_tool(name),
+        _object_search_around_tool(name),
+    ]
 
 
 def _object_get_tool(name: str) -> dict[str, object]:
@@ -38,6 +44,51 @@ def _object_unified_search_tool(name: str) -> dict[str, object]:
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
         },
         ["query"],
+        is_write=False,
+    )
+
+
+def _object_links_tool(name: str) -> dict[str, object]:
+    return _tool(
+        f"object.{name}.links",
+        (
+            f"Follow one link type from a {name} object to the objects on the other side. "
+            f"Search finds objects by what they contain; this finds them by what they are "
+            f"connected to, which no filter on {name}'s own properties can express. The link "
+            f"type needs its own read scope, so a traversal never reveals a relationship the "
+            f"caller was not granted."
+        ),
+        {
+            "objectId": {"type": "string", "pattern": r"\S"},
+            "linkType": {"type": "string", "pattern": r"\S"},
+        },
+        ["objectId", "linkType"],
+        is_write=False,
+    )
+
+
+def _object_search_around_tool(name: str) -> dict[str, object]:
+    return _tool(
+        f"object.{name}.searchAround",
+        (
+            f"Start from a filtered set of {name} objects, follow up to three link hops, and get "
+            f"back the set of objects on the far side. The object type changes at every hop, so "
+            f"this answers questions whose answer is a different type than the question — which "
+            f"communities discuss a concern, which ingredients the posts about one problem name. "
+            f"A single-object link lookup cannot do this because the input is a set, not a row. "
+            f"Every link type in the chain needs its own read scope."
+        ),
+        {
+            "filter": {"type": "object", "description": f"Filter narrowing the starting {name} set."},
+            "linkTypes": {
+                "type": "array",
+                "items": {"type": "string", "pattern": r"\S"},
+                "minItems": 1,
+                "maxItems": 3,
+                "description": "Ordered link types to follow; each hop must start at the current type.",
+            },
+        },
+        ["linkTypes"],
         is_write=False,
     )
 

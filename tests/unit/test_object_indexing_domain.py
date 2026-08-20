@@ -43,7 +43,24 @@ def test_object_indexing_domain_rules_gate_full_mode_side_effects() -> None:
         )
         is False
     )
-    assert should_delete_missing_source_link(is_deleted=True, is_present_in_source=False, index_mode="full") is False
+    assert (
+        should_delete_missing_source_link(
+            is_deleted=True,
+            is_present_in_source=False,
+            is_source_backed=True,
+            index_mode="full",
+        )
+        is False
+    )
+    assert (
+        should_delete_missing_source_link(
+            is_deleted=False,
+            is_present_in_source=False,
+            is_source_backed=False,
+            index_mode="full",
+        )
+        is False
+    )
 
 
 def test_object_indexing_domain_records_only_real_base_update_conflicts() -> None:

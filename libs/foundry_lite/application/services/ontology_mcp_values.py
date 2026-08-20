@@ -138,6 +138,15 @@ def text(value: Mapping[str, object], key: str) -> str:
     return item.strip()
 
 
+def text_list(value: Mapping[str, object], key: str) -> list[str]:
+    item = value.get(key)
+    if not isinstance(item, Sequence) or isinstance(item, str | bytes) or not item:
+        raise ValidationFailed("Ontology MCP field must be a non-empty list", details={"field": key})
+    if not all(isinstance(entry, str) and entry.strip() for entry in item):
+        raise ValidationFailed("Ontology MCP list entries must be non-empty strings", details={"field": key})
+    return [str(entry).strip() for entry in item]
+
+
 def optional_text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 

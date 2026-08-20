@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
+    IndexRunSourceRef,
     ObjectIndexRebuildResult,
     ObjectIndexRepository,
     ObjectIndexRowHashRepository,
@@ -250,15 +251,16 @@ class ObjectIndexRebuildService(CoreService):
         for source in refresh.rows_to_index:
             self._index_object_source_row(conn, ctx, plan, source)
         objects_deleted = self._delete_missing_records(conn, ctx, plan, refresh, source_rows)
-        links_upserted = self.object_link_indexing_service._index_links_for_object_type(conn, ctx, plan, rows)
+        link_result = self.object_link_indexing_service._index_links_for_object_type(conn, ctx, plan, rows)
         persist_row_hashes(conn, self.object_index_row_hash_repository, ctx.tenant_id, plan, refresh)
         return ObjectIndexRebuildCounts(
             len(rows),
             len(refresh.rows_to_index),
             objects_deleted,
-            links_upserted,
+            link_result.links_upserted,
             refresh.refresh_mode,
             refresh.skipped_count,
+            link_result.source_dataset_version_ids,
         )
 
     def _index_object_source_row(
@@ -471,14 +473,28 @@ class ObjectIndexRebuildService(CoreService):
         plan: ObjectIndexRebuildPlan,
         counts: ObjectIndexRebuildCounts,
     ) -> None:
+        if plan.mode == "full":
+            self.object_index_repository.deactivate_superseded_object_type_index(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_id=plan.object_type["id"],
+                object_type_api_name=plan.object_type["api_name"],
+                updated_at=_now(),
+            )
         self.object_index_record_mutation_service.mark_index_run_succeeded(
             conn,
             ctx,
             plan.run_id,
             counts,
-            source_ref_updates=changelog_source_ref_updates(counts),
+            source_ref_updates=self._index_source_ref_updates(counts),
         )
         self._audit_index_rebuild(conn, ctx, plan, counts)
+
+    def _index_source_ref_updates(self, counts: ObjectIndexRebuildCounts) -> IndexRunSourceRef:
+        updates = changelog_source_ref_updates(counts)
+        if counts.link_source_dataset_version_ids:
+            updates["linkSourceDatasetVersionIds"] = dict(counts.link_source_dataset_version_ids)
+        return updates
 
     def _audit_index_rebuild(
         self,

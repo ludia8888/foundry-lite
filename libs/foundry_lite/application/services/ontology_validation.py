@@ -62,6 +62,15 @@ PROPERTY_EDIT_POLICIES = frozenset({"conflict_requires_review", "edit_only", "ed
 PROPERTY_CLASSIFICATIONS = frozenset({"finance", "pii", "public"})
 LINK_CARDINALITIES = frozenset({"many_to_many", "many_to_one", "one_to_many", "one_to_one"})
 OBJECT_BACKING_MODES = frozenset({"snapshot"})
+# Palantir's derived-property aggregations. `approximateCardinality` counts distinct neighbours;
+# the rest need a numeric property on the far side of the link.
+DERIVED_AGGREGATIONS = frozenset({"count", "sum", "avg", "min", "max", "approximateCardinality"})
+_NUMERIC_DERIVED_AGGREGATIONS = frozenset({"sum", "avg", "min", "max"})
+_NUMERIC_PROPERTY_TYPES = frozenset({"integer", "float"})
+_COUNTING_DERIVED_AGGREGATIONS = frozenset({"count", "approximateCardinality"})
+_DERIVATION_FIELDS = frozenset({"expression", "link", "aggregation", "property"})
+_DERIVATION_LINK_FIELDS = frozenset({"link", "aggregation", "property"})
+_MANY_FROM_CARDINALITIES = frozenset({"one_to_many", "many_to_many"})
 CDC_DELETE_POLICIES = frozenset({"tombstone"})
 ACTION_MUTATION_TYPES = frozenset({"setProperty"})
 
@@ -144,6 +153,10 @@ def validate_ontology_definition(
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
     for link_def in link_defs.values():
         _validate_yaml_link(conn, ctx, link_def, object_defs, dataset_columns_for_ref)
+    # Derived properties are checked last: they are the only property shape whose validity
+    # depends on other object types and on the link graph, so every type must exist first.
+    for object_def in object_defs.values():
+        _validate_derived_properties(object_def, object_defs, link_defs)
 
 
 def _object_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
@@ -381,6 +394,170 @@ def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable
             PROPERTY_CLASSIFICATIONS,
             "classification",
             details,
+        )
+
+
+def _validate_derived_properties(
+    object_def: YamlObject,
+    object_defs: Mapping[str, YamlObject],
+    link_defs: Mapping[str, YamlObject],
+) -> None:
+    """Validate provenance-only and link-derived property declarations."""
+    object_api_name = required_str(object_def, "apiName")
+    primary_key = required_str(object_def, "primaryKey")
+    for prop in mapping_sequence(object_def, "properties"):
+        derivation = prop.get("derivation")
+        if derivation is None:
+            continue
+        prop_api = required_str(prop, "apiName")
+        details: dict[str, object] = {"objectType": object_api_name, "property": prop_api}
+        if not isinstance(derivation, Mapping):
+            raise ValidationFailed("property derivation must be a mapping", details=details)
+        _validate_derived_property_shape(prop, derivation, details, primary_key)
+        if "link" in derivation:
+            _validate_link_derived_property(prop, derivation, details, object_defs, link_defs)
+
+
+def _validate_derived_property_shape(
+    prop: YamlObject,
+    derivation: Mapping[str, object],
+    details: Mapping[str, object],
+    primary_key: str,
+) -> None:
+    unknown = sorted(set(derivation) - _DERIVATION_FIELDS)
+    if unknown:
+        raise ValidationFailed("property derivation contains unknown fields", details={**details, "fields": unknown})
+    has_expression = "expression" in derivation
+    has_link_shape = bool(set(derivation) & _DERIVATION_LINK_FIELDS)
+    if has_expression and has_link_shape:
+        raise ValidationFailed("expression and link derivations must be declared separately", details=dict(details))
+    if not has_expression and not has_link_shape:
+        raise ValidationFailed("property derivation must declare expression or link", details=dict(details))
+    if has_expression:
+        required_str(derivation, "expression")
+        return
+    if "link" not in derivation:
+        raise ValidationFailed("link derivation requires a link type", details=dict(details))
+    if required_str(prop, "apiName") == primary_key:
+        raise ValidationFailed("primary key properties cannot be link-derived", details=dict(details))
+    if optional_bool(prop, "editable", False):
+        raise ValidationFailed("link-derived properties are read-only", details=dict(details))
+    if "column" in prop:
+        raise ValidationFailed("link-derived properties cannot declare a backing column", details=dict(details))
+
+
+def _validate_link_derived_property(
+    prop: YamlObject,
+    derivation: Mapping[str, object],
+    details: Mapping[str, object],
+    object_defs: Mapping[str, YamlObject],
+    link_defs: Mapping[str, YamlObject],
+) -> None:
+    link_api = optional_str(derivation, "link")
+    if link_api is None:
+        raise ValidationFailed("link derivation requires a link type", details=dict(details))
+    link_def = link_defs.get(link_api)
+    if link_def is None:
+        raise ValidationFailed("derived property link type not found", details={**details, "linkType": link_api})
+    if required_str(link_def, "from") != details["objectType"]:
+        raise ValidationFailed(
+            "derived property must follow a link that starts at its own object type",
+            details={**details, "linkType": link_api, "from": required_str(link_def, "from")},
+        )
+    aggregation = optional_str(derivation, "aggregation")
+    target_property = optional_str(derivation, "property")
+    target_prop = _derived_target_property(link_def, target_property, object_defs, details)
+    if aggregation is None:
+        _validate_single_link_derivation(prop, link_def, target_property, target_prop, details)
+        return
+    _validate_link_aggregation(prop, aggregation, target_property, target_prop, details)
+
+
+def _derived_target_property(
+    link_def: YamlObject,
+    target_property: str | None,
+    object_defs: Mapping[str, YamlObject],
+    details: Mapping[str, object],
+) -> YamlObject | None:
+    if target_property is None:
+        return None
+    target_api = required_str(link_def, "to")
+    target_def = object_defs.get(target_api)
+    if target_def is None:
+        raise ValidationFailed("derived property link target not found", details={**details, "to": target_api})
+    properties = {required_str(item, "apiName"): item for item in mapping_sequence(target_def, "properties")}
+    target = properties.get(target_property)
+    if target is None:
+        raise ValidationFailed(
+            "derived property target does not exist on the linked object type",
+            details={**details, "to": target_api, "targetProperty": target_property},
+        )
+    target_derivation = target.get("derivation")
+    if isinstance(target_derivation, Mapping) and "link" in target_derivation:
+        raise ValidationFailed(
+            "derived property cannot target another link-derived property",
+            details={**details, "to": target_api, "targetProperty": target_property},
+        )
+    return target
+
+
+def _validate_single_link_derivation(
+    prop: YamlObject,
+    link_def: YamlObject,
+    target_property: str | None,
+    target_prop: YamlObject | None,
+    details: Mapping[str, object],
+) -> None:
+    cardinality = optional_str(link_def, "cardinality", "many_to_one") or "many_to_one"
+    if cardinality in _MANY_FROM_CARDINALITIES:
+        raise ValidationFailed("derived property over a many link requires an aggregation", details=dict(details))
+    if target_property is None or target_prop is None:
+        raise ValidationFailed("derived property requires the linked property it derives", details=dict(details))
+    if required_str(prop, "type") != required_str(target_prop, "type"):
+        raise ValidationFailed(
+            "single-link derived property type must match the linked property",
+            details={**details, "targetType": required_str(target_prop, "type")},
+        )
+
+
+def _validate_link_aggregation(
+    prop: YamlObject,
+    aggregation: str,
+    target_property: str | None,
+    target_prop: YamlObject | None,
+    details: Mapping[str, object],
+) -> None:
+    _require_allowed(aggregation, DERIVED_AGGREGATIONS, "derived aggregation", details)
+    if aggregation == "count":
+        if target_property is not None:
+            raise ValidationFailed("count derived property must not name a target property", details=dict(details))
+    elif target_property is None or target_prop is None:
+        raise ValidationFailed(
+            "derived property requires the linked property it aggregates",
+            details={**details, "aggregation": aggregation},
+        )
+    if aggregation in _COUNTING_DERIVED_AGGREGATIONS:
+        _require_derived_output_type(prop, _NUMERIC_PROPERTY_TYPES - {"float"}, aggregation, details)
+    elif aggregation in _NUMERIC_DERIVED_AGGREGATIONS:
+        _require_derived_output_type(prop, frozenset({"float"}), aggregation, details)
+        if target_prop is not None and required_str(target_prop, "type") not in _NUMERIC_PROPERTY_TYPES:
+            raise ValidationFailed(
+                "derived aggregation needs a numeric linked property",
+                details={**details, "aggregation": aggregation, "targetType": required_str(target_prop, "type")},
+            )
+
+
+def _require_derived_output_type(
+    prop: YamlObject,
+    allowed_types: frozenset[str],
+    aggregation: str,
+    details: Mapping[str, object],
+) -> None:
+    data_type = required_str(prop, "type")
+    if data_type not in allowed_types:
+        raise ValidationFailed(
+            "derived aggregation has an incompatible property type",
+            details={**details, "aggregation": aggregation, "type": data_type, "allowed": sorted(allowed_types)},
         )
 
 

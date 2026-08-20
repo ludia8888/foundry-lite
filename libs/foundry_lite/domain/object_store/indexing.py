@@ -59,9 +59,15 @@ def should_delete_missing_source_link(
     *,
     is_deleted: bool,
     is_present_in_source: bool,
+    is_source_backed: bool,
     index_mode: str,
 ) -> bool:
-    return should_prune_missing_source_links(index_mode) and not is_deleted and not is_present_in_source
+    return (
+        should_prune_missing_source_links(index_mode)
+        and is_source_backed
+        and not is_deleted
+        and not is_present_in_source
+    )
 
 
 def should_record_base_update_conflict(

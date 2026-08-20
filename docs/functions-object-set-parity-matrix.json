@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "title": "Palantir Functions and ObjectSet public-behavior parity matrix",
   "scope": "Publicly documented behavior only. This does not claim access to Palantir private implementation, infrastructure, source code, or trademarks.",
-  "lastVerified": "2026-08-13",
+  "lastVerified": "2026-08-20",
   "statusValues": ["current", "partial", "planned"],
   "officialSources": [
     {
@@ -34,6 +34,11 @@
       "id": "palantir-object-set-limits",
       "url": "https://www.palantir.com/docs/foundry/ontologies/oss-limitations",
       "contract": "Object Set Service limits are explicit platform behavior and depend on API generation and operation shape."
+    },
+    {
+      "id": "palantir-derived-properties",
+      "url": "https://www.palantir.com/docs/foundry/object-link-types/derived-properties",
+      "contract": "A derived property computes a read-only value from linked objects; aggregation is required only when the traversed link has a many cardinality."
     }
   ],
   "capabilities": [
@@ -91,8 +96,52 @@
         "test_the_lazy_aggregate_callback_uses_the_same_governed_service"
       ],
       "gaps": [
-        "Phrase, fuzzy, geo, link-presence, Search Around, KNN, union, intersect, subtract, advanced buckets, and relevance ordering remain planned.",
+        "Phrase, fuzzy, geo, link-presence, KNN, union, intersect, subtract, advanced buckets, and relevance ordering remain planned.",
         "Searchable render-hint enforcement and Palantir's complete bucket/load limits are not yet identical."
+      ]
+    },
+    {
+      "id": "link-derived-properties",
+      "publicBehavior": "A read-only property may follow one link to a scalar target, or aggregate linked targets where the link cardinality can produce many values.",
+      "sourceIds": ["palantir-derived-properties"],
+      "status": "partial",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/ports/ontology_definitions.py",
+        "libs/foundry_lite/application/services/ontology_yaml.py",
+        "libs/foundry_lite/application/services/ontology_validation.py",
+        "libs/foundry_lite/infrastructure/repositories/object_read_repository.py"
+      ],
+      "proofTests": [
+        "test_derived_properties_match_the_links_they_summarize",
+        "test_derived_properties_work_in_filter_group_by_and_order_by",
+        "test_single_link_derived_property_reads_filters_and_sorts_the_linked_scalar",
+        "test_derived_property_cannot_silently_chain_through_another_link_derived_property"
+      ],
+      "gaps": [
+        "The declaration supports one link only; Palantir's documented multi-link derived-property paths are not yet represented or executed.",
+        "Exact cardinality, collection aggregations, and an OSv2-scale HyperLogLog approximation backend are not implemented."
+      ]
+    },
+    {
+      "id": "search-around-object-set",
+      "publicBehavior": "Search Around transforms a source ObjectSet into an unordered ObjectSet of the linked type, with at most three link operations in the Function-facing contract.",
+      "sourceIds": ["palantir-object-sets", "palantir-object-set-limits"],
+      "status": "partial",
+      "implementationEvidence": [
+        "libs/foundry_lite/application/services/object_store/set_members.py",
+        "libs/foundry_lite/application/services/object_store/sets.py",
+        "libs/foundry_lite/application/facades/object_store.py",
+        "libs/foundry_lite/application/services/ontology_mcp_gateway.py"
+      ],
+      "proofTests": [
+        "test_search_around_object_set_changes_object_type_across_a_link",
+        "test_search_around_object_set_follows_the_same_link_from_its_reverse_endpoint",
+        "test_search_around_stops_before_reading_more_links_after_the_result_bound",
+        "test_ontology_mcp_search_around_lands_on_a_different_type_and_needs_every_hop_grant"
+      ],
+      "gaps": [
+        "The local Object Storage v1-compatible path fails at 100,000 distinct results per hop; OSv2's larger limits and Spark fallback are not implemented.",
+        "Per-hop traversal filters, complete Functions OSDK vocabulary, and Searchable render-hint enforcement are not implemented."
       ]
     },
     {

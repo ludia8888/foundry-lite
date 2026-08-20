@@ -9,6 +9,7 @@ import {
 import {
   LinksWidget,
   ObjectDetailWidget,
+  ObjectLinksWidget,
   ObjectListWidget,
   ObjectSetTitleWidget,
   ObjectTableWidget,
@@ -35,6 +36,7 @@ export const WIDGET_RENDERERS: Record<WidgetKind, WidgetComponent> = {
   objectDetail: ObjectDetailWidget,
   objectSetTitle: ObjectSetTitleWidget,
   links: LinksWidget,
+  objectLinks: ObjectLinksWidget,
   metricCard: MetricCardWidget,
   barChart: BarChartWidget,
   pieChart: PieChartWidget,

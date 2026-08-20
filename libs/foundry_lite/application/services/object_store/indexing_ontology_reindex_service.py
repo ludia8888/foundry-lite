@@ -125,6 +125,13 @@ class ObjectOntologyReindexService(CoreService):
     ) -> None:
         plan = execution.plan
         completed_at = _now()
+        self.object_index_repository.deactivate_superseded_object_type_index(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_id=plan.object_type["id"],
+            object_type_api_name=plan.object_type["api_name"],
+            updated_at=completed_at,
+        )
         self.object_index_record_mutation_service.mark_index_run_succeeded(conn, ctx, plan.run_id, counts)
         self.ontology_service._complete_object_reindex_contract(
             conn,

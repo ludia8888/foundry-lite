@@ -31,7 +31,7 @@ def test_builder_mcp_executes_every_catalog_tool_through_real_json_rpc(
     monkeypatch: Any,
     tmp_path: Any,
 ) -> None:
-    """Ratchet the real Builder MCP surface to exactly the canonical 69 tools."""
+    """Ratchet the real Builder MCP surface to exactly the canonical 70 tools."""
     state = _prepare_surface_state(foundry, monkeypatch, tmp_path)
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     issuer = foundry._services.osdk_oauth_sessions.oauth_token_issuer
@@ -192,8 +192,8 @@ class _FullSurfaceRunner:
     def assert_complete(self) -> None:
         expected = set(self.catalog)
         mutations = {tool_id for tool_id, spec in self.catalog.items() if spec.effect != "READ"}
-        assert len(expected) == 69
-        assert len(expected - mutations) == 49
+        assert len(expected) == 71
+        assert len(expected - mutations) == 51
         assert len(mutations) == 20
         assert self.executed == expected
         assert self.challenged == mutations
@@ -281,7 +281,7 @@ def _run_governance_tools(runner: _FullSurfaceRunner, foundry: Any) -> dict[str,
         {
             "displayName": "MCP Full Surface",
             "description": "Real JSON-RPC exhaustive proof",
-            "metadata": {"proof": "69-of-69"},
+            "metadata": {"proof": "70-of-70"},
             "idempotencyKey": "mcp-full-surface-project",
         },
         ("project",),
@@ -397,6 +397,20 @@ def _run_object_and_dataset_exploration(runner: _FullSurfaceRunner, state: dict[
         {"objectType": "Order", "groupBy": ["status"], "select": [{"function": "count", "name": "orders"}]},
         ("groups",),
     )
+    runner.call(
+        "exploration",
+        "tenant:tenant-demo",
+        "traverse_ontology_object_links",
+        {"objectType": "Order", "objectId": "O-1", "linkType": "OrderCustomer"},
+        ("objectType", "linkType", "items", "count"),
+    )
+    runner.call(
+        "exploration",
+        "tenant:tenant-demo",
+        "search_around_ontology_objects",
+        {"fromObjectType": "Order", "linkTypes": ["OrderCustomer"]},
+        ("objectType", "fromObjectType", "linkTypes", "objectIds", "count"),
+    )
     dataset_ref = state["datasetRef"]
     workspace = f"dataset:{dataset_ref}"
     schema = runner.call(
@@ -476,7 +490,7 @@ def _run_ontology_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         workspace,
         "ontology.branch.propose",
         {
-            "title": "Builder MCP 69-tool ontology proof",
+            "title": "Builder MCP 70-tool ontology proof",
             "description": "Exhaustive JSON-RPC branch proposal",
             "idempotencyKey": "mcp-full-surface-ontology-proposal",
         },
@@ -537,7 +551,7 @@ def _run_pipeline_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
         workspace,
         "pipeline.branch.propose",
         {
-            "title": "Builder MCP 69-tool pipeline proof",
+            "title": "Builder MCP 70-tool pipeline proof",
             "description": "Exhaustive JSON-RPC pipeline proposal",
             "idempotencyKey": "mcp-full-surface-pipeline-proposal",
         },
@@ -891,7 +905,16 @@ def _advertised_tools(tools: object) -> dict[str, dict[str, object]]:
 
 def _mode_resources(mode: str) -> list[dict[str, Any]]:
     if mode == "exploration":
-        return [{"resourceType": "object", "resourceApiName": "Order", "scopes": ["osdk:object:Order:read"]}]
+        return [
+            {"resourceType": "object", "resourceApiName": "Order", "scopes": ["osdk:object:Order:read"]},
+            # Traversal needs the link's own read scope on top of the object's: reaching a
+            # neighbour is a separate grant from reading the object you started at.
+            {
+                "resourceType": "link",
+                "resourceApiName": "OrderCustomer",
+                "scopes": ["osdk:link:OrderCustomer:read"],
+            },
+        ]
     if mode == "functions_editing":
         return [
             {

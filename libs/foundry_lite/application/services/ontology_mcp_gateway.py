@@ -87,6 +87,9 @@ from foundry_lite.application.services.ontology_mcp_values import (
     text as _text,
 )
 from foundry_lite.application.services.ontology_mcp_values import (
+    text_list as _text_list,
+)
+from foundry_lite.application.services.ontology_mcp_values import (
     tool_event_payload as _tool_event_payload,
 )
 from foundry_lite.application.services.osdk_service_principal_authorization import (
@@ -297,6 +300,25 @@ class OntologyMcpGateway:
                 # The runtime has always accepted this; only the MCP surface withheld it, so an
                 # external agent could keyword-match but never search by meaning.
                 semantic_text=_optional_text(arguments.get("semanticText")),
+            )
+        if operation == "links":
+            link_type = _text(arguments, "linkType")
+            links = self.objects.links(
+                name,
+                _text(arguments, "objectId"),
+                link_type,
+                ctx=object_ctx,
+            )
+            return {"linkType": link_type, "links": [dict(link) for link in links]}
+        if operation == "searchAround":
+            link_types = _text_list(arguments, "linkTypes")
+            return dict(
+                self.objects.search_around(
+                    name,
+                    link_types,
+                    ctx=object_ctx,
+                    filter_ast=_optional_mapping(arguments.get("filter")),
+                )
             )
         if operation == "unifiedSearch":
             hits = self.unified_search.unified_search(

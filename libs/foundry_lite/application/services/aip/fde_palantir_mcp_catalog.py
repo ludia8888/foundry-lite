@@ -94,6 +94,36 @@ PALANTIR_MCP_NATIVE_TOOLS = (
         ["objectType", "select"],
     ),
     _tool(
+        "traverse_ontology_object_links",
+        "Follow one link type from a permission-scoped Ontology object to the objects on the "
+        "other side. Answers relationship questions an object query cannot: which concerns a "
+        "post expresses, which orders a customer placed. Traversal is bounded by the platform "
+        "link fan-out cap and returns only objects the caller may already read.",
+        "object:read",
+        {
+            "objectType": {"type": "string"},
+            "objectId": {"type": "string"},
+            "linkType": {"type": "string"},
+        },
+        ["objectType", "objectId", "linkType"],
+    ),
+    _tool(
+        "search_around_ontology_objects",
+        "Traverse from a filtered set of objects across up to three link hops and return the set "
+        "of objects on the far side. Unlike a link lookup this is set-to-set and the object type "
+        "changes at every hop, so it answers questions whose answer is a different type than the "
+        "question: which communities discuss a given concern, which ingredients the posts about "
+        "hair loss mention. The chain is bounded by the platform hop and result caps, and every "
+        "link type in the chain needs its own read grant.",
+        "object:read",
+        {
+            "fromObjectType": {"type": "string"},
+            "filter": {"type": "object"},
+            "linkTypes": {"type": "array", "items": {"type": "string"}},
+        },
+        ["fromObjectType", "linkTypes"],
+    ),
+    _tool(
         "get_foundry_dataset_schema",
         "Get the committed schema and version identity for one permission-scoped dataset.",
         "dataset:read",
@@ -342,7 +372,12 @@ PALANTIR_MCP_TOOLS_BY_CAPABILITY = {
     "resource.search": ("resource.search", "search_foundry_projects"),
     "resource.inspect": ("resource.inspect", "list_resources_in_foundry_folder", "get_project_imports"),
     "governance.project.create": ("create_foundry_project",),
-    "object.query": ("query_ontology_objects", "aggregate_ontology_objects"),
+    "object.query": (
+        "query_ontology_objects",
+        "aggregate_ontology_objects",
+        "traverse_ontology_object_links",
+        "search_around_ontology_objects",
+    ),
     "dataset.inspect": ("get_foundry_dataset_schema", "list_dataset_files", "get_dataset_stats"),
     "lineage.inspect": ("get_resource_graph",),
     "ontology.inspect": (

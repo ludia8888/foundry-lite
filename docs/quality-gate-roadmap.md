@@ -665,7 +665,7 @@ Palantir 공식 Foundry 문서를 설계 근거로 갖는지 확인한다. 비�
 `tests/unit/test_quality_palantir_design_authority.py`가 현재 repo 통과, 공식 source가 없는 ADR,
 비공식 parity source를 회귀 검증한다. 이 gate는 static lane에 포함된다.
 
-### Tier G14I — Functions/ObjectSet public-behavior parity (🟡 bounded current 2026-08-13)
+### Tier G14I — Functions/ObjectSet public-behavior parity (🟡 bounded current 2026-08-20)
 
 `scripts/quality/check_functions_object_set_parity_matrix.py`와
 `quality:functions-object-set-parity`는 공식 ObjectSet, Function types, Python/TypeScript v2,
@@ -677,8 +677,10 @@ operator, 공식 Python import/expression shape, TypeScript default export, 그�
 bounded aggregation Function + app-owned OSDK 생성이다. `quality:pipeline-python-isolation-live`가
 누락된 실제 Docker image를 먼저 만든 뒤 두 언어의 ObjectSet 왕복을 실행한다.
 
-Phrase/fuzzy/geo/link 필터, Search Around, KNN, union/intersect/subtract, 전체 bucket/limit,
-Searchable render hint, repository package/version lifecycle, 전체 registry type은 partial/planned다.
+저장·MCP 경로의 bounded Search Around(양방향 링크, 최대 3 hop, 10만 distinct 결과 hop cap)와
+한 링크 기반 derived property(직접 scalar, count/numeric aggregate)는 실행 증거가 있다. 그러나
+Phrase/fuzzy/geo/link 필터, KNN, union/intersect/subtract, 전체 bucket/limit, Searchable render hint,
+multi-link derived property, OSv2/Spark execution, repository package/version lifecycle, 전체 registry type은 partial/planned다.
 따라서 이 gate가 green이어도 “Functions 전체 parity”를 뜻하지 않는다. matrix의 bounded current
 row만 current이고, 전체 vocabulary row는 planned로 남는다.
 

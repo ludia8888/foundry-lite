@@ -250,6 +250,15 @@ def property_derivation(prop: YamlObject) -> PropertyDerivation | None:
     expression = optional_str(derivation, "expression")
     if expression is not None:
         result["expression"] = expression
+    link = optional_str(derivation, "link")
+    if link is not None:
+        result["link"] = link
+    aggregation = optional_str(derivation, "aggregation")
+    if aggregation is not None:
+        result["aggregation"] = aggregation
+    target_property = optional_str(derivation, "property")
+    if target_property is not None:
+        result["property"] = target_property
     return result
 
 

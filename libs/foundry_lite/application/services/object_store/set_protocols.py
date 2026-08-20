@@ -6,10 +6,15 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from foundry_lite.application.ports import (
+    LinkTypeRow,
+    ObjectLinkRow,
     ObjectQueryItem,
     ObjectQueryResult,
     ObjectRecordRow,
     ObjectTypeRow,
+    OntologyVersionRow,
+    OsdkResourceOperation,
+    OsdkResourceType,
     PropertyTypeRow,
     TransactionContext,
 )
@@ -37,6 +42,45 @@ class SetObjectQuery(Protocol):
     ) -> ObjectQueryItem: ...
 
 
+class SetLinkScopeBoundary(Protocol):
+    """The per-link-type grant gate; traversal must pass the same one a direct link read passes."""
+
+    def require_resource_scope(
+        self,
+        ctx: RequestContext,
+        *,
+        resource_type: OsdkResourceType,
+        resource_api_name: str,
+        operation: OsdkResourceOperation,
+    ) -> None: ...
+
+
+class SetLinkReader(Protocol):
+    """Repository reads needed to traverse either side of a declared link type."""
+
+    def active_links_from(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        link_type_api_name: str,
+        from_api_name: str,
+        from_object_id: str,
+        limit: int | None = None,
+    ) -> list[ObjectLinkRow]: ...
+
+    def active_links_to(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        link_type_api_name: str,
+        to_api_name: str,
+        to_object_id: str,
+        limit: int | None = None,
+    ) -> list[ObjectLinkRow]: ...
+
+
 class SetOntologyLookup(Protocol):
     def _active_object_type(
         self,
@@ -50,6 +94,19 @@ class SetOntologyLookup(Protocol):
         conn: TransactionContext,
         object_type_id: str,
     ) -> Sequence[PropertyTypeRow]: ...
+
+    def _active_ontology_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+    ) -> OntologyVersionRow: ...
+
+    def _link_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[LinkTypeRow]: ...
 
 
 class SetRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):

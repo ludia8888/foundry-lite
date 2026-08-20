@@ -38,6 +38,8 @@ def object_set_definition_from_inputs(
             return normalized
         if set_type == "dynamic" and set(normalized) == {"filter"}:
             return normalized
+        if set_type == "search_around" and set(normalized) == {"searchAround"}:
+            return normalized
         raise ValidationFailed(
             "object set definition does not match set type",
             details={"set_type": set_type, "definition": normalized},
@@ -45,6 +47,8 @@ def object_set_definition_from_inputs(
     if set_type == "static":
         ids = object_ids or []
         return {"ids": ids}
+    if set_type == "search_around":
+        raise ValidationFailed("search-around object sets require an explicit definition")
     return {"filter": dict(filter_ast or {})}
 
 

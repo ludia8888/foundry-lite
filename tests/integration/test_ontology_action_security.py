@@ -291,6 +291,34 @@ def test_ontology_migration_reindex_executor_completes_required_object_reindex(
     completed_catalog = foundry.ontology.catalog(ctx=ctx)
     completed_order_type = next(item for item in completed_catalog["objectTypes"] if item["apiName"] == "Order")
     remapped = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    with foundry.engine.begin() as conn:
+        current_order_type_id = conn.execute(
+            select(db.object_types.c.id).where(
+                db.object_types.c.tenant_id == ctx.tenant_id,
+                db.object_types.c.ontology_version_id == completed_catalog["ontologyVersionId"],
+                db.object_types.c.api_name == "Order",
+            )
+        ).scalar_one()
+        active_record_type_ids = {
+            row["object_type_id"]
+            for row in conn.execute(
+                select(db.object_records.c.object_type_id).where(
+                    db.object_records.c.tenant_id == ctx.tenant_id,
+                    db.object_records.c.object_type_api_name == "Order",
+                    db.object_records.c.is_active == True,  # noqa: E712
+                )
+            ).mappings()
+        }
+        active_link_type_ids = {
+            row["from_object_type_id"]
+            for row in conn.execute(
+                select(db.object_links.c.from_object_type_id).where(
+                    db.object_links.c.tenant_id == ctx.tenant_id,
+                    db.object_links.c.from_api_name == "Order",
+                    db.object_links.c.is_active == True,  # noqa: E712
+                )
+            ).mappings()
+        }
 
     assert result["ontologyReindexKey"] == reindex_key
     assert result["servingContractStatus"] == "object_reindex_complete"
@@ -300,6 +328,8 @@ def test_ontology_migration_reindex_executor_completes_required_object_reindex(
     assert completed_order_type["config"]["servingContractStatus"] == "object_reindex_complete"
     assert completed_order_type["config"]["objectReindexCompleted"]["indexRunId"] == result["index_run_id"]
     assert remapped["properties"]["status"] == "C-100"
+    assert active_record_type_ids == {current_order_type_id}
+    assert active_link_type_ids == {current_order_type_id}
 
 
 def test_ontology_mapping_migrates_with_dataset_schema(foundry: FoundryLite, tmp_path: Path) -> None:
