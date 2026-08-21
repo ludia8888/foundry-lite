@@ -33,18 +33,38 @@ def object_set_definition_from_inputs(
     filter_ast: Mapping[str, object] | None,
 ) -> ObjectSetDefinition:
     if definition is not None:
-        normalized: ObjectSetDefinition = dict(definition)
-        if set_type == "static" and set(normalized) == {"ids"}:
-            return normalized
-        if set_type == "dynamic" and set(normalized) == {"filter"}:
-            return normalized
-        raise ValidationFailed(
-            "object set definition does not match set type",
-            details={"set_type": set_type, "definition": normalized},
-        )
+        return _explicit_object_set_definition(set_type, definition)
+    return _legacy_object_set_definition(set_type, object_ids, filter_ast)
+
+
+def _explicit_object_set_definition(
+    set_type: str,
+    definition: Mapping[str, object],
+) -> ObjectSetDefinition:
+    normalized: ObjectSetDefinition = dict(definition)
+    expected_key = {
+        "static": "ids",
+        "dynamic": "filter",
+        "search_around": "searchAround",
+    }.get(set_type)
+    if expected_key is not None and set(normalized) == {expected_key}:
+        return normalized
+    raise ValidationFailed(
+        "object set definition does not match set type",
+        details={"set_type": set_type, "definition": normalized},
+    )
+
+
+def _legacy_object_set_definition(
+    set_type: str,
+    object_ids: list[str] | None,
+    filter_ast: Mapping[str, object] | None,
+) -> ObjectSetDefinition:
     if set_type == "static":
         ids = object_ids or []
         return {"ids": ids}
+    if set_type == "search_around":
+        raise ValidationFailed("search-around object sets require an explicit definition")
     return {"filter": dict(filter_ast or {})}
 
 

@@ -18,6 +18,7 @@ export type WidgetKind =
   | "objectDetail"
   | "objectSetTitle"
   | "links"
+  | "objectLinks"
   | "metricCard"
   | "barChart"
   | "pieChart"
@@ -78,6 +79,8 @@ export type WidgetConfig = {
   dateProperty?: string | null;
   /** 단일 선택 필터 대상 속성 (dropdown/stringSelector). */
   filterProperty?: string | null;
+  /** 순회할 링크 타입 apiName (objectLinks). 선택 객체에서 이 관계를 따라간다. */
+  linkTypeApiName?: string | null;
   /** 마크다운/헤더 본문. */
   text?: string;
   /** 메트릭 단위 접미사 (예: "건", "₩"). */
@@ -275,6 +278,7 @@ export const WIDGET_LABELS: Record<WidgetKind, string> = {
   objectList: "객체 목록",
   objectDetail: "객체 상세",
   objectSetTitle: "객체 세트 제목",
+  objectLinks: "관계 순회",
   links: "링크",
   metricCard: "메트릭 카드",
   barChart: "막대 차트",

@@ -20,9 +20,9 @@ from foundry_lite.application.services.materialization_types import (
     materialization_spec_name,
 )
 from foundry_lite.application.services.ontology_catalog import build_ontology_catalog as build_ontology_catalog
-from foundry_lite.application.services.ontology_datasource_validation import validate_yaml_object_datasources
+from foundry_lite.application.services.ontology_datasource_validation import validate_yaml_object_data_contracts
+from foundry_lite.application.services.ontology_derived_property_validation import validate_derived_properties
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan
-from foundry_lite.application.services.ontology_row_policy_validation import validate_yaml_row_policies
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     action_type_definition,
@@ -62,6 +62,8 @@ PROPERTY_EDIT_POLICIES = frozenset({"conflict_requires_review", "edit_only", "ed
 PROPERTY_CLASSIFICATIONS = frozenset({"finance", "pii", "public"})
 LINK_CARDINALITIES = frozenset({"many_to_many", "many_to_one", "one_to_many", "one_to_one"})
 OBJECT_BACKING_MODES = frozenset({"snapshot"})
+# Palantir's derived-property aggregations. `approximateCardinality` counts distinct neighbours;
+# the rest need a numeric property on the far side of the link.
 CDC_DELETE_POLICIES = frozenset({"tombstone"})
 ACTION_MUTATION_TYPES = frozenset({"setProperty"})
 
@@ -144,6 +146,10 @@ def validate_ontology_definition(
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
     for link_def in link_defs.values():
         _validate_yaml_link(conn, ctx, link_def, object_defs, dataset_columns_for_ref)
+    # Derived properties are checked last: they are the only property shape whose validity
+    # depends on other object types and on the link graph, so every type must exist first.
+    for object_def in object_defs.values():
+        validate_derived_properties(object_def, object_defs, link_defs)
 
 
 def _object_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
@@ -221,9 +227,8 @@ def _validate_yaml_object_type(
     # Primary key and property columns validate per datasource segment (a
     # single-dataset backing is one "primary" segment) so multi-datasource
     # declarations check every dataset they reference.
-    validate_yaml_object_datasources(conn, ctx, object_def, property_defs, dataset_columns_for_ref)
+    validate_yaml_object_data_contracts(conn, ctx, object_def, property_defs, dataset_columns_for_ref)
     _validate_yaml_title_property(object_def, property_defs)
-    validate_yaml_row_policies(object_def, property_defs)
     _validate_yaml_action_mutations(definition, object_api_name, property_defs)
 
 

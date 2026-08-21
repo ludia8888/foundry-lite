@@ -86,9 +86,26 @@ class LinkTypeBacking(TypedDict):
 
 
 class PropertyDerivation(TypedDict, total=False):
-    """Optional derivation metadata for a property type."""
+    """Optional derivation metadata for a property type.
+
+    Two shapes, deliberately distinct:
+
+    * ``expression`` is provenance only — a human-readable note about where a dataset column
+      came from. Nothing computes it.
+    * ``link`` + ``aggregation`` is a **derived property**: a value computed at read time by
+      following one link type off this object and aggregating the objects on the other side.
+      Palantir's rule is carried over — when the link can reach many objects an aggregation is
+      mandatory, because otherwise the property has no single value to hold.
+
+    A derived property is an ordinary property everywhere downstream: filters, ``groupBy`` and
+    ``orderBy`` accept it without new syntax. That is the whole point of pushing traversal into
+    a property instead of into the query language.
+    """
 
     expression: str
+    link: str
+    aggregation: str
+    property: str
 
 
 class InterfacePropertyDefinition(TypedDict):

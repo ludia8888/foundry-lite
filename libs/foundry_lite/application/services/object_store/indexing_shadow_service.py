@@ -70,6 +70,7 @@ class ObjectIndexShadowService(CoreService):
             transaction=conn,
             tenant_id=ctx.tenant_id,
             object_type_id=plan.object_type["id"],
+            object_type_api_name=plan.object_type["api_name"],
             index_version=plan.index_version,
             updated_at=_now(),
             expected_previous_index_version=plan.previous_index_version,

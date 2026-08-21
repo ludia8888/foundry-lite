@@ -32,6 +32,7 @@ def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> Obje
             payload.name,
             payload.object_type,
             set_type=payload.set_type,
+            definition=payload.definition,
             object_ids=payload.ids,
             filter_ast=payload.filter_ast,
             visibility=payload.visibility,

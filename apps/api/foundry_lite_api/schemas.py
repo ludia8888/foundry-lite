@@ -238,6 +238,7 @@ class ObjectSetCreateRequest(BaseModel):
     lifecycle: str | None = None
     ids: list[str] | None = None
     filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    definition: JsonObject | None = None
     ttl_seconds: int | None = Field(default=None, alias="ttlSeconds")
 
 

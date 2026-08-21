@@ -11,6 +11,7 @@ from foundry_lite.application.services.aip.fde_application_tool_projections impo
     lineage_graph,
     pilot_generation_tool_result,
 )
+from foundry_lite.application.services.aip.fde_object_tools import search_around_ontology_objects
 from foundry_lite.application.services.aip.fde_pilot import FdePilotService
 from foundry_lite.application.services.aip.fde_platform_docs import (
     list_platform_sdk_apis,
@@ -58,6 +59,29 @@ class FdeObjectQueryReader(Protocol):
     ) -> Mapping[str, object]: ...
 
 
+class FdeObjectLinkReader(Protocol):
+    def get_links(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        link_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Sequence[Mapping[str, object]]: ...
+
+
+class FdeObjectSetResolver(Protocol):
+    def resolve_search_around(
+        self,
+        from_object_type_api_name: str,
+        link_types: Sequence[str],
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        include_items: bool = True,
+    ) -> Mapping[str, object]: ...
+
+
 class FdeDatasetInspector(Protocol):
     def inspect_dataset(
         self,
@@ -75,14 +99,18 @@ class FdeApplicationToolService(CoreService):
     required_collaborators = (
         "dataset_registry_service",
         "fde_pilot_service",
+        "object_links_service",
         "object_query_service",
+        "object_sets_service",
         "osdk_application_service",
         "resource_catalog_service",
         "runtime_service",
     )
     dataset_registry_service: FdeDatasetInspector
     fde_pilot_service: FdePilotService
+    object_links_service: FdeObjectLinkReader
     object_query_service: FdeObjectQueryReader
+    object_sets_service: FdeObjectSetResolver
     osdk_application_service: OsdkApplicationService
     resource_catalog_service: ResourceCatalogService
     runtime_service: FdeLineageReader
@@ -173,7 +201,21 @@ class FdeApplicationToolService(CoreService):
         return {"projectId": project_id, "items": items, "count": len(items), "nextCursor": None}
 
     def _palantir_objects(self, ctx: RequestContext, request: FdePlatformToolRequest) -> dict[str, object]:
+        if request.spec.tool_id == "search_around_ontology_objects":
+            return search_around_ontology_objects(self.object_sets_service, ctx, request)
         object_type = required_text(request.arguments, "objectType")
+        if request.spec.tool_id == "traverse_ontology_object_links":
+            link_type = required_text(request.arguments, "linkType")
+            links = self.object_links_service.get_links(
+                object_type,
+                required_text(request.arguments, "objectId"),
+                link_type,
+                ctx=ctx,
+            )
+            items = [dict(link) for link in links]
+            # Fan-out is capped by the link service, so a full page is a signal to the caller
+            # that the traversal was cut rather than that the object has exactly this many.
+            return {"objectType": object_type, "linkType": link_type, "items": items, "count": len(items)}
         if request.spec.tool_id == "query_ontology_objects":
             return dict(
                 self.object_query_service.query_objects(
@@ -311,6 +353,14 @@ def _optional_mapping_value(value: object) -> Mapping[str, object] | None:
     return None if value is None else _mapping(value, "filter")
 
 
+def _text_items(value: object, field: str) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise FdePlatformToolError("schema_invalid", f"{field} must be a list of strings")
+    if not all(isinstance(item, str) and item for item in value):
+        raise FdePlatformToolError("schema_invalid", f"{field} must be a list of non-empty strings")
+    return [str(item) for item in value]
+
+
 def _mapping_items(value: object) -> list[dict[str, object]]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         raise FdePlatformToolError("schema_invalid", "expected a list of objects")
@@ -396,7 +446,14 @@ _PALANTIR_COMPASS_TOOL_IDS = frozenset(
         "search_foundry_projects",
     }
 )
-_PALANTIR_OBJECT_TOOL_IDS = frozenset({"query_ontology_objects", "aggregate_ontology_objects"})
+_PALANTIR_OBJECT_TOOL_IDS = frozenset(
+    {
+        "query_ontology_objects",
+        "aggregate_ontology_objects",
+        "traverse_ontology_object_links",
+        "search_around_ontology_objects",
+    }
+)
 _PALANTIR_DATASET_TOOL_IDS = frozenset({"get_foundry_dataset_schema", "list_dataset_files", "get_dataset_stats"})
 _PALANTIR_LINEAGE_TOOL_IDS = frozenset({"get_resource_graph"})
 _PALANTIR_ONTOLOGY_SDK_TOOL_IDS = frozenset({"get_ontology_sdk_context", "get_ontology_sdk_examples"})

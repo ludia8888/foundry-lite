@@ -1,12 +1,12 @@
 import type { GenericObject } from "@foundry-lite/sdk";
 import {
   useFoundryLiteClient,
-  useFoundryLiteGenericObjectQuery,
+  useFoundryLiteQuery,
   type FoundryLiteOntologyActionView,
   type FoundryLiteOntologyObjectView,
 } from "@foundry-lite/sdk/react";
 import { LayoutGrid, type LucideIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -32,12 +32,22 @@ export type WidgetObjectsResult = {
   allObjects: GenericObject[];
   objects: GenericObject[];
   isLoading: boolean;
-  error: ReturnType<typeof useFoundryLiteGenericObjectQuery>["error"];
+  error: ReturnType<typeof useFoundryLiteQuery<GenericObject[]>>["error"];
   reload: () => void;
+  /** 상한에 걸려 일부만 읽었는가. 집계 위젯은 이걸 화면에 드러내야 한다. */
+  isTruncated: boolean;
 };
 
+const WIDGET_PAGE_SIZE = 500;
+/** 브라우저로 끌어올 수 있는 상한. 넘으면 자르되, 자른 사실을 숨기지 않는다. */
+export const WIDGET_OBJECT_CAP = 10_000;
+
 /**
- * 위젯의 객체 타입을 조회하고 공유 런타임 필터·검색을 적용해 반환한다.
+ * 위젯의 객체 타입을 끝까지 읽고 공유 런타임 필터·검색을 적용해 반환한다.
+ *
+ * 예전에는 첫 200건 한 페이지만 읽고 그 위에서 집계했다. 차트는 그 표본을 전체인 양
+ * 표시했기 때문에 1,000건짜리 객체 타입에서 "총 200건"이라고 단언했다. 표본이라는 표시가
+ * 없는 수치는 틀린 수치보다 나쁘다 — 읽는 사람이 검증할 방법이 없기 때문이다.
  * dataVersion이 바뀌면(액션 apply 후) 리페치한다.
  */
 export function useWidgetObjects(
@@ -46,12 +56,26 @@ export function useWidgetObjects(
 ): WidgetObjectsResult {
   const client = useFoundryLiteClient();
   const state = useRuntimeState();
-  const query = useFoundryLiteGenericObjectQuery(client, {
-    objectApiName,
-    pageSize: 200,
-    key: ["workshop-widget", objectApiName ?? "none", state.dataVersion],
-  });
-  const allObjects = query.objects;
+  const load = useCallback(async () => {
+    if (!objectApiName) return [] as GenericObject[];
+    const collected: GenericObject[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await client.objects.generic.query(objectApiName, {
+        limit: WIDGET_PAGE_SIZE,
+        ...(cursor ? { cursor } : {}),
+      });
+      collected.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor && collected.length < WIDGET_OBJECT_CAP);
+    return collected;
+  }, [client, objectApiName]);
+  const query = useFoundryLiteQuery<GenericObject[]>(
+    ["workshop-widget", objectApiName ?? "none", state.dataVersion],
+    load,
+    { enabled: Boolean(objectApiName) },
+  );
+  const allObjects = useMemo(() => query.data ?? [], [query.data]);
   const filtered = applyRuntimeFilters(allObjects, state);
   const objects = applyVariableFilters(
     filtered,
@@ -64,6 +88,7 @@ export function useWidgetObjects(
     isLoading: query.isLoading,
     error: query.error,
     reload: query.reload,
+    isTruncated: allObjects.length >= WIDGET_OBJECT_CAP,
   };
 }
 

@@ -370,6 +370,7 @@ class ObjectIndexRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         object_type_id: str,
+        object_type_api_name: str,
         index_version: str,
         updated_at: str,
         expected_previous_index_version: str | None = None,
@@ -380,6 +381,18 @@ class ObjectIndexRepository(Protocol):
         like a compare-and-swap promotion: it succeeds only if the object type's
         active index pointer still matches the version that was validated.
         """
+        ...
+
+    def deactivate_superseded_object_type_index(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+        object_type_api_name: str,
+        updated_at: str,
+    ) -> None:
+        """Retire active rows from prior ontology incarnations of one logical object type."""
         ...
 
     def delete_inactive_index_version(

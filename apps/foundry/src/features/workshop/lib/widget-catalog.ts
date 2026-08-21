@@ -30,6 +30,7 @@ export type WidgetCategory =
 export type WidgetConfigField =
   | "title"
   | "object"
+  | "linkType"
   | "action"
   | "actions"
   | "properties"
@@ -151,6 +152,17 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
     fields: ["title", "object"],
     compact: false,
     defaultConfig: (s) => ({ objectApiName: s.objectApiName }),
+  },
+  objectLinks: {
+    kind: "objectLinks",
+    label: "관계 순회",
+    description: "선택 객체에서 링크를 따라가 실제 연결된 객체를 표시합니다.",
+    icon: Link2,
+    category: "display",
+    role: "consumer",
+    fields: ["title", "object", "linkType"],
+    compact: false,
+    defaultConfig: (s) => ({ objectApiName: s.objectApiName, linkTypeApiName: null }),
   },
   metricCard: {
     kind: "metricCard",

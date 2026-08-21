@@ -528,6 +528,7 @@ class SqlAlchemyObjectIndexRepository:
         transaction: Any,
         tenant_id: str,
         object_type_id: str,
+        object_type_api_name: str,
         index_version: str,
         updated_at: str,
         expected_previous_index_version: str | None = None,
@@ -542,30 +543,31 @@ class SqlAlchemyObjectIndexRepository:
         )
         if not switched:
             return False
-        transaction.execute(
-            update(db.object_records)
-            .where(
-                and_(
-                    db.object_records.c.tenant_id == tenant_id,
-                    db.object_records.c.object_type_id == object_type_id,
-                    db.object_records.c.is_active == True,  # noqa: E712
-                )
-            )
-            .values(is_active=False, updated_at=updated_at)
-        )
-        transaction.execute(
-            update(db.object_links)
-            .where(
-                and_(
-                    db.object_links.c.tenant_id == tenant_id,
-                    db.object_links.c.from_object_type_id == object_type_id,
-                    db.object_links.c.is_active == True,  # noqa: E712
-                )
-            )
-            .values(is_active=False, updated_at=updated_at)
+        _deactivate_active_logical_object_type(
+            transaction,
+            tenant_id,
+            object_type_api_name,
+            updated_at,
         )
         self._activate_index_version(transaction, tenant_id, object_type_id, index_version, updated_at)
         return True
+
+    def deactivate_superseded_object_type_index(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        object_type_api_name: str,
+        updated_at: str,
+    ) -> None:
+        _deactivate_active_logical_object_type(
+            transaction,
+            tenant_id,
+            object_type_api_name,
+            updated_at,
+            except_object_type_id=object_type_id,
+        )
 
     def _upsert_active_index_pointer(
         self,
@@ -646,6 +648,16 @@ class SqlAlchemyObjectIndexRepository:
                 )
             )
             _insert_object_record_version_from_current(transaction, tenant_id, str(row["id"]))
+        self._activate_index_version_links(transaction, tenant_id, object_type_id, index_version, updated_at)
+
+    def _activate_index_version_links(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+        updated_at: str,
+    ) -> None:
         transaction.execute(
             update(db.object_links)
             .where(
@@ -686,6 +698,45 @@ class SqlAlchemyObjectIndexRepository:
                 )
             )
         )
+
+
+def _deactivate_active_logical_object_type(
+    transaction: Any,
+    tenant_id: str,
+    object_type_api_name: str,
+    updated_at: str,
+    *,
+    except_object_type_id: str | None = None,
+) -> None:
+    """Deactivate one logical type's prior serving rows across ontology versions.
+
+    ``object_type_id`` is intentionally version-scoped.  The API name is the
+    stable identity used by the serving indexes, so a replacement ontology row
+    must retire the old id's records and outbound links as one transaction.
+    """
+    record_conditions = [
+        db.object_records.c.tenant_id == tenant_id,
+        db.object_records.c.object_type_api_name == object_type_api_name,
+        db.object_records.c.is_active == True,  # noqa: E712
+    ]
+    link_conditions = [
+        db.object_links.c.tenant_id == tenant_id,
+        db.object_links.c.from_api_name == object_type_api_name,
+        db.object_links.c.is_active == True,  # noqa: E712
+    ]
+    if except_object_type_id is not None:
+        record_conditions.append(db.object_records.c.object_type_id != except_object_type_id)
+        link_conditions.append(db.object_links.c.from_object_type_id != except_object_type_id)
+    transaction.execute(
+        update(db.object_records)
+        .where(db.object_records.c.tenant_id == tenant_id, and_(*record_conditions))
+        .values(is_active=False, updated_at=updated_at)
+    )
+    transaction.execute(
+        update(db.object_links)
+        .where(db.object_links.c.tenant_id == tenant_id, and_(*link_conditions))
+        .values(is_active=False, updated_at=updated_at)
+    )
 
 
 def _active_index_pointer_values(

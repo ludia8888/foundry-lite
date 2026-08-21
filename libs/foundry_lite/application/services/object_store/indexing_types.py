@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 
 from foundry_lite.application.ports import (
     DatasetVersionRow,
@@ -42,6 +42,14 @@ class ObjectIndexMultiSourcePlan:
 
 
 @dataclass(frozen=True)
+class ObjectIndexLinkSource:
+    """One M:N join datasource pinned to the version used by a rebuild."""
+
+    dataset_ref: str
+    dataset_version: DatasetVersionRow
+
+
+@dataclass(frozen=True)
 class ObjectIndexRebuildPlan:
     run_id: str
     object_type_api_name: str
@@ -58,6 +66,10 @@ class ObjectIndexRebuildPlan:
     # Multi-datasource types read one parquet per segment and merge by primary
     # key (union of PKs); None keeps the legacy single-dataset read untouched.
     multi_source: ObjectIndexMultiSourcePlan | None = None
+    # Unlike direct links, M:N links are backed by their own join datasource.
+    # Capture those sources before creating the run so failure replay cannot
+    # quietly switch to whatever happened to become the latest join snapshot.
+    link_sources: Mapping[str, ObjectIndexLinkSource] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -70,6 +82,9 @@ class ObjectIndexRebuildCounts:
     # ("full" vs "changelog_incremental") and how many rows it could skip.
     refresh_mode: str = "full"
     rows_skipped: int = 0
+    # M:N links read their own join datasource. Persisting the exact version
+    # prevents an operator from mistaking the object snapshot for the link source.
+    link_source_dataset_version_ids: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

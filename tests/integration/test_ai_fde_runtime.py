@@ -218,7 +218,7 @@ def test_ai_fde_catalog_is_permission_scoped_and_lists_current_modes(foundry: An
     assert modes["platform_qa"] == "current"
     assert catalog["safetyBoundary"]["writes"] == "governed_scope_only"
     tool_ids = {str(tool["toolId"]) for tool in catalog["tools"]}
-    assert len(tool_ids) == 69
+    assert len(tool_ids) == 71
     assert {
         "list_resources_in_foundry_folder",
         "get_project_imports",
@@ -226,6 +226,8 @@ def test_ai_fde_catalog_is_permission_scoped_and_lists_current_modes(foundry: An
         "search_foundry_projects",
         "query_ontology_objects",
         "aggregate_ontology_objects",
+        "traverse_ontology_object_links",
+        "search_around_ontology_objects",
         "get_foundry_dataset_schema",
         "list_dataset_files",
         "get_dataset_stats",

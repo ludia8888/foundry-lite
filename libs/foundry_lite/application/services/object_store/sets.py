@@ -6,8 +6,8 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from foundry_lite.application.ports import (
+    ObjectReadRepository,
     ObjectSetDefinition,
-    ObjectSetObjectTypeRow,
     ObjectSetPayload,
     ObjectSetQueryResult,
     ObjectSetRecord,
@@ -16,41 +16,61 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
-from foundry_lite.application.query_filters import FILTER_OPERATIONS, validate_filter_ast
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.object_store.row_policies import row_policy_scope
+from foundry_lite.application.services.object_store.row_policies import row_policy_scope, row_visible
+from foundry_lite.application.services.object_store.set_links import (
+    link_types_by_api_name,
+    require_link_read_scope,
+)
 from foundry_lite.application.services.object_store.set_members import (
     collect_dynamic_object_set_members,
     collect_static_object_set_members,
+    resolve_search_around_object_ids,
 )
 from foundry_lite.application.services.object_store.set_protocols import (
+    SetLinkScopeBoundary,
     SetObjectQuery,
     SetOntologyLookup,
     SetRuntimeBoundary,
+)
+from foundry_lite.application.services.object_store.set_rows import object_type_by_id
+from foundry_lite.application.services.object_store.set_search_around import (
+    require_search_around_link_reads,
+    resolve_search_around_result_type,
+    search_around_parts,
+    search_around_payload,
+    search_around_source_ids,
+    transient_search_around_row,
 )
 from foundry_lite.application.services.object_store.set_semantics import (
     NormalizedObjectSetDefinition,
     ObjectSetMembers,
     can_read_object_set,
     object_set_access_scope,
-    object_set_definition_from_inputs,
-    object_set_expires_at,
     object_set_is_expired,
     object_set_lifecycle,
-    object_set_storage_visibility,
+)
+from foundry_lite.application.services.object_store.set_validation import (
+    normalize_object_set_definition,
+    validate_object_set_definition,
 )
 from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
-OBJECT_SET_TYPES = {"static", "dynamic"}
-
 
 class ObjectSetsService(CoreService):
-    required_dependencies = ("engine", "policy", "object_set_repository")
-    required_collaborators = ("object_query_service", "ontology_service", "runtime_service")
+    required_dependencies = ("engine", "policy", "object_set_repository", "object_read_repository")
+    required_collaborators = (
+        "object_query_service",
+        "ontology_service",
+        "osdk_application_service",
+        "runtime_service",
+    )
     object_query_service: SetObjectQuery
+    object_read_repository: ObjectReadRepository
     ontology_service: SetOntologyLookup
+    osdk_application_service: SetLinkScopeBoundary
     runtime_service: SetRuntimeBoundary
 
     def create_object_set(
@@ -70,7 +90,7 @@ class ObjectSetsService(CoreService):
     ) -> ObjectSetPayload:
         ctx = ctx or RequestContext()
         self._require_object_set_create(ctx, name)
-        normalized = self._normalize_object_set_definition(
+        normalized = normalize_object_set_definition(
             name,
             set_type=set_type,
             definition=definition,
@@ -97,7 +117,21 @@ class ObjectSetsService(CoreService):
     ) -> ObjectSetPayload:
         with self.engine.begin() as conn:
             object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
-            self._validate_object_set_definition(conn, ctx, object_type, normalized)
+            validate_object_set_definition(
+                conn,
+                ctx,
+                object_type,
+                normalized,
+                object_set_repository=self.object_set_repository,
+                ontology_service=self.ontology_service,
+                policy=self.policy,
+                link_types_by_api=lambda connection, request_ctx: link_types_by_api_name(
+                    self.ontology_service, connection, request_ctx
+                ),
+                require_link_read=lambda request_ctx, link_api: require_link_read_scope(
+                    self.osdk_application_service, request_ctx, link_api
+                ),
+            )
             set_id = self._create_object_set_record(
                 conn,
                 ctx,
@@ -233,121 +267,32 @@ class ObjectSetsService(CoreService):
                 )
             return {"deleted": len(expired_ids)}
 
-    def _normalize_object_set_definition(
+    def resolve_search_around(
         self,
-        name: str,
+        from_object_type_api_name: str,
+        link_types: Sequence[str],
         *,
-        set_type: str,
-        definition: Mapping[str, object] | None,
-        object_ids: list[str] | None,
-        filter_ast: Mapping[str, object] | None,
-        visibility: str | None,
-        access_scope: str | None,
-        lifecycle: str | None,
-        ttl_seconds: int | None,
-    ) -> NormalizedObjectSetDefinition:
-        if not name.strip():
-            raise ValidationFailed("object set name is required")
-        if set_type not in OBJECT_SET_TYPES:
-            raise ValidationFailed("unsupported object set type", details={"set_type": set_type})
-        if ttl_seconds is not None and ttl_seconds <= 0:
-            raise ValidationFailed("ttl_seconds must be positive", details={"ttl_seconds": ttl_seconds})
-        storage_visibility = object_set_storage_visibility(
-            visibility=visibility,
-            access_scope=access_scope,
-            lifecycle=lifecycle,
-            ttl_seconds=ttl_seconds,
-        )
-        normalized_definition = object_set_definition_from_inputs(set_type, definition, object_ids, filter_ast)
-        return {
-            "definition": normalized_definition,
-            "visibility": storage_visibility,
-            "expires_at": object_set_expires_at(ttl_seconds),
-        }
-
-    def _validate_object_set_definition(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-        normalized: NormalizedObjectSetDefinition,
-    ) -> None:
-        definition = normalized["definition"]
-        if "ids" in definition:
-            self._validate_static_object_set_ids(conn, ctx, object_type, definition["ids"])
-        elif "filter" in definition:
-            self._validate_dynamic_object_set_filter(conn, ctx, object_type, definition["filter"])
-        else:
-            raise ValidationFailed(
-                "object set definition must include ids or filter",
-                details={"definition": definition},
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        include_items: bool = True,
+    ) -> dict[str, object]:
+        """Resolve a traversal chain without persisting an ObjectSet row."""
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "object:read")
+        hops = [{"link": link_type} for link_type in link_types]
+        with self.engine.begin() as conn:
+            link_type_rows = link_types_by_api_name(self.ontology_service, conn, ctx)
+            result_type = resolve_search_around_result_type(
+                from_object_type_api_name,
+                hops,
+                link_type_rows,
+                lambda link_api: require_link_read_scope(self.osdk_application_service, ctx, link_api),
             )
-
-    def _validate_static_object_set_ids(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-        object_ids: object,
-    ) -> None:
-        if not isinstance(object_ids, list) or not all(isinstance(item, str) and item for item in object_ids):
-            raise ValidationFailed("static object set ids must be non-empty strings")
-        requested_ids = cast(list[str], object_ids)
-        existing = self.object_set_repository.active_object_ids(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_api_name=object_type["api_name"],
-            object_ids=requested_ids,
+            row = transient_search_around_row(from_object_type_api_name, filter_ast, hops)
+            object_ids, items = self._search_around_object_set_members(conn, ctx, result_type, row, include_items)
+        return search_around_payload(
+            result_type, from_object_type_api_name, link_types, object_ids, items, include_items
         )
-        missing = [object_id for object_id in requested_ids if object_id not in existing]
-        if missing:
-            raise ValidationFailed("static object set references missing objects", details={"objectIds": missing})
-
-    def _validate_dynamic_object_set_filter(
-        self, conn: TransactionContext, ctx: RequestContext, object_type: ObjectTypeRow, filter_ast: object
-    ) -> None:
-        if not isinstance(filter_ast, dict) or not filter_ast:
-            raise ValidationFailed("dynamic object set filter is required")
-        property_names = self.object_set_repository.property_names_for_object_type(
-            transaction=conn,
-            object_type_id=object_type["id"],
-        )
-        masked_property_names = self.policy.masked_property_names(ctx, object_type["api_name"])
-        typed_filter = cast(Mapping[str, object], filter_ast)
-        self._validate_filter_ast(typed_filter, property_names, masked_property_names)
-        property_data_types = {
-            row["api_name"]: row["data_type"]
-            for row in self.ontology_service._properties_for_object_type(conn, object_type["id"])
-        }
-        validate_filter_ast(typed_filter, property_data_types=property_data_types)
-
-    def _validate_filter_ast(
-        self, filter_ast: Mapping[str, object], property_names: set[str], masked_property_names: set[str]
-    ) -> None:
-        if "and" in filter_ast:
-            self._validate_filter_group(filter_ast["and"], property_names, masked_property_names)
-            return
-        if "or" in filter_ast:
-            self._validate_filter_group(filter_ast["or"], property_names, masked_property_names)
-            return
-        prop = filter_ast.get("property")
-        op = filter_ast.get("op")
-        if prop not in property_names:
-            raise ValidationFailed("object set filter references missing property", details={"property": prop})
-        if prop in masked_property_names:
-            raise ValidationFailed("object set filter references masked property", details={"property": prop})
-        if op not in FILTER_OPERATIONS:
-            raise ValidationFailed("unsupported filter operation", details={"op": op})
-        if "value" not in filter_ast:
-            raise ValidationFailed("object set filter value is required", details={"property": prop})
-
-    def _validate_filter_group(self, items: object, property_names: set[str], masked_property_names: set[str]) -> None:
-        if not isinstance(items, list) or not items:
-            raise ValidationFailed("logical filter group must be a non-empty list")
-        for item in items:
-            if not isinstance(item, dict):
-                raise ValidationFailed("logical filter item must be an object")
-            self._validate_filter_ast(cast(Mapping[str, object], item), property_names, masked_property_names)
 
     def _object_set_payload(
         self,
@@ -370,7 +315,7 @@ class ObjectSetsService(CoreService):
         *,
         include_items: bool,
     ) -> ObjectSetPayload:
-        object_type = self._object_type_by_id(conn, ctx, row["object_type_id"])
+        object_type = object_type_by_id(self.object_set_repository, conn, ctx, row["object_type_id"])
         object_ids, items = self._object_set_members(conn, ctx, object_type["api_name"], row, include_items)
         payload: ObjectSetPayload = {
             "id": row["id"],
@@ -400,6 +345,8 @@ class ObjectSetsService(CoreService):
     ) -> ObjectSetMembers:
         if row["set_type"] == "static":
             return self._static_object_set_members(conn, ctx, object_type_api_name, row, include_items)
+        if row["set_type"] == "search_around":
+            return self._search_around_object_set_members(conn, ctx, object_type_api_name, row, include_items)
         return self._dynamic_object_set_members(ctx, object_type_api_name, row, include_items)
 
     def _static_object_set_members(
@@ -454,6 +401,69 @@ class ObjectSetsService(CoreService):
             include_items=include_items,
         )
 
+    def _search_around_object_set_members(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        row: ObjectSetRow,
+        include_items: bool,
+    ) -> ObjectSetMembers:
+        source_type, filter_ast, hops = search_around_parts(row["definition"]["searchAround"])
+        source_ids = search_around_source_ids(self.object_query_service, ctx, source_type, filter_ast)
+        link_types = link_types_by_api_name(self.ontology_service, conn, ctx)
+        require_search_around_link_reads(
+            hops,
+            lambda link_api: require_link_read_scope(self.osdk_application_service, ctx, link_api),
+        )
+        resolved_type, object_ids = resolve_search_around_object_ids(
+            self.object_read_repository,
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            from_object_type_api_name=source_type,
+            from_object_ids=source_ids,
+            hops=hops,
+            link_types_by_api=link_types,
+        )
+        if resolved_type != object_type_api_name:
+            raise ValidationFailed(
+                "search-around result type does not match the stored object type",
+                details={"declared": object_type_api_name, "resolved": resolved_type},
+            )
+        return self._visible_search_around_members(conn, ctx, object_type_api_name, object_ids, include_items)
+
+    def _visible_search_around_members(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        object_ids: list[str],
+        include_items: bool,
+    ) -> ObjectSetMembers:
+        """Return only active, row-visible traversal targets; no dangling link leaks an id."""
+        records = {
+            record["object_id"]: record
+            for record in self.object_set_repository.active_object_records_by_ids(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_api_name=object_type_api_name,
+                object_ids=object_ids,
+            )
+        }
+        object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+        scope = row_policy_scope(
+            object_type,
+            ctx.roles,
+            self.ontology_service._properties_for_object_type(conn, object_type["id"]),
+        )
+        visible_ids = [oid for oid in object_ids if oid in records and row_visible(scope, records[oid]["properties"])]
+        if not include_items:
+            return visible_ids, []
+        items = [
+            self.object_query_service._object_query_item(ctx, object_type_api_name, records[oid]) for oid in visible_ids
+        ]
+        return visible_ids, items
+
     def _visible_object_set_row(
         self,
         conn: TransactionContext,
@@ -486,15 +496,3 @@ class ObjectSetsService(CoreService):
             object_type_id=object_type_id,
         )
         return [row for row in rows if not object_set_is_expired(row) and can_read_object_set(ctx, row)]
-
-    def _object_type_by_id(
-        self, conn: TransactionContext, ctx: RequestContext, object_type_id: str
-    ) -> ObjectSetObjectTypeRow:
-        row = self.object_set_repository.object_type_by_id(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_id=object_type_id,
-        )
-        if row is None:
-            raise NotFound("object type not found", details={"object_type_id": object_type_id})
-        return row

@@ -6,7 +6,11 @@ from typing import Any, cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ObjectQueryItem, ObjectQueryResult, ObjectRecordRow
-from foundry_lite.application.services.object_store.set_members import collect_dynamic_object_set_members
+from foundry_lite.application.services.object_store import set_members, set_validation
+from foundry_lite.application.services.object_store.set_members import (
+    collect_dynamic_object_set_members,
+    resolve_search_around_object_ids,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -387,3 +391,163 @@ def test_object_set_definition_validation(foundry: FoundryLite) -> None:
             object_ids=["O-404"],
             ctx=ctx,
         )
+
+
+def test_object_set_definition_normalizer_is_directly_executable() -> None:
+    """The pure ObjectSet rule remains testable without starting the full runtime."""
+    normalized = set_validation.normalize_object_set_definition(
+        "Pending orders",
+        set_type="dynamic",
+        definition=None,
+        object_ids=None,
+        filter_ast={"property": "status", "op": "eq", "value": "PENDING"},
+        visibility="public",
+        access_scope=None,
+        lifecycle=None,
+        ttl_seconds=None,
+    )
+    assert normalized["definition"] == {"filter": {"property": "status", "op": "eq", "value": "PENDING"}}
+    assert normalized["visibility"] == "public"
+
+
+def test_search_around_object_set_changes_object_type_across_a_link(foundry: FoundryLite) -> None:
+    """Traversal is set-to-set: filter Orders, hop OrderCustomer, land on Customers.
+
+    This is the capability a filter predicate cannot express — the answer is of a different type
+    than the question, which is exactly why Palantir models it as `searchAround` rather than as
+    another operator inside the filter language.
+    """
+    ctx = prepare_indexed_demo(foundry)
+
+    customers = foundry.objects.create_set(
+        "Customers Behind Pending Orders",
+        "Customer",
+        set_type="search_around",
+        definition={
+            "searchAround": {
+                "from": {
+                    "objectType": "Order",
+                    "filter": {"property": "status", "op": "eq", "value": "PENDING"},
+                },
+                "hops": [{"link": "OrderCustomer"}],
+            }
+        },
+        ctx=ctx,
+    )
+
+    assert customers["objectType"] == "Customer"
+    assert customers["setType"] == "search_around"
+    pending_orders = foundry.objects.query(
+        "Order", filter_ast={"property": "status", "op": "eq", "value": "PENDING"}, ctx=ctx
+    )["items"]
+    expected = {
+        link["to"]["objectId"]
+        for order in pending_orders
+        for link in foundry.objects.links("Order", order["objectId"], "OrderCustomer", ctx=ctx)
+    }
+    assert set(customers["objectIds"]) == expected
+    assert expected
+
+
+def test_search_around_object_set_declared_type_must_match_where_the_chain_lands(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    with pytest.raises(ValidationFailed) as excinfo:
+        foundry.objects.create_set(
+            "Mistyped Traversal",
+            "Order",
+            set_type="search_around",
+            definition={
+                "searchAround": {
+                    "from": {"objectType": "Order", "filter": {}},
+                    "hops": [{"link": "OrderCustomer"}],
+                }
+            },
+            ctx=ctx,
+        )
+    assert excinfo.value.details["resolved"] == "Customer"
+
+
+def test_search_around_object_set_refuses_a_chain_longer_than_palantirs_limit(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    with pytest.raises(ValidationFailed) as excinfo:
+        foundry.objects.create_set(
+            "Too Many Hops",
+            "Customer",
+            set_type="search_around",
+            definition={
+                "searchAround": {
+                    "from": {"objectType": "Order", "filter": {}},
+                    "hops": [{"link": "OrderCustomer"}] * 4,
+                }
+            },
+            ctx=ctx,
+        )
+    assert excinfo.value.details == {"hops": 4, "maxHops": 3}
+
+
+def test_search_around_object_set_follows_the_same_link_from_its_reverse_endpoint(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    customer = foundry.objects.query("Customer", ctx=ctx, limit=1)["items"][0]
+    customer_id = customer["properties"]["customerId"]
+    orders = foundry.objects.create_set(
+        "Orders For One Customer",
+        "Order",
+        set_type="search_around",
+        definition={
+            "searchAround": {
+                "from": {
+                    "objectType": "Customer",
+                    "filter": {"property": "customerId", "op": "eq", "value": customer_id},
+                },
+                "hops": [{"link": "OrderCustomer"}],
+            }
+        },
+        ctx=ctx,
+    )
+
+    expected = {
+        item["objectId"]
+        for item in foundry.objects.query("Order", ctx=ctx, limit=200)["items"]
+        if item["properties"]["customerId"] == customer_id
+    }
+    assert orders["objectType"] == "Order"
+    assert set(orders["objectIds"]) == expected
+
+
+def test_search_around_stops_before_reading_more_links_after_the_result_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local cap must bound the work, not merely reject after buffering every candidate."""
+    monkeypatch.setattr(set_members, "SEARCH_AROUND_RESULT_LIMIT", 2)
+
+    class LinkReader:
+        calls: list[str] = []
+
+        def active_links_from(self, **kwargs: object) -> list[dict[str, object]]:
+            object_id = str(kwargs["from_object_id"])
+            self.calls.append(object_id)
+            return [{"to_object_id": f"target-{index}"} for index in range(3)]
+
+        def active_links_to(self, **kwargs: object) -> list[dict[str, object]]:
+            raise AssertionError("the forward link must not use the reverse read")
+
+    reader = LinkReader()
+    with pytest.raises(ValidationFailed) as excinfo:
+        resolve_search_around_object_ids(
+            cast(Any, reader),
+            transaction=cast(Any, object()),
+            tenant_id="tenant-a",
+            from_object_type_api_name="Order",
+            from_object_ids=["first", "second"],
+            hops=[{"link": "OrderCustomer"}],
+            link_types_by_api={"OrderCustomer": {"from_api_name": "Order", "to_api_name": "Customer"}},
+        )
+
+    assert excinfo.value.details == {"linkType": "OrderCustomer", "limit": 2}
+    assert reader.calls == ["first"]

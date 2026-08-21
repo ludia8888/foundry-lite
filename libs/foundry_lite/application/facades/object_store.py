@@ -264,6 +264,23 @@ class ObjectStore:
             ttl_seconds=ttl_seconds,
         )
 
+    def search_around(
+        self,
+        from_object_type_api_name: str,
+        link_types: Sequence[str],
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        include_items: bool = True,
+    ) -> dict[str, object]:
+        return self._objects.sets.resolve_search_around(
+            from_object_type_api_name,
+            link_types,
+            ctx=ctx,
+            filter_ast=filter_ast,
+            include_items=include_items,
+        )
+
     def get_set(
         self, set_id: str, *, ctx: RequestContext | None = None, include_items: bool = True
     ) -> ObjectSetPayload:

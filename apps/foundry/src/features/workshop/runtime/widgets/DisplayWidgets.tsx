@@ -1,4 +1,5 @@
 import type { GenericObject } from "@foundry-lite/sdk";
+import { useFoundryLiteClient, useFoundryLiteQuery } from "@foundry-lite/sdk/react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowDown,
@@ -14,7 +15,7 @@ import {
   Play,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { StatusPill } from "@/components/shared/StatusPill";
 import { cn } from "@/lib/utils";
@@ -905,6 +906,90 @@ export function LinksWidget(props: WidgetRuntimeProps) {
             <StatusPill intent="neutral">{link.cardinality}</StatusPill>
           </div>
         ))
+      )}
+    </WidgetFrame>
+  );
+}
+
+/**
+ * 객체 링크 순회: 선택한 객체에서 하나의 링크 타입을 따라가 실제 이웃 객체를 보여준다.
+ *
+ * `LinksWidget` 과 다르다. 저쪽은 온톨로지 메타데이터에서 링크 *타입 정의*를 나열할 뿐이라
+ * "Post → Concern (many_to_many)" 까지만 보여준다. 이 위젯은 실제 순회를 해서 "이 게시글은
+ * 여드름·건조·피지유분을 말하고 있다"를 보여준다 — 다대다 관계를 화면에서 확인할 유일한 방법.
+ */
+export function ObjectLinksWidget(props: WidgetRuntimeProps) {
+  const { widget } = props;
+  const objectApiName = widget.config.objectApiName ?? null;
+  const linkTypeApiName = widget.config.linkTypeApiName ?? null;
+  const { allObjects } = useWidgetObjects(objectApiName);
+  const state = useRuntimeState();
+  const dispatch = useRuntimeDispatch();
+  const client = useFoundryLiteClient();
+  const object = selectedObjectFrom(allObjects, state.selectedObjectId);
+  const objectId = object?.objectId ?? null;
+
+  const load = useCallback(async () => {
+    if (!objectApiName || !linkTypeApiName || !objectId) return [];
+    return client.objects.generic.links(objectApiName, objectId, linkTypeApiName);
+  }, [client, objectApiName, linkTypeApiName, objectId]);
+  const query = useFoundryLiteQuery(
+    ["workshop-object-links", objectApiName ?? "none", linkTypeApiName ?? "none", objectId ?? "none"],
+    load,
+    { enabled: Boolean(objectApiName && linkTypeApiName && objectId) },
+  );
+  const links = query.data ?? [];
+
+  if (!objectApiName) return MISSING_OBJECT;
+
+  const title = widget.config.title || linkTypeApiName || "관계";
+  if (!linkTypeApiName) {
+    return (
+      <WidgetFrame title={title}>
+        <WidgetPlaceholder label="링크 타입을 선택하세요" />
+      </WidgetFrame>
+    );
+  }
+  if (!objectId) {
+    return (
+      <WidgetFrame title={title} subtitle={linkTypeApiName}>
+        <WidgetPlaceholder label="객체를 선택하면 연결된 대상을 표시합니다" />
+      </WidgetFrame>
+    );
+  }
+  return (
+    <WidgetFrame
+      title={title}
+      subtitle={`${object ? objectTitleOf(object, objectViewFor(props, objectApiName)) : objectId} · ${links.length}개`}
+      className="min-h-[140px]"
+      bodyClassName="overflow-auto p-2 space-y-1"
+    >
+      {query.isLoading ? (
+        <WidgetPlaceholder label="불러오는 중" />
+      ) : links.length === 0 ? (
+        <WidgetPlaceholder label="연결된 대상이 없습니다" />
+      ) : (
+        links.map((link) => {
+          const target = link.to;
+          const label =
+            (target.properties?.name as string | undefined) ??
+            (target.properties?.title as string | undefined) ??
+            target.objectId;
+          return (
+            <button
+              key={`${link.linkType}-${target.objectId}`}
+              type="button"
+              onClick={() => dispatch({ type: "selectObject", objectId: target.objectId })}
+              className="flex w-full items-center gap-2 rounded border border-[#e4e9ed] px-2.5 py-2 text-left hover:bg-[#f6f7f9]"
+            >
+              <Link2 className="size-3.5 shrink-0 text-[#00847a]" />
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#1c2127]">
+                {label}
+              </span>
+              <StatusPill intent="neutral">{target.objectType}</StatusPill>
+            </button>
+          );
+        })
       )}
     </WidgetFrame>
   );

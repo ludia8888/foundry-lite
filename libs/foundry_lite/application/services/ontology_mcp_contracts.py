@@ -103,6 +103,25 @@ class OntologyMcpObjectRuntime(Protocol):
         semantic_text: str | None = None,
     ) -> ObjectQueryResult: ...
 
+    def links(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        link_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> Sequence[Mapping[str, object]]: ...
+
+    def search_around(
+        self,
+        from_object_type_api_name: str,
+        link_types: Sequence[str],
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        include_items: bool = True,
+    ) -> Mapping[str, object]: ...
+
 
 class OntologyMcpActionRuntime(Protocol):
     def get(self, action_api_name: str, *, ctx: RequestContext | None = None) -> ActionCatalogItem: ...
