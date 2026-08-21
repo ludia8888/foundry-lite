@@ -219,13 +219,22 @@ def test_upgrade_prepulls_images_before_running_atomic_helm_upgrade(tmp_path: Pa
     token = tmp_path / "token"
     token.write_text("registry-token", encoding="utf-8")
     calls: list[str] = []
+    contract = tmp_path / "contract.json"
+    contract.write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(subject, "_assert_deployed_release", lambda _args: calls.append("release"))
+    monkeypatch.setattr(subject, "_write_upgrade_runtime_contract", lambda _args: calls.append("contract") or contract)
     monkeypatch.setattr(
         subject,
         "_prepull_images",
         lambda _manifest, _token: calls.append("prepull") or {"status": "passed"},
     )
-    monkeypatch.setattr(subject, "_helm_upgrade", lambda *_args: calls.append("helm") or {"returnCode": 0})
+
+    def helm_upgrade(*arguments: object) -> dict[str, object]:
+        calls.append("helm")
+        assert arguments[2] == (values, contract)
+        return {"returnCode": 0}
+
+    monkeypatch.setattr(subject, "_helm_upgrade", helm_upgrade)
     monkeypatch.setattr(subject, "_collect_evidence", lambda _args: {"helmRevision": 3})
     monkeypatch.setattr(subject, "write_json_receipt", lambda _path, _receipt: calls.append("receipt"))
 
@@ -240,7 +249,24 @@ def test_upgrade_prepulls_images_before_running_atomic_helm_upgrade(tmp_path: Pa
         )
     )
 
-    assert calls == ["release", "prepull", "helm", "receipt"]
+    assert calls == ["release", "contract", "prepull", "helm", "receipt"]
+
+
+def test_runtime_contract_preserves_embedded_oauth_empty_values() -> None:
+    contract = subject._runtime_contract_values(
+        {
+            "global": {"protectedProfile": False, "runtimeProfile": "test"},
+            "secrets": {"applicationExistingSecret": "foundry-lite-application"},
+            "auth": {"profile": "header-trust", "localOAuthIssuer": "https://foundry.invalid"},
+            "mcp": {"authorizationServer": "", "publicBaseUrl": "https://foundry.invalid"},
+            "external": {"oidc": {"discoveryUrl": ""}},
+            "qaDependencies": {"keycloak": {"publicBaseUrl": "https://identity.invalid"}},
+        }
+    )
+
+    assert contract["global"] == {"protectedProfile": False, "runtimeProfile": "test"}
+    assert contract["mcp"] == {"authorizationServer": "", "publicBaseUrl": "https://foundry.invalid"}
+    assert contract["external"] == {"oidc": {"discoveryUrl": ""}}
 
 
 def test_helm_upgrade_cannot_install_a_missing_release(monkeypatch, tmp_path: Path) -> None:
