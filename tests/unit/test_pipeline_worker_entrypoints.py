@@ -66,12 +66,14 @@ def test_pipeline_control_uses_runtime_home_without_schema_ddl(monkeypatch, tmp_
 
     monkeypatch.setenv("FOUNDRY_LITE_HOME", str(tmp_path / "runtime"))
     monkeypatch.setenv("FOUNDRY_LITE_DB_URL", "postgresql://database.invalid/foundry_lite")
+    monkeypatch.setenv("FOUNDRY_LITE_ADAPTER_PROFILE", "s3-storage")
     monkeypatch.setattr(pipeline_control, "create_runtime_core_dependencies", create_dependencies)
     monkeypatch.setattr(pipeline_control, "FoundryLite", foundry_lite)
 
     pipeline_control.run_control_loop(stop)
 
     assert captured_dependencies["storage_root"] == str(tmp_path / "runtime")
+    assert captured_dependencies["adapter_profile"] == "s3-storage"
     assert captured_foundry == {"dependencies": dependencies, "should_initialize_schema": False}
     assert close_calls == ["close"]
 

@@ -21,6 +21,7 @@ def run_control_loop(stop_event: Event | None = None) -> None:
         dependencies=create_runtime_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
             storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+            adapter_profile=os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local"),
         ),
         should_initialize_schema=False,
     )
