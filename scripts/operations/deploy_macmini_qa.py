@@ -331,7 +331,15 @@ def _helm_upgrade(
     value_files: tuple[Path, ...],
     override: Path,
 ) -> dict[str, object]:
-    command = [args.helm, "upgrade", _RELEASE, str(chart), "--namespace", args.namespace, "--reuse-values"]
+    command = [
+        args.helm,
+        "upgrade",
+        _RELEASE,
+        str(chart),
+        "--namespace",
+        args.namespace,
+        "--reset-then-reuse-values",
+    ]
     for path in (*value_files, override):
         command.extend(("--values", str(path)))
     command.extend(("--atomic", "--wait", "--wait-for-jobs", "--timeout", "30m"))
