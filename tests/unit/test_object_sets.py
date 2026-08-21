@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ObjectQueryItem, ObjectQueryResult, ObjectRecordRow
-from foundry_lite.application.services.object_store import set_members, set_validation
+from foundry_lite.application.services.object_store import set_members, set_search_around, set_validation
 from foundry_lite.application.services.object_store.set_members import (
     collect_dynamic_object_set_members,
     resolve_search_around_object_ids,
@@ -551,3 +551,33 @@ def test_search_around_stops_before_reading_more_links_after_the_result_bound(
 
     assert excinfo.value.details == {"linkType": "OrderCustomer", "limit": 2}
     assert reader.calls == ["first"]
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        None,
+        {},
+        {"from": {}},
+        {"from": {"objectType": "Order", "filter": ["invalid"]}, "hops": [{"link": "OrderCustomer"}]},
+        {"from": {"objectType": "Order"}, "hops": []},
+        {"from": {"objectType": "Order"}, "hops": [{"link": "OrderCustomer"}] * 4},
+        {"from": {"objectType": "Order"}, "hops": ["not-an-object"]},
+    ],
+)
+def test_search_around_definition_rejects_malformed_source_and_hops(definition: object) -> None:
+    with pytest.raises(ValidationFailed):
+        set_search_around.search_around_parts(definition)
+
+
+def test_search_around_definition_parses_a_bounded_source_and_hop() -> None:
+    source_type, filter_ast, hops = set_search_around.search_around_parts(
+        {
+            "from": {"objectType": "Order", "filter": {"property": "status", "op": "eq", "value": "PENDING"}},
+            "hops": [{"link": "OrderCustomer"}],
+        }
+    )
+
+    assert source_type == "Order"
+    assert filter_ast == {"property": "status", "op": "eq", "value": "PENDING"}
+    assert hops == [{"link": "OrderCustomer"}]

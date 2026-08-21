@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.services import ontology_derived_property_validation as derived_property_validation
+from foundry_lite.application.services.ontology_derived_property_definition import property_derivation_from_value
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -396,3 +397,96 @@ def test_link_derived_property_validation_rule_is_directly_executable() -> None:
     }
 
     derived_property_validation.validate_derived_properties(customer, {"Customer": customer, "Order": order}, links)
+
+
+def test_property_derivation_parser_preserves_supported_fields_and_rejects_invalid_values() -> None:
+    assert property_derivation_from_value(
+        {"expression": "source.amount", "link": "CustomerOrders", "aggregation": "sum", "property": "amount"}
+    ) == {
+        "expression": "source.amount",
+        "link": "CustomerOrders",
+        "aggregation": "sum",
+        "property": "amount",
+    }
+
+    with pytest.raises(ValidationFailed, match="mapping"):
+        property_derivation_from_value(["not-a-mapping"])
+    with pytest.raises(ValidationFailed, match="aggregation must be a string"):
+        property_derivation_from_value({"aggregation": 1})
+
+
+def test_link_derived_property_validation_rejects_every_non_scalar_contract_edge() -> None:
+    order = {
+        "apiName": "Order",
+        "primaryKey": "id",
+        "properties": [
+            {"apiName": "id", "type": "string"},
+            {"apiName": "amount", "type": "float"},
+        ],
+    }
+    base_customer = {
+        "apiName": "Customer",
+        "primaryKey": "id",
+        "properties": [{"apiName": "id", "type": "string"}],
+    }
+    customer_orders = {
+        "apiName": "CustomerOrders",
+        "from": "Customer",
+        "to": "Order",
+        "cardinality": "many_to_many",
+    }
+    customer_order = {**customer_orders, "cardinality": "many_to_one"}
+    cases = (
+        ({"apiName": "derived", "type": "integer", "derivation": []}, {"CustomerOrders": customer_orders}),
+        (
+            {"apiName": "derived", "type": "integer", "derivation": {"unknown": "value"}},
+            {"CustomerOrders": customer_orders},
+        ),
+        (
+            {"apiName": "id", "type": "string", "derivation": {"link": "CustomerOrders", "aggregation": "count"}},
+            {"CustomerOrders": customer_orders},
+        ),
+        (
+            {
+                "apiName": "derived",
+                "type": "integer",
+                "column": "derived",
+                "derivation": {"link": "CustomerOrders", "aggregation": "count"},
+            },
+            {"CustomerOrders": customer_orders},
+        ),
+        (
+            {"apiName": "derived", "type": "integer", "derivation": {"link": "Unknown", "aggregation": "count"}},
+            {"CustomerOrders": customer_orders},
+        ),
+        (
+            {"apiName": "derived", "type": "string", "derivation": {"link": "CustomerOrder", "property": "amount"}},
+            {"CustomerOrder": customer_order},
+        ),
+        (
+            {"apiName": "derived", "type": "float", "derivation": {"link": "CustomerOrder", "property": "missing"}},
+            {"CustomerOrder": customer_order},
+        ),
+        (
+            {"apiName": "derived", "type": "float", "derivation": {"link": "CustomerOrder"}},
+            {"CustomerOrder": customer_order},
+        ),
+        (
+            {"apiName": "derived", "type": "float", "derivation": {"link": "CustomerOrder", "aggregation": "sum"}},
+            {"CustomerOrder": customer_order},
+        ),
+        (
+            {
+                "apiName": "derived",
+                "type": "float",
+                "derivation": {"link": "CustomerOrder", "aggregation": "mode", "property": "amount"},
+            },
+            {"CustomerOrder": customer_order},
+        ),
+    )
+    for prop, links in cases:
+        customer = {**base_customer, "properties": [*base_customer["properties"], prop]}
+        with pytest.raises(ValidationFailed):
+            derived_property_validation.validate_derived_properties(
+                customer, {"Customer": customer, "Order": order}, links
+            )

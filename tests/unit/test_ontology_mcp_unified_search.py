@@ -19,7 +19,8 @@ from typing import cast
 
 import pytest
 from foundry_lite.application.services.ontology_mcp_tools import object_tools
-from foundry_lite.application.services.ontology_mcp_unified_search import _unified_hit_payload
+from foundry_lite.application.services.ontology_mcp_unified_search import _unified_hit_payload, execute_object_tool
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.platform.scopes import resource_scope
 
 
@@ -58,6 +59,36 @@ class _RecordingUnifiedSearch:
     ) -> Sequence[_Hit]:
         self.calls.append({"query_text": query_text, "object_type": object_type, "filters": filters, "limit": limit})
         return self.hits
+
+
+class _RecordingObjects:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    def get(self, name: str, object_id: str, *, ctx: RequestContext) -> Mapping[str, object]:
+        self.calls.append(("get", (name, object_id, ctx.tenant_id)))
+        return {"objectId": object_id}
+
+    def query(self, name: str, *, ctx: RequestContext, **kwargs: object) -> Mapping[str, object]:
+        self.calls.append(("query", (name, kwargs, ctx.tenant_id)))
+        return {"items": []}
+
+    def links(
+        self, name: str, object_id: str, link_type: str, *, ctx: RequestContext
+    ) -> Sequence[Mapping[str, object]]:
+        self.calls.append(("links", (name, object_id, link_type, ctx.tenant_id)))
+        return ({"to": {"objectId": "C-1"}},)
+
+    def search_around(
+        self,
+        name: str,
+        link_types: Sequence[str],
+        *,
+        ctx: RequestContext,
+        filter_ast: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
+        self.calls.append(("searchAround", (name, list(link_types), filter_ast, ctx.tenant_id)))
+        return {"objectIds": ["C-1"]}
 
 
 def _read_scopes(name: str) -> tuple[str, ...]:
@@ -152,3 +183,46 @@ def test_runtime_receives_the_object_type_and_bounded_limit(limit: int) -> None:
     runtime.unified_search(object(), query_text="late shipment", object_type="Order", limit=limit)
 
     assert runtime.calls == [{"query_text": "late shipment", "object_type": "Order", "filters": None, "limit": limit}]
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments", "expected"),
+    [
+        ("get", {"objectId": "O-1"}, {"objectId": "O-1"}),
+        ("search", {"filter": {"property": "status", "op": "eq", "value": "PENDING"}, "limit": 2}, {"items": []}),
+        (
+            "links",
+            {"objectId": "O-1", "linkType": "OrderCustomer"},
+            {"linkType": "OrderCustomer", "links": [{"to": {"objectId": "C-1"}}]},
+        ),
+        (
+            "searchAround",
+            {"linkTypes": ["OrderCustomer"], "filter": {"property": "status", "op": "eq", "value": "PENDING"}},
+            {"objectIds": ["C-1"]},
+        ),
+        ("unifiedSearch", {"query": "late shipment", "limit": 1}, {"hits": []}),
+    ],
+)
+def test_object_tool_dispatches_every_object_read_operation(
+    operation: str,
+    arguments: Mapping[str, object],
+    expected: Mapping[str, object],
+) -> None:
+    objects = _RecordingObjects()
+    unified_search = _RecordingUnifiedSearch([])
+    ctx = RequestContext(tenant_id="tenant-a")
+    granted: list[tuple[str, str]] = []
+
+    result = execute_object_tool(
+        objects=objects,
+        unified_search=unified_search,
+        require_object_read=lambda active_ctx, name: granted.append((active_ctx.tenant_id, name)),
+        object_context=lambda active_ctx, _name: active_ctx,
+        ctx=ctx,
+        name="Order",
+        operation=operation,
+        arguments=arguments,
+    )
+
+    assert result == expected
+    assert granted == [("tenant-a", "Order")]
