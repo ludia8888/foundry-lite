@@ -95,11 +95,20 @@ def upgrade(args: argparse.Namespace) -> dict[str, object]:
     manifest = _load_manifest(_qa_input_path(args.image_manifest, is_directory=False))
     token = _qa_input_path(args.registry_token_file, is_directory=False)
     _assert_deployed_release(args)
+    runtime_contract = _write_upgrade_runtime_contract(args)
     image_prepull = _prepull_images(manifest, token)
     override = _write_runtime_override(args.run_id, manifest)
-    helm_result = _helm_upgrade(args, chart, (values,), override)
+    helm_result = _helm_upgrade(args, chart, (values, runtime_contract), override)
     evidence = _collect_evidence(args)
-    receipt = _upgrade_receipt(args, manifest, values, override, image_prepull, helm_result, evidence)
+    receipt = _upgrade_receipt(
+        args,
+        manifest,
+        (values, runtime_contract),
+        override,
+        image_prepull,
+        helm_result,
+        evidence,
+    )
     target = QA_ROOT / "evidence" / args.run_id / "upgrade-receipt.json"
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_json_receipt(target, receipt)
@@ -296,6 +305,73 @@ def _write_runtime_override(run_id: str, manifest: dict[str, object]) -> Path:
     return override
 
 
+def _write_upgrade_runtime_contract(args: argparse.Namespace) -> Path:
+    current = _current_helm_values(args)
+    contract = _runtime_contract_values(current)
+    override = QA_ROOT / "state" / f"{args.run_id}-runtime-contract.json"
+    _write_private_json(override, contract)
+    return override
+
+
+def _current_helm_values(args: argparse.Namespace) -> dict[str, object]:
+    result = subprocess.run(  # nosec B603 - fixed Helm get-values argv under the Mac mini guard.
+        (
+            args.helm,
+            "get",
+            "values",
+            _RELEASE,
+            "--namespace",
+            args.namespace,
+            "--kubeconfig",
+            args.kubeconfig,
+            "--all",
+            "--output",
+            "json",
+        ),
+        check=False,
+        capture_output=True,
+        timeout=60,
+    )
+    if result.returncode != 0 or len(result.stdout) > 16 * 1024 * 1024:
+        raise RuntimeError("macmini_qa_upgrade_runtime_contract_read_failed")
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("macmini_qa_upgrade_runtime_contract_read_failed") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("macmini_qa_upgrade_runtime_contract_read_failed")
+    return cast(dict[str, object], value)
+
+
+def _runtime_contract_values(current: dict[str, object]) -> dict[str, object]:
+    global_values = _runtime_contract_mapping(current, "global")
+    auth = _runtime_contract_mapping(current, "auth")
+    mcp = _runtime_contract_mapping(current, "mcp")
+    secrets = _runtime_contract_mapping(current, "secrets")
+    external = _runtime_contract_mapping(current, "external")
+    qa_dependencies = _runtime_contract_mapping(current, "qaDependencies")
+    oidc = _runtime_contract_mapping(external, "oidc")
+    keycloak = _runtime_contract_mapping(qa_dependencies, "keycloak")
+    return {
+        "global": {
+            "protectedProfile": global_values.get("protectedProfile"),
+            "runtimeProfile": global_values.get("runtimeProfile"),
+        },
+        "secrets": {"applicationExistingSecret": secrets.get("applicationExistingSecret")},
+        "auth": auth,
+        "mcp": mcp,
+        "external": {"oidc": oidc},
+        "qaDependencies": {"keycloak": {"publicBaseUrl": keycloak.get("publicBaseUrl")}},
+    }
+
+
+def _runtime_contract_mapping(source: dict[str, object], key: str) -> dict[str, object]:
+    value = source.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeError("macmini_qa_upgrade_runtime_contract_invalid")
+    return cast(dict[str, object], value)
+
+
 def _helm(
     args: argparse.Namespace,
     chart: Path,
@@ -453,7 +529,7 @@ def _receipt(
 def _upgrade_receipt(
     args: argparse.Namespace,
     manifest: dict[str, object],
-    values: Path,
+    value_files: tuple[Path, ...],
     override: Path,
     image_prepull: dict[str, object],
     helm_result: dict[str, object],
@@ -467,7 +543,7 @@ def _upgrade_receipt(
         "namespace": args.namespace,
         "gitRevision": manifest["revision"],
         "images": manifest["images"],
-        "valuesSha256": _hash_paths((values, override)),
+        "valuesSha256": _hash_paths((*value_files, override)),
         "imagePrepull": image_prepull,
         "upgrade": helm_result,
         "evidence": evidence,
