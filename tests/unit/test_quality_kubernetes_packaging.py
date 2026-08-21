@@ -186,11 +186,11 @@ def test_tempo_qa_profile_bounds_ingester_memory_and_declares_its_resources() ->
         "rateLimitBytes": 4194304,
         "burstSizeBytes": 8388608,
         "maxTracesPerUser": 2000,
-        "maxAttributeBytes": 2048,
         "maxBytesPerTrace": 5242880,
     }
     assert "rate_limit_bytes: {{ .Values.qaDependencies.tempo.limits.rateLimitBytes }}" in config
     assert "max_bytes_per_trace: {{ .Values.qaDependencies.tempo.limits.maxBytesPerTrace }}" in config
+    assert "max_attribute_bytes" not in config
 
 
 def test_kafka_outbox_subscription_is_packaged_for_runtime_and_macmini() -> None:
