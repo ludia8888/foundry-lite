@@ -177,7 +177,6 @@ qaDependencies:
       rateLimitBytes: 4194304
       burstSizeBytes: 8388608
       maxTracesPerUser: 2000
-      maxAttributeBytes: 2048
       maxBytesPerTrace: 5242880
   grafana:
     image: docker.io/grafana/grafana@sha256:bde5c7baab9cae482cf7ef7a4c4e6b52d035e4e7a4f9784fca3a875c8a459291
