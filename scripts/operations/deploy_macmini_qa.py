@@ -478,6 +478,7 @@ def _helm_upgrade(
         str(chart),
         "--namespace",
         args.namespace,
+        "--force-conflicts",
         "--reset-then-reuse-values",
     ]
     for path in (*value_files, override):
@@ -488,7 +489,11 @@ def _helm_upgrade(
     )
     if completed.returncode != 0:
         raise RuntimeError("macmini_qa_helm_upgrade_failed")
-    return {"phase": "upgrade", "returnCode": 0}
+    return {
+        "phase": "upgrade",
+        "returnCode": 0,
+        "fieldConflictPolicy": "chart_authoritative",
+    }
 
 
 def _collect_evidence(args: argparse.Namespace) -> dict[str, object]:

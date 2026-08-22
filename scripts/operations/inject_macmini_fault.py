@@ -622,6 +622,7 @@ def _invalid_image_fault(args: argparse.Namespace) -> dict[str, object]:
                 "image",
                 f"deployment/{_API_DEPLOYMENT}",
                 f"{_API_CONTAINER}={invalid_image}",
+                "--field-manager=helm",
             ),
             30,
         ),
@@ -648,6 +649,7 @@ def _invalid_image_fault(args: argparse.Namespace) -> dict[str, object]:
         "invalidRevisionRejected": has_rejected_revision,
         "previousCapacityMaintained": has_kept_capacity,
         "originalImageRestored": is_restored,
+        "fieldManager": "helm",
         "recoveryTargetSeconds": 120,
     }
 
@@ -928,7 +930,13 @@ def _pvc_disk_pressure_fault(args: argparse.Namespace) -> dict[str, object]:
 def _restore_api_image(args: argparse.Namespace, image: str) -> None:
     restored = _kubectl(
         args,
-        ("set", "image", f"deployment/{_API_DEPLOYMENT}", f"{_API_CONTAINER}={image}"),
+        (
+            "set",
+            "image",
+            f"deployment/{_API_DEPLOYMENT}",
+            f"{_API_CONTAINER}={image}",
+            "--field-manager=helm",
+        ),
         30,
     )
     _require_success(restored, "macmini_fault_invalid_image_restore_failed")
