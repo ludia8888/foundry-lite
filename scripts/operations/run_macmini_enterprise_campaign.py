@@ -28,6 +28,7 @@ from scripts.operations.macmini_qa_guard import (
 )
 
 _PYTHONPATH = ".:libs:apps/cli:apps/api:apps/worker"
+_REMEDIATION_SOURCE_STATUSES = frozenset({"failed", "skipped"})
 
 
 def run_campaign(args: argparse.Namespace) -> dict[str, object]:
@@ -75,7 +76,7 @@ def run_campaign(args: argparse.Namespace) -> dict[str, object]:
                 receipt = _skipped_receipt(event, scheduled_at, "prior_recovery_failure")
             else:
                 receipt = _run_event(args, event, scheduled_at)
-            if _is_mutating(event) and receipt.get("status") != "passed":
+            if _blocks_later_mutations(event, receipt):
                 mutation_allowed = False
             event_receipts.append(receipt)
             _append_journal(journal, receipt)
@@ -87,6 +88,112 @@ def run_campaign(args: argparse.Namespace) -> dict[str, object]:
     summary = _campaign_summary(args.run_id, started_at, event_receipts, soak_return_code, soak_summary)
     write_json_receipt(target / "summary.json", summary)
     return summary
+
+
+def run_remediation(args: argparse.Namespace) -> dict[str, object]:
+    assert_host_boundary()
+    assert_namespace(args.namespace)
+    _validate_paths(args)
+    started_at = datetime.now(UTC)
+    events, source_journal = _remediation_events(args.rerun_failed_and_skipped_from_run_id)
+    target = _campaign_directory(args.run_id)
+    write_json_receipt(target / "plan.json", _remediation_plan(args, events, source_journal, started_at))
+    receipts = _run_remediation_events(args, events, target)
+    summary = _remediation_summary(args, receipts, source_journal, started_at)
+    write_json_receipt(target / "summary.json", summary)
+    return summary
+
+
+def _run_remediation_events(
+    args: argparse.Namespace,
+    events: tuple[CampaignEvent, ...],
+    target: Path,
+) -> list[dict[str, object]]:
+    receipts: list[dict[str, object]] = []
+    mutation_allowed = True
+    journal = _open_journal(target / "journal.ndjson")
+    try:
+        for index, event in enumerate(events, start=1):
+            scheduled_at = datetime.now(UTC)
+            receipt = (
+                _run_event(args, event, scheduled_at)
+                if mutation_allowed
+                else _skipped_receipt(event, scheduled_at, "prior_recovery_failure")
+            )
+            mutation_allowed = mutation_allowed and not _blocks_later_mutations(event, receipt)
+            receipts.append(receipt)
+            _append_journal(journal, receipt)
+            write_json_receipt(target / "events" / f"{index:02d}-{event.event_id}.json", receipt)
+    finally:
+        journal.close()
+    return receipts
+
+
+def _remediation_events(source_run_id: str) -> tuple[tuple[CampaignEvent, ...], bytes]:
+    source = QA_ROOT / "evidence" / _validated_run_id(source_run_id) / "campaign" / "journal.ndjson"
+    raw = source.read_bytes()
+    if not raw or len(raw) > 1024 * 1024:
+        raise ValueError("macmini_campaign_source_journal_invalid")
+    selected_ids = _selected_remediation_event_ids(raw)
+    events = tuple(event for event in EVENTS if event.event_id in selected_ids)
+    if not events or len(events) != len(selected_ids):
+        raise ValueError("macmini_campaign_remediation_events_invalid")
+    return events, raw
+
+
+def _selected_remediation_event_ids(raw: bytes) -> set[str]:
+    selected: set[str] = set()
+    try:
+        rows = [json.loads(line) for line in raw.splitlines() if line]
+    except json.JSONDecodeError as exc:
+        raise ValueError("macmini_campaign_source_journal_invalid") from exc
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("macmini_campaign_source_journal_invalid")
+        event_id = row.get("eventId")
+        if row.get("status") in _REMEDIATION_SOURCE_STATUSES and isinstance(event_id, str):
+            selected.add(event_id)
+    return selected
+
+
+def _remediation_plan(
+    args: argparse.Namespace,
+    events: tuple[CampaignEvent, ...],
+    source_journal: bytes,
+    started_at: datetime,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "scope": "failed-and-skipped-events-only",
+        "runId": args.run_id,
+        "sourceRunId": args.rerun_failed_and_skipped_from_run_id,
+        "startedAt": started_at.isoformat(),
+        "sourceJournalSha256": _sha256(source_journal),
+        "eventIds": [event.event_id for event in events],
+    }
+
+
+def _remediation_summary(
+    args: argparse.Namespace,
+    receipts: list[dict[str, object]],
+    source_journal: bytes,
+    started_at: datetime,
+) -> dict[str, object]:
+    statuses = [str(receipt.get("status")) for receipt in receipts]
+    is_passed = bool(statuses) and all(status == "passed" for status in statuses)
+    return {
+        "schemaVersion": 1,
+        "status": "passed" if is_passed else "failed",
+        "scope": "failed-and-skipped-events-only",
+        "runId": args.run_id,
+        "sourceRunId": args.rerun_failed_and_skipped_from_run_id,
+        "startedAt": started_at.isoformat(),
+        "endedAt": datetime.now(UTC).isoformat(),
+        "sourceJournalSha256": _sha256(source_journal),
+        "eventCounts": {value: statuses.count(value) for value in ("passed", "failed", "skipped")},
+        "full24HourCampaignStatus": "notProven",
+        "p0P1Clear": False,
+    }
 
 
 def _run_event(args: argparse.Namespace, event: CampaignEvent, scheduled_at: datetime) -> dict[str, object]:
@@ -458,6 +565,10 @@ def _recovery_passed(value: object) -> bool:
     return value is None or isinstance(value, dict) and value.get("status") == "passed"
 
 
+def _blocks_later_mutations(event: CampaignEvent, receipt: dict[str, object]) -> bool:
+    return _is_mutating(event) and not _recovery_passed(receipt.get("recovery"))
+
+
 def _is_mutating(event: CampaignEvent) -> bool:
     return event.kind in {"fault", "dr"}
 
@@ -483,11 +594,15 @@ def _sha256(value: bytes) -> str:
 
 
 def _campaign_directory(run_id: str) -> Path:
-    if not run_id or not all(value.isalnum() or value in "-_" for value in run_id):
-        raise ValueError("macmini_campaign_run_id_invalid")
-    target = QA_ROOT / "evidence" / run_id / "campaign"
+    target = QA_ROOT / "evidence" / _validated_run_id(run_id) / "campaign"
     (target / "events").mkdir(mode=0o700, parents=True, exist_ok=False)
     return target
+
+
+def _validated_run_id(run_id: str) -> str:
+    if not run_id or not all(value.isalnum() or value in "-_" for value in run_id):
+        raise ValueError("macmini_campaign_run_id_invalid")
+    return run_id
 
 
 def _open_journal(path: Path) -> BinaryIO:
@@ -558,7 +673,9 @@ def main() -> int:
     parser.add_argument("--start-delay-seconds", type=int, default=60)
     parser.add_argument("--current-commit", required=True)
     parser.add_argument("--rollback-commit", required=True)
-    summary = run_campaign(parser.parse_args())
+    parser.add_argument("--rerun-failed-and-skipped-from-run-id", default="")
+    args = parser.parse_args()
+    summary = run_remediation(args) if args.rerun_failed_and_skipped_from_run_id else run_campaign(args)
     print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
     return 0 if summary["status"] == "passed" else 1
 

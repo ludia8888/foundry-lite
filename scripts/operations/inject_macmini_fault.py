@@ -182,18 +182,22 @@ def _signal_fault(
     process_after = _pid_one_identity(args, pod, container)
     runtime_after = _runtime_container_target(after)
     restarted = _restart_observed(before, after)
-    terminated = _termination_observed(after, expected_signal)
+    signal_termination_observed = _termination_observed(after, expected_signal)
+    graceful_termination_observed = _graceful_termination_observed(after, signal_name)
+    termination_contract_satisfied = signal_termination_observed or graceful_termination_observed
     container_id_changed = before["containerId"] != after["containerId"]
-    is_passed = (
-        signalled.returncode == 0
-        and restarted
-        and terminated
-        and container_id_changed
-        and runtime_before["observed"]
-        and runtime_after["observed"]
-        and process_before["observed"]
-        and process_after["observed"]
-        and rollout.returncode == 0
+    is_passed = all(
+        (
+            signalled.returncode == 0,
+            restarted,
+            termination_contract_satisfied,
+            container_id_changed,
+            runtime_before["observed"],
+            runtime_after["observed"],
+            process_before["observed"],
+            process_after["observed"],
+            rollout.returncode == 0,
+        )
     )
     return {
         "status": "passed" if is_passed else "failed",
@@ -213,7 +217,10 @@ def _signal_fault(
         "containerLifecycleAfter": after,
         "containerRestartObserved": restarted,
         "containerIdChanged": container_id_changed,
-        "terminationSignalObserved": terminated,
+        "terminationSignalObserved": signal_termination_observed,
+        "gracefulTerminationObserved": graceful_termination_observed,
+        "terminationContractSatisfied": termination_contract_satisfied,
+        "terminationMode": _termination_mode(signal_termination_observed, graceful_termination_observed),
         "recoveryTargetSeconds": 120,
         "recoveryObserved": rollout.returncode == 0,
     }
@@ -384,6 +391,27 @@ def _termination_observed(snapshot: dict[str, object], expected_signal: int) -> 
     signal = _optional_int(terminal.get("signal"), default=None)
     exit_code = _optional_int(terminal.get("exitCode"), default=None)
     return signal == expected_signal or exit_code == 128 + expected_signal
+
+
+def _graceful_termination_observed(snapshot: dict[str, object], signal_name: str) -> bool:
+    if signal_name != "TERM":
+        return False
+    terminal = snapshot.get("lastTermination")
+    if not isinstance(terminal, dict):
+        return False
+    return (
+        terminal.get("reason") == "Completed"
+        and _optional_int(terminal.get("exitCode"), default=None) == 0
+        and _optional_text(terminal.get("finishedAt")) is not None
+    )
+
+
+def _termination_mode(is_signal_observed: bool, is_graceful_observed: bool) -> str:
+    if is_signal_observed:
+        return "signal"
+    if is_graceful_observed:
+        return "graceful"
+    return "unproven"
 
 
 def _optional_text(value: object) -> str | None:

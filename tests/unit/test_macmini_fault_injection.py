@@ -166,6 +166,9 @@ def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
     assert receipt["runtimeKillAccepted"] is True
     assert receipt["containerRestartObserved"] is True
     assert receipt["terminationSignalObserved"] is True
+    assert receipt["gracefulTerminationObserved"] is False
+    assert receipt["terminationContractSatisfied"] is True
+    assert receipt["terminationMode"] == "signal"
     assert receipt["containerIdChanged"] is True
     assert receipt["targetProcessBefore"] == {"observed": True, "pid": 1, "commandSha256": "a" * 64}
     assert kill_calls == [
@@ -180,6 +183,114 @@ def test_signal_fault_requires_observed_container_restart(monkeypatch) -> None:
             "KILL",
         )
     ]
+
+
+def test_sigterm_accepts_graceful_completed_container_restart(monkeypatch) -> None:
+    _stub_signal_fault(
+        monkeypatch,
+        signal_name="TERM",
+        last_termination={
+            "reason": "Completed",
+            "exitCode": 0,
+            "signal": None,
+            "finishedAt": "2026-08-21T10:38:35Z",
+        },
+    )
+
+    receipt = subject._signal_fault(
+        Namespace(),
+        subject._POD_SELECTORS["api-pod"],
+        "api",
+        "TERM",
+        "deployment/foundry-lite",
+    )
+
+    assert receipt["status"] == "passed"
+    assert receipt["terminationSignalObserved"] is False
+    assert receipt["gracefulTerminationObserved"] is True
+    assert receipt["terminationContractSatisfied"] is True
+    assert receipt["terminationMode"] == "graceful"
+
+
+def test_sigkill_does_not_accept_graceful_completed_termination(monkeypatch) -> None:
+    _stub_signal_fault(
+        monkeypatch,
+        signal_name="KILL",
+        last_termination={
+            "reason": "Completed",
+            "exitCode": 0,
+            "signal": None,
+            "finishedAt": "2026-08-21T10:38:35Z",
+        },
+    )
+
+    receipt = subject._signal_fault(
+        Namespace(),
+        subject._POD_SELECTORS["worker-pod"],
+        "worker",
+        "KILL",
+        "deployment/foundry-lite-worker-action",
+    )
+
+    assert receipt["status"] == "failed"
+    assert receipt["terminationContractSatisfied"] is False
+    assert receipt["terminationMode"] == "unproven"
+
+
+def _stub_signal_fault(
+    monkeypatch,
+    *,
+    signal_name: str,
+    last_termination: dict[str, object],
+) -> None:
+    before = {
+        "containerId": "docker://" + ("a" * 64),
+        "restartCount": 0,
+        "isReady": True,
+        "startedAt": "2026-08-21T10:00:00Z",
+        "lastTermination": {"reason": None, "exitCode": None, "signal": None, "finishedAt": None},
+    }
+    after = {
+        "containerId": "docker://" + ("b" * 64),
+        "restartCount": 1,
+        "isReady": True,
+        "startedAt": "2026-08-21T10:38:36Z",
+        "lastTermination": last_termination,
+    }
+    monkeypatch.setattr(subject, "_first_pod", lambda _args, _selector: "target-1")
+    monkeypatch.setattr(subject, "_container_lifecycle_snapshot", lambda *_args: before)
+    monkeypatch.setattr(subject, "_wait_for_container_restart", lambda *_args: after)
+    monkeypatch.setattr(
+        subject,
+        "_pid_one_identity",
+        lambda *_args: {"observed": True, "pid": 1, "commandSha256": "a" * 64},
+    )
+    monkeypatch.setattr(
+        subject,
+        "_runtime_container_target",
+        lambda snapshot: {
+            "observed": True,
+            "runtime": "docker",
+            "containerId": snapshot["containerId"],
+            "runtimeContainerId": str(snapshot["containerId"]).removeprefix("docker://"),
+            "hostPid": 101 if snapshot is before else 102,
+        },
+    )
+    monkeypatch.setattr(
+        subject,
+        "_runtime_docker_kill",
+        lambda _target, observed_signal: subprocess.CompletedProcess(
+            ("docker", "kill", "--signal", observed_signal),
+            0 if observed_signal == signal_name else 1,
+            b"",
+            b"",
+        ),
+    )
+    monkeypatch.setattr(
+        subject,
+        "_kubectl",
+        lambda _args, operation, _timeout: subprocess.CompletedProcess(operation, 0, b"", b""),
+    )
 
 
 def test_runtime_signal_target_fails_closed_when_kubernetes_does_not_report_docker_id() -> None:
