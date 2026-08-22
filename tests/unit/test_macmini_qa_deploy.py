@@ -310,6 +310,7 @@ def test_helm_upgrade_cannot_install_a_missing_release(monkeypatch, tmp_path: Pa
 
     assert command[:3] == ["helm", "upgrade", "foundry-lite"]
     assert "--install" not in command
+    assert "--force-conflicts" in command
     assert "--reset-then-reuse-values" in command
     assert "--reuse-values" not in command
     assert command[-4:] == ["--wait", "--wait-for-jobs", "--timeout", "30m"]

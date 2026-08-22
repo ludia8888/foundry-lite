@@ -383,7 +383,14 @@ def test_invalid_image_fault_restores_exact_digest_after_rejected_rollout(
 
     assert receipt["status"] == "passed"
     assert receipt["invalidRevisionRejected"] is True
-    assert calls[-3] == ("set", "image", "deployment/foundry-lite", f"api={original}")
+    assert calls[-3] == (
+        "set",
+        "image",
+        "deployment/foundry-lite",
+        f"api={original}",
+        "--field-manager=helm",
+    )
+    assert receipt["fieldManager"] == "helm"
 
 
 def test_rolling_restart_preserves_exact_image_digest(monkeypatch) -> None:
