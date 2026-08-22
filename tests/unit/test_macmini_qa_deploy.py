@@ -57,11 +57,13 @@ def test_foundation_phase_disables_application_until_migration(tmp_path: Path, m
     (tmp_path / "state").mkdir()
     manifest = subject._load_manifest(_write_manifest(tmp_path))
 
-    override, foundation = subject._write_overrides("run-1", manifest)
+    endpoint = {"kubernetesApiEndpointCidr": "192.168.5.1/32", "kubernetesApiEndpointPort": 63861}
+    override, foundation = subject._write_overrides("run-1", manifest, endpoint)
     immutable = json.loads(override.read_text(encoding="utf-8"))
     phase = json.loads(foundation.read_text(encoding="utf-8"))
 
     assert immutable["global"]["revision"] == "a" * 40
+    assert immutable["networkPolicy"] == endpoint
     assert phase["api"]["replicas"] == 0
     assert phase["web"]["replicas"] == 0
     assert phase["runtimePersistence"]["enabled"] is False
@@ -225,6 +227,11 @@ def test_upgrade_prepulls_images_before_running_atomic_helm_upgrade(tmp_path: Pa
     monkeypatch.setattr(subject, "_write_upgrade_runtime_contract", lambda _args: calls.append("contract") or contract)
     monkeypatch.setattr(
         subject,
+        "_kubernetes_api_endpoint",
+        lambda _args: {"kubernetesApiEndpointCidr": "192.168.5.1/32", "kubernetesApiEndpointPort": 63861},
+    )
+    monkeypatch.setattr(
+        subject,
         "_prepull_images",
         lambda _manifest, _token: calls.append("prepull") or {"status": "passed"},
     )
@@ -250,6 +257,22 @@ def test_upgrade_prepulls_images_before_running_atomic_helm_upgrade(tmp_path: Pa
     )
 
     assert calls == ["release", "contract", "prepull", "helm", "receipt"]
+
+
+def test_macmini_deployer_resolves_the_real_kubernetes_api_backend(monkeypatch) -> None:
+    payload = {
+        "subsets": [
+            {
+                "addresses": [{"ip": "192.168.5.1"}],
+                "ports": [{"name": "https", "port": 63861}],
+            }
+        ]
+    }
+    monkeypatch.setattr(subject, "_json_command", lambda *_args: payload)
+
+    result = subject._kubernetes_api_endpoint(Namespace())
+
+    assert result == {"kubernetesApiEndpointCidr": "192.168.5.1/32", "kubernetesApiEndpointPort": 63861}
 
 
 def test_runtime_contract_preserves_embedded_oauth_empty_values() -> None:

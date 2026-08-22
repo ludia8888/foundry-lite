@@ -75,7 +75,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/deploy_m
   --registry-token-file /Users/sean1234/foundry-qa/state/github-packages-token
 ```
 
-도구는 image pre-pull 뒤 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. immutable OAuth signing Secret 생성 Job과 그 제한 RBAC는 최초 `pre-install`에서만 실행한다. 이후 upgrade는 기존 Secret을 재사용하며, Secret이 사라졌으면 workload의 required Secret mount가 fail-closed한다. 이는 설치 후 default-deny NetworkPolicy가 활성화된 상태에서 bootstrap Pod가 Kubernetes API를 다시 호출하지 않도록 하는 one-time key 계약이다. 초기 runtime은 `values.embedded-oauth-smoke.yaml`을 반드시 검증·적용해 `identity.invalid` 외부 OIDC로 잘못 부팅되는 것을 막고, 비보호 `test` profile에서 tailnet 내부 폐루프를 위한 내장 OAuth만 짧게 점검한다. pre-upgrade role bootstrap은 최종 runtime DB principal의 비슈퍼유저·`NOBYPASSRLS` 상태를 보장하고, 이어지는 migration Job은 별도 관리자 Secret으로 migration을 실제로 두 번 실행한다. 이 초기 smoke는 production RLS 합격 증거로 계산하지 않는다. Keycloak OIDC atomic 전환이 production profile과 별도 runtime Secret을 함께 선택하고 rollout을 끝낸 뒤에만 protected runtime·RLS 검증을 시작한다. 완료 영수증은 image pre-pull count와 output hash, Helm revision, 적용한 두 values 파일의 합성 hash, `initialAuthMode=embedded_oauth_smoke`, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.
+도구는 image pre-pull 뒤 foundation과 runtime을 두 단계로 설치한다. foundation에서는 stateful dependency만 준비하고 API/Web/worker를 0 또는 disabled로 둔다. 설치·upgrade 도구는 `default/kubernetes` endpoint를 읽어 K3s API의 실제 backend CIDR/port를 private override에 고정한다. 따라서 NetworkPolicy가 Service DNAT 뒤에 적용되는 Colima에서도 release controller가 API server에 연결할 수 있고, 단순히 ClusterIP 443만 허용해 연결이 거절되는 상태를 피한다. immutable OAuth signing Secret 생성 Job과 그 제한 RBAC는 최초 `pre-install`에서만 실행한다. 이후 upgrade는 기존 Secret을 재사용하며, Secret이 사라졌으면 workload의 required Secret mount가 fail-closed한다. 이는 설치 후 default-deny NetworkPolicy가 활성화된 상태에서 bootstrap Pod가 Kubernetes API를 다시 호출하지 않도록 하는 one-time key 계약이다. 초기 runtime은 `values.embedded-oauth-smoke.yaml`을 반드시 검증·적용해 `identity.invalid` 외부 OIDC로 잘못 부팅되는 것을 막고, 비보호 `test` profile에서 tailnet 내부 폐루프를 위한 내장 OAuth만 짧게 점검한다. pre-upgrade role bootstrap은 최종 runtime DB principal의 비슈퍼유저·`NOBYPASSRLS` 상태를 보장하고, 이어지는 migration Job은 별도 관리자 Secret으로 migration을 실제로 두 번 실행한다. 이 초기 smoke는 production RLS 합격 증거로 계산하지 않는다. Keycloak OIDC atomic 전환이 production profile과 별도 runtime Secret을 함께 선택하고 rollout을 끝낸 뒤에만 protected runtime·RLS 검증을 시작한다. 완료 영수증은 image pre-pull count와 output hash, Helm revision, 적용한 두 values 파일의 합성 hash, `initialAuthMode=embedded_oauth_smoke`, Pod inventory, 실제 migration marker와 raw log가 아닌 log SHA-256을 기록한다. 기존 Helm release가 있으면 초기 설치 도구는 애플리케이션을 0 replica로 내리지 않고 실패한다.
 
 ## 4.1 이후 Helm upgrade
 
@@ -167,7 +167,7 @@ Tailscale owner와 DNS가 `sean1234` 대상임을 확인한 뒤에만 443을 Web
 
 각 장애는 `scripts/operations/inject_macmini_fault.py`로 한 번에 하나만 실행하고, 원래 replica와 NetworkPolicy selector를 `finally`에서 복구한다. 추가 deny policy는 기존 allow policy를 무효화하지 못하므로 network partition은 기존 internal policy의 selector를 bounded하게 patch한 뒤 원본으로 되돌린다. signal fault는 더 이상 `kubectl exec` 안의 PID 1을 죽이지 않는다. Kubernetes status의 exact container ID를 Colima runtime `docker inspect`로 host PID까지 다시 대조한 뒤 같은 runtime container에 `docker kill --signal <SIGNAL>`을 보낸다. receipt는 kill acceptance timestamp, runtime container ID/PID 전후, restartCount, 새 container ID, 새 host PID, rollout recovery를 모두 남긴다. `SIGKILL`은 Kubernetes termination signal 또는 `128+signal` exit code를 반드시 요구한다. `SIGTERM`은 application이 신호를 정상 처리할 수 있으므로 같은 runtime kill·container 교체·restart 증가가 모두 증명되고 Kubernetes가 `reason=Completed`, `exitCode=0`, 종료 시각을 기록한 경우 `terminationMode=graceful`로도 통과한다. 이 완화는 `SIGKILL`에는 적용하지 않는다.
 
-지원하는 추가 안전 장애 이름은 `invalid-image`, `migration-failure`, `pvc-disk-pressure`다. `invalid-image`는 존재하지 않는 digest가 새 API replica로 승격되지 않는지 확인한 뒤 `rollout undo`가 아니라 관측한 원래 digest를 명시적으로 복원한다. `migration-failure`는 임시 immutable DB Secret과 `helm upgrade --atomic --reuse-values`로 실제 pre-upgrade migration hook을 연결 불가능한 loopback DB에 실행하고, 실패 뒤 release가 계속 `deployed`이며 live Deployment image·가용 replica가 바뀌지 않았는지 확인한다. `pvc-disk-pressure`는 전용 128 MiB `local-path` PVC만 112 MiB(87.5%)까지 채워 임계 경보를 기록하고, 더 쓰지 않은 채 Job과 PVC를 삭제한다. 정리는 Kubernetes 리소스 부재뿐 아니라 PVC가 실제 저장되는 Colima 데이터 디스크의 `/var/lib/rancher/k3s/storage` 가용 공간 회복으로 확인한다. macOS host path나 기존 PVC는 채우지 않는다.
+지원하는 추가 안전 장애 이름은 `invalid-image`, `bad-config`, `migration-failure`, `pvc-disk-pressure`다. `invalid-image`는 존재하지 않는 digest가 새 API replica로 승격되지 않는지 확인한 뒤 `rollout undo`가 아니라 관측한 원래 digest를 명시적으로 복원한다. `bad-config`는 보호 프로필에서 application DB Secret 이름을 현재 migration DB Secret 이름과 같게 만들어 chart의 불변조건이 배포 전에 거절하는지 확인한다. 런타임 인증 프로필에 의존하지 않으며, 예상과 달리 Helm revision이나 values가 바뀌면 장애 전 revision으로 즉시 rollback하고 원래 values hash를 확인한다. `migration-failure`는 임시 immutable DB Secret과 `helm upgrade --atomic --reuse-values`로 실제 pre-upgrade migration hook을 연결 불가능한 loopback DB에 실행한다. 외부 프로세스 제한시간은 Helm의 3분 제한과 atomic rollback보다 길게 두고, 그래도 timeout 또는 `pending-rollback`이 관측되면 장애 전 revision으로 bounded rollback한다. 최종 release가 `deployed`이고 원래 values hash, live Deployment image, 가용 replica가 모두 복원되어야 통과한다. `pvc-disk-pressure`는 전용 128 MiB `local-path` PVC만 112 MiB(87.5%)까지 채워 임계 경보를 기록하고, 더 쓰지 않은 채 Job과 PVC를 삭제한다. 정리는 Kubernetes 리소스 부재뿐 아니라 PVC가 실제 저장되는 Colima 데이터 디스크의 `/var/lib/rancher/k3s/storage` 가용 공간 회복으로 확인한다. macOS host path나 기존 PVC는 채우지 않는다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_macmini_fault.py \
@@ -251,15 +251,13 @@ Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승�
 이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. StatefulSet이나
 container가 Ready여도 API connection pool이 기존 연결을 정리하는 짧은 구간이 있을 수 있으므로 recovery probe는
 최대 120초 동안 5초 간격으로 bounded polling한다. receipt에는 첫 시도 상태, 총 시도 수, 재시도 후 복구 여부와
-최종 business/operations 증거를 남긴다. fault execution
+최종 business/operations 증거를 남긴다. 그 뒤 Outbox `pending=0`, `oldest=0`, 장애 전 대비 DLQ 증가 0을 2초 간격으로 세 번 연속 확인한 후에만 다음 장애를 시작한다. Publisher는 일시적 stream 실패를 최대 5회까지 pending으로 되돌려 재시도하며, 한도를 모두 소진한 경우에만 DLQ로 이동한다. fault execution
 증거가 실패해도 recovery probe가 모두 통과하면 해당 이벤트 자체는 실패로 남기되 다음 장애는 계속 실행한다.
 실제 복구가 실패할 때만 남은 mutation을 중지하고 quiet observation만 유지한다. 네트워크 fault는 다른 macOS 계정이나 Docker Desktop이
 아니라 전용 `foundry-qa` Colima VM의 `cni0`에만 적용하며, 기존 qdisc가 있으면 덮어쓰지 않고 중단한다. 모든
 qdisc/iptables/Deployment command 변경은 `finally`에서 exact 원상복구한다.
 
-판정 오류 때문에 이전 campaign에서 `failed` 또는 `skipped`가 된 이벤트만 즉시 다시 실행할 때는 같은 고정 event
-command와 recovery probe를 사용하는 remediation mode를 쓴다. 이 mode는 source journal SHA-256과 선택된 event ID,
-개별 execution/recovery receipt를 새 run 아래에 남긴다. `blocked`와 이미 `passed`인 이벤트는 다시 실행하지 않는다.
+판정 오류나 중간 프로세스 종료 때문에 이전 campaign에서 `failed`, `skipped`, 또는 plan에는 있지만 journal에는 없는 이벤트를 즉시 다시 실행할 때는 같은 고정 event command와 recovery probe를 사용하는 remediation mode를 쓴다. 이 mode는 source journal SHA-256과 선택된 event ID, 개별 execution/recovery/outbox-drain receipt를 새 run 아래에 남긴다. `blocked`와 이미 `passed`인 이벤트는 다시 실행하지 않는다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_enterprise_campaign.py \

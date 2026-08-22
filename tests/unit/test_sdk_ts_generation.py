@@ -327,6 +327,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type BackupRestorePostRestoreValidationReport = {" in generated
     assert "export type BackupRestoreRecoveryOverview = {" in generated
     assert "export type OutboxPublishBatchResult = {" in generated
+    assert "retrying: number;" in generated
     assert "export type ObservabilityDetectorConfig = {" in generated
     assert "detect(payload: ObservabilityDetectRequest): Promise<ObservabilityReport>;" in generated
     assert "export type StoredObservabilityIncident = Omit<ObservabilityIncident, 'status'> & {" in generated

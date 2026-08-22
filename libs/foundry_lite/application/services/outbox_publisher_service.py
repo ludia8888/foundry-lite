@@ -8,6 +8,7 @@ from typing import Literal, TypedDict
 
 from foundry_lite.application.ports import (
     OUTBOX_PUBLISH_FAILED,
+    OUTBOX_PUBLISH_RETRY_PENDING,
     OUTBOX_PUBLISHED,
     OUTBOX_PUBLISHING,
     OUTBOX_PUBLISHING_RECLAIM,
@@ -25,6 +26,7 @@ from foundry_lite.security.tenant_context import tenant_context
 
 DEFAULT_OUTBOX_STREAM_NAME = "foundry-lite-outbox"
 MAX_OUTBOX_PUBLISH_BATCH_SIZE = 500
+MAX_OUTBOX_PUBLISH_ATTEMPTS = 5
 # A worker that crashes between claiming an event (pending -> publishing) and marking it
 # published/failed leaves the row stranded in publishing forever. Each publish cycle first
 # requeues rows whose claim is older than this lease so no event is silently lost. The
@@ -42,6 +44,7 @@ class OutboxPublishBatchResult(TypedDict):
     requested: int
     published: int
     failed: int
+    retrying: int
     skipped: int
     eventIds: list[str]
     deadLetterEventIds: list[str]
@@ -150,15 +153,11 @@ class OutboxPublisherService(CoreService):
         fence = _row_text(claimed, "claimed_at")
         try:
             self.stream_adapter.publish_event(_stream_request(claimed, ctx=ctx, stream_name=stream_name))
-        except Exception as exc:  # noqa: BLE001 - failures become durable DLQ evidence for operators.
-            dead_letter_id = self._mark_failed(ctx=ctx, row=claimed, fence=fence, exc=exc)
+        except Exception as exc:  # noqa: BLE001 - classified into bounded retry or durable DLQ evidence.
+            outcome, dead_letter_id = self._record_failure(ctx=ctx, row=claimed, fence=fence, exc=exc)
+            result[outcome] += 1
             if dead_letter_id is not None:
-                result["failed"] += 1
                 result["deadLetterEventIds"].append(dead_letter_id)
-            else:
-                # The claim was reclaimed under us before we could fail it; another
-                # worker now owns the row, so this attempt is a no-op, not a failure.
-                result["skipped"] += 1
             return
         if self._mark_published(ctx, claimed, fence=fence):
             result["published"] += 1
@@ -167,6 +166,22 @@ class OutboxPublisherService(CoreService):
             # Our claim was superseded before mark_published landed; the row is
             # owned by another worker. Counting it as published would be a lie.
             result["skipped"] += 1
+
+    def _record_failure(
+        self, *, ctx: RequestContext, row: RuntimeRow, fence: str, exc: Exception
+    ) -> tuple[Literal["retrying", "failed", "skipped"], str | None]:
+        error = self.runtime_service._error_payload(
+            exc,
+            ctx,
+            run_id=_row_text(row, "id"),
+            correlation_id=_row_text(row, "correlation_id"),
+            adapter=self.stream_adapter.profile_name,
+        )
+        if _row_attempts(row) < MAX_OUTBOX_PUBLISH_ATTEMPTS:
+            is_requeued = self._mark_retry_pending(ctx=ctx, row=row, fence=fence, error=error)
+            return ("retrying", None) if is_requeued else ("skipped", None)
+        dead_letter_id = self._mark_failed(ctx=ctx, row=row, fence=fence, error=error)
+        return ("failed", dead_letter_id) if dead_letter_id is not None else ("skipped", None)
 
     def _claim_event(self, ctx: RequestContext, event_id: str) -> RuntimeRow | None:
         with self.engine.begin() as conn:
@@ -195,16 +210,28 @@ class OutboxPublisherService(CoreService):
                 return True
         return False
 
-    def _mark_failed(self, *, ctx: RequestContext, row: RuntimeRow, fence: str, exc: Exception) -> str | None:
+    def _mark_retry_pending(
+        self, *, ctx: RequestContext, row: RuntimeRow, fence: str, error: Mapping[str, object]
+    ) -> bool:
+        event_id = _row_text(row, "id")
+        with self.engine.begin() as conn:
+            pending = self.runtime_repository.mark_outbox_event_retry_pending(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                event_id=event_id,
+                transition=OUTBOX_PUBLISH_RETRY_PENDING,
+                claimed_at=fence,
+            )
+            if pending is not None:
+                self._audit_publish(conn, ctx, pending, status="retry_scheduled", error=error)
+                return True
+        return False
+
+    def _mark_failed(
+        self, *, ctx: RequestContext, row: RuntimeRow, fence: str, error: Mapping[str, object]
+    ) -> str | None:
         event_id = _row_text(row, "id")
         failed_at = _now()
-        error = self.runtime_service._error_payload(
-            exc,
-            ctx,
-            run_id=event_id,
-            correlation_id=_row_text(row, "correlation_id"),
-            adapter=self.stream_adapter.profile_name,
-        )
         with self.engine.begin() as conn:
             failed = self.runtime_repository.mark_outbox_event_failed(
                 transaction=conn,
@@ -298,6 +325,7 @@ def _empty_result(*, stream_name: str, requested: int) -> OutboxPublishBatchResu
         "requested": requested,
         "published": 0,
         "failed": 0,
+        "retrying": 0,
         "skipped": 0,
         "eventIds": [],
         "deadLetterEventIds": [],
@@ -315,6 +343,7 @@ def _all_tenant_result(
         "requested": sum(result["requested"] for result in tenant_results),
         "published": sum(result["published"] for result in tenant_results),
         "failed": sum(result["failed"] for result in tenant_results),
+        "retrying": sum(result["retrying"] for result in tenant_results),
         "skipped": sum(result["skipped"] for result in tenant_results),
         "eventIds": [event_id for result in tenant_results for event_id in result["eventIds"]],
         "deadLetterEventIds": [event_id for result in tenant_results for event_id in result["deadLetterEventIds"]],
@@ -365,6 +394,13 @@ def _row_payload(row: RuntimeRow) -> RuntimeJsonObject:
 def _row_text(row: RuntimeRow, key: str) -> str:
     value = row.get(key)
     return "" if value is None else str(value)
+
+
+def _row_attempts(row: RuntimeRow) -> int:
+    value = row.get("attempts")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise RuntimeError("outbox_publish_attempts_invalid")
+    return value
 
 
 def _dead_letter_id(event_id: str) -> str:

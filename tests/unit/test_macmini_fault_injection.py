@@ -413,19 +413,36 @@ def test_bad_config_is_rejected_without_helm_revision_or_image_change(
             {"version": 8, "info": {"status": "deployed"}},
         )
     )
+    protected_values = {
+        "global": {"protectedProfile": True},
+        "secrets": {
+            "applicationExistingSecret": "foundry-lite-application",
+            "migrationExistingSecret": "foundry-lite-migration",
+        },
+    }
+    commands: list[tuple[str, ...]] = []
     monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
     monkeypatch.setattr(subject, "_helm_status", lambda _args: next(statuses))
+    monkeypatch.setattr(subject, "_helm_values", lambda _args: protected_values)
+    monkeypatch.setattr(
+        subject,
+        "_recover_helm_release",
+        lambda *_args: {"rollbackPerformed": False, "rollbackReturnCode": None, "originalValuesRestored": True},
+    )
     monkeypatch.setattr(
         subject,
         "_command",
-        lambda command, _timeout: subprocess.CompletedProcess(command, 1, b"", b"protected config rejected"),
+        lambda command, _timeout: (
+            commands.append(command) or subprocess.CompletedProcess(command, 1, b"", b"protected config rejected")
+        ),
     )
 
     receipt = subject._bad_config_fault(Namespace(helm="helm", namespace="foundry-qa"))
 
     assert receipt["status"] == "passed"
     assert receipt["invalidProtectedConfigRejected"] is True
-    assert receipt["helmRevisionUnchanged"] is True
+    assert receipt["helmValuesRestored"] is True
+    assert "secrets.applicationExistingSecret=foundry-lite-migration" in commands[0]
 
 
 def test_migration_failure_uses_atomic_helm_and_keeps_live_image(monkeypatch) -> None:
@@ -438,8 +455,21 @@ def test_migration_failure_uses_atomic_helm_and_keeps_live_image(monkeypatch) ->
             {"version": 2, "info": {"status": "deployed"}},
         )
     )
+    protected_values = {
+        "global": {"protectedProfile": True},
+        "secrets": {
+            "applicationExistingSecret": "foundry-lite-application",
+            "migrationExistingSecret": "foundry-lite-migration",
+        },
+    }
     monkeypatch.setattr(subject, "_deployment_snapshot", lambda _args: _deployment(original, 2))
     monkeypatch.setattr(subject, "_helm_status", lambda _args: next(helm_statuses))
+    monkeypatch.setattr(subject, "_helm_values", lambda _args: protected_values)
+    monkeypatch.setattr(
+        subject,
+        "_recover_helm_release",
+        lambda *_args: {"rollbackPerformed": False, "rollbackReturnCode": None, "originalValuesRestored": True},
+    )
     monkeypatch.setattr(
         subject,
         "_create_fault_resource",
@@ -510,7 +540,50 @@ def test_faulting_helm_upgrade_reuses_values_and_is_atomic(tmp_path: Path, monke
     assert result.returncode == 1
     assert "--reuse-values" in captured[0]
     assert "--atomic" in captured[0]
-    assert "secrets.applicationExistingSecret=foundry-lite-fault-migration" in captured[0]
+    assert "secrets.migrationExistingSecret=foundry-lite-fault-migration" in captured[0]
+
+
+def test_bounded_command_classifies_timeout_without_losing_receipt_path(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subject,
+        "_command",
+        lambda command, timeout: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(command, timeout, output=b"bounded", stderr=b"redacted")
+        ),
+    )
+
+    result = subject._bounded_command(("helm", "upgrade"), 420)
+
+    assert result.returncode == 124
+    assert result.stdout == b"bounded"
+
+
+def test_helm_recovery_rolls_pending_release_back_to_exact_pre_fault_values(monkeypatch) -> None:
+    expected = {"global": {"protectedProfile": True}, "auth": {"profile": "header-trust"}}
+    statuses = iter(
+        (
+            {"version": 25, "info": {"status": "pending-rollback"}},
+            {"version": 26, "info": {"status": "deployed"}},
+        )
+    )
+    values = iter(({"auth": {"profile": "local"}}, expected))
+    rollbacks: list[int] = []
+    monkeypatch.setattr(subject, "_helm_status_optional", lambda _args: next(statuses))
+    monkeypatch.setattr(subject, "_helm_values_optional", lambda _args: next(values))
+    monkeypatch.setattr(
+        subject,
+        "_helm_rollback",
+        lambda _args, revision: (
+            rollbacks.append(revision) or subprocess.CompletedProcess(("helm", "rollback"), 0, b"", b"")
+        ),
+    )
+
+    receipt = subject._recover_helm_release(Namespace(), 22, expected, False)
+
+    assert rollbacks == [22]
+    assert receipt["rollbackPerformed"] is True
+    assert receipt["rollbackReturnCode"] == 0
+    assert receipt["originalValuesRestored"] is True
 
 
 def test_pvc_disk_pressure_stops_at_threshold_and_cleans_resources(monkeypatch) -> None:

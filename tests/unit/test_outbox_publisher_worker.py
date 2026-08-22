@@ -40,6 +40,7 @@ def test_outbox_publisher_worker_publishes_until_empty_batch(tmp_path: Path) -> 
     assert result.iterations == 2
     assert result.requested == 2
     assert result.published == 2
+    assert result.retrying == 0
     assert result.event_ids == ("outbox_worker_1", "outbox_worker_2")
     assert rows["outbox_worker_1"]["status"] == "published"
     assert rows["outbox_worker_2"]["published_at"] is not None
@@ -66,6 +67,7 @@ def test_outbox_publisher_worker_main_prints_operator_summary(tmp_path: Path, ca
     assert exit_code == 0
     assert payload["status"] == "STOPPED"
     assert payload["published"] == 1
+    assert payload["retrying"] == 0
     assert payload["eventIds"] == ["outbox_worker_cli"]
     assert payload["tenantIds"] == ["tenant-demo"]
 

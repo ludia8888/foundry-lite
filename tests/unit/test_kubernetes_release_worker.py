@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from foundry_lite.infrastructure.adapters.kubernetes_deployment import KubernetesTransportError
 from foundry_lite.infrastructure.kubernetes_release_controller import (
     KubernetesReleaseControllerConfig,
     KubernetesReleaseControllerResult,
@@ -136,6 +137,24 @@ def test_release_worker_reports_bounded_error_without_exception_detail(
     output = capsys.readouterr().out
     assert json.loads(output)["reason"] == "reconcile_failed"
     assert "private-cluster-detail" not in output
+
+
+def test_release_worker_classifies_kubernetes_transport_failure_without_raw_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _Controller:
+        def __init__(self, _config: KubernetesReleaseControllerConfig) -> None:
+            pass
+
+        def reconcile_once(self) -> tuple[KubernetesReleaseControllerResult, ...]:
+            raise KubernetesTransportError("unavailable")
+
+    monkeypatch.setattr(worker, "KubernetesReleaseController", _Controller)
+    config = worker.KubernetesReleaseWorkerConfig(_controller_config(), poll_seconds=1, max_iterations=1)
+
+    assert worker.run_controller(config) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "kubernetes_transport_unavailable"
 
 
 @pytest.mark.parametrize(

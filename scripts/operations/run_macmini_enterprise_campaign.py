@@ -8,6 +8,7 @@ import json
 import os
 import subprocess  # nosec B404 - fixed QA script argv only; never accepts shell commands.
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
@@ -31,6 +32,9 @@ _PYTHONPATH = ".:libs:apps/cli:apps/api:apps/worker"
 _REMEDIATION_SOURCE_STATUSES = frozenset({"failed", "skipped"})
 _RECOVERY_PROBE_DEADLINE_SECONDS = 120
 _RECOVERY_PROBE_INTERVAL_SECONDS = 5
+_OUTBOX_DRAIN_DEADLINE_SECONDS = 120
+_OUTBOX_DRAIN_INTERVAL_SECONDS = 2
+_OUTBOX_DRAIN_STABLE_OBSERVATIONS = 3
 
 
 def run_campaign(args: argparse.Namespace) -> dict[str, object]:
@@ -132,19 +136,21 @@ def _run_remediation_events(
 
 
 def _remediation_events(source_run_id: str) -> tuple[tuple[CampaignEvent, ...], bytes]:
-    source = QA_ROOT / "evidence" / _validated_run_id(source_run_id) / "campaign" / "journal.ndjson"
+    campaign = QA_ROOT / "evidence" / _validated_run_id(source_run_id) / "campaign"
+    source = campaign / "journal.ndjson"
     raw = source.read_bytes()
     if not raw or len(raw) > 1024 * 1024:
         raise ValueError("macmini_campaign_source_journal_invalid")
-    selected_ids = _selected_remediation_event_ids(raw)
+    selected_ids = _selected_remediation_event_ids(raw, _planned_event_ids(campaign / "plan.json"))
     events = tuple(event for event in EVENTS if event.event_id in selected_ids)
     if not events or len(events) != len(selected_ids):
         raise ValueError("macmini_campaign_remediation_events_invalid")
     return events, raw
 
 
-def _selected_remediation_event_ids(raw: bytes) -> set[str]:
+def _selected_remediation_event_ids(raw: bytes, planned_event_ids: set[str] | None = None) -> set[str]:
     selected: set[str] = set()
+    observed: set[str] = set()
     try:
         rows = [json.loads(line) for line in raw.splitlines() if line]
     except json.JSONDecodeError as exc:
@@ -153,9 +159,43 @@ def _selected_remediation_event_ids(raw: bytes) -> set[str]:
         if not isinstance(row, dict):
             raise ValueError("macmini_campaign_source_journal_invalid")
         event_id = row.get("eventId")
-        if row.get("status") in _REMEDIATION_SOURCE_STATUSES and isinstance(event_id, str):
-            selected.add(event_id)
+        if isinstance(event_id, str):
+            observed.add(event_id)
+            if row.get("status") in _REMEDIATION_SOURCE_STATUSES:
+                selected.add(event_id)
+    selected.update((planned_event_ids or set()) - observed)
     return selected
+
+
+def _planned_event_ids(path: Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    value = _read_source_plan(path)
+    raw_ids = value.get("eventIds")
+    if isinstance(raw_ids, list):
+        return _validated_planned_ids(raw_ids)
+    events = value.get("events")
+    if not isinstance(events, list):
+        raise ValueError("macmini_campaign_source_plan_invalid")
+    ids = [item.get("eventId", item.get("event_id")) for item in events if isinstance(item, dict)]
+    return _validated_planned_ids(ids)
+
+
+def _read_source_plan(path: Path) -> dict[str, object]:
+    try:
+        raw = path.read_bytes()
+        value = json.loads(raw) if 0 < len(raw) <= 1024 * 1024 else None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("macmini_campaign_source_plan_invalid") from exc
+    if not isinstance(value, dict):
+        raise ValueError("macmini_campaign_source_plan_invalid")
+    return value
+
+
+def _validated_planned_ids(values: Sequence[object]) -> set[str]:
+    if not values or not all(isinstance(item, str) and item for item in values):
+        raise ValueError("macmini_campaign_source_plan_invalid")
+    return {str(item) for item in values}
 
 
 def _remediation_plan(
@@ -166,7 +206,7 @@ def _remediation_plan(
 ) -> dict[str, object]:
     return {
         "schemaVersion": 1,
-        "scope": "failed-and-skipped-events-only",
+        "scope": "failed-skipped-and-interrupted-events",
         "runId": args.run_id,
         "sourceRunId": args.rerun_failed_and_skipped_from_run_id,
         "startedAt": started_at.isoformat(),
@@ -186,7 +226,7 @@ def _remediation_summary(
     return {
         "schemaVersion": 1,
         "status": "passed" if is_passed else "failed",
-        "scope": "failed-and-skipped-events-only",
+        "scope": "failed-skipped-and-interrupted-events",
         "runId": args.run_id,
         "sourceRunId": args.rerun_failed_and_skipped_from_run_id,
         "startedAt": started_at.isoformat(),
@@ -211,13 +251,18 @@ def _run_event(args: argparse.Namespace, event: CampaignEvent, scheduled_at: dat
             "observedAt": observed_at.isoformat(),
             "mutationPerformed": False,
         }
+    pre_fault_operations = _execute(_operations_probe_command(args), 120)
+    if pre_fault_operations["status"] != "passed":
+        return _pre_fault_failure_receipt(event, scheduled_at, observed_at, pre_fault_operations)
     if event.kind == "dr":
         execution = _run_dr(args, event)
     else:
         command, timeout = _event_command(args, event)
         execution = _execute(command, timeout)
     recovery = _recovery_probe(args) if _is_mutating(event) else None
-    status = "passed" if execution["status"] == "passed" and _recovery_passed(recovery) else "failed"
+    outbox_drain = _event_outbox_drain(args, pre_fault_operations, recovery)
+    is_recovered = _recovery_passed(recovery) and _recovery_passed(outbox_drain)
+    status = "passed" if execution["status"] == "passed" and is_recovered else "failed"
     return {
         "schemaVersion": 1,
         "eventId": event.event_id,
@@ -228,7 +273,96 @@ def _run_event(args: argparse.Namespace, event: CampaignEvent, scheduled_at: dat
         "endedAt": datetime.now(UTC).isoformat(),
         "execution": execution,
         "recovery": recovery,
+        "preFaultOperations": pre_fault_operations,
+        "outboxDrain": outbox_drain,
         "mutationPerformed": _is_mutating(event),
+    }
+
+
+def _pre_fault_failure_receipt(
+    event: CampaignEvent,
+    scheduled_at: datetime,
+    observed_at: datetime,
+    operations: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "eventId": event.event_id,
+        "phaseId": event.phase_id,
+        "status": "failed",
+        "reason": "pre_fault_operations_failed",
+        "scheduledAt": scheduled_at.isoformat(),
+        "observedAt": observed_at.isoformat(),
+        "preFaultOperations": operations,
+        "recovery": {"status": "failed", "reason": "mutation_not_started"},
+        "mutationPerformed": False,
+    }
+
+
+def _event_outbox_drain(
+    args: argparse.Namespace,
+    pre_fault_operations: dict[str, object] | None,
+    recovery: dict[str, object] | None,
+) -> dict[str, object] | None:
+    if pre_fault_operations is None:
+        return None
+    if not _recovery_passed(recovery):
+        return {"status": "failed", "reason": "recovery_failed_before_outbox_drain"}
+    baseline = _operation_metric(pre_fault_operations, "deadLetterCount")
+    if baseline is None:
+        return {"status": "failed", "reason": "dead_letter_baseline_missing"}
+    return _wait_for_outbox_drain(args, baseline)
+
+
+def _wait_for_outbox_drain(args: argparse.Namespace, baseline_dead_letters: int) -> dict[str, object]:
+    started = time.monotonic()
+    deadline = started + _OUTBOX_DRAIN_DEADLINE_SECONDS
+    stable = 0
+    observations = 0
+    latest: dict[str, object] = {}
+    while True:
+        latest = _execute(_operations_probe_command(args), 120)
+        observations += 1
+        if _is_clean_outbox_observation(latest, baseline_dead_letters):
+            stable += 1
+            if stable >= _OUTBOX_DRAIN_STABLE_OBSERVATIONS:
+                return _outbox_drain_receipt("passed", latest, observations, started)
+        else:
+            stable = 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or _operation_metric(latest, "deadLetterCount") != baseline_dead_letters:
+            return _outbox_drain_receipt("failed", latest, observations, started)
+        time.sleep(min(_OUTBOX_DRAIN_INTERVAL_SECONDS, remaining))
+
+
+def _is_clean_outbox_observation(value: dict[str, object], baseline_dead_letters: int) -> bool:
+    return (
+        value.get("status") == "passed"
+        and _operation_metric(value, "outboxPendingCount") == 0
+        and _operation_metric(value, "oldestOutboxPendingSeconds") == 0
+        and _operation_metric(value, "deadLetterCount") == baseline_dead_letters
+    )
+
+
+def _operation_metric(value: dict[str, object], key: str) -> int | None:
+    receipt = value.get("receipt")
+    metric = receipt.get(key) if isinstance(receipt, dict) else None
+    return metric if isinstance(metric, int) and not isinstance(metric, bool) and metric >= 0 else None
+
+
+def _outbox_drain_receipt(
+    status: str,
+    latest: dict[str, object],
+    observations: int,
+    started: float,
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "reason": None if status == "passed" else "outbox_or_dead_letter_invariant_failed",
+        "observations": observations,
+        "stableObservationsRequired": _OUTBOX_DRAIN_STABLE_OBSERVATIONS,
+        "durationMs": int((time.monotonic() - started) * 1000),
+        "finalOperations": latest,
     }
 
 

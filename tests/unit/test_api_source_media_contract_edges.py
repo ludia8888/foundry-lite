@@ -1419,8 +1419,24 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
 
 def test_outbox_worker_failure_and_empty_batch_edges(monkeypatch, tmp_path) -> None:
     batches = [
-        {"requested": 0, "published": 0, "failed": 0, "skipped": 0, "eventIds": [], "deadLetterEventIds": []},
-        {"requested": 1, "published": 1, "failed": 0, "skipped": 0, "eventIds": ["event-1"], "deadLetterEventIds": []},
+        {
+            "requested": 0,
+            "published": 0,
+            "failed": 0,
+            "retrying": 0,
+            "skipped": 0,
+            "eventIds": [],
+            "deadLetterEventIds": [],
+        },
+        {
+            "requested": 1,
+            "published": 1,
+            "failed": 0,
+            "retrying": 0,
+            "skipped": 0,
+            "eventIds": ["event-1"],
+            "deadLetterEventIds": [],
+        },
     ]
 
     class OutboxPublisher:

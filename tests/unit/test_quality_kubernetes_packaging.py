@@ -56,6 +56,13 @@ def test_kubernetes_packaging_gate_rejects_sandbox_network_allow(tmp_path: Path)
     assert any(item.code == "execution_network_deny_contract_missing" for item in findings)
 
 
+def test_release_controller_network_policy_allows_resolved_api_backend() -> None:
+    policy = (ROOT / "deploy/helm/foundry-lite/templates/networkpolicies.yaml").read_text(encoding="utf-8")
+
+    assert ".Values.networkPolicy.kubernetesApiEndpointCidr" in policy
+    assert ".Values.networkPolicy.kubernetesApiEndpointPort" in policy
+
+
 def test_kubernetes_packaging_gate_rejects_mutable_macmini_tool_manifest(tmp_path: Path) -> None:
     _copy_gate_tree(tmp_path)
     manifest = tmp_path / "deploy/macmini-tools-arm64.json"

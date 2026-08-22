@@ -299,6 +299,18 @@ class RuntimeRepository(Protocol):
         """CAS a publishing outbox row into the failed terminal state, fenced by ``claimed_at``."""
         ...
 
+    def mark_outbox_event_retry_pending(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+        claimed_at: str,
+    ) -> RuntimeRow | None:
+        """Requeue a transient publish failure while preserving its attempt count and claim fence."""
+        ...
+
     def update_outbox_event_for_retry(
         self,
         *,

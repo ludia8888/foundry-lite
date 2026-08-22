@@ -145,6 +145,7 @@ DEAD_LETTER_REPLAY_FAILED = StatusTransition(("REPLAY_REQUESTED", "REPLAYING"), 
 DEAD_LETTER_DISCARDED = StatusTransition(("QUARANTINED",), "DISCARDED")
 OUTBOX_PUBLISHING = StatusTransition(("pending",), "publishing")
 OUTBOX_PUBLISHED = StatusTransition(("publishing",), "published")
+OUTBOX_PUBLISH_RETRY_PENDING = StatusTransition(("publishing",), "pending")
 OUTBOX_PUBLISH_FAILED = StatusTransition(("publishing",), "failed")
 OUTBOX_RETRY_PENDING = StatusTransition(("failed",), "pending")
 OUTBOX_PUBLISHING_RECLAIM = StatusTransition(("publishing",), "pending")
