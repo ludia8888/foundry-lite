@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from argparse import Namespace
+from pathlib import Path
 
 from scripts.operations import run_macmini_enterprise_campaign as subject
 from scripts.operations.macmini_enterprise_campaign_plan import EVENTS
@@ -103,6 +104,36 @@ def test_remediation_selects_failed_and_skipped_events_only() -> None:
     assert selected == {"api-sigterm", "worker-sigkill"}
 
 
+def test_remediation_also_selects_planned_events_missing_after_interruption() -> None:
+    journal = b"\n".join(
+        (
+            json.dumps({"eventId": "bad-config", "status": "failed"}).encode(),
+            json.dumps({"eventId": "migration-failure", "status": "passed"}).encode(),
+        )
+    )
+
+    selected = subject._selected_remediation_event_ids(
+        journal,
+        {"bad-config", "migration-failure", "verified-digest-rollback", "backup-restore-recovery"},
+    )
+
+    assert selected == {"bad-config", "verified-digest-rollback", "backup-restore-recovery"}
+
+
+def test_remediation_reads_interrupted_event_ids_from_saved_plan(tmp_path: Path) -> None:
+    path = tmp_path / "plan.json"
+    path.write_text(
+        json.dumps({"eventIds": ["bad-config", "migration-failure", "verified-digest-rollback"]}),
+        encoding="utf-8",
+    )
+
+    assert subject._planned_event_ids(path) == {
+        "bad-config",
+        "migration-failure",
+        "verified-digest-rollback",
+    }
+
+
 def test_remediation_summary_does_not_claim_full_24_hour_clear() -> None:
     args = Namespace(run_id="remediation", rerun_failed_and_skipped_from_run_id="source")
 
@@ -116,6 +147,49 @@ def test_remediation_summary_does_not_claim_full_24_hour_clear() -> None:
     assert summary["status"] == "passed"
     assert summary["full24HourCampaignStatus"] == "notProven"
     assert summary["p0P1Clear"] is False
+
+
+def test_outbox_drain_requires_three_clean_observations_without_dlq_growth(monkeypatch) -> None:
+    observations = iter(
+        [
+            {
+                "status": "passed",
+                "receipt": {"outboxPendingCount": 1, "oldestOutboxPendingSeconds": 0, "deadLetterCount": 259},
+            },
+            *[
+                {
+                    "status": "passed",
+                    "receipt": {"outboxPendingCount": 0, "oldestOutboxPendingSeconds": 0, "deadLetterCount": 259},
+                }
+                for _ in range(3)
+            ],
+        ]
+    )
+    monkeypatch.setattr(subject, "_execute", lambda *_args: next(observations))
+    monkeypatch.setattr(subject.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(subject.time, "sleep", lambda _seconds: None)
+
+    receipt = subject._wait_for_outbox_drain(Namespace(namespace="foundry-qa", kubeconfig="kubeconfig"), 259)
+
+    assert receipt["status"] == "passed"
+    assert receipt["observations"] == 4
+
+
+def test_outbox_drain_fails_immediately_when_fault_creates_new_dlq(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subject,
+        "_execute",
+        lambda *_args: {
+            "status": "passed",
+            "receipt": {"outboxPendingCount": 0, "oldestOutboxPendingSeconds": 0, "deadLetterCount": 260},
+        },
+    )
+    monkeypatch.setattr(subject.time, "monotonic", lambda: 0.0)
+
+    receipt = subject._wait_for_outbox_drain(Namespace(namespace="foundry-qa", kubeconfig="kubeconfig"), 259)
+
+    assert receipt["status"] == "failed"
+    assert receipt["reason"] == "outbox_or_dead_letter_invariant_failed"
 
 
 def test_recovery_probe_retries_transient_post_restart_failure(monkeypatch) -> None:

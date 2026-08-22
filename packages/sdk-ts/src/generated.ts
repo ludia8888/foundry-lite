@@ -2878,6 +2878,7 @@ export type OutboxPublishBatchResult = {
   requested: number;
   published: number;
   failed: number;
+  retrying: number;
   skipped: number;
   eventIds: string[];
   deadLetterEventIds: string[];

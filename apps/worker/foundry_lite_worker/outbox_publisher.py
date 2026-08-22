@@ -45,6 +45,7 @@ class OutboxPublisherWorkerResult:
     requested: int
     published: int
     failed: int
+    retrying: int
     skipped: int
     event_ids: tuple[str, ...]
     dead_letter_event_ids: tuple[str, ...]
@@ -115,6 +116,7 @@ class _OutboxAccumulator:
         self.requested = 0
         self.published = 0
         self.failed = 0
+        self.retrying = 0
         self.skipped = 0
         self.event_ids: list[str] = []
         self.dead_letter_event_ids: list[str] = []
@@ -125,6 +127,7 @@ class _OutboxAccumulator:
         self.requested += result["requested"]
         self.published += result["published"]
         self.failed += result["failed"]
+        self.retrying += result["retrying"]
         self.skipped += result["skipped"]
         self.event_ids.extend(result["eventIds"])
         self.dead_letter_event_ids.extend(result["deadLetterEventIds"])
@@ -159,6 +162,7 @@ def _finalize(
         requested=accumulator.requested,
         published=accumulator.published,
         failed=accumulator.failed,
+        retrying=accumulator.retrying,
         skipped=accumulator.skipped,
         event_ids=tuple(accumulator.event_ids),
         dead_letter_event_ids=tuple(accumulator.dead_letter_event_ids),
@@ -215,6 +219,7 @@ def _result_json(result: OutboxPublisherWorkerResult) -> str:
             "requested": result.requested,
             "published": result.published,
             "failed": result.failed,
+            "retrying": result.retrying,
             "skipped": result.skipped,
             "eventIds": list(result.event_ids),
             "deadLetterEventIds": list(result.dead_letter_event_ids),

@@ -191,6 +191,10 @@ qaDependencies:
 networkPolicy:
   enabled: true
   kubernetesApiCidr: 10.43.0.1/32
+  # Some local Kubernetes distributions enforce egress after Service DNAT.
+  # The Mac mini deployer resolves and overrides this backend endpoint.
+  kubernetesApiEndpointCidr: 10.43.0.1/32
+  kubernetesApiEndpointPort: 443
   tailscaleIngressNamespaceSelector:
     kubernetes.io/metadata.name: kube-system
 

@@ -680,6 +680,8 @@ def _rolling_restart_fault(args: argparse.Namespace) -> dict[str, object]:
 def _bad_config_fault(args: argparse.Namespace) -> dict[str, object]:
     before = _deployment_snapshot(args)
     helm_before = _helm_status(args)
+    values_before = _helm_values(args)
+    migration_secret = _protected_migration_secret(values_before)
     command = (
         args.helm,
         "upgrade",
@@ -691,24 +693,31 @@ def _bad_config_fault(args: argparse.Namespace) -> dict[str, object]:
         "--atomic",
         "--timeout",
         "2m",
-        "--set",
-        "auth.profile=local",
+        "--set-string",
+        f"secrets.applicationExistingSecret={migration_secret}",
     )
-    failed = _command(command, 180)
+    failed = _bounded_command(command, 180)
+    recovery = _recover_helm_release(args, _helm_revision(helm_before), values_before, failed.returncode == 0)
     helm_after = _helm_status(args)
+    values_after = _helm_values(args)
     after = _deployment_snapshot(args)
     is_rejected = failed.returncode != 0
     is_unchanged = _container_image(after, _API_CONTAINER) == _container_image(before, _API_CONTAINER)
     capacity_kept = _available_replicas(after) >= _available_replicas(before)
-    revision_unchanged = _helm_revision(helm_after) == _helm_revision(helm_before)
-    is_passed = is_rejected and is_unchanged and capacity_kept and revision_unchanged
+    values_restored = _json_sha256(values_after) == _json_sha256(values_before)
+    is_deployed = _helm_release_status(helm_after) == "deployed"
+    is_passed = is_rejected and is_unchanged and capacity_kept and values_restored and is_deployed
     return {
         "status": "passed" if is_passed else "failed",
         "target": "helm/foundry-lite",
         "invalidProtectedConfigRejected": is_rejected,
         "liveDeploymentImageUnchanged": is_unchanged,
         "liveDeploymentCapacityMaintained": capacity_kept,
-        "helmRevisionUnchanged": revision_unchanged,
+        "helmRevisionBefore": _helm_revision(helm_before),
+        "helmRevisionAfter": _helm_revision(helm_after),
+        "helmValuesRestored": values_restored,
+        "helmReleaseRemainsDeployed": is_deployed,
+        "helmRecovery": recovery,
         "failureLogSha256": "sha256:" + hashlib.sha256(failed.stdout + failed.stderr).hexdigest(),
         "rawFailureLogStored": False,
     }
@@ -836,6 +845,7 @@ def _migration_failure_fault(args: argparse.Namespace) -> dict[str, object]:
     image = _container_image(before, _API_CONTAINER)
     name = _fault_resource_name("migration", args.run_id)
     helm_before = _helm_status(args)
+    values_before = _helm_values(args)
     next_revision = _helm_revision(helm_before) + 1
     _create_fault_resource(
         args,
@@ -844,16 +854,19 @@ def _migration_failure_fault(args: argparse.Namespace) -> dict[str, object]:
     )
     try:
         failed = _run_faulting_helm_upgrade(args, name)
-        helm_after = _helm_status(args)
-        after = _deployment_snapshot(args)
+        recovery = _recover_helm_release(args, _helm_revision(helm_before), values_before, False)
     finally:
         _delete_fault_resource_optional(args, "job", f"foundry-lite-migrate-{next_revision}")
         _delete_fault_resource(args, "secret", name, "macmini_fault_migration_secret_cleanup_failed")
+    helm_after = _helm_status(args)
+    values_after = _helm_values(args)
+    after = _deployment_snapshot(args)
     has_failed = failed.returncode != 0
     is_unchanged = _container_image(after, _API_CONTAINER) == image
     has_kept_capacity = _available_replicas(after) >= _available_replicas(before)
     is_deployed = _helm_release_status(helm_after) == "deployed"
-    is_passed = has_failed and is_unchanged and has_kept_capacity and is_deployed
+    values_restored = _json_sha256(values_after) == _json_sha256(values_before)
+    is_passed = has_failed and is_unchanged and has_kept_capacity and is_deployed and values_restored
     failure_output = failed.stdout + failed.stderr
     return {
         "status": "passed" if is_passed else "failed",
@@ -862,6 +875,8 @@ def _migration_failure_fault(args: argparse.Namespace) -> dict[str, object]:
         "liveDeploymentImageUnchanged": is_unchanged,
         "liveDeploymentCapacityMaintained": has_kept_capacity,
         "helmReleaseRemainsDeployed": is_deployed,
+        "helmValuesRestored": values_restored,
+        "helmRecovery": recovery,
         "helmRevisionBefore": _helm_revision(helm_before),
         "helmRevisionAfter": _helm_revision(helm_after),
         "failureLogSha256": "sha256:" + hashlib.sha256(failure_output).hexdigest(),
@@ -1070,14 +1085,58 @@ def _run_faulting_helm_upgrade(args: argparse.Namespace, secret_name: str) -> su
         args.namespace,
         "--reuse-values",
         "--set-string",
-        f"secrets.applicationExistingSecret={secret_name}",
+        f"secrets.migrationExistingSecret={secret_name}",
         "--atomic",
         "--wait",
         "--wait-for-jobs",
         "--timeout",
         "3m",
     )
-    return _command(command, 240)
+    return _bounded_command(command, 420)
+
+
+def _recover_helm_release(
+    args: argparse.Namespace,
+    revision: int,
+    expected_values: object,
+    is_unexpectedly_accepted: bool,
+) -> dict[str, object]:
+    current_status = _helm_status_optional(args)
+    current_values = _helm_values_optional(args)
+    has_drift = current_values is None or _json_sha256(current_values) != _json_sha256(expected_values)
+    is_deployed = current_status is not None and _helm_release_status(current_status) == "deployed"
+    should_rollback = is_unexpectedly_accepted or has_drift or not is_deployed
+    rollback = _helm_rollback(args, revision) if should_rollback else None
+    final_status = _helm_status_optional(args)
+    final_values = _helm_values_optional(args)
+    is_restored = (
+        final_status is not None
+        and _helm_release_status(final_status) == "deployed"
+        and final_values is not None
+        and _json_sha256(final_values) == _json_sha256(expected_values)
+    )
+    return {
+        "rollbackPerformed": should_rollback,
+        "rollbackReturnCode": None if rollback is None else rollback.returncode,
+        "originalValuesRestored": is_restored,
+    }
+
+
+def _helm_rollback(args: argparse.Namespace, revision: int) -> subprocess.CompletedProcess[bytes]:
+    command = (
+        args.helm,
+        "rollback",
+        "foundry-lite",
+        str(revision),
+        "--namespace",
+        args.namespace,
+        "--wait",
+        "--wait-for-jobs",
+        "--cleanup-on-fail",
+        "--timeout",
+        "10m",
+    )
+    return _bounded_command(command, 720)
 
 
 def _helm_status(args: argparse.Namespace) -> object:
@@ -1091,6 +1150,51 @@ def _helm_status(args: argparse.Namespace) -> object:
         "json",
     )
     return _json_output(_command(command, 60), "macmini_fault_helm_status_failed")
+
+
+def _helm_status_optional(args: argparse.Namespace) -> object | None:
+    try:
+        return _helm_status(args)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return None
+
+
+def _helm_values(args: argparse.Namespace) -> object:
+    command = (
+        args.helm,
+        "get",
+        "values",
+        "foundry-lite",
+        "--namespace",
+        args.namespace,
+        "--all",
+        "--output",
+        "json",
+    )
+    return _json_output(_command(command, 60), "macmini_fault_helm_values_failed")
+
+
+def _helm_values_optional(args: argparse.Namespace) -> object | None:
+    try:
+        return _helm_values(args)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return None
+
+
+def _protected_migration_secret(values: object) -> str:
+    global_values = values.get("global") if isinstance(values, dict) else None
+    secrets = values.get("secrets") if isinstance(values, dict) else None
+    if not isinstance(global_values, dict) or global_values.get("protectedProfile") is not True:
+        raise RuntimeError("macmini_fault_protected_profile_required")
+    value = secrets.get("migrationExistingSecret") if isinstance(secrets, dict) else None
+    if not isinstance(value, str) or not value or len(value) > 253:
+        raise RuntimeError("macmini_fault_migration_secret_name_invalid")
+    return value
+
+
+def _json_sha256(value: object) -> str:
+    raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def _helm_revision(payload: object) -> int:
@@ -1395,6 +1499,15 @@ def _command(command: tuple[str, ...], timeout: float) -> subprocess.CompletedPr
         env=qa_command_environment(),
         timeout=timeout,
     )
+
+
+def _bounded_command(command: tuple[str, ...], timeout: float) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return _command(command, timeout)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, bytes) else b""
+        stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+        return subprocess.CompletedProcess(command, 124, stdout, stderr)
 
 
 def _require_success(result: subprocess.CompletedProcess[bytes], reason: str) -> None:

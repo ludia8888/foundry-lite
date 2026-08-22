@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from foundry_lite.infrastructure.adapters.kubernetes_deployment import KubernetesTransportError
 from foundry_lite.infrastructure.kubernetes_release_controller import (
     KubernetesReleaseController,
     KubernetesReleaseControllerConfig,
@@ -51,8 +52,9 @@ def run_controller(config: KubernetesReleaseWorkerConfig) -> Literal[0, 1]:
             results = controller.reconcile_once()
             payload = {"event": "reconcile", "iteration": iteration, "results": _results(results)}
             print(json.dumps(payload, sort_keys=True))
-        except (RuntimeError, ValueError):
-            print(json.dumps({"event": "controller_error", "iteration": iteration, "reason": "reconcile_failed"}))
+        except (RuntimeError, ValueError) as exc:
+            reason = _controller_error_reason(exc)
+            print(json.dumps({"event": "controller_error", "iteration": iteration, "reason": reason}))
             if config.max_iterations == 1:
                 return 1
         if config.max_iterations == 0 or iteration < config.max_iterations:
@@ -76,6 +78,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def _results(results: tuple[KubernetesReleaseControllerResult, ...]) -> list[Mapping[str, object]]:
     return [asdict(result) for result in results]
+
+
+def _controller_error_reason(exc: RuntimeError | ValueError) -> str:
+    if isinstance(exc, KubernetesTransportError):
+        return f"kubernetes_transport_{exc.kind}"
+    return "reconcile_failed"
 
 
 def _required(values: Mapping[str, str], name: str) -> str:

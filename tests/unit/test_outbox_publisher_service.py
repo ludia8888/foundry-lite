@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     OUTBOX_PUBLISHING,
     OUTBOX_PUBLISHING_RECLAIM,
     OutboxEventRecord,
+    StreamEvent,
     StreamPublishRequest,
 )
 from foundry_lite.domain.context import demo_admin_context
@@ -24,6 +25,20 @@ class FailingStreamAdapter(LocalStreamAdapter):
     def publish_event(self, request: StreamPublishRequest) -> NoReturn:
         del request
         raise RuntimeError("stream down")
+
+
+class RecoveringStreamAdapter(LocalStreamAdapter):
+    profile_name = "recovering-stream"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    def publish_event(self, request: StreamPublishRequest) -> StreamEvent:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError("transient stream outage")
+        return super().publish_event(request)
 
 
 def test_operations_publish_pending_outbox_pushes_events_to_stream(tmp_path: Path) -> None:
@@ -48,7 +63,7 @@ def test_operations_publish_pending_outbox_dead_letters_stream_failures(tmp_path
     stream_adapter = FailingStreamAdapter()
     foundry, dependencies = _foundry(tmp_path, stream_adapter=stream_adapter)
     ctx = demo_admin_context()
-    _insert_outbox(dependencies, event_id="outbox_failed_1", request_id=ctx.request_id)
+    _insert_outbox(dependencies, event_id="outbox_failed_1", request_id=ctx.request_id, attempts=4)
 
     result = foundry.operations.publish_pending_outbox(ctx=ctx, stream_name="ops-outbox", limit=10)
     runs = foundry.operations.list_runs(ctx=ctx)
@@ -62,6 +77,26 @@ def test_operations_publish_pending_outbox_dead_letters_stream_failures(tmp_path
     error = cast(dict[str, object], runs["deadLetterEvents"][0]["error"])
     trace = cast(dict[str, object], error["trace"])
     assert trace["adapter"] == "failing-stream"
+
+
+def test_operations_publish_pending_outbox_retries_transient_stream_failure_before_dlq(tmp_path: Path) -> None:
+    stream_adapter = RecoveringStreamAdapter()
+    foundry, dependencies = _foundry(tmp_path, stream_adapter=stream_adapter)
+    ctx = demo_admin_context()
+    _insert_outbox(dependencies, event_id="outbox_retry_1", request_id=ctx.request_id)
+
+    first = foundry.operations.publish_pending_outbox(ctx=ctx, stream_name="ops-outbox", limit=10)
+    after_first = foundry.operations.list_runs(ctx=ctx)
+    second = foundry.operations.publish_pending_outbox(ctx=ctx, stream_name="ops-outbox", limit=10)
+    after_second = foundry.operations.list_runs(ctx=ctx)
+
+    assert first["retrying"] == 1
+    assert first["failed"] == 0
+    assert after_first["outboxEvents"][0]["status"] == "pending"
+    assert after_first["deadLetterEvents"] == []
+    assert second["published"] == 1
+    assert second["retrying"] == 0
+    assert after_second["outboxEvents"][0]["status"] == "published"
 
 
 def test_operations_publish_pending_outbox_reclaims_and_republishes_stuck_publishing_event(tmp_path: Path) -> None:
@@ -154,7 +189,7 @@ def _foundry(
     return FoundryLite(dependencies=dependencies), dependencies
 
 
-def _insert_outbox(dependencies: CoreDependencies, *, event_id: str, request_id: str) -> None:
+def _insert_outbox(dependencies: CoreDependencies, *, event_id: str, request_id: str, attempts: int = 0) -> None:
     with dependencies.engine.begin() as transaction:
         dependencies.runtime_repository.insert_outbox_event(
             transaction=transaction,
@@ -166,7 +201,7 @@ def _insert_outbox(dependencies: CoreDependencies, *, event_id: str, request_id:
                 aggregate_id="dsv_1",
                 payload={"versionId": "dsv_1"},
                 status="pending",
-                attempts=0,
+                attempts=attempts,
                 idempotency_key=event_id,
                 correlation_id=request_id,
                 created_at="2026-06-10T00:00:00Z",

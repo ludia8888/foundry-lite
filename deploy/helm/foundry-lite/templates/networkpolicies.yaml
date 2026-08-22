@@ -64,6 +64,10 @@ spec:
         - ipBlock: {cidr: {{ .Values.networkPolicy.kubernetesApiCidr | quote }}}
       ports:
         - {protocol: TCP, port: 443}
+    - to:
+        - ipBlock: {cidr: {{ .Values.networkPolicy.kubernetesApiEndpointCidr | quote }}}
+      ports:
+        - {protocol: TCP, port: {{ .Values.networkPolicy.kubernetesApiEndpointPort }}}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

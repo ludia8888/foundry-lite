@@ -6456,6 +6456,7 @@ export type FoundryLiteOutboxPublishState =
   FoundryLiteMutationState<OutboxPublishBatchResult, OutboxPublishRequest | undefined> & {
     batch: OutboxPublishBatchResult | null;
     hasFailures: boolean;
+    hasRetries: boolean;
     deadLetterEventIds: string[];
   };
 
@@ -6474,6 +6475,7 @@ export function useFoundryLiteOutboxPublish(
     ...mutation,
     batch: mutation.result,
     hasFailures: (mutation.result?.failed ?? 0) > 0,
+    hasRetries: (mutation.result?.retrying ?? 0) > 0,
     deadLetterEventIds: mutation.result?.deadLetterEventIds ?? [],
   };
 }

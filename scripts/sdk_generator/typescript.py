@@ -2936,6 +2936,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  requested: number;",
         "  published: number;",
         "  failed: number;",
+        "  retrying: number;",
         "  skipped: number;",
         "  eventIds: string[];",
         "  deadLetterEventIds: string[];",

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import stat
 import subprocess  # nosec B404 - fixed Helm/kubectl only; remove if arbitrary command input is introduced.
 import tempfile
+from itertools import product
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -62,7 +64,8 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
     _assert_fresh_release(args)
     secret_receipt = bootstrap_secrets(args)
     image_prepull = _prepull_images(manifest, _qa_input_path(args.registry_token_file, is_directory=False))
-    override, foundation = _write_overrides(args.run_id, manifest)
+    api_endpoint = _kubernetes_api_endpoint(args)
+    override, foundation = _write_overrides(args.run_id, manifest, api_endpoint)
     value_files = (values, initial_auth_values)
     foundation_result = _helm(args, chart, value_files, override, foundation)
     final_result = _helm(args, chart, value_files, override, None)
@@ -97,7 +100,7 @@ def upgrade(args: argparse.Namespace) -> dict[str, object]:
     _assert_deployed_release(args)
     runtime_contract = _write_upgrade_runtime_contract(args)
     image_prepull = _prepull_images(manifest, token)
-    override = _write_runtime_override(args.run_id, manifest)
+    override = _write_runtime_override(args.run_id, manifest, _kubernetes_api_endpoint(args))
     helm_result = _helm_upgrade(args, chart, (values, runtime_contract), override)
     evidence = _collect_evidence(args)
     receipt = _upgrade_receipt(
@@ -280,8 +283,10 @@ def _validate_initial_auth_values(path: Path) -> None:
         raise ValueError("macmini_qa_initial_auth_values_invalid")
 
 
-def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Path]:
-    override = _write_runtime_override(run_id, manifest)
+def _write_overrides(
+    run_id: str, manifest: dict[str, object], api_endpoint: dict[str, object] | None = None
+) -> tuple[Path, Path]:
+    override = _write_runtime_override(run_id, manifest, api_endpoint)
     state = QA_ROOT / "state"
     foundation = state / f"{run_id}-foundation.json"
     _write_private_json(
@@ -299,10 +304,69 @@ def _write_overrides(run_id: str, manifest: dict[str, object]) -> tuple[Path, Pa
     return override, foundation
 
 
-def _write_runtime_override(run_id: str, manifest: dict[str, object]) -> Path:
+def _write_runtime_override(
+    run_id: str, manifest: dict[str, object], api_endpoint: dict[str, object] | None = None
+) -> Path:
     override = QA_ROOT / "state" / f"{run_id}-immutable-images.json"
-    _write_private_json(override, {"global": {"revision": manifest["revision"]}, "images": manifest["images"]})
+    value: dict[str, object] = {"global": {"revision": manifest["revision"]}, "images": manifest["images"]}
+    if api_endpoint is not None:
+        value["networkPolicy"] = api_endpoint
+    _write_private_json(override, value)
     return override
+
+
+def _kubernetes_api_endpoint(args: argparse.Namespace) -> dict[str, object]:
+    payload = _json_command(
+        args,
+        ("get", "endpoints", "kubernetes", "--namespace", "default", "--output", "json"),
+        "macmini_qa_kubernetes_api_endpoint_read_failed",
+    )
+    subsets = payload.get("subsets") if isinstance(payload, dict) else None
+    if not isinstance(subsets, list):
+        raise RuntimeError("macmini_qa_kubernetes_api_endpoint_invalid")
+    candidates = _endpoint_candidates(subsets)
+    if len(candidates) != 1:
+        raise RuntimeError("macmini_qa_kubernetes_api_endpoint_invalid")
+    address, port = candidates[0]
+    parsed = ipaddress.ip_address(address)
+    suffix = 32 if parsed.version == 4 else 128
+    return {"kubernetesApiEndpointCidr": f"{parsed}/{suffix}", "kubernetesApiEndpointPort": port}
+
+
+def _endpoint_candidates(subsets: list[object]) -> list[tuple[str, int]]:
+    candidates: set[tuple[str, int]] = set()
+    for subset in subsets:
+        candidates.update(_subset_endpoint_candidates(subset))
+    return sorted(candidates)
+
+
+def _subset_endpoint_candidates(subset: object) -> set[tuple[str, int]]:
+    addresses = subset.get("addresses") if isinstance(subset, dict) else None
+    ports = subset.get("ports") if isinstance(subset, dict) else None
+    if not isinstance(addresses, list) or not isinstance(ports, list):
+        return set()
+    pairs = product(_endpoint_field_values(addresses, "ip"), _endpoint_field_values(ports, "port"))
+    return set(map(_cast_endpoint_pair, filter(_is_endpoint_tuple, pairs)))
+
+
+def _endpoint_field_values(values: list[object], key: str) -> list[object]:
+    return [item.get(key) for item in values if isinstance(item, dict)]
+
+
+def _is_endpoint_tuple(value: tuple[object, object]) -> bool:
+    return _is_endpoint_pair(value[0], value[1])
+
+
+def _cast_endpoint_pair(value: tuple[object, object]) -> tuple[str, int]:
+    return cast(tuple[str, int], value)
+
+
+def _is_endpoint_pair(address: object, port: object) -> bool:
+    return isinstance(address, str) and _is_endpoint_port(port)
+
+
+def _is_endpoint_port(port: object) -> bool:
+    return type(port) is int and port in range(1, 65536)
 
 
 def _write_upgrade_runtime_contract(args: argparse.Namespace) -> Path:
