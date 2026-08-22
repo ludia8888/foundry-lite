@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import sys
+from argparse import Namespace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from scripts.operations import run_macmini_soak as subject
 from scripts.operations.run_macmini_soak import (
     PhaseWindow,
     _business_probe,
@@ -218,8 +220,9 @@ def test_phase_metrics_require_quiet_resources_to_return_to_baseline(
     started = datetime(2026, 8, 17, tzinfo=UTC)
     baseline = [_operational_sample(started + timedelta(seconds=index), memory=40) for index in range(10)]
     quiet = [_operational_sample(started + timedelta(seconds=20 + index), memory=42) for index in range(10)]
+    drain = _drain_samples(started + timedelta(seconds=31))
     samples.write_text(
-        "".join(json.dumps(sample) + "\n" for sample in baseline + quiet),
+        "".join(json.dumps(sample) + "\n" for sample in baseline + quiet + drain),
         encoding="utf-8",
     )
     windows = (
@@ -236,7 +239,76 @@ def test_phase_metrics_require_quiet_resources_to_return_to_baseline(
 
     assert summary["status"] == "passed"
     assert summary["baselineReturn"]["status"] == "passed"
+    assert summary["outboxDrain"]["status"] == "passed"
+    assert summary["outboxDrain"]["businessProbeExecutions"] == 0
     assert summary["phaseMetrics"]["baseline"]["httpLatencyMs"]["p95"] == 1
+
+
+def test_quiet_tail_uses_post_workload_consecutive_outbox_drain(tmp_path: Path) -> None:
+    samples = tmp_path / "samples.ndjson"
+    started = datetime(2026, 8, 17, tzinfo=UTC)
+    baseline = [_operational_sample(started + timedelta(seconds=index), memory=40) for index in range(10)]
+    quiet = [_operational_sample(started + timedelta(seconds=20 + index), memory=42) for index in range(10)]
+    for sample in quiet:
+        receipt = sample["operationsProbe"]["receipt"]  # type: ignore[index]
+        receipt["outboxPendingCount"] = 2  # type: ignore[index]
+        receipt["oldestOutboxPendingSeconds"] = 7  # type: ignore[index]
+    drain = _drain_samples(started + timedelta(seconds=31))
+    samples.write_text(
+        "".join(json.dumps(sample) + "\n" for sample in baseline + quiet + drain),
+        encoding="utf-8",
+    )
+    windows = (
+        PhaseWindow("baseline", started, started + timedelta(seconds=10)),
+        PhaseWindow("quiet", started + timedelta(seconds=20), started + timedelta(seconds=30)),
+    )
+
+    summary = _summarize(
+        samples,
+        30,
+        phase_windows=windows,
+        is_operations_probe_required=True,
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["baselineReturn"]["checks"]["outboxDrained"] is True
+    assert summary["baselineReturn"]["quietTail"]["finalOutboxPendingCount"] == 2
+    assert summary["outboxDrain"]["finalOutboxPendingCount"] == 0
+
+
+def test_outbox_drain_requires_three_consecutive_zero_observations(monkeypatch) -> None:
+    pending_counts = iter((0, 1, 0, 0, 0))
+    appended: list[dict[str, object]] = []
+    monkeypatch.setattr(subject.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(subject.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        subject,
+        "_drain_sample",
+        lambda *_args: _drain_sample(datetime.now(UTC), next(pending_counts), 0),
+    )
+    monkeypatch.setattr(subject, "_append_sample", lambda _stream, sample: appended.append(sample))
+
+    subject._collect_outbox_drain_samples(Namespace(), (), None, 10, (), object())  # type: ignore[arg-type]
+
+    assert [sample["outboxDrainConsecutiveZeroCount"] for sample in appended] == [1, 0, 1, 2, 3]
+
+
+def test_drain_sample_disables_business_and_forces_operations_probe(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    def sample(*_args, **kwargs):
+        observed.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(subject, "_sample", sample)
+
+    subject._drain_sample(Namespace(), (), None, 1, ())
+
+    assert observed == {
+        "is_business_probe_enabled": False,
+        "is_operations_probe_forced": True,
+        "sample_kind": "outboxDrain",
+    }
 
 
 def test_phase_metrics_fail_when_quiet_memory_does_not_recover(tmp_path: Path) -> None:
@@ -309,6 +381,21 @@ def _operational_sample(sampled_at: datetime, *, memory: int) -> dict[str, objec
             "deadLetterCount": 0,
         },
     }
+    return sample
+
+
+def _drain_samples(started: datetime) -> list[dict[str, object]]:
+    return [_drain_sample(started + timedelta(seconds=index), 0, index + 1) for index in range(3)]
+
+
+def _drain_sample(sampled_at: datetime, pending_count: int, consecutive_zeroes: int) -> dict[str, object]:
+    sample = _operational_sample(sampled_at, memory=42)
+    receipt = sample["operationsProbe"]["receipt"]  # type: ignore[index]
+    receipt["outboxPendingCount"] = pending_count  # type: ignore[index]
+    receipt["oldestOutboxPendingSeconds"] = 0 if pending_count == 0 else 1  # type: ignore[index]
+    sample["sampleKind"] = "outboxDrain"
+    sample["businessProbe"] = None
+    sample["outboxDrainConsecutiveZeroCount"] = consecutive_zeroes
     return sample
 
 

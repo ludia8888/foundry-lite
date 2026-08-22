@@ -165,7 +165,7 @@ Tailscale owner와 DNS가 `sean1234` 대상임을 확인한 뒤에만 443을 Web
 
 ## 7. 장애 주입
 
-각 장애는 `scripts/operations/inject_macmini_fault.py`로 한 번에 하나만 실행하고, 원래 replica와 NetworkPolicy selector를 `finally`에서 복구한다. 추가 deny policy는 기존 allow policy를 무효화하지 못하므로 network partition은 기존 internal policy의 selector를 bounded하게 patch한 뒤 원본으로 되돌린다. `worker-sigkill`은 더 이상 `kubectl exec` 안의 PID 1을 죽이지 않는다. Kubernetes status의 exact container ID를 Colima runtime `docker inspect`로 host PID까지 다시 대조한 뒤 같은 runtime container에 `docker kill --signal KILL`을 보낸다. receipt는 kill acceptance timestamp, runtime container ID/PID 전후, restartCount, Kubernetes termination signal, 새 container ID, 새 host PID, rollout recovery를 모두 남기며 하나라도 빠지면 실패다.
+각 장애는 `scripts/operations/inject_macmini_fault.py`로 한 번에 하나만 실행하고, 원래 replica와 NetworkPolicy selector를 `finally`에서 복구한다. 추가 deny policy는 기존 allow policy를 무효화하지 못하므로 network partition은 기존 internal policy의 selector를 bounded하게 patch한 뒤 원본으로 되돌린다. signal fault는 더 이상 `kubectl exec` 안의 PID 1을 죽이지 않는다. Kubernetes status의 exact container ID를 Colima runtime `docker inspect`로 host PID까지 다시 대조한 뒤 같은 runtime container에 `docker kill --signal <SIGNAL>`을 보낸다. receipt는 kill acceptance timestamp, runtime container ID/PID 전후, restartCount, 새 container ID, 새 host PID, rollout recovery를 모두 남긴다. `SIGKILL`은 Kubernetes termination signal 또는 `128+signal` exit code를 반드시 요구한다. `SIGTERM`은 application이 신호를 정상 처리할 수 있으므로 같은 runtime kill·container 교체·restart 증가가 모두 증명되고 Kubernetes가 `reason=Completed`, `exitCode=0`, 종료 시각을 기록한 경우 `terminationMode=graceful`로도 통과한다. 이 완화는 `SIGKILL`에는 적용하지 않는다.
 
 지원하는 추가 안전 장애 이름은 `invalid-image`, `migration-failure`, `pvc-disk-pressure`다. `invalid-image`는 존재하지 않는 digest가 새 API replica로 승격되지 않는지 확인한 뒤 `rollout undo`가 아니라 관측한 원래 digest를 명시적으로 복원한다. `migration-failure`는 임시 immutable DB Secret과 `helm upgrade --atomic --reuse-values`로 실제 pre-upgrade migration hook을 연결 불가능한 loopback DB에 실행하고, 실패 뒤 release가 계속 `deployed`이며 live Deployment image·가용 replica가 바뀌지 않았는지 확인한다. `pvc-disk-pressure`는 전용 128 MiB `local-path` PVC만 112 MiB(87.5%)까지 채워 임계 경보를 기록하고, 더 쓰지 않은 채 Job과 PVC를 삭제한다. 정리는 Kubernetes 리소스 부재뿐 아니라 PVC가 실제 저장되는 Colima 데이터 디스크의 `/var/lib/rancher/k3s/storage` 가용 공간 회복으로 확인한다. macOS host path나 기존 PVC는 채우지 않는다.
 
@@ -213,7 +213,10 @@ Dataset inventory, active object index, action/materialization run, row/object/h
 최종 soak summary는 전체 집계 외에도 9개 단계별 sample 수, availability, HTTP/business p50·p95·p99,
 memory/disk/DB connection p50·p95·p99, outbox 최고치와 최종치를 별도로 남긴다. quiet 마지막 10% 구간은
 baseline p95 대비 memory `+10%p`, disk `+5%p`, DB connection `max(+5, +20%)` 안으로 복귀해야 하며,
-outbox 수와 oldest lag가 모두 0이고 business failure가 없어야 통과한다. baseline 또는 quiet sample이 10개보다
+business failure가 없어야 한다. 24시간 workload가 끝나면 business probe를 먼저 완전히 중단하고 operations-only
+drain barrier를 시작한다. 2초 간격으로 pending outbox와 oldest lag가 모두 0인 관측이 3회 연속 나와야
+`outboxDrain.status=passed`가 된다. 120초 안에 이 조건을 만족하지 못하면 실패한다. 따라서 workload가 새 이벤트를
+만드는 순간에 찍힌 마지막 snapshot과 실제 drain 완료를 혼동하지 않는다. baseline 또는 quiet sample이 10개보다
 적어도 fail-closed한다.
 
 | 경과 시간 | 단계 | 실제 주입 및 검증 |
@@ -245,10 +248,31 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
 ```
 
 Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승인된 tailnet URL로 치환한다. campaign은 각
-이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. 복구가 실패하면
-남은 mutation을 중지하고 quiet observation만 유지한다. 네트워크 fault는 다른 macOS 계정이나 Docker Desktop이
+이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. fault execution
+증거가 실패해도 recovery probe가 모두 통과하면 해당 이벤트 자체는 실패로 남기되 다음 장애는 계속 실행한다.
+실제 복구가 실패할 때만 남은 mutation을 중지하고 quiet observation만 유지한다. 네트워크 fault는 다른 macOS 계정이나 Docker Desktop이
 아니라 전용 `foundry-qa` Colima VM의 `cni0`에만 적용하며, 기존 qdisc가 있으면 덮어쓰지 않고 중단한다. 모든
 qdisc/iptables/Deployment command 변경은 `finally`에서 exact 원상복구한다.
+
+판정 오류 때문에 이전 campaign에서 `failed` 또는 `skipped`가 된 이벤트만 즉시 다시 실행할 때는 같은 고정 event
+command와 recovery probe를 사용하는 remediation mode를 쓴다. 이 mode는 source journal SHA-256과 선택된 event ID,
+개별 execution/recovery receipt를 새 run 아래에 남긴다. `blocked`와 이미 `passed`인 이벤트는 다시 실행하지 않는다.
+
+```bash
+PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_enterprise_campaign.py \
+  --run-id "$REMEDIATION_RUN_ID" \
+  --rerun-failed-and-skipped-from-run-id "$SOURCE_RUN_ID" \
+  --kubeconfig /Users/sean1234/foundry-qa/state/kubeconfig \
+  --business-probe-config /Users/sean1234/foundry-qa/state/business-probe.json \
+  --operator-token-file /Users/sean1234/foundry-qa/state/operator-token \
+  --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt \
+  --age-identity-file /Users/sean1234/foundry-qa/state/age-identity.txt \
+  --current-commit "$CURRENT_SHA" \
+  --rollback-commit "$PREVIOUS_VERIFIED_SHA"
+```
+
+remediation summary가 `passed`여도 `full24HourCampaignStatus=notProven`, `p0P1Clear=false`를 유지한다. 이는 건너뛴
+장애 복구 증거를 닫는 실행이지, 시간축·지속 부하까지 포함한 새 24시간 campaign을 대신하지 않는다.
 
 sampler receipt에는 동일 `actionRunId`, `idempotentReplay=true`, materialization version/row count, Dataset preview 및
 Object query 일치만 남기고 원문 데이터·parameter·token은 제외한다. probe별 availability와 p50·p95·p99를 따로
@@ -262,7 +286,7 @@ Acceptance는 다음과 같다.
 - business probe 실행 1회 이상, 실패 0, 마지막 Action replay·materialization·Object query receipt 모두 일치
 - 선언 밖 OOM/restart/replacement 0; 선언된 worker OOM은 `OOMKilled` 실제 관측과 exact command 복원 필수
 - committed 데이터 손실·중복 0
-- 최종 pending outbox 0, dead-letter 증가 0
+- workload 중단 후 pending outbox와 oldest lag 0을 3회 연속 관측, dead-letter 증가 0
 - node memory 85% 미만, disk 80% 미만
 - warm-up 이후 지속적 memory/disk 증가 없음
 - 모든 fault와 restore 결과가 `passed`, `failed`, `blocked`, `notProven` 중 하나로 분류됨

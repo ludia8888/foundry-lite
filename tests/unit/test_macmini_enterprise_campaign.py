@@ -64,3 +64,55 @@ def test_campaign_summary_surfaces_phase_and_baseline_return_evidence() -> None:
     assert summary["status"] == "passed"
     assert summary["baselineReturn"] == {"status": "passed"}
     assert summary["phaseMetrics"] == {"baseline": {"sampleCount": 10}}
+
+
+def test_failed_fault_execution_with_passed_recovery_does_not_skip_later_faults() -> None:
+    event = next(item for item in EVENTS if item.event_id == "api-sigterm")
+    receipt = {
+        "status": "failed",
+        "execution": {"status": "failed"},
+        "recovery": {"status": "passed"},
+    }
+
+    assert subject._blocks_later_mutations(event, receipt) is False
+
+
+def test_failed_recovery_stops_later_mutating_faults() -> None:
+    event = next(item for item in EVENTS if item.event_id == "worker-sigkill")
+    receipt = {
+        "status": "failed",
+        "execution": {"status": "passed"},
+        "recovery": {"status": "failed"},
+    }
+
+    assert subject._blocks_later_mutations(event, receipt) is True
+
+
+def test_remediation_selects_failed_and_skipped_events_only() -> None:
+    journal = b"\n".join(
+        (
+            json.dumps({"eventId": "api-pod-delete", "status": "passed"}).encode(),
+            json.dumps({"eventId": "api-sigterm", "status": "failed"}).encode(),
+            json.dumps({"eventId": "worker-sigkill", "status": "skipped"}).encode(),
+            json.dumps({"eventId": "external-oidc-network-path", "status": "blocked"}).encode(),
+        )
+    )
+
+    selected = subject._selected_remediation_event_ids(journal)
+
+    assert selected == {"api-sigterm", "worker-sigkill"}
+
+
+def test_remediation_summary_does_not_claim_full_24_hour_clear() -> None:
+    args = Namespace(run_id="remediation", rerun_failed_and_skipped_from_run_id="source")
+
+    summary = subject._remediation_summary(
+        args,
+        [{"status": "passed"}, {"status": "passed"}],
+        b"journal",
+        subject.datetime.now(subject.UTC),
+    )
+
+    assert summary["status"] == "passed"
+    assert summary["full24HourCampaignStatus"] == "notProven"
+    assert summary["p0P1Clear"] is False

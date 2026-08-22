@@ -24,6 +24,11 @@ from scripts.operations.macmini_qa_guard import (
     assert_namespace,
 )
 
+_OUTBOX_DRAIN_CONSECUTIVE_ZEROES = 3
+_OUTBOX_DRAIN_INTERVAL_SECONDS = 2.0
+_OUTBOX_DRAIN_TIMEOUT_SECONDS = 120.0
+_OUTBOX_DRAIN_SAMPLE_KIND = "outboxDrain"
+
 
 @dataclass(frozen=True, slots=True)
 class Probe:
@@ -112,6 +117,8 @@ def run_soak(args: argparse.Namespace) -> dict[str, object]:
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(min(interval, remaining))
+        if args.require_operations_probe:
+            _collect_outbox_drain_samples(args, probes, token, sample_count, fault_windows, stream)
     summary = _summarize(
         samples_path,
         duration,
@@ -130,20 +137,27 @@ def _sample(
     sampled_at: str,
     sample_index: int,
     fault_windows: tuple[tuple[datetime, datetime], ...],
+    *,
+    is_business_probe_enabled: bool = True,
+    is_operations_probe_forced: bool = False,
+    sample_kind: str = "steady",
 ) -> dict[str, object]:
     results = [_http_probe(probe, token, args.http_timeout_seconds) for probe in probes]
     pods = _kubectl_json(args.kubectl, args.kubeconfig, args.namespace, ("get", "pods", "-o", "json"))
     node_metrics = _node_metrics(args.kubectl, args.kubeconfig)
     disk = _colima_disk_metrics()
     business = None
-    if args.business_probe_command_json and sample_index % args.business_probe_every == 0:
+    if is_business_probe_enabled and args.business_probe_command_json and sample_index % args.business_probe_every == 0:
         business = _business_probe(args.business_probe_command_json, args.business_probe_timeout_seconds)
     operations = None
-    if args.operations_probe_command_json and sample_index % args.operations_probe_every == 0:
+    if args.operations_probe_command_json and (
+        is_operations_probe_forced or sample_index % args.operations_probe_every == 0
+    ):
         operations = _operations_probe(args.operations_probe_command_json, args.operations_probe_timeout_seconds)
     return {
         "schemaVersion": 1,
         "sampledAt": sampled_at,
+        "sampleKind": sample_kind,
         "isDeclaredFault": _is_declared_fault(sampled_at, fault_windows),
         "http": results,
         "pods": _pod_snapshot(pods),
@@ -152,6 +166,58 @@ def _sample(
         "businessProbe": business,
         "operationsProbe": operations,
     }
+
+
+def _collect_outbox_drain_samples(
+    args: argparse.Namespace,
+    probes: tuple[Probe, ...],
+    token: str | None,
+    sample_index: int,
+    fault_windows: tuple[tuple[datetime, datetime], ...],
+    stream: TextIO,
+) -> None:
+    deadline = time.monotonic() + _OUTBOX_DRAIN_TIMEOUT_SECONDS
+    consecutive_zeroes = 0
+    while time.monotonic() < deadline and consecutive_zeroes < _OUTBOX_DRAIN_CONSECUTIVE_ZEROES:
+        sample = _drain_sample(args, probes, token, sample_index, fault_windows)
+        consecutive_zeroes = consecutive_zeroes + 1 if _outbox_is_drained(sample) else 0
+        sample["outboxDrainConsecutiveZeroCount"] = consecutive_zeroes
+        _append_sample(stream, sample)
+        sample_index += 1
+        if consecutive_zeroes < _OUTBOX_DRAIN_CONSECUTIVE_ZEROES:
+            time.sleep(_OUTBOX_DRAIN_INTERVAL_SECONDS)
+
+
+def _drain_sample(
+    args: argparse.Namespace,
+    probes: tuple[Probe, ...],
+    token: str | None,
+    sample_index: int,
+    fault_windows: tuple[tuple[datetime, datetime], ...],
+) -> dict[str, object]:
+    return _sample(
+        args,
+        probes,
+        token,
+        datetime.now(UTC).isoformat(),
+        sample_index,
+        fault_windows,
+        is_business_probe_enabled=False,
+        is_operations_probe_forced=True,
+        sample_kind=_OUTBOX_DRAIN_SAMPLE_KIND,
+    )
+
+
+def _outbox_is_drained(sample: Mapping[str, object]) -> bool:
+    probe = sample.get("operationsProbe")
+    receipt = probe.get("receipt") if isinstance(probe, Mapping) else None
+    return (
+        isinstance(probe, Mapping)
+        and probe.get("status") == "passed"
+        and isinstance(receipt, Mapping)
+        and receipt.get("outboxPendingCount") == 0
+        and receipt.get("oldestOutboxPendingSeconds") == 0
+    )
 
 
 def _http_probe(probe: Probe, token: str | None, timeout_seconds: float) -> dict[str, object]:
@@ -412,8 +478,8 @@ def _summarize(
     *,
     is_operations_probe_required: bool = False,
 ) -> dict[str, object]:
-    samples = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    eligible = [sample for sample in samples if not _is_declared_fault(str(sample["sampledAt"]), fault_windows)]
+    samples = _load_samples(path)
+    eligible = _eligible_samples(samples, fault_windows)
     metrics = _soak_metrics(
         samples,
         eligible,
@@ -421,10 +487,11 @@ def _summarize(
         is_operations_probe_required=is_operations_probe_required,
     )
     phase_metrics = _phase_metrics(samples, phase_windows)
-    baseline_return = _baseline_return(samples, phase_windows, phase_metrics)
+    outbox_drain = _outbox_drain_summary(samples, is_operations_probe_required)
+    baseline_return = _baseline_return(samples, phase_windows, phase_metrics, outbox_drain)
     return {
         "schemaVersion": 1,
-        "status": ("passed" if metrics.is_passed and baseline_return["status"] != "failed" else "failed"),
+        "status": _soak_status(metrics, baseline_return, outbox_drain),
         "requestedDurationSeconds": requested_duration_seconds,
         "sampleCount": len(samples),
         "eligibleSampleCount": len(eligible),
@@ -437,9 +504,7 @@ def _summarize(
         "businessProbeFailures": metrics.business_failures,
         "lastBusinessProbeReceipt": _last_business_receipt(eligible),
         "httpLatencyMs": _latency_percentiles(_http_results(sample) for sample in eligible),
-        "businessLatencyMs": _latency_percentiles(
-            [sample.get("businessProbe")] for sample in eligible if isinstance(sample.get("businessProbe"), dict)
-        ),
+        "businessLatencyMs": _latency_percentiles(_business_probe_results(eligible)),
         "maximumObservedOomCount": _maximum_pod_value(samples, "oomCount"),
         "unexpectedOomIncrementCount": metrics.unexpected_ooms,
         "operationsProbeRequired": metrics.is_operations_probe_required,
@@ -459,9 +524,38 @@ def _summarize(
         "isSustainedDiskGrowth": metrics.is_disk_growth_sustained,
         "phaseMetrics": phase_metrics,
         "baselineReturn": baseline_return,
+        "outboxDrain": outbox_drain,
         "hostPhysicalFailureTolerance": "notProven",
         "multiNodeAvailability": "notProven",
     }
+
+
+def _load_samples(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _eligible_samples(
+    samples: list[dict[str, object]],
+    fault_windows: tuple[tuple[datetime, datetime], ...],
+) -> list[dict[str, object]]:
+    return [sample for sample in samples if not _is_declared_fault(str(sample["sampledAt"]), fault_windows)]
+
+
+def _business_probe_results(samples: list[dict[str, object]]) -> list[list[object]]:
+    return [[sample["businessProbe"]] for sample in samples if isinstance(sample.get("businessProbe"), dict)]
+
+
+def _soak_status(
+    metrics: SoakMetrics,
+    baseline_return: Mapping[str, object],
+    outbox_drain: Mapping[str, object],
+) -> str:
+    checks = (
+        metrics.is_passed,
+        baseline_return.get("status") != "failed",
+        outbox_drain.get("status") != "failed",
+    )
+    return "passed" if all(checks) else "failed"
 
 
 def _phase_metrics(samples: list[dict[str, object]], windows: tuple[PhaseWindow, ...]) -> dict[str, object]:
@@ -494,6 +588,7 @@ def _baseline_return(
     samples: list[dict[str, object]],
     windows: tuple[PhaseWindow, ...],
     phase_metrics: dict[str, object],
+    outbox_drain: Mapping[str, object],
 ) -> dict[str, object]:
     if not windows:
         return {"status": "notRequired"}
@@ -502,7 +597,7 @@ def _baseline_return(
     if len(baseline) < 10 or len(quiet) < 10:
         return {"status": "failed", "reason": "insufficient_phase_samples"}
     quiet_tail = quiet[-max(10, len(quiet) // 10) :]
-    checks = _baseline_return_checks(baseline, quiet_tail)
+    checks = _baseline_return_checks(baseline, quiet_tail, outbox_drain)
     return {
         "status": "passed" if all(checks.values()) else "failed",
         "checks": checks,
@@ -511,7 +606,11 @@ def _baseline_return(
     }
 
 
-def _baseline_return_checks(baseline: list[dict[str, object]], quiet_tail: list[dict[str, object]]) -> dict[str, bool]:
+def _baseline_return_checks(
+    baseline: list[dict[str, object]],
+    quiet_tail: list[dict[str, object]],
+    outbox_drain: Mapping[str, object],
+) -> dict[str, bool]:
     baseline_memory = _section_percentile(baseline, "nodeMetrics", "memoryPercent", 0.95)
     quiet_memory = _section_percentile(quiet_tail, "nodeMetrics", "memoryPercent", 0.95)
     baseline_disk = _section_percentile(baseline, "disk", "usedPercent", 0.95)
@@ -522,8 +621,14 @@ def _baseline_return_checks(baseline: list[dict[str, object]], quiet_tail: list[
         "memoryReturned": _within_delta(baseline_memory, quiet_memory, 10),
         "diskReturned": _within_delta(baseline_disk, quiet_disk, 5),
         "databaseConnectionsReturned": _database_connections_returned(baseline_db, quiet_db),
-        "outboxDrained": _last_operations_value(quiet_tail, "outboxPendingCount") == 0,
-        "queueLagDrained": _last_operations_value(quiet_tail, "oldestOutboxPendingSeconds") == 0,
+        "outboxDrained": _drain_check(
+            outbox_drain,
+            _last_operations_value(quiet_tail, "outboxPendingCount") == 0,
+        ),
+        "queueLagDrained": _drain_check(
+            outbox_drain,
+            _last_operations_value(quiet_tail, "oldestOutboxPendingSeconds") == 0,
+        ),
         "quietBusinessSucceeded": _business_probe_executions(quiet_tail) > 0
         and _business_probe_failures(quiet_tail) == 0,
         "quietAvailabilityRecovered": all(
@@ -532,6 +637,38 @@ def _baseline_return_checks(baseline: list[dict[str, object]], quiet_tail: list[
                 [probe for sample in quiet_tail for probe in _http_results(sample)]
             ).values()
         ),
+    }
+
+
+def _drain_check(outbox_drain: Mapping[str, object], is_fallback_passed: bool) -> bool:
+    return is_fallback_passed if outbox_drain.get("status") == "notRequired" else outbox_drain.get("status") == "passed"
+
+
+def _outbox_drain_summary(samples: list[dict[str, object]], is_required: bool) -> dict[str, object]:
+    if not is_required:
+        return {"status": "notRequired"}
+    drain_samples = [sample for sample in samples if sample.get("sampleKind") == _OUTBOX_DRAIN_SAMPLE_KIND]
+    if not drain_samples:
+        return {"status": "failed", "reason": "drain_samples_missing", "sampleCount": 0}
+    final_sample = drain_samples[-1]
+    consecutive_zeroes = final_sample.get("outboxDrainConsecutiveZeroCount")
+    is_confirmed = (
+        isinstance(consecutive_zeroes, int)
+        and not isinstance(consecutive_zeroes, bool)
+        and consecutive_zeroes >= _OUTBOX_DRAIN_CONSECUTIVE_ZEROES
+        and _outbox_is_drained(final_sample)
+    )
+    return {
+        "status": "passed" if is_confirmed else "failed",
+        "sampleCount": len(drain_samples),
+        "requiredConsecutiveZeroCount": _OUTBOX_DRAIN_CONSECUTIVE_ZEROES,
+        "observedConsecutiveZeroCount": consecutive_zeroes,
+        "finalOutboxPendingCount": _last_operations_value(drain_samples, "outboxPendingCount"),
+        "finalOldestOutboxPendingSeconds": _last_operations_value(
+            drain_samples,
+            "oldestOutboxPendingSeconds",
+        ),
+        "businessProbeExecutions": _business_probe_executions(drain_samples),
     }
 
 
