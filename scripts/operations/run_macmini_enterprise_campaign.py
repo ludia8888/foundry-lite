@@ -29,6 +29,8 @@ from scripts.operations.macmini_qa_guard import (
 
 _PYTHONPATH = ".:libs:apps/cli:apps/api:apps/worker"
 _REMEDIATION_SOURCE_STATUSES = frozenset({"failed", "skipped"})
+_RECOVERY_PROBE_DEADLINE_SECONDS = 120
+_RECOVERY_PROBE_INTERVAL_SECONDS = 5
 
 
 def run_campaign(args: argparse.Namespace) -> dict[str, object]:
@@ -368,12 +370,48 @@ def _run_dr(args: argparse.Namespace, event: CampaignEvent) -> dict[str, object]
 
 
 def _recovery_probe(args: argparse.Namespace) -> dict[str, object]:
+    started = time.monotonic()
+    deadline = started + _RECOVERY_PROBE_DEADLINE_SECONDS
+    attempt_count = 0
+    first_attempt_status = "failed"
+    while True:
+        attempt = _recovery_attempt(args)
+        attempt_count += 1
+        if attempt_count == 1:
+            first_attempt_status = str(attempt["status"])
+        if attempt["status"] == "passed":
+            return _recovery_probe_receipt(attempt, attempt_count, first_attempt_status, started)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _recovery_probe_receipt(attempt, attempt_count, first_attempt_status, started)
+        time.sleep(min(_RECOVERY_PROBE_INTERVAL_SECONDS, remaining))
+
+
+def _recovery_attempt(args: argparse.Namespace) -> dict[str, object]:
     business = _execute(_business_probe_command(args), 180)
     operations = _execute(_operations_probe_command(args), 120)
     return {
         "status": ("passed" if business["status"] == "passed" and operations["status"] == "passed" else "failed"),
         "business": business,
         "operations": operations,
+    }
+
+
+def _recovery_probe_receipt(
+    attempt: dict[str, object],
+    attempt_count: int,
+    first_attempt_status: str,
+    started: float,
+) -> dict[str, object]:
+    status = str(attempt["status"])
+    return {
+        **attempt,
+        "attemptCount": attempt_count,
+        "firstAttemptStatus": first_attempt_status,
+        "recoveredAfterRetry": status == "passed" and attempt_count > 1,
+        "recoveryDeadlineSeconds": _RECOVERY_PROBE_DEADLINE_SECONDS,
+        "durationMs": int((time.monotonic() - started) * 1000),
+        "reason": None if status == "passed" else "recovery_deadline_exceeded",
     }
 
 

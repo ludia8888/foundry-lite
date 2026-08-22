@@ -248,7 +248,10 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
 ```
 
 Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승인된 tailnet URL로 치환한다. campaign은 각
-이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. fault execution
+이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. StatefulSet이나
+container가 Ready여도 API connection pool이 기존 연결을 정리하는 짧은 구간이 있을 수 있으므로 recovery probe는
+최대 120초 동안 5초 간격으로 bounded polling한다. receipt에는 첫 시도 상태, 총 시도 수, 재시도 후 복구 여부와
+최종 business/operations 증거를 남긴다. fault execution
 증거가 실패해도 recovery probe가 모두 통과하면 해당 이벤트 자체는 실패로 남기되 다음 장애는 계속 실행한다.
 실제 복구가 실패할 때만 남은 mutation을 중지하고 quiet observation만 유지한다. 네트워크 fault는 다른 macOS 계정이나 Docker Desktop이
 아니라 전용 `foundry-qa` Colima VM의 `cni0`에만 적용하며, 기존 qdisc가 있으면 덮어쓰지 않고 중단한다. 모든

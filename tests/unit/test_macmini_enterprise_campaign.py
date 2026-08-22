@@ -116,3 +116,46 @@ def test_remediation_summary_does_not_claim_full_24_hour_clear() -> None:
     assert summary["status"] == "passed"
     assert summary["full24HourCampaignStatus"] == "notProven"
     assert summary["p0P1Clear"] is False
+
+
+def test_recovery_probe_retries_transient_post_restart_failure(monkeypatch) -> None:
+    attempts = iter(
+        (
+            {"status": "failed", "business": {"status": "failed"}, "operations": {"status": "passed"}},
+            {"status": "passed", "business": {"status": "passed"}, "operations": {"status": "passed"}},
+        )
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(subject, "_recovery_attempt", lambda _args: next(attempts))
+    monkeypatch.setattr(subject.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+
+    receipt = subject._recovery_probe(Namespace())
+
+    assert receipt["status"] == "passed"
+    assert receipt["attemptCount"] == 2
+    assert receipt["firstAttemptStatus"] == "failed"
+    assert receipt["recoveredAfterRetry"] is True
+    assert receipt["reason"] is None
+    assert sleeps == [5]
+
+
+def test_recovery_probe_fails_after_bounded_deadline(monkeypatch) -> None:
+    monotonic_values = iter((0.0, 121.0, 121.0))
+    monkeypatch.setattr(
+        subject,
+        "_recovery_attempt",
+        lambda _args: {
+            "status": "failed",
+            "business": {"status": "failed"},
+            "operations": {"status": "passed"},
+        },
+    )
+    monkeypatch.setattr(subject.time, "monotonic", lambda: next(monotonic_values))
+
+    receipt = subject._recovery_probe(Namespace())
+
+    assert receipt["status"] == "failed"
+    assert receipt["attemptCount"] == 1
+    assert receipt["recoveredAfterRetry"] is False
+    assert receipt["reason"] == "recovery_deadline_exceeded"
