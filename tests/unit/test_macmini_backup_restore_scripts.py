@@ -6,6 +6,7 @@ import json
 import subprocess
 import tarfile
 from pathlib import Path
+from typing import BinaryIO, cast
 
 import pytest
 
@@ -218,6 +219,11 @@ def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.M
     monkeypatch.setattr(restore_subject, "_workload_replicas", replicas)
     monkeypatch.setattr(restore_subject, "_scale_workload", scale)
     monkeypatch.setattr(restore_subject, "_wait_workload", wait)
+    monkeypatch.setattr(
+        restore_subject,
+        "_existing_recovery_workloads",
+        lambda _args: restore_subject._RECOVERY_HIBERNATE,
+    )
     args = argparse.Namespace(source_namespace="foundry-qa", recovery_namespace="foundry-qa-recovery")
 
     receipt = restore_subject._handoff_source_capacity(args)
@@ -229,6 +235,96 @@ def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.M
     assert ("foundry-qa-recovery", "deployment", "foundry-lite-worker-action", 0) in scaled
     assert ("foundry-qa", "deployment", "foundry-lite", 2) in scaled
     assert ("foundry-qa", "statefulset", "foundry-lite-keycloak") in waited
+
+
+def test_restore_hibernates_only_workloads_present_in_foundation_chart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scaled: list[tuple[str, str, str, int]] = []
+    waited: list[tuple[str, str, str]] = []
+    present = (
+        ("deployment", "foundry-lite"),
+        ("deployment", "foundry-lite-temporal"),
+        ("statefulset", "foundry-lite-postgresql"),
+    )
+    monkeypatch.setattr(restore_subject, "_existing_recovery_workloads", lambda _args: present)
+    monkeypatch.setattr(
+        restore_subject,
+        "_scale_workload",
+        lambda _args, namespace, kind, name, count: scaled.append((namespace, kind, name, count)),
+    )
+    monkeypatch.setattr(
+        restore_subject,
+        "_wait_workload",
+        lambda _args, namespace, kind, name, _timeout: waited.append((namespace, kind, name)),
+    )
+
+    restore_subject._hibernate_recovery(argparse.Namespace(recovery_namespace="foundry-qa-recovery"))
+
+    assert scaled == [("foundry-qa-recovery", kind, name, 0) for kind, name in present]
+    assert waited == [("foundry-qa-recovery", kind, name) for kind, name in present]
+
+
+def test_restore_inventory_excludes_absent_and_unknown_recovery_workloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = {
+        "items": [
+            {"kind": "Deployment", "metadata": {"name": "foundry-lite"}},
+            {"kind": "StatefulSet", "metadata": {"name": "foundry-lite-postgresql"}},
+            {"kind": "Deployment", "metadata": {"name": "unrelated-workload"}},
+        ]
+    }
+    monkeypatch.setattr(
+        restore_subject,
+        "_kubectl",
+        lambda *_args: subprocess.CompletedProcess((), 0, json.dumps(inventory).encode(), b""),
+    )
+    args = argparse.Namespace(recovery_namespace="foundry-qa-recovery")
+
+    workloads = restore_subject._existing_recovery_workloads(args)
+
+    assert workloads == (
+        ("deployment", "foundry-lite"),
+        ("statefulset", "foundry-lite-postgresql"),
+    )
+
+
+def test_restore_retries_partial_s3_import_from_clean_bucket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "s3-versions.tar"
+    archive.write_bytes(b"streamed-snapshot")
+    purged = iter((0, 9))
+    stream_positions: list[int] = []
+
+    monkeypatch.setattr(restore_subject, "_purge_recovery_s3", lambda _args: next(purged))
+
+    def run(_command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        stream = cast(BinaryIO, kwargs["stdin"])
+        stream_positions.append(stream.tell())
+        stream.read()
+        if len(stream_positions) == 1:
+            return subprocess.CompletedProcess(
+                _command,
+                1,
+                b"",
+                b"error: Internal error occurred: error executing command in container: unexpected EOF",
+            )
+        return subprocess.CompletedProcess(_command, 0, b"", b"")
+
+    monkeypatch.setattr(restore_subject.subprocess, "run", run)
+    args = argparse.Namespace(
+        recovery_namespace="foundry-qa-recovery",
+        kubectl="kubectl",
+        kubeconfig="/qa/kubeconfig",
+    )
+
+    receipt = restore_subject._restore_s3(args, archive)
+
+    assert receipt == {"attempts": 2, "purgedVersionCount": 9}
+    assert stream_positions == [0, 0]
 
 
 def test_restore_waits_for_each_resumed_source_worker(

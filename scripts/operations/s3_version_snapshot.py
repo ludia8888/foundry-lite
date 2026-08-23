@@ -48,6 +48,8 @@ class S3SnapshotClient(Protocol):
 
     def delete_object(self, *, Bucket: str, Key: str) -> object: ...
 
+    def delete_objects(self, *, Bucket: str, Delete: Mapping[str, object]) -> Mapping[str, object]: ...
+
 
 class HashingReader:
     def __init__(self, source: _ReadableBody) -> None:
@@ -152,6 +154,20 @@ def import_archive(client: S3SnapshotClient, bucket: str, source: BinaryIO) -> t
                 continue
             restored.add(_restore_archive_entry(client, bucket, item, member))
     return _validate_restored_archive(client, bucket, expected, restored)
+
+
+def purge_bucket(client: S3SnapshotClient, bucket: str) -> int:
+    versions = list(_list_versions(client, bucket))
+    if len(versions) > _MAX_OBJECTS:
+        raise RuntimeError("s3_snapshot_object_limit_exceeded")
+    for start in range(0, len(versions), 1000):
+        objects = [{"Key": item["Key"], "VersionId": item["VersionId"]} for item in versions[start : start + 1000]]
+        response = client.delete_objects(Bucket=bucket, Delete={"Objects": objects, "Quiet": True})
+        if _listed_items(response.get("Errors")):
+            raise RuntimeError("s3_snapshot_purge_failed")
+    if any(_list_versions(client, bucket)):
+        raise RuntimeError("s3_snapshot_purge_incomplete")
+    return len(versions)
 
 
 def _restore_archive_entry(
@@ -364,7 +380,7 @@ def _client() -> tuple[S3SnapshotClient, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("manifest", "export", "import"))
+    parser.add_argument("mode", choices=("manifest", "export", "import", "purge"))
     args = parser.parse_args()
     client, bucket = _client()
     if args.mode == "manifest":
@@ -372,8 +388,11 @@ def main() -> int:
         print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
     elif args.mode == "export":
         export_archive(client, bucket, sys.stdout.buffer)
-    else:
+    elif args.mode == "import":
         import_archive(client, bucket, sys.stdin.buffer)
+    else:
+        deleted = purge_bucket(client, bucket)
+        print(json.dumps({"deletedVersionCount": deleted, "status": "passed"}, separators=(",", ":")))
     return 0
 
 

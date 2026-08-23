@@ -279,6 +279,11 @@ remediation summary가 `passed`여도 `full24HourCampaignStatus=notProven`, `p0P
 hibernate가 `spec.replicas`를 0으로 내린 뒤에도 archive에 고정된 chart가 해당 필드의 권위 있는 소유권을
 회수해야 하기 때문이다. 실패 영수증은 raw Helm 출력 대신 `foundation`/`full` 단계와
 `field_conflict`/`timeout`/`command_failed` 분류를 남긴다.
+Recovery S3 import는 격리 namespace의 기존 object version/delete marker만 1,000개 단위로 bounded purge한 뒤
+시작한다. `kubectl exec` stream이 중간에 끊기면 partial version을 다시 purge하고 같은 immutable archive를 최대
+2회 exact retry한다. source namespace의 bucket은 이 purge 대상이 아니다. 실패 cleanup은 archive chart에 실제로
+존재하는 recovery workload만 0으로 내려, foundation chart에 없는 Deployment 때문에 나머지 hibernate가 중단되지
+않게 한다.
 
 sampler receipt에는 동일 `actionRunId`, `idempotentReplay=true`, materialization version/row count, Dataset preview 및
 Object query 일치만 남기고 원문 데이터·parameter·token은 제외한다. probe별 availability와 p50·p95·p99를 따로

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import io
 import tarfile
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, cast
+from typing import Protocol, TypedDict, cast
 
 import pytest
 
 from scripts.operations import s3_version_snapshot as subject
-from scripts.operations.s3_version_snapshot import build_manifest, export_archive, import_archive
+from scripts.operations.s3_version_snapshot import build_manifest, export_archive, import_archive, purge_bucket
 
 
 class _ConfigView(Protocol):
@@ -16,9 +17,21 @@ class _ConfigView(Protocol):
     s3: dict[str, object]
 
 
+class _Readable(Protocol):
+    def read(self, size: int = -1, /) -> bytes: ...
+
+
+class _Event(TypedDict):
+    key: str
+    body: bytes
+    delete: bool
+    version: str
+    at: datetime
+
+
 class _FakeS3:
     def __init__(self) -> None:
-        self.events: list[dict[str, object]] = []
+        self.events: list[_Event] = []
         self.get_calls = 0
         self._sequence = 0
 
@@ -30,6 +43,14 @@ class _FakeS3:
         assert Bucket == "qa-bucket"
         self._sequence += 1
         self.events.append(self._event(Key, b"", True))
+
+    def delete_objects(self, *, Bucket: str, Delete: Mapping[str, object]) -> dict[str, object]:
+        assert Bucket == "qa-bucket"
+        objects = Delete["Objects"]
+        assert isinstance(objects, list)
+        coordinates = {(item["Key"], item["VersionId"]) for item in objects if isinstance(item, dict)}
+        self.events = [item for item in self.events if (item["key"], item["version"]) not in coordinates]
+        return {"Errors": []}
 
     def list_object_versions(self, **arguments: object) -> dict[str, object]:
         assert arguments["Bucket"] == "qa-bucket"
@@ -45,11 +66,11 @@ class _FakeS3:
 
     def put_object(self, *, Bucket: str, Key: str, Body: object, ContentLength: int) -> None:
         assert Bucket == "qa-bucket"
-        body = Body.read(ContentLength)
+        body = cast(_Readable, Body).read(ContentLength)
         assert len(body) == ContentLength
         self.add(Key, body)
 
-    def _event(self, key: str, body: bytes, is_delete: bool) -> dict[str, object]:
+    def _event(self, key: str, body: bytes, is_delete: bool) -> _Event:
         return {
             "key": key,
             "body": body,
@@ -59,7 +80,7 @@ class _FakeS3:
         }
 
     @staticmethod
-    def _listed(item: dict[str, object]) -> dict[str, object]:
+    def _listed(item: _Event) -> dict[str, object]:
         return {
             "Key": item["key"],
             "VersionId": item["version"],
@@ -71,7 +92,7 @@ class _FakeS3:
 class _CorruptingS3(_FakeS3):
     def put_object(self, *, Bucket: str, Key: str, Body: object, ContentLength: int) -> None:
         assert Bucket == "qa-bucket"
-        body = Body.read(ContentLength)
+        body = cast(_Readable, Body).read(ContentLength)
         self.add(Key, body + b"corrupt")
 
 
@@ -114,6 +135,17 @@ def test_s3_version_snapshot_refuses_nonempty_restore_target() -> None:
     target.add("existing", b"data")
     with pytest.raises(RuntimeError, match="restore_bucket_not_empty"):
         import_archive(target, "qa-bucket", io.BytesIO())
+
+
+def test_s3_version_snapshot_purges_exact_versions_for_safe_restore_retry() -> None:
+    target = _FakeS3()
+    target.add("existing", b"first")
+    target.delete_object(Bucket="qa-bucket", Key="existing")
+    target.add("existing", b"second")
+
+    assert purge_bucket(target, "qa-bucket") == 3
+    assert list(subject._list_versions(target, "qa-bucket")) == []
+    assert purge_bucket(target, "qa-bucket") == 0
 
 
 def test_s3_snapshot_client_streams_without_rewinding_tar_members(monkeypatch: pytest.MonkeyPatch) -> None:
