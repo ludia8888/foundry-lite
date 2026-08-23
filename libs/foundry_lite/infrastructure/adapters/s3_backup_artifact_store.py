@@ -32,6 +32,7 @@ from foundry_lite.infrastructure.adapters.s3_client import (
 
 _ARTIFACT_SCHEME = "s3-backup-artifact://"
 _SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9_.=-]+")
+_DEFAULT_MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class S3BackupArtifactStoreConfig:
     secret_access_key: str | None = None
     region_name: str = "us-east-1"
     prefix: str = "foundry-lite/backup-artifacts"
-    max_artifact_bytes: int = 16 * 1024 * 1024
+    max_artifact_bytes: int = _DEFAULT_MAX_ARTIFACT_BYTES
 
 
 class S3BackupArtifactStore:

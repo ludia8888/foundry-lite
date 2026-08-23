@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from foundry_lite.application.ports.backup_artifact_store import (
     BackupArtifactNotFoundError,
 )
 from foundry_lite.application.runtime_repository_backup_restore import BackupRestorePreflightReport
+from foundry_lite.infrastructure.adapters.backup_artifact_codec import build_backup_artifact
 from foundry_lite.infrastructure.adapters.local_backup_artifact_store import LocalBackupArtifactStore
 from foundry_lite.infrastructure.adapters.s3_backup_artifact_store import (
     S3BackupArtifactStore,
@@ -130,6 +132,42 @@ def test_s3_backup_artifact_store_is_immutable_replayable_and_hash_verified() ->
     assert artifact["preflightReport"]["backupId"] == "backup-s3"
     with pytest.raises(BackupArtifactConflictError):
         store.write_backup_artifact(_report("backup-s3", version_id="version-2"))
+
+
+def test_backup_artifact_storage_is_compact_and_has_soak_history_headroom() -> None:
+    report = _report("backup-large-soak", version_id="version-1")
+    template = report["datasetVersions"][0]
+    report["datasetVersions"] = [
+        {
+            **deepcopy(template),
+            "versionId": f"dsv_{index:032x}",
+            "versionNumber": index,
+            "manifestUri": f"s3://foundry/datasets/ds-orders/main/{index}/manifest.json",
+            "manifestContentHashes": ["sha256:" + "a" * 64],
+        }
+        for index in range(31_000)
+    ]
+    artifact_ref = "s3-backup-artifact://foundry-artifacts/qa/backups/tenant-demo/large.json"
+    _receipt, encoded = build_backup_artifact(report, artifact_ref)
+    canonical = json.dumps(json.loads(encoded), sort_keys=True, separators=(",", ":")).encode()
+
+    assert encoded == canonical
+    assert len(encoded) < 16 * 1024 * 1024
+    client = _MemoryS3()
+    store = S3BackupArtifactStore(
+        S3BackupArtifactStoreConfig(
+            bucket="foundry-artifacts",
+            prefix="qa/backups",
+            max_artifact_bytes=16 * 1024 * 1024,
+        ),
+        client=client,
+    )
+    receipt = store.write_backup_artifact(report)
+    assert receipt["datasetVersionCount"] == 31_000
+
+
+def test_s3_backup_artifact_default_capacity_is_bounded_at_64_mib() -> None:
+    assert S3BackupArtifactStoreConfig(bucket="foundry-artifacts").max_artifact_bytes == 64 * 1024 * 1024
 
 
 def test_s3_backup_artifact_store_rejects_missing_and_cross_prefix_refs() -> None:

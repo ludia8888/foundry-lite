@@ -6,8 +6,9 @@ from typing import Any, cast
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.ports import BackupArtifactIntegrityError
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
+from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from sqlalchemy import Table, func, insert, select
 
@@ -89,6 +90,35 @@ def test_backup_restore_create_artifact_fails_closed_when_preflight_is_blocked(
         event["event_type"] == "backup_restore.artifact_failed" and event["resource_id"] == "backup-artifact-blocked"
         for event in audit_events
     )
+
+
+def test_backup_restore_create_artifact_reports_storage_integrity_failure(
+    foundry: FoundryLite,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = demo_admin_context()
+    backup_id = "backup-artifact-too-large"
+    foundry.datasets.ensure("raw.restore_artifact_large", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.restore_artifact_large", _csv(tmp_path, "artifact-large.csv"), ctx=ctx)
+    service = foundry.operations._backup_restore.backup_restore_artifact_service
+
+    def fail_write(_store: object, _report: object) -> None:
+        raise BackupArtifactIntegrityError("s3-backup-artifact://redacted/large.json", "size limit")
+
+    monkeypatch.setattr(type(service.backup_artifact_store), "write_backup_artifact", fail_write)
+    with pytest.raises(InvariantViolation, match="integrity contract failed") as raised:
+        foundry.operations.create_backup_artifact(ctx=ctx, backup_id=backup_id)
+
+    assert raised.value.details == {
+        "backup_id": backup_id,
+        "artifact_ref": "s3-backup-artifact://redacted/large.json",
+        "reason": "size limit",
+    }
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    failure = next(event for event in audit_events if event["resource_id"] == backup_id)
+    assert failure["event_type"] == "backup_restore.artifact_failed"
+    assert failure["after_ref"]["reason"] == "artifact_integrity_failed"
 
 
 def test_backup_restore_artifact_restore_validates_and_runs_closed_loop(foundry: FoundryLite) -> None:

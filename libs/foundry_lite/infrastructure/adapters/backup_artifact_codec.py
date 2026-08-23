@@ -54,7 +54,12 @@ def build_backup_artifact(
     artifact_hash = backup_artifact_hash(payload)
     receipt = _receipt(report, artifact_ref, artifact_hash, len(canonical_backup_payload_bytes(payload)))
     document = {"receipt": receipt, **payload}
-    encoded = (json.dumps(_json_ready(document), indent=2, sort_keys=True) + "\n").encode("utf-8")
+    # Backup artifacts can contain tens of thousands of immutable dataset
+    # versions. Presentation whitespace previously added roughly 40% to the
+    # object and made valid soak backups cross the S3 adapter's size boundary.
+    # The payload hash was already defined over canonical compact JSON, so use
+    # the same bounded representation for the stored envelope as well.
+    encoded = canonical_backup_payload_bytes(document)
     return receipt, encoded
 
 
