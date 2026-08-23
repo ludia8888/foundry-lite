@@ -77,6 +77,34 @@ def test_kubernetes_packaging_gate_rejects_missing_release_sigstore_cache(tmp_pa
     assert any(item.code == "release_sigstore_cache_contract_missing" for item in findings)
 
 
+def test_kubernetes_packaging_gate_rejects_release_cosign_version_drift(tmp_path: Path) -> None:
+    _copy_gate_tree(tmp_path)
+    workflow = tmp_path / ".github/workflows/kubernetes-images.yml"
+    text = workflow.read_text(encoding="utf-8")
+    workflow.write_text(text.replace("cosign-release: v3.1.3", "cosign-release: v2.4.1"), encoding="utf-8")
+
+    findings = collect_findings(tmp_path)
+
+    assert any(
+        item.code == "cosign_version_contract_mismatch" and item.path == ".github/workflows/kubernetes-images.yml"
+        for item in findings
+    )
+
+
+def test_kubernetes_packaging_gate_rejects_controller_cosign_image_drift(tmp_path: Path) -> None:
+    _copy_gate_tree(tmp_path)
+    dockerfile = tmp_path / "deploy/kubernetes/Dockerfile.controller"
+    text = dockerfile.read_text(encoding="utf-8")
+    dockerfile.write_text(text.replace("9e5c2f2edc343511", "b74da950a9b069fb"), encoding="utf-8")
+
+    findings = collect_findings(tmp_path)
+
+    assert any(
+        item.code == "cosign_version_contract_mismatch" and item.path == "deploy/kubernetes/Dockerfile.controller"
+        for item in findings
+    )
+
+
 def test_kubernetes_packaging_gate_rejects_mutable_macmini_tool_manifest(tmp_path: Path) -> None:
     _copy_gate_tree(tmp_path)
     manifest = tmp_path / "deploy/macmini-tools-arm64.json"
