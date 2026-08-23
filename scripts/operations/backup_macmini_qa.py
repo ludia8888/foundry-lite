@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess  # nosec B404 - fixed operator tools only; remove if arbitrary command input is introduced.
 import tarfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +37,9 @@ _CHART_RELATIVE_PATH = Path("deploy/helm/foundry-lite")
 _OPERATOR_TENANT_ID = "tenant-demo"
 _OPERATOR_USER_ID = "enterprise-qa-operator"
 _OPERATOR_ROLES = "admin,data_engineer,ops_manager"
+_API_TIMEOUT_SECONDS = 180
+_RESTORE_MODE_CONFIRM_DEADLINE_SECONDS = 180
+_RESTORE_MODE_CONFIRM_INTERVAL_SECONDS = 2
 
 
 def backup(args: argparse.Namespace) -> dict[str, object]:
@@ -45,12 +49,7 @@ def backup(args: argparse.Namespace) -> dict[str, object]:
     recipient = _age_recipient(Path(args.age_recipient_file))
     target = _backup_directory(args.run_id)
     restore_id = f"enterprise-qa-{args.run_id}"
-    mode = _api_json(
-        args.api_base_url,
-        token,
-        "/api/operations/backup-restore/restore-mode/start",
-        {"backupId": args.run_id, "restoreId": restore_id},
-    )
+    mode = _start_restore_mode(args.api_base_url, token, args.run_id, restore_id)
     if mode.get("status") != "paused":
         raise RuntimeError("macmini_backup_restore_mode_not_active")
     workers = _pause_workers(args)
@@ -382,7 +381,52 @@ def _has_pull_secret(value: object) -> bool:
     return isinstance(value, list) and "foundry-lite-ghcr" in value
 
 
+def _start_restore_mode(base_url: str, token: str, backup_id: str, restore_id: str) -> dict[str, object]:
+    try:
+        return _api_json(
+            base_url,
+            token,
+            "/api/operations/backup-restore/restore-mode/start",
+            {"backupId": backup_id, "restoreId": restore_id},
+        )
+    except RuntimeError as exc:
+        if str(exc) != "macmini_backup_api_unavailable":
+            raise
+        return _confirm_started_restore_mode(base_url, token, backup_id, restore_id, exc)
+
+
+def _confirm_started_restore_mode(
+    base_url: str,
+    token: str,
+    backup_id: str,
+    restore_id: str,
+    original_error: RuntimeError,
+) -> dict[str, object]:
+    deadline = time.monotonic() + _RESTORE_MODE_CONFIRM_DEADLINE_SECONDS
+    while True:
+        try:
+            status = _api_get_json(base_url, token, f"/api/operations/backup-restore/restore-mode/{restore_id}")
+        except RuntimeError:
+            status = {}
+        if status.get("status") == "paused" and status.get("backupId") == backup_id:
+            return status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("macmini_backup_restore_mode_start_not_confirmed") from original_error
+        time.sleep(min(_RESTORE_MODE_CONFIRM_INTERVAL_SECONDS, remaining))
+
+
 def _api_json(base_url: str, token: str, path: str, payload: object) -> dict[str, object]:
+    request = _api_request(base_url, token, path, payload=payload)
+    return _api_response_json(request)
+
+
+def _api_get_json(base_url: str, token: str, path: str) -> dict[str, object]:
+    request = _api_request(base_url, token, path, payload=None)
+    return _api_response_json(request)
+
+
+def _api_request(base_url: str, token: str, path: str, *, payload: object | None) -> urllib.request.Request:
     base = urllib.parse.urlsplit(base_url)
     if base.scheme not in {"http", "https"} or not base.hostname:
         raise ValueError("macmini_backup_api_url_invalid")
@@ -391,15 +435,18 @@ def _api_json(base_url: str, token: str, path: str, payload: object) -> dict[str
     url = urllib.parse.urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
     if urllib.parse.urlsplit(url).netloc != base.netloc:
         raise ValueError("macmini_backup_api_origin_mismatch")
-    request = urllib.request.Request(
+    return urllib.request.Request(
         url,
-        data=json.dumps(payload, separators=(",", ":")).encode(),
-        method="POST",
+        data=(json.dumps(payload, separators=(",", ":")).encode() if payload is not None else None),
+        method="POST" if payload is not None else "GET",
         headers=_operator_api_headers(token),
     )
+
+
+def _api_response_json(request: urllib.request.Request) -> dict[str, object]:
     opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with opener.open(request, timeout=30) as response:
+        with opener.open(request, timeout=_API_TIMEOUT_SECONDS) as response:
             body = response.read(_MAX_API_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise RuntimeError("macmini_backup_api_unavailable") from exc

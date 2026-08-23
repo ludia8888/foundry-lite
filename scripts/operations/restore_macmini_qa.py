@@ -79,6 +79,7 @@ _RECOVERY_HIBERNATE = (
 _MAX_API_BYTES = 2 * 1024 * 1024
 _KUBERNETES_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 _STORAGE_SIZE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi)$")
+_API_TIMEOUT_SECONDS = 180
 
 
 class CapacityReceipt(TypedDict):
@@ -669,7 +670,7 @@ def _api_post(base: str, token: str, path: str, payload: object) -> dict[str, ob
     )
     opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with opener.open(request, timeout=30) as response:
+        with opener.open(request, timeout=_API_TIMEOUT_SECONDS) as response:
             body = response.read(_MAX_API_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise RuntimeError("macmini_restore_api_unavailable") from exc

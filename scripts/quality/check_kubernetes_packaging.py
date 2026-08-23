@@ -241,7 +241,22 @@ def _template_findings(root: Path) -> list[KubernetesPackagingFinding]:
     for term in identity_terms:
         if term not in identity_text:
             findings.append(_finding("keycloak_policy_contract_missing", CHART_ROOT, term))
+    findings.extend(_release_sigstore_cache_findings(root))
     return findings
+
+
+def _release_sigstore_cache_findings(root: Path) -> list[KubernetesPackagingFinding]:
+    path = CHART_ROOT / "templates/release-controller.yaml"
+    text = (root / path).read_text(encoding="utf-8")
+    sigstore_cache_terms = (
+        "- {name: sigstore-cache, mountPath: /home/foundry-lite/.sigstore}",
+        "- {name: sigstore-cache, emptyDir: {sizeLimit: 32Mi}}",
+    )
+    return [
+        _finding("release_sigstore_cache_contract_missing", path, term)
+        for term in sigstore_cache_terms
+        if term not in text
+    ]
 
 
 def _rbac_findings(root: Path) -> list[KubernetesPackagingFinding]:

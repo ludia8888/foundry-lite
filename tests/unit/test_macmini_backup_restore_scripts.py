@@ -99,6 +99,31 @@ def test_backup_restore_operator_headers_cover_oidc_and_header_trust() -> None:
     assert headers["X-Roles"] == "admin,data_engineer,ops_manager"
 
 
+def test_backup_confirms_committed_restore_mode_after_lost_start_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backup_subject,
+        "_api_json",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("macmini_backup_api_unavailable")),
+    )
+    monkeypatch.setattr(
+        backup_subject,
+        "_api_get_json",
+        lambda *_args: {"status": "paused", "backupId": "backup-1", "restoreId": "restore-1"},
+    )
+
+    status = backup_subject._start_restore_mode("http://127.0.0.1:30443", "token", "backup-1", "restore-1")
+
+    assert status["status"] == "paused"
+    assert status["backupId"] == "backup-1"
+
+
+def test_backup_and_restore_allow_bounded_long_running_preflight() -> None:
+    assert backup_subject._API_TIMEOUT_SECONDS == 180
+    assert restore_subject._API_TIMEOUT_SECONDS == 180
+
+
 def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.MonkeyPatch) -> None:
     scaled: list[tuple[str, str, str, int]] = []
     waited: list[tuple[str, str, str]] = []
