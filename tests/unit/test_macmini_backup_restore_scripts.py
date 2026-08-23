@@ -277,6 +277,39 @@ def test_backup_writes_only_bounded_preflight_summary_from_immutable_artifact() 
         backup_subject._artifact_preflight_summary(artifact, expected_backup_id="other-backup")
 
 
+def test_backup_extracts_large_s3_manifest_from_streamed_archive(tmp_path: Path) -> None:
+    archive_path = tmp_path / "s3-versions.tar"
+    manifest_path = tmp_path / "s3-manifest.json"
+    manifest = {
+        "schemaVersion": 1,
+        "bucket": "foundry-lite",
+        "entries": [
+            {
+                "key": f"datasets/tenant-demo/ops.action_log/versions/dsv_{index:032x}/data/part-00000.parquet",
+                "versionId": f"version-{index:032x}",
+                "isDeleteMarker": False,
+                "size": 4096,
+                "lastModified": "2026-08-23T11:03:26.000000+00:00",
+                "sha256": "sha256:" + "a" * 64,
+            }
+            for index in range(62_158)
+        ],
+    }
+    encoded = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode()
+    assert len(encoded) > 16 * 1024 * 1024
+    with tarfile.open(archive_path, mode="w") as archive:
+        payload = io.BytesIO(encoded)
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(encoded)
+        archive.addfile(info, payload)
+
+    backup_subject._s3_manifest_from_archive(archive_path, manifest_path)
+
+    assert manifest_path.read_bytes() == encoded
+    assert manifest_path.stat().st_mode & 0o077 == 0
+    assert len(json.loads(manifest_path.read_bytes())["entries"]) == 62_158
+
+
 def test_failed_backup_approves_resume_restores_exact_workers_and_removes_partial_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

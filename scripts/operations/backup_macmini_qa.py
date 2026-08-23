@@ -21,6 +21,8 @@ from typing import TypedDict
 from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, assert_namespace
 
 _MAX_API_BYTES = 2 * 1024 * 1024
+_MAX_S3_MANIFEST_BYTES = 128 * 1024 * 1024
+_MAX_S3_MANIFEST_ENTRIES = 250_000
 _S3_SNAPSHOT_SCRIPT = "/app/scripts/operations/s3_version_snapshot.py"
 _WORKER_COMPONENT_PREFIX = "worker-"
 _IMAGE_NAMES = ("api", "web", "controller", "codeExecution", "nodeCodeExecution", "trainedModel")
@@ -98,8 +100,9 @@ def _capture_backup(
     preflight = _artifact_preflight_summary(artifact, expected_backup_id=args.run_id)
     before = _postgres_inventory(args)
     _pg_dump(args, target / "postgres.dump")
-    _s3_manifest(args, target / "s3-manifest.json")
-    _s3_archive(args, target / "s3-versions.tar")
+    s3_archive = target / "s3-versions.tar"
+    _s3_archive(args, s3_archive)
+    _s3_manifest_from_archive(s3_archive, target / "s3-manifest.json")
     _kubernetes_images(args, target / "kubernetes-images.json")
     after = _postgres_inventory(args)
     if before != after:
@@ -474,13 +477,6 @@ def _pg_dump(args: argparse.Namespace, output: Path) -> None:
         raise RuntimeError("macmini_backup_pg_dump_failed")
 
 
-def _s3_manifest(args: argparse.Namespace, output: Path) -> None:
-    operation = _api_exec_operation("manifest")
-    result = _kubectl(args, operation, 1800)
-    payload = _json_command(result, "macmini_backup_s3_manifest_failed")
-    _write_json(output, payload)
-
-
 def _s3_archive(args: argparse.Namespace, output: Path) -> None:
     command = _kubectl_argv(args, _api_exec_operation("export"))
     with output.open("xb") as stream:
@@ -490,6 +486,49 @@ def _s3_archive(args: argparse.Namespace, output: Path) -> None:
         )
     if result.returncode != 0 or output.stat().st_size == 0:
         raise RuntimeError("macmini_backup_s3_archive_failed")
+
+
+def _s3_manifest_from_archive(archive_path: Path, output: Path) -> None:
+    raw = _read_s3_manifest(archive_path)
+    _validate_s3_manifest(raw)
+    descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(raw)
+
+
+def _read_s3_manifest(archive_path: Path) -> bytes:
+    try:
+        with tarfile.open(archive_path, mode="r:") as archive:
+            member = archive.getmember("manifest.json")
+            if not member.isfile() or not 0 < member.size <= _MAX_S3_MANIFEST_BYTES:
+                raise RuntimeError("macmini_backup_s3_manifest_invalid")
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise RuntimeError("macmini_backup_s3_manifest_invalid")
+            raw = stream.read(_MAX_S3_MANIFEST_BYTES + 1)
+    except (KeyError, OSError, tarfile.TarError) as exc:
+        raise RuntimeError("macmini_backup_s3_manifest_invalid") from exc
+    if not 0 < len(raw) <= _MAX_S3_MANIFEST_BYTES:
+        raise RuntimeError("macmini_backup_s3_manifest_invalid")
+    return raw
+
+
+def _validate_s3_manifest(raw: bytes) -> None:
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("macmini_backup_s3_manifest_invalid") from exc
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    bucket = payload.get("bucket") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schemaVersion") != 1
+        or not isinstance(bucket, str)
+        or not bucket
+        or not isinstance(entries, list)
+        or len(entries) > _MAX_S3_MANIFEST_ENTRIES
+    ):
+        raise RuntimeError("macmini_backup_s3_manifest_invalid")
 
 
 def _api_exec_operation(mode: str) -> tuple[str, ...]:
