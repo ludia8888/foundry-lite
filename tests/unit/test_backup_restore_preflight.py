@@ -615,6 +615,38 @@ def test_restore_retry_is_idempotent(foundry: FoundryLite, tmp_path: Path) -> No
     assert len(restore_events) == 1
 
 
+def test_post_restore_validation_exact_retry_is_idempotent(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_validation_retry", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.restore_validation_retry", _csv(tmp_path, "validation-retry.csv"), ctx=ctx)
+    foundry.operations.start_restore_mode(
+        ctx=ctx,
+        backup_id="backup-validation-retry",
+        restore_id="restore-validation-retry",
+    )
+
+    first = foundry.operations.run_post_restore_validation(
+        "restore-validation-retry",
+        ctx=ctx,
+        validation_id="closed-loop-validation-retry",
+    )
+    second = foundry.operations.run_post_restore_validation(
+        "restore-validation-retry",
+        ctx=ctx,
+        validation_id="closed-loop-validation-retry",
+    )
+
+    assert second == first
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    validation_events = [
+        event
+        for event in audit_events
+        if event["event_type"] == "backup_restore.post_restore_validated"
+        and event["resource_id"] == "restore-validation-retry"
+    ]
+    assert len(validation_events) == 1
+
+
 def test_restore_failure_never_opens_serving_traffic(foundry: FoundryLite, tmp_path: Path) -> None:
     ctx = demo_admin_context()
     foundry.datasets.ensure("raw.restore_blocked", ctx=ctx, primary_key=["order_id"])

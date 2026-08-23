@@ -121,7 +121,73 @@ def test_backup_confirms_committed_restore_mode_after_lost_start_response(
 
 def test_backup_and_restore_allow_bounded_long_running_preflight() -> None:
     assert backup_subject._API_TIMEOUT_SECONDS == 180
-    assert restore_subject._API_TIMEOUT_SECONDS == 180
+    assert restore_subject._API_TIMEOUT_SECONDS == 300
+
+
+def test_restore_exactly_retries_lost_validation_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def api_post(_base: str, _token: str, path: str, payload: object) -> dict[str, object]:
+        calls.append(path)
+        if len(calls) == 1:
+            raise RuntimeError("macmini_restore_api_unavailable")
+        if path.endswith("post-restore-validation"):
+            return {"status": "passed", "validationId": payload["validationId"]}  # type: ignore[index]
+        return {"status": "resume_approved"}
+
+    monkeypatch.setattr(restore_subject, "_api_post", api_post)
+    monkeypatch.setattr(restore_subject.time, "sleep", lambda _seconds: None)
+
+    validation, approval = restore_subject._validate_and_approve_resume(
+        "http://127.0.0.1:18082",
+        "token",
+        "restore-1",
+        "validation-1",
+    )
+
+    assert validation["status"] == "passed"
+    assert approval["status"] == "resume_approved"
+    assert calls.count("/api/operations/backup-restore/restore-mode/restore-1/post-restore-validation") == 2
+
+
+def test_restore_confirms_committed_approval_after_lost_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    def api_post(_base: str, _token: str, path: str, payload: object) -> dict[str, object]:
+        if path.endswith("post-restore-validation"):
+            return {"status": "passed", "validationId": payload["validationId"]}  # type: ignore[index]
+        raise RuntimeError("macmini_restore_api_unavailable")
+
+    monkeypatch.setattr(restore_subject, "_api_post", api_post)
+    monkeypatch.setattr(restore_subject, "_api_get", lambda *_args: {"status": "resume_approved"})
+    monkeypatch.setattr(restore_subject.time, "sleep", lambda _seconds: None)
+
+    _validation, approval = restore_subject._validate_and_approve_resume(
+        "http://127.0.0.1:18082",
+        "token",
+        "restore-1",
+        "validation-1",
+    )
+
+    assert approval["status"] == "resume_approved"
+
+
+def test_restore_rejects_unapproved_resume_before_worker_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        restore_subject,
+        "_api_post",
+        lambda _base, _token, path, payload: (
+            {"status": "passed", "validationId": payload["validationId"]}
+            if path.endswith("post-restore-validation")
+            else {"status": "paused"}
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="resume_approval_failed"):
+        restore_subject._validate_and_approve_resume(
+            "http://127.0.0.1:18082",
+            "token",
+            "restore-1",
+            "validation-1",
+        )
 
 
 def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.MonkeyPatch) -> None:
