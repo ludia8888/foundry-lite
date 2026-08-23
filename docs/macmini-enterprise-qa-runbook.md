@@ -180,7 +180,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/inject_m
 
 ## 8. 백업과 recovery namespace 복원
 
-백업은 restore mode로 write/outbox를 잠근 뒤 PostgreSQL dump, MinIO version manifest, schema revision, high-watermark, image digest와 checksum을 하나의 commit point로 묶고 age recipient로 암호화한다. 이때 Helm의 실제 merged release values도 commit point 앞뒤로 두 번 조회해 동일해야 하며, exact Git revision, 6개 GHCR repository/digest, image pull Secret 참조, 인증 profile, QA dependency profile을 검증한 뒤 암호화 archive에 포함한다. 로컬 chart 경로가 release Git SHA의 깨끗한 tracked tree인지 확인하고 exact chart package도 같은 archive에 고정한다. Helm values에는 Secret 내용이 없고 참조 이름만 있으며, raw token과 Secret 내용은 evidence나 archive에 넣지 않는다.
+백업은 restore mode로 write/outbox를 잠근 뒤 PostgreSQL dump, MinIO version manifest, schema revision, high-watermark, image digest와 checksum을 하나의 commit point로 묶고 age recipient로 암호화한다. loopback Operations 요청은 bearer token과 bounded QA operator identity header를 함께 보내며, OIDC profile은 검증된 bearer를, header-trust profile은 operator header를 각자의 인증 경계로 사용한다. 이때 Helm의 실제 merged release values도 commit point 앞뒤로 두 번 조회해 동일해야 하며, exact Git revision, 6개 GHCR repository/digest, image pull Secret 참조, 인증 profile, QA dependency profile을 검증한 뒤 암호화 archive에 포함한다. 로컬 chart 경로가 release Git SHA의 깨끗한 tracked tree인지 확인하고 exact chart package도 같은 archive에 고정한다. Helm values에는 Secret 내용이 없고 참조 이름만 있으며, raw token과 Secret 내용은 evidence나 archive에 넣지 않는다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/backup_macmini_qa.py \

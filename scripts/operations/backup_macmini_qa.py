@@ -33,6 +33,9 @@ _IMAGE_REPOSITORIES = {
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CHART_RELATIVE_PATH = Path("deploy/helm/foundry-lite")
+_OPERATOR_TENANT_ID = "tenant-demo"
+_OPERATOR_USER_ID = "enterprise-qa-operator"
+_OPERATOR_ROLES = "admin,data_engineer,ops_manager"
 
 
 def backup(args: argparse.Namespace) -> dict[str, object]:
@@ -392,7 +395,7 @@ def _api_json(base_url: str, token: str, path: str, payload: object) -> dict[str
         url,
         data=json.dumps(payload, separators=(",", ":")).encode(),
         method="POST",
-        headers={"authorization": f"Bearer {token}", "content-type": "application/json", "accept": "application/json"},
+        headers=_operator_api_headers(token),
     )
     opener = urllib.request.build_opener(_NoRedirect())
     try:
@@ -409,6 +412,17 @@ def _api_json(base_url: str, token: str, path: str, payload: object) -> dict[str
     if not isinstance(value, dict):
         raise RuntimeError("macmini_backup_api_response_invalid")
     return value
+
+
+def _operator_api_headers(token: str) -> dict[str, str]:
+    return {
+        "authorization": f"Bearer {token}",
+        "content-type": "application/json",
+        "accept": "application/json",
+        "X-Tenant-ID": _OPERATOR_TENANT_ID,
+        "X-User-ID": _OPERATOR_USER_ID,
+        "X-Roles": _OPERATOR_ROLES,
+    }
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
