@@ -55,6 +55,8 @@ spec:
           resources: {{- toYaml .Values.releaseController.resources | nindent 12 }}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+            - {name: sigstore-cache, mountPath: /home/foundry-lite/.sigstore}
       volumes:
         - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
+        - {name: sigstore-cache, emptyDir: {sizeLimit: 32Mi}}
 {{- end }}

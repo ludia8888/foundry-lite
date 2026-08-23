@@ -63,6 +63,20 @@ def test_release_controller_network_policy_allows_resolved_api_backend() -> None
     assert ".Values.networkPolicy.kubernetesApiEndpointPort" in policy
 
 
+def test_kubernetes_packaging_gate_rejects_missing_release_sigstore_cache(tmp_path: Path) -> None:
+    _copy_gate_tree(tmp_path)
+    controller = tmp_path / "deploy/helm/foundry-lite/templates/release-controller.yaml"
+    text = controller.read_text(encoding="utf-8")
+    controller.write_text(
+        text.replace("- {name: sigstore-cache, mountPath: /home/foundry-lite/.sigstore}\n", ""),
+        encoding="utf-8",
+    )
+
+    findings = collect_findings(tmp_path)
+
+    assert any(item.code == "release_sigstore_cache_contract_missing" for item in findings)
+
+
 def test_kubernetes_packaging_gate_rejects_mutable_macmini_tool_manifest(tmp_path: Path) -> None:
     _copy_gate_tree(tmp_path)
     manifest = tmp_path / "deploy/macmini-tools-arm64.json"
