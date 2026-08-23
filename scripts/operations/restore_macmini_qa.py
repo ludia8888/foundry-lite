@@ -289,8 +289,7 @@ def _install_recovery(
     if is_foundation:
         foundation = _foundation_values(temporary)
         command.extend(("--values", str(foundation)))
-    else:
-        command.append("--force-conflicts")
+    command.append("--force-conflicts")
     command.extend(
         (
             "--atomic",
@@ -300,11 +299,22 @@ def _install_recovery(
             "15m",
         )
     )
-    result = subprocess.run(  # nosec B603 - validated Helm argv; remove if shell or free argv appears.
-        command, check=False, capture_output=True, timeout=1000
-    )
+    try:
+        result = subprocess.run(  # nosec B603 - validated Helm argv; remove if shell or free argv appears.
+            command, check=False, capture_output=True, timeout=1000
+        )
+    except subprocess.TimeoutExpired as exc:
+        phase = "foundation" if is_foundation else "full"
+        raise RuntimeError(f"macmini_restore_{phase}_helm_timeout") from exc
     if result.returncode != 0:
-        raise RuntimeError("macmini_restore_helm_install_failed")
+        raise RuntimeError(_helm_install_failure_reason(result, is_foundation=is_foundation))
+
+
+def _helm_install_failure_reason(result: subprocess.CompletedProcess[bytes], *, is_foundation: bool) -> str:
+    phase = "foundation" if is_foundation else "full"
+    output = (result.stdout + result.stderr).lower()
+    failure = "field_conflict" if b"conflict occurred while applying object" in output else "command_failed"
+    return f"macmini_restore_{phase}_helm_{failure}"
 
 
 def _archived_release_values(payload: Path) -> Path:
