@@ -275,6 +275,11 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
 remediation summary가 `passed`여도 `full24HourCampaignStatus=notProven`, `p0P1Clear=false`를 유지한다. 이는 건너뛴
 장애 복구 증거를 닫는 실행이지, 시간축·지속 부하까지 포함한 새 24시간 campaign을 대신하지 않는다.
 
+복구 namespace의 two-phase Helm install은 foundation과 full 단계 모두 `--force-conflicts`를 사용한다. 앞선
+hibernate가 `spec.replicas`를 0으로 내린 뒤에도 archive에 고정된 chart가 해당 필드의 권위 있는 소유권을
+회수해야 하기 때문이다. 실패 영수증은 raw Helm 출력 대신 `foundation`/`full` 단계와
+`field_conflict`/`timeout`/`command_failed` 분류를 남긴다.
+
 sampler receipt에는 동일 `actionRunId`, `idempotentReplay=true`, materialization version/row count, Dataset preview 및
 Object query 일치만 남기고 원문 데이터·parameter·token은 제외한다. probe별 availability와 p50·p95·p99를 따로
 계산하며 하나의 성공 probe가 다른 실패를 숨길 수 없다. 선언된 fault window는 restart/OOM/replacement baseline을

@@ -711,11 +711,39 @@ def test_restore_helm_install_uses_exact_values_in_two_phases(
     assert all(str(chart) in command for command in commands)
     assert all(str(archived) in command for command in commands)
     assert all("--atomic" in command and "--wait-for-jobs" in command for command in commands)
-    assert "--force-conflicts" not in commands[0]
-    assert "--force-conflicts" in commands[1]
+    assert all("--force-conflicts" in command for command in commands)
     assert str(tmp_path / "recovery-foundation.json") in commands[0]
     assert str(tmp_path / "recovery-foundation.json") not in commands[1]
     foundation = json.loads((tmp_path / "recovery-foundation.json").read_text(encoding="utf-8"))
     assert foundation["migrations"] == {"enabled": False}
     assert foundation["runtimePersistence"] == {"enabled": False}
     assert foundation["secrets"] == {"bootstrapOauthSigningSecret": False}
+
+
+def test_restore_foundation_reclaims_hibernated_replica_field_ownership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archived = tmp_path / "helm-release-values.json"
+    archived.write_text(json.dumps(_exact_release_values()), encoding="utf-8")
+    chart = tmp_path / "helm-chart.tgz"
+    chart.write_bytes(b"exact-chart-package")
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            b"",
+            b'conflict occurred while applying object: conflict with "helm" using apps/v1: .spec.replicas',
+        )
+
+    monkeypatch.setattr(restore_subject.subprocess, "run", run)
+    args = argparse.Namespace(helm="/qa/bin/helm", recovery_namespace="foundry-qa-recovery")
+
+    with pytest.raises(RuntimeError, match="macmini_restore_foundation_helm_field_conflict"):
+        restore_subject._install_recovery(args, tmp_path, archived, chart, is_foundation=True)
+
+    assert len(commands) == 1
+    assert "--force-conflicts" in commands[0]
