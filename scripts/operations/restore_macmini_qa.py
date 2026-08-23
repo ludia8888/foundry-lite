@@ -81,6 +81,7 @@ _KUBERNETES_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 _STORAGE_SIZE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi)$")
 _API_TIMEOUT_SECONDS = 300
 _API_REQUEST_ATTEMPTS = 2
+_S3_IMPORT_ATTEMPTS = 2
 
 
 class CapacityReceipt(TypedDict):
@@ -88,6 +89,11 @@ class CapacityReceipt(TypedDict):
     name: str
     replicasBefore: int
     replicasDuringRecovery: int
+
+
+class S3RestoreReceipt(TypedDict):
+    attempts: int
+    purgedVersionCount: int
 
 
 def restore(args: argparse.Namespace) -> dict[str, object]:
@@ -120,7 +126,7 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
         _ensure_recovery_runtime_pvc(args, release_values)
         _scale_named(args, args.recovery_namespace, "foundry-lite", 1)
         _wait_deployment(args, args.recovery_namespace, "foundry-lite", 300)
-        _restore_s3(args, payload / "s3-versions.tar")
+        s3_restore = _restore_s3(args, payload / "s3-versions.tar")
         observed = _postgres_inventory(args, args.recovery_namespace)
         expected = json.loads((payload / "database-inventory.json").read_text(encoding="utf-8"))
         if observed != expected:
@@ -157,6 +163,8 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
             "rpo": 0,
             "databaseInventoryMatched": True,
             "s3ContentCoordinatesMatched": True,
+            "s3ImportAttempts": s3_restore["attempts"],
+            "recoveryS3VersionsPurged": s3_restore["purgedVersionCount"],
             "exactHelmReleaseValuesRestored": True,
             "exactHelmChartRestored": True,
             "twoPhaseRecoveryInstall": True,
@@ -491,10 +499,27 @@ def _restore_source_capacity(args: argparse.Namespace, receipts: list[CapacityRe
 
 
 def _hibernate_recovery(args: argparse.Namespace) -> None:
-    for kind, name in _RECOVERY_HIBERNATE:
+    workloads = _existing_recovery_workloads(args)
+    for kind, name in workloads:
         _scale_workload(args, args.recovery_namespace, kind, name, 0)
-    for kind, name in _RECOVERY_HIBERNATE:
+    for kind, name in workloads:
         _wait_workload(args, args.recovery_namespace, kind, name, 300)
+
+
+def _existing_recovery_workloads(args: argparse.Namespace) -> tuple[tuple[str, str], ...]:
+    operation = ("get", "deployment,statefulset", "-o", "json")
+    payload = _json_command(
+        _kubectl(args, args.recovery_namespace, operation, 60),
+        "macmini_restore_recovery_inventory_failed",
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise RuntimeError("macmini_restore_recovery_inventory_failed")
+    existing = {
+        (str(item.get("kind", "")).lower(), str(item.get("metadata", {}).get("name", "")))
+        for item in payload["items"]
+        if isinstance(item, dict) and isinstance(item.get("metadata"), dict)
+    }
+    return tuple(item for item in _RECOVERY_HIBERNATE if item in existing)
 
 
 def _best_effort_capacity_recovery(args: argparse.Namespace, receipts: list[CapacityReceipt]) -> None:
@@ -536,28 +561,68 @@ def _restore_postgresql(args: argparse.Namespace, dump: Path) -> None:
         raise RuntimeError("macmini_restore_pg_restore_failed")
 
 
-def _restore_s3(args: argparse.Namespace, archive: Path) -> None:
-    operation = (
-        "exec",
-        "-i",
-        "deployment/foundry-lite",
-        "-c",
-        "api",
-        "--",
-        "/opt/foundry-lite-venv/bin/python",
-        "/app/scripts/operations/s3_version_snapshot.py",
-        "import",
-    )
+def _restore_s3(args: argparse.Namespace, archive: Path) -> S3RestoreReceipt:
+    purged = 0
+    reason = "macmini_restore_s3_import_command_failed"
+    for attempt in range(1, _S3_IMPORT_ATTEMPTS + 1):
+        purged += _purge_recovery_s3(args)
+        try:
+            result = _import_s3_archive(args, archive)
+        except subprocess.TimeoutExpired:
+            reason = "macmini_restore_s3_import_timeout"
+            continue
+        if result.returncode == 0:
+            return S3RestoreReceipt(attempts=attempt, purgedVersionCount=purged)
+        reason = _s3_import_failure_reason(result)
+    raise RuntimeError(reason)
+
+
+def _purge_recovery_s3(args: argparse.Namespace) -> int:
+    result = _kubectl(args, args.recovery_namespace, _s3_snapshot_operation("purge", is_streaming=False), 300)
+    payload = _json_command(result, "macmini_restore_s3_purge_failed")
+    if not isinstance(payload, dict):
+        raise RuntimeError("macmini_restore_s3_purge_failed")
+    count = payload.get("deletedVersionCount")
+    if payload.get("status") != "passed" or not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        raise RuntimeError("macmini_restore_s3_purge_failed")
+    return count
+
+
+def _import_s3_archive(args: argparse.Namespace, archive: Path) -> subprocess.CompletedProcess[bytes]:
+    operation = _s3_snapshot_operation("import", is_streaming=True)
     with archive.open("rb") as stream:
-        result = subprocess.run(  # nosec B603 - recovery-bound kubectl argv; remove if free argv appears.
+        return subprocess.run(  # nosec B603 - recovery-bound kubectl argv; remove if free argv appears.
             _kubectl_argv(args, args.recovery_namespace, operation),
             stdin=stream,
             check=False,
             capture_output=True,
             timeout=3600,
         )
-    if result.returncode != 0:
-        raise RuntimeError("macmini_restore_s3_import_failed")
+
+
+def _s3_snapshot_operation(mode: str, *, is_streaming: bool) -> tuple[str, ...]:
+    operation = (
+        "exec",
+        *(("-i",) if is_streaming else ()),
+        "deployment/foundry-lite",
+        "-c",
+        "api",
+        "--",
+        "/opt/foundry-lite-venv/bin/python",
+        "/app/scripts/operations/s3_version_snapshot.py",
+        mode,
+    )
+    return operation
+
+
+def _s3_import_failure_reason(result: subprocess.CompletedProcess[bytes]) -> str:
+    output = (result.stdout + result.stderr).lower()
+    if match := re.search(rb"s3_snapshot_[a-z0-9_]{1,100}", output):
+        return "macmini_restore_" + match.group().decode()
+    transport_markers = (b"unexpected eof", b"lost connection", b"error executing command", b"broken pipe")
+    if any(marker in output for marker in transport_markers):
+        return "macmini_restore_s3_import_transport_failed"
+    return "macmini_restore_s3_import_command_failed"
 
 
 def _postgres_inventory(args: argparse.Namespace, namespace: str) -> object:
