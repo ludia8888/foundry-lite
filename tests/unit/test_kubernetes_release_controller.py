@@ -267,6 +267,13 @@ def test_crane_cosign_resolver_verifies_arm64_revision_and_immutable_signature()
     assert artifact.image_reference == f"{IMAGE_REPOSITORY}@{DIGEST}"
     assert artifact.is_signature_verified
     assert runner.arguments[0] == ("crane", "digest", f"{IMAGE_REPOSITORY}:sha-{COMMIT_ID}")
+    assert runner.arguments[2] == (
+        "crane",
+        "config",
+        "--platform",
+        "linux/arm64",
+        f"{IMAGE_REPOSITORY}@{DIGEST}",
+    )
     assert runner.arguments[-1][-1] == f"{IMAGE_REPOSITORY}@{DIGEST}"
 
 

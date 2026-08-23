@@ -137,7 +137,10 @@ class CraneCosignArtifactResolver:
         _validate_digest(digest)
         immutable_reference = f"{repository}@{digest}"
         manifest = self._json_command(("crane", "manifest", immutable_reference), "image_manifest_invalid")
-        config = self._json_command(("crane", "config", immutable_reference), "image_config_invalid")
+        config = self._json_command(
+            ("crane", "config", "--platform", "linux/arm64", immutable_reference),
+            "image_config_invalid",
+        )
         if not _contains_linux_arm64(manifest, config):
             raise ArtifactVerificationError("linux_arm64_image_missing")
         if _oci_revision(config) != commit_id:
