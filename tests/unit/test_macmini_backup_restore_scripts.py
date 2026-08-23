@@ -212,7 +212,17 @@ def test_backup_freezes_commit_point_after_platform_evidence_mutations(
 
     def api_json(_base: str, _token: str, path: str, _payload: object) -> dict[str, object]:
         events.append(path)
-        return {"status": "paused"} if path.endswith("/start") else {}
+        if path.endswith("/start"):
+            return {"status": "paused"}
+        return {
+            "preflightStatus": "ready",
+            "artifactRef": "/runtime/backups/run-1.json",
+            "artifactHash": "sha256:" + "a" * 64,
+            "datasetVersionCount": 30_000,
+            "issueCount": 0,
+            "payloadByteSize": 4_000_000,
+            "backupId": "run-1",
+        }
 
     class CommitPointCaptured(RuntimeError):
         pass
@@ -221,33 +231,173 @@ def test_backup_freezes_commit_point_after_platform_evidence_mutations(
         events.append("postgres-inventory")
         raise CommitPointCaptured
 
-    monkeypatch.setattr(backup_subject, "assert_host_boundary", lambda: None)
-    monkeypatch.setattr(backup_subject, "assert_namespace", lambda _namespace: None)
-    monkeypatch.setattr(backup_subject, "_private_text", lambda _path: "operator-token")
-    monkeypatch.setattr(backup_subject, "_age_recipient", lambda _path: "age1recipient")
-    monkeypatch.setattr(backup_subject, "_backup_directory", lambda _run_id: target)
     monkeypatch.setattr(backup_subject, "_api_json", api_json)
-    monkeypatch.setattr(backup_subject, "_pause_workers", lambda _args: [])
+    monkeypatch.setattr(backup_subject, "_pause_workers", lambda _args, **_kwargs: [])
     monkeypatch.setattr(backup_subject, "_helm_release_values", lambda _args: _exact_release_values())
     monkeypatch.setattr(backup_subject, "_package_release_chart", lambda *_args: target / "helm-chart.tgz")
     monkeypatch.setattr(backup_subject, "_postgres_inventory", postgres_inventory)
     args = argparse.Namespace(
-        namespace="foundry-qa",
-        bearer_token_file=str(tmp_path / "token"),
-        age_recipient_file=str(tmp_path / "recipient"),
         run_id="run-1",
         api_base_url="http://127.0.0.1:30443",
     )
+    progress = backup_subject.BackupProgress(isRestoreModeActive=False, workers=[])
 
     with pytest.raises(CommitPointCaptured):
-        backup_subject.backup(args)
+        backup_subject._capture_backup(args, "operator-token", "age1recipient", target, "restore-1", progress)
 
     assert events == [
         "/api/operations/backup-restore/restore-mode/start",
-        "/api/operations/backup-restore/preflight",
         "/api/operations/backup-restore/artifacts",
         "postgres-inventory",
     ]
+
+
+def test_backup_writes_only_bounded_preflight_summary_from_immutable_artifact() -> None:
+    artifact = {
+        "preflightStatus": "ready",
+        "artifactRef": "/runtime/backups/large.json",
+        "artifactHash": "sha256:" + "b" * 64,
+        "datasetVersionCount": 30_575,
+        "issueCount": 0,
+        "payloadByteSize": 8_000_000,
+        "backupId": "large-backup",
+        "datasetVersions": [{"versionId": str(index)} for index in range(100)],
+        "summary": {"unbounded": [str(index) for index in range(100)]},
+    }
+
+    summary = backup_subject._artifact_preflight_summary(artifact, expected_backup_id="large-backup")
+
+    assert summary["datasetVersionCount"] == 30_575
+    assert summary["detailsStoredInImmutableArtifact"] is True
+    assert "datasetVersions" not in summary
+    assert "summary" not in summary
+    assert len(json.dumps(summary)) < 1024
+
+    with pytest.raises(RuntimeError, match="artifact_receipt_invalid"):
+        backup_subject._artifact_preflight_summary(artifact, expected_backup_id="other-backup")
+
+
+def test_failed_backup_approves_resume_restores_exact_workers_and_removes_partial_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_paths: list[str] = []
+    kubectl_operations: list[tuple[str, ...]] = []
+
+    def api_json(_base: str, _token: str, path: str, _payload: object) -> dict[str, object]:
+        api_paths.append(path)
+        return {"status": "passed" if path.endswith("post-restore-validation") else "resume_approved"}
+
+    def kubectl(
+        _args: argparse.Namespace,
+        operation: tuple[str, ...],
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        kubectl_operations.append(operation)
+        return subprocess.CompletedProcess(operation, 0, b"", b"")
+
+    monkeypatch.setattr(backup_subject, "_api_json", api_json)
+    monkeypatch.setattr(backup_subject, "_kubectl", kubectl)
+    target = tmp_path / "run-1"
+    target.mkdir()
+    (target / "partial").write_text("partial", encoding="utf-8")
+    (tmp_path / "run-1.tar").write_bytes(b"partial")
+    (tmp_path / "run-1.tar.age").write_bytes(b"partial")
+    args = argparse.Namespace(run_id="run-1", api_base_url="http://127.0.0.1:30443")
+    progress = backup_subject.BackupProgress(
+        isRestoreModeActive=True,
+        workers=[
+            {"name": "foundry-lite-worker-action", "replicasBefore": 1, "replicasAfter": 0},
+            {"name": "foundry-lite-worker-outbox", "replicasBefore": 0, "replicasAfter": 0},
+        ],
+    )
+
+    cleanup = backup_subject._recover_failed_backup(args, "token", target, "restore-1", progress)
+
+    assert cleanup["status"] == "passed"
+    assert cleanup["restoreModeStatus"] == "resume_approved"
+    assert cleanup["workersRestored"] is True
+    assert not target.exists()
+    assert not (tmp_path / "run-1.tar").exists()
+    assert not (tmp_path / "run-1.tar.age").exists()
+    assert api_paths == [
+        "/api/operations/backup-restore/restore-mode/restore-1/post-restore-validation",
+        "/api/operations/backup-restore/restore-mode/restore-1/approve-resume",
+    ]
+    patch_operations = [operation for operation in kubectl_operations if operation[0] == "patch"]
+    assert all("--field-manager=helm" in operation for operation in patch_operations)
+    assert any(any('"replicas":1' in value for value in operation) for operation in patch_operations)
+    assert any(any('"replicas":0' in value for value in operation) for operation in patch_operations)
+    assert sum(operation[0] == "rollout" for operation in kubectl_operations) == 1
+
+
+def test_failed_backup_does_not_restart_workers_before_resume_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_subject, "_api_json", lambda *_args: {"status": "blocked"})
+    kubectl_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        backup_subject,
+        "_kubectl",
+        lambda _args, operation, _timeout: kubectl_calls.append(operation),
+    )
+    target = tmp_path / "run-2"
+    target.mkdir()
+    progress = backup_subject.BackupProgress(
+        isRestoreModeActive=True,
+        workers=[{"name": "foundry-lite-worker-action", "replicasBefore": 1}],
+    )
+
+    cleanup = backup_subject._recover_failed_backup(
+        argparse.Namespace(run_id="run-2", api_base_url="http://127.0.0.1:30443"),
+        "token",
+        target,
+        "restore-2",
+        progress,
+    )
+
+    assert cleanup["status"] == "failed"
+    assert cleanup["workersRestored"] is False
+    assert kubectl_calls == []
+    assert not target.exists()
+
+
+def test_worker_pause_failure_preserves_receipts_for_automatic_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = {
+        "items": [
+            {
+                "metadata": {
+                    "name": f"foundry-lite-worker-{name}",
+                    "labels": {"app.kubernetes.io/component": f"worker-{name}"},
+                },
+                "spec": {"replicas": 1},
+            }
+            for name in ("action", "outbox")
+        ]
+    }
+    calls = 0
+
+    def kubectl(
+        _args: argparse.Namespace,
+        operation: tuple[str, ...],
+        _timeout: float,
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal calls
+        if operation[0] == "get":
+            return subprocess.CompletedProcess(operation, 0, json.dumps(inventory).encode(), b"")
+        calls += 1
+        return subprocess.CompletedProcess(operation, 0 if calls == 1 else 1, b"", b"")
+
+    monkeypatch.setattr(backup_subject, "_kubectl", kubectl)
+    receipts: list[dict[str, object]] = []
+
+    with pytest.raises(RuntimeError, match="worker_pause_failed"):
+        backup_subject._pause_workers(argparse.Namespace(), receipts=receipts)
+
+    assert receipts == [{"name": "foundry-lite-worker-action", "replicasBefore": 1, "replicasAfter": 0}]
 
 
 def test_restore_safe_extract_rejects_links(tmp_path: Path) -> None:
