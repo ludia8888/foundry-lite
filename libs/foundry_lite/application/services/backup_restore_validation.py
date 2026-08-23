@@ -44,6 +44,27 @@ class BackupRestoreValidationService(CoreService):
 
     def approval_candidate(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport:
         current = self.existing_restore_mode_report(ctx, restore_id)
+        return self._require_approval_candidate(current, restore_id)
+
+    def post_restore_validation_candidate(
+        self,
+        ctx: RequestContext,
+        restore_id: str,
+        validation_id: str | None,
+    ) -> tuple[BackupRestoreModeReport, BackupRestorePostRestoreValidationReport | None]:
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        audit_events = snapshot["auditEvents"]
+        current = self._require_approval_candidate(latest_restore_mode_report(audit_events, restore_id), restore_id)
+        existing = latest_post_restore_validation_report(audit_events, restore_id)
+        if validation_id is None or existing is None or existing["validationId"] != validation_id:
+            return current, None
+        return current, existing
+
+    @staticmethod
+    def _require_approval_candidate(
+        current: BackupRestoreModeReport | None,
+        restore_id: str,
+    ) -> BackupRestoreModeReport:
         if current is None:
             raise NotFound("restore mode not found", details={"restore_id": restore_id})
         if current["status"] == "blocked":
@@ -71,20 +92,6 @@ class BackupRestoreValidationService(CoreService):
                 "post-restore validation id does not match latest passed evidence",
                 details={"restore_id": restore_id, "validation_id": validation_id},
             )
-        return report
-
-    def existing_post_restore_validation(
-        self,
-        ctx: RequestContext,
-        restore_id: str,
-        validation_id: str | None,
-    ) -> BackupRestorePostRestoreValidationReport | None:
-        if validation_id is None:
-            return None
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
-        report = latest_post_restore_validation_report(snapshot["auditEvents"], restore_id)
-        if report is None or report["validationId"] != validation_id:
-            return None
         return report
 
     def audit_restore_mode(
