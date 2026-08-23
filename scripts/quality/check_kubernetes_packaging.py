@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "kubernetes_packaging.json"
 CHART_ROOT = Path("deploy/helm/foundry-lite")
 TOOL_MANIFEST = Path("deploy/macmini-tools-arm64.json")
+COSIGN_RELEASE = "v3.1.3"
+COSIGN_IMAGE = "ghcr.io/sigstore/cosign/cosign@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8"
 REQUIRED_PATHS = (
     CHART_ROOT / "Chart.yaml",
     CHART_ROOT / "values.yaml",
@@ -77,6 +79,7 @@ def collect_findings(root: Path = ROOT) -> list[KubernetesPackagingFinding]:
     return [
         *_values_findings(root),
         *_dockerfile_findings(root),
+        *_cosign_version_findings(root),
         *_workflow_findings(root),
         *_crd_findings(root),
         *_template_findings(root),
@@ -154,6 +157,21 @@ def _dockerfile_findings(root: Path) -> list[KubernetesPackagingFinding]:
             reference = line.split()[1]
             if reference != "${API_BASE_IMAGE}" and "@sha256:" not in reference:
                 findings.append(_finding("mutable_base_image", relative, reference))
+    return findings
+
+
+def _cosign_version_findings(root: Path) -> list[KubernetesPackagingFinding]:
+    dockerfile_path = Path("deploy/kubernetes/Dockerfile.controller")
+    workflow_path = Path(".github/workflows/kubernetes-images.yml")
+    dockerfile = (root / dockerfile_path).read_text(encoding="utf-8")
+    workflow = (root / workflow_path).read_text(encoding="utf-8")
+    expected_stage = f"FROM {COSIGN_IMAGE} AS cosign"
+    expected_release = f"cosign-release: {COSIGN_RELEASE}"
+    findings: list[KubernetesPackagingFinding] = []
+    if expected_stage not in dockerfile:
+        findings.append(_finding("cosign_version_contract_mismatch", dockerfile_path, COSIGN_RELEASE))
+    if expected_release not in workflow:
+        findings.append(_finding("cosign_version_contract_mismatch", workflow_path, COSIGN_RELEASE))
     return findings
 
 

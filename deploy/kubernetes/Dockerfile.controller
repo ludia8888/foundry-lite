@@ -2,7 +2,7 @@
 
 ARG API_BASE_IMAGE
 FROM gcr.io/go-containerregistry/crane@sha256:8f5dc5ba9ccf8528d40c3f9983345f9929eb17b0b26f9564fd3fe1f84e47dea2 AS crane
-FROM ghcr.io/sigstore/cosign/cosign@sha256:b74da950a9b069fbdba58fcf66e899952a190fff2a943dbf30e55279d70274d4 AS cosign
+FROM ghcr.io/sigstore/cosign/cosign@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8 AS cosign
 
 FROM ${API_BASE_IMAGE} AS runtime
 
