@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import cast
 
-from foundry_lite.application.ports import BackupArtifactConflictError, BackupArtifactStore
+from foundry_lite.application.ports import (
+    BackupArtifactConflictError,
+    BackupArtifactIntegrityError,
+    BackupArtifactStore,
+)
 from foundry_lite.application.ports.runtime_repository import RuntimeRepository, RuntimeRow
 from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.runtime_repository_backup_restore import (
@@ -16,7 +20,7 @@ from foundry_lite.application.services.backup_restore_preflight_service import B
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected
+from foundry_lite.domain.errors import ConflictDetected, InvariantViolation
 
 
 class BackupRestoreArtifactService(CoreService):
@@ -52,8 +56,18 @@ class BackupRestoreArtifactService(CoreService):
                 "backup artifact requires a ready restore preflight",
                 details={"backup_id": resolved_backup_id, "issue_count": len(report["issues"])},
             )
+        receipt = self._write_backup_artifact(ctx, report)
+        if not receipt["isIdempotentReplay"]:
+            self._audit_backup_artifact_created(ctx, receipt)
+        return receipt
+
+    def _write_backup_artifact(
+        self,
+        ctx: RequestContext,
+        report: BackupRestorePreflightReport,
+    ) -> BackupRestoreArtifactReceipt:
         try:
-            receipt = self.backup_artifact_store.write_backup_artifact(report)
+            return self.backup_artifact_store.write_backup_artifact(report)
         except BackupArtifactConflictError as exc:
             raise ConflictDetected(
                 "backup artifact id already points at different commit-point evidence",
@@ -63,9 +77,12 @@ class BackupRestoreArtifactService(CoreService):
                     "requested_hash": exc.requested_hash,
                 },
             ) from exc
-        if not receipt["isIdempotentReplay"]:
-            self._audit_backup_artifact_created(ctx, receipt)
-        return receipt
+        except BackupArtifactIntegrityError as exc:
+            self._audit_backup_artifact_failed(ctx, report, reason="artifact_integrity_failed")
+            raise InvariantViolation(
+                "backup artifact integrity contract failed",
+                details={"backup_id": report["backupId"], "artifact_ref": exc.artifact_ref, "reason": exc.reason},
+            ) from exc
 
     def _audit_backup_artifact_created(
         self,
@@ -88,6 +105,8 @@ class BackupRestoreArtifactService(CoreService):
         self,
         ctx: RequestContext,
         report: BackupRestorePreflightReport,
+        *,
+        reason: str = "preflight_not_ready",
     ) -> None:
         with self.engine.begin() as conn:
             self.runtime_service._audit(
@@ -101,7 +120,7 @@ class BackupRestoreArtifactService(CoreService):
                 after_ref={
                     "status": report["status"],
                     "issueCount": len(report["issues"]),
-                    "reason": "preflight_not_ready",
+                    "reason": reason,
                 },
                 correlation_id=ctx.request_id,
             )
