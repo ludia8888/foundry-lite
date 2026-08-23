@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 
-from scripts.operations.backup_macmini_qa import _validated_release_values
+from scripts.operations.backup_macmini_qa import _operator_api_headers, _validated_release_values
 from scripts.operations.macmini_qa_guard import QA_ROOT, assert_host_boundary, assert_namespace
 
 _RECOVERY_NAMESPACE = "foundry-qa-recovery"
@@ -665,7 +665,7 @@ def _api_post(base: str, token: str, path: str, payload: object) -> dict[str, ob
         url,
         data=json.dumps(payload, separators=(",", ":")).encode(),
         method="POST",
-        headers={"authorization": f"Bearer {token}", "content-type": "application/json", "accept": "application/json"},
+        headers=_operator_api_headers(token),
     )
     opener = urllib.request.build_opener(_NoRedirect())
     try:

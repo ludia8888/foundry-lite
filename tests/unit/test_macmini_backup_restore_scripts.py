@@ -90,6 +90,15 @@ def test_backup_and_restore_scaling_preserve_helm_field_ownership(monkeypatch: p
     assert "--field-manager=helm" in restore_commands[-1]
 
 
+def test_backup_restore_operator_headers_cover_oidc_and_header_trust() -> None:
+    headers = backup_subject._operator_api_headers("operator-token")
+
+    assert headers["authorization"] == "Bearer operator-token"
+    assert headers["X-Tenant-ID"] == "tenant-demo"
+    assert headers["X-User-ID"] == "enterprise-qa-operator"
+    assert headers["X-Roles"] == "admin,data_engineer,ops_manager"
+
+
 def test_single_node_restore_hands_capacity_back_to_source(monkeypatch: pytest.MonkeyPatch) -> None:
     scaled: list[tuple[str, str, str, int]] = []
     waited: list[tuple[str, str, str]] = []
