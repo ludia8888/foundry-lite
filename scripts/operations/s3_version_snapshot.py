@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -37,6 +38,10 @@ class _ReadableBody(Protocol):
 
 class _ClosableBody(_ReadableBody, Protocol):
     def close(self) -> None: ...
+
+
+class _MutableHeaders(Protocol):
+    def __setitem__(self, key: str, value: str) -> None: ...
 
 
 class S3SnapshotClient(Protocol):
@@ -168,6 +173,15 @@ def purge_bucket(client: S3SnapshotClient, bucket: str) -> int:
     if any(_list_versions(client, bucket)):
         raise RuntimeError("s3_snapshot_purge_incomplete")
     return len(versions)
+
+
+def _add_delete_objects_content_md5(request: object, **_kwargs: object) -> None:
+    body = getattr(request, "body", None)
+    headers = getattr(request, "headers", None)
+    if not isinstance(body, bytes) or not hasattr(headers, "__setitem__"):
+        raise RuntimeError("s3_snapshot_delete_request_invalid")
+    digest = hashlib.md5(body, usedforsecurity=False).digest()  # noqa: S324 - required S3 wire integrity header.
+    cast(_MutableHeaders, headers)["Content-MD5"] = base64.b64encode(digest).decode("ascii")
 
 
 def _restore_archive_entry(
@@ -375,7 +389,9 @@ def _client() -> tuple[S3SnapshotClient, str]:
     if not endpoint or not bucket:
         raise RuntimeError("s3_snapshot_configuration_missing")
     config = Config(request_checksum_calculation="when_required", s3={"payload_signing_enabled": False})
-    return cast(S3SnapshotClient, boto3.client("s3", endpoint_url=endpoint, config=config)), bucket
+    client = boto3.client("s3", endpoint_url=endpoint, config=config)
+    client.meta.events.register_last("before-sign.s3.DeleteObjects", _add_delete_objects_content_md5)
+    return cast(S3SnapshotClient, client), bucket
 
 
 def main() -> int:
