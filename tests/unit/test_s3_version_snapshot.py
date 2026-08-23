@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import tarfile
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, cast
 
@@ -18,6 +19,7 @@ class _ConfigView(Protocol):
 class _FakeS3:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
+        self.get_calls = 0
         self._sequence = 0
 
     def add(self, key: str, body: bytes) -> None:
@@ -37,6 +39,7 @@ class _FakeS3:
 
     def get_object(self, *, Bucket: str, Key: str, VersionId: str) -> dict[str, object]:
         assert Bucket == "qa-bucket"
+        self.get_calls += 1
         item = next(value for value in self.events if value["key"] == Key and value["version"] == VersionId)
         return {"Body": io.BytesIO(item["body"])}
 
@@ -65,6 +68,13 @@ class _FakeS3:
         }
 
 
+class _CorruptingS3(_FakeS3):
+    def put_object(self, *, Bucket: str, Key: str, Body: object, ContentLength: int) -> None:
+        assert Bucket == "qa-bucket"
+        body = Body.read(ContentLength)
+        self.add(Key, body + b"corrupt")
+
+
 def test_s3_version_snapshot_round_trips_version_content_and_delete_order() -> None:
     source = _FakeS3()
     source.add("receipts/a.txt", b"first")
@@ -73,6 +83,12 @@ def test_s3_version_snapshot_round_trips_version_content_and_delete_order() -> N
     archive = io.BytesIO()
 
     expected = export_archive(source, "qa-bucket", archive)
+    assert source.get_calls == 2
+    archive.seek(0)
+    with tarfile.open(fileobj=archive, mode="r:") as exported:
+        members = exported.getmembers()
+    assert members[-1].name == "manifest.json"
+    assert all("foundry.sha256" not in member.pax_headers for member in members if member.name.startswith("objects/"))
     target = _FakeS3()
     archive.seek(0)
     restored = import_archive(target, "qa-bucket", archive)
@@ -80,6 +96,17 @@ def test_s3_version_snapshot_round_trips_version_content_and_delete_order() -> N
     assert restored == expected
     assert [entry.sha256 for entry in build_manifest(target, "qa-bucket")] == [entry.sha256 for entry in expected]
     assert target.events[-1]["body"] == b"second"
+
+
+def test_s3_snapshot_manifest_detects_corruption_after_streamed_restore() -> None:
+    source = _FakeS3()
+    source.add("receipts/a.txt", b"source-bytes")
+    archive = io.BytesIO()
+    export_archive(source, "qa-bucket", archive)
+    archive.seek(0)
+
+    with pytest.raises(RuntimeError, match="restored_manifest_mismatch"):
+        import_archive(_CorruptingS3(), "qa-bucket", archive)
 
 
 def test_s3_version_snapshot_refuses_nonempty_restore_target() -> None:
@@ -107,3 +134,7 @@ def test_s3_snapshot_client_streams_without_rewinding_tar_members(monkeypatch: p
     assert captured["service"] == "s3"
     assert config.request_checksum_calculation == "when_required"
     assert config.s3["payload_signing_enabled"] is False
+
+
+def test_s3_snapshot_object_bound_has_repeated_soak_headroom() -> None:
+    assert subject._MAX_OBJECTS == 250_000

@@ -10,14 +10,14 @@ import os
 import sys
 import tarfile
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import BinaryIO, Protocol, cast
 
 import boto3  # type: ignore[import-untyped]
 from botocore.config import Config  # type: ignore[import-untyped]
 
-_MAX_OBJECTS = 100_000
+_MAX_OBJECTS = 250_000
 _MAX_TOTAL_BYTES = 50 * 1024 * 1024 * 1024
 
 
@@ -65,6 +65,10 @@ class HashingReader:
 
 
 def build_manifest(client: S3SnapshotClient, bucket: str) -> tuple[VersionEntry, ...]:
+    return tuple(_entry_with_hash(client, bucket, entry) for entry in _listed_manifest(client, bucket))
+
+
+def _listed_manifest(client: S3SnapshotClient, bucket: str) -> tuple[VersionEntry, ...]:
     raw = list(_list_versions(client, bucket))
     if len(raw) > _MAX_OBJECTS:
         raise RuntimeError("s3_snapshot_object_limit_exceeded")
@@ -79,7 +83,6 @@ def build_manifest(client: S3SnapshotClient, bucket: str) -> tuple[VersionEntry,
         is_delete_marker = bool(item["IsDeleteMarker"])
         key = _listed_text(item, "Key")
         version_id = _listed_text(item, "VersionId")
-        digest = None if is_delete_marker else _object_hash(client, bucket, key, version_id)
         entries.append(
             VersionEntry(
                 key=key,
@@ -87,41 +90,51 @@ def build_manifest(client: S3SnapshotClient, bucket: str) -> tuple[VersionEntry,
                 is_delete_marker=is_delete_marker,
                 size=size,
                 last_modified=_listed_datetime(item).isoformat(),
-                sha256=digest,
+                sha256=None,
             )
         )
     return tuple(entries)
 
 
+def _entry_with_hash(client: S3SnapshotClient, bucket: str, entry: VersionEntry) -> VersionEntry:
+    if entry.is_delete_marker:
+        return entry
+    return replace(entry, sha256=_object_hash(client, bucket, entry.key, entry.version_id))
+
+
 def export_archive(client: S3SnapshotClient, bucket: str, output: BinaryIO) -> tuple[VersionEntry, ...]:
-    manifest = build_manifest(client, bucket)
+    listed = _listed_manifest(client, bucket)
+    completed: list[VersionEntry] = []
     with tarfile.open(fileobj=output, mode="w|") as archive:
+        for index, entry in enumerate(listed):
+            completed.append(_add_archive_entry(archive, client, bucket, index, entry))
+        manifest = tuple(completed)
         _add_manifest(archive, bucket, manifest)
-        for index, entry in enumerate(manifest):
-            if entry.is_delete_marker:
-                info = tarfile.TarInfo(f"markers/{index:08d}.delete")
-                info.size = 0
-                info.mode = 0o600
-                info.pax_headers = {
-                    "foundry.key": entry.key,
-                    "foundry.version": entry.version_id,
-                    "foundry.delete": "true",
-                }
-                archive.addfile(info, io.BytesIO())
-                continue
-            response = client.get_object(Bucket=bucket, Key=entry.key, VersionId=entry.version_id)
-            body = _body(response)
-            info = tarfile.TarInfo(f"objects/{index:08d}.bin")
-            info.size = entry.size
-            info.mode = 0o600
-            info.pax_headers = {
-                "foundry.key": entry.key,
-                "foundry.version": entry.version_id,
-                "foundry.sha256": entry.sha256 or "",
-            }
-            archive.addfile(info, body)
-            body.close()
     return manifest
+
+
+def _add_archive_entry(
+    archive: tarfile.TarFile,
+    client: S3SnapshotClient,
+    bucket: str,
+    index: int,
+    entry: VersionEntry,
+) -> VersionEntry:
+    info = tarfile.TarInfo(f"markers/{index:08d}.delete" if entry.is_delete_marker else f"objects/{index:08d}.bin")
+    info.size = entry.size
+    info.mode = 0o600
+    info.pax_headers = {"foundry.key": entry.key, "foundry.version": entry.version_id}
+    if entry.is_delete_marker:
+        info.pax_headers["foundry.delete"] = "true"
+        archive.addfile(info, io.BytesIO())
+        return entry
+    body = _body(client.get_object(Bucket=bucket, Key=entry.key, VersionId=entry.version_id))
+    reader = HashingReader(body)
+    try:
+        archive.addfile(info, reader)
+    finally:
+        body.close()
+    return replace(entry, sha256=reader.digest)
 
 
 def import_archive(client: S3SnapshotClient, bucket: str, source: BinaryIO) -> tuple[VersionEntry, ...]:
@@ -153,17 +166,17 @@ def _restore_archive_entry(
         return key, version
     reader = HashingReader(member)
     client.put_object(Bucket=bucket, Key=key, Body=reader, ContentLength=item.size)
-    if reader.digest != digest:
+    if digest is not None and reader.digest != digest:
         raise RuntimeError("s3_snapshot_content_hash_mismatch")
     return key, version
 
 
-def _archive_entry_metadata(item: tarfile.TarInfo) -> tuple[str, str, bool, str]:
+def _archive_entry_metadata(item: tarfile.TarInfo) -> tuple[str, str, bool, str | None]:
     key = item.pax_headers.get("foundry.key", "")
     version = item.pax_headers.get("foundry.version", "")
     is_delete_marker = item.pax_headers.get("foundry.delete") == "true"
-    digest = item.pax_headers.get("foundry.sha256", "")
-    if not key or not version or (not is_delete_marker and not digest):
+    digest = item.pax_headers.get("foundry.sha256")
+    if not key or not version:
         raise RuntimeError("s3_snapshot_archive_metadata_invalid")
     return key, version, is_delete_marker, digest
 
