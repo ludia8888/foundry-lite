@@ -181,8 +181,13 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
     except BaseException:
         if source_capacity:
             _best_effort_capacity_recovery(args, source_capacity)
-        if is_source_resume_approved and payload is not None:
-            _best_effort_source_worker_recovery(args, payload)
+        if payload is not None:
+            _best_effort_failed_restore_source_recovery(
+                args,
+                token,
+                payload,
+                is_source_resume_approved=is_source_resume_approved,
+            )
         raise
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -578,7 +583,12 @@ def _restore_s3(args: argparse.Namespace, archive: Path) -> S3RestoreReceipt:
 
 
 def _purge_recovery_s3(args: argparse.Namespace) -> int:
-    result = _kubectl(args, args.recovery_namespace, _s3_snapshot_operation("purge", is_streaming=False), 300)
+    try:
+        result = _kubectl(args, args.recovery_namespace, _s3_snapshot_operation("purge", is_streaming=False), 300)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("macmini_restore_s3_purge_timeout") from exc
+    if result.returncode != 0:
+        raise RuntimeError(_s3_purge_failure_reason(result))
     payload = _json_command(result, "macmini_restore_s3_purge_failed")
     if not isinstance(payload, dict):
         raise RuntimeError("macmini_restore_s3_purge_failed")
@@ -586,6 +596,15 @@ def _purge_recovery_s3(args: argparse.Namespace) -> int:
     if payload.get("status") != "passed" or not isinstance(count, int) or isinstance(count, bool) or count < 0:
         raise RuntimeError("macmini_restore_s3_purge_failed")
     return count
+
+
+def _s3_purge_failure_reason(result: subprocess.CompletedProcess[bytes]) -> str:
+    output = (result.stdout + result.stderr).lower()
+    if b"missingcontentmd5" in output:
+        return "macmini_restore_s3_purge_content_md5_missing"
+    if match := re.search(rb"s3_snapshot_[a-z0-9_]{1,100}", output):
+        return "macmini_restore_" + match.group().decode()
+    return "macmini_restore_s3_purge_command_failed"
 
 
 def _import_s3_archive(args: argparse.Namespace, archive: Path) -> subprocess.CompletedProcess[bytes]:
@@ -687,6 +706,33 @@ def _best_effort_source_worker_recovery(args: argparse.Namespace, payload: Path)
         _resume_source_workers(args, payload)
     except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
+
+
+def _best_effort_failed_restore_source_approval(args: argparse.Namespace, token: str) -> bool:
+    restore_id = f"enterprise-qa-{args.run_id}"
+    try:
+        with _port_forward(args, args.source_namespace, 18082):
+            _validate_and_approve_resume(
+                "http://127.0.0.1:18082",
+                token,
+                restore_id,
+                f"source-failure-recovery-{args.run_id}",
+            )
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _best_effort_failed_restore_source_recovery(
+    args: argparse.Namespace,
+    token: str,
+    payload: Path,
+    *,
+    is_source_resume_approved: bool,
+) -> None:
+    is_approved = is_source_resume_approved or _best_effort_failed_restore_source_approval(args, token)
+    if is_approved:
+        _best_effort_source_worker_recovery(args, payload)
 
 
 @contextmanager

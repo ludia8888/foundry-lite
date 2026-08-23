@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import tarfile
 from collections.abc import Mapping
@@ -15,6 +17,35 @@ from scripts.operations.s3_version_snapshot import build_manifest, export_archiv
 class _ConfigView(Protocol):
     request_checksum_calculation: str
     s3: dict[str, object]
+
+
+class _RegisteredEvent(TypedDict):
+    name: str
+    callback: object
+
+
+class _Events:
+    def __init__(self) -> None:
+        self.registered: list[_RegisteredEvent] = []
+
+    def register_last(self, name: str, callback: object) -> None:
+        self.registered.append({"name": name, "callback": callback})
+
+
+class _Meta:
+    def __init__(self) -> None:
+        self.events = _Events()
+
+
+class _ConfiguredClient:
+    def __init__(self) -> None:
+        self.meta = _Meta()
+
+
+class _Request:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.headers: dict[str, str] = {}
 
 
 class _Readable(Protocol):
@@ -150,10 +181,11 @@ def test_s3_version_snapshot_purges_exact_versions_for_safe_restore_retry() -> N
 
 def test_s3_snapshot_client_streams_without_rewinding_tar_members(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
+    configured_client = _ConfiguredClient()
 
     def client(service: str, **kwargs: object) -> object:
         captured.update({"service": service, **kwargs})
-        return object()
+        return configured_client
 
     monkeypatch.setenv("FOUNDRY_LITE_S3_ENDPOINT_URL", "http://minio:9000")
     monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", "qa-bucket")
@@ -166,6 +198,18 @@ def test_s3_snapshot_client_streams_without_rewinding_tar_members(monkeypatch: p
     assert captured["service"] == "s3"
     assert config.request_checksum_calculation == "when_required"
     assert config.s3["payload_signing_enabled"] is False
+    assert configured_client.meta.events.registered == [
+        {"name": "before-sign.s3.DeleteObjects", "callback": subject._add_delete_objects_content_md5}
+    ]
+
+
+def test_s3_delete_objects_adds_minio_required_content_md5() -> None:
+    request = _Request(b"<Delete><Object><Key>one</Key></Object></Delete>")
+
+    subject._add_delete_objects_content_md5(request)
+
+    expected = base64.b64encode(hashlib.md5(request.body, usedforsecurity=False).digest()).decode("ascii")
+    assert request.headers["Content-MD5"] == expected
 
 
 def test_s3_snapshot_object_bound_has_repeated_soak_headroom() -> None:

@@ -5,6 +5,8 @@ import io
 import json
 import subprocess
 import tarfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, cast
 
@@ -325,6 +327,82 @@ def test_restore_retries_partial_s3_import_from_clean_bucket(
 
     assert receipt == {"attempts": 2, "purgedVersionCount": 9}
     assert stream_positions == [0, 0]
+
+
+def test_restore_classifies_minio_missing_content_md5() -> None:
+    result = subprocess.CompletedProcess(
+        (),
+        1,
+        b"",
+        b"ClientError: MissingContentMD5: Missing required header: Content-Md5",
+    )
+
+    assert restore_subject._s3_purge_failure_reason(result) == "macmini_restore_s3_purge_content_md5_missing"
+
+
+def test_failed_restore_approves_source_before_worker_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    calls: list[str] = []
+
+    @contextmanager
+    def port_forward(*_args: object) -> Iterator[None]:
+        calls.append("port-forward-enter")
+        yield
+        calls.append("port-forward-exit")
+
+    def approve(*_args: object) -> tuple[dict[str, str], dict[str, str]]:
+        calls.append("approved")
+        return {"status": "passed"}, {"status": "resume_approved"}
+
+    monkeypatch.setattr(restore_subject, "_port_forward", port_forward)
+    monkeypatch.setattr(restore_subject, "_validate_and_approve_resume", approve)
+
+    is_approved = restore_subject._best_effort_failed_restore_source_approval(
+        argparse.Namespace(run_id="run-1", source_namespace="foundry-qa"),
+        "token",
+    )
+
+    assert is_approved is True
+    assert calls == ["port-forward-enter", "approved", "port-forward-exit"]
+
+    def confirm_approval(*_args: object) -> bool:
+        calls.append("approval-confirmed")
+        return True
+
+    monkeypatch.setattr(restore_subject, "_best_effort_failed_restore_source_approval", confirm_approval)
+    monkeypatch.setattr(
+        restore_subject,
+        "_best_effort_source_worker_recovery",
+        lambda *_args: calls.append("workers-recovered"),
+    )
+    restore_subject._best_effort_failed_restore_source_recovery(
+        argparse.Namespace(),
+        "token",
+        payload,
+        is_source_resume_approved=False,
+    )
+
+    assert calls[-2:] == ["approval-confirmed", "workers-recovered"]
+
+    calls.clear()
+
+    def reject_approval(*_args: object) -> bool:
+        calls.append("approval-rejected")
+        return False
+
+    monkeypatch.setattr(restore_subject, "_best_effort_failed_restore_source_approval", reject_approval)
+    restore_subject._best_effort_failed_restore_source_recovery(
+        argparse.Namespace(),
+        "token",
+        payload,
+        is_source_resume_approved=False,
+    )
+
+    assert calls == ["approval-rejected"]
 
 
 def test_restore_waits_for_each_resumed_source_worker(
