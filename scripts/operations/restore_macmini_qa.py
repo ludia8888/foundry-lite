@@ -79,7 +79,8 @@ _RECOVERY_HIBERNATE = (
 _MAX_API_BYTES = 2 * 1024 * 1024
 _KUBERNETES_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 _STORAGE_SIZE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi)$")
-_API_TIMEOUT_SECONDS = 180
+_API_TIMEOUT_SECONDS = 300
+_API_REQUEST_ATTEMPTS = 2
 
 
 class CapacityReceipt(TypedDict):
@@ -103,6 +104,8 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
     temporary = Path(tempfile.mkdtemp(prefix="restore-", dir=QA_ROOT / "state"))
     os.chmod(temporary, 0o700)
     source_capacity: list[CapacityReceipt] = []
+    payload: Path | None = None
+    is_source_resume_approved = False
     try:
         payload = _decrypt_and_extract(args.age, identity, archive, temporary, args.run_id)
         _verify_manifest(payload)
@@ -126,35 +129,20 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
         _wait_all_recovery(args)
         restore_id = f"enterprise-qa-{args.run_id}"
         with _port_forward(args, args.recovery_namespace, 18081):
-            validation = _api_post(
+            _recovery_validation, recovery_resume = _validate_and_approve_resume(
                 "http://127.0.0.1:18081",
                 token,
-                f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
-                {"validationId": f"recovery-{args.run_id}"},
-            )
-            if validation.get("status") != "passed":
-                raise RuntimeError("macmini_restore_post_validation_failed")
-            recovery_resume = _api_post(
-                "http://127.0.0.1:18081",
-                token,
-                f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
-                {"validationId": f"recovery-{args.run_id}"},
+                restore_id,
+                f"recovery-{args.run_id}",
             )
         with _port_forward(args, args.source_namespace, 18082):
-            source_validation = _api_post(
+            _source_validation, source_resume = _validate_and_approve_resume(
                 "http://127.0.0.1:18082",
                 token,
-                f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
-                {"validationId": f"source-{args.run_id}"},
+                restore_id,
+                f"source-{args.run_id}",
             )
-            if source_validation.get("status") != "passed":
-                raise RuntimeError("macmini_restore_source_validation_failed")
-            source_resume = _api_post(
-                "http://127.0.0.1:18082",
-                token,
-                f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
-                {"validationId": f"source-{args.run_id}"},
-            )
+            is_source_resume_approved = True
         _hibernate_recovery(args)
         _restore_source_capacity(args, source_capacity)
         _resume_source_workers(args, payload)
@@ -185,6 +173,8 @@ def restore(args: argparse.Namespace) -> dict[str, object]:
     except BaseException:
         if source_capacity:
             _best_effort_capacity_recovery(args, source_capacity)
+        if is_source_resume_approved and payload is not None:
+            _best_effort_source_worker_recovery(args, payload)
         raise
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -617,6 +607,13 @@ def _resume_source_workers(args: argparse.Namespace, payload: Path) -> None:
             _wait_deployment(args, args.source_namespace, item["name"], 300)
 
 
+def _best_effort_source_worker_recovery(args: argparse.Namespace, payload: Path) -> None:
+    try:
+        _resume_source_workers(args, payload)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        pass
+
+
 @contextmanager
 def _port_forward(args: argparse.Namespace, namespace: str, local_port: int) -> Iterator[None]:
     operation = ("port-forward", "service/foundry-lite-api", f"{local_port}:10000")
@@ -683,6 +680,66 @@ def _api_post(base: str, token: str, path: str, payload: object) -> dict[str, ob
     if not isinstance(value, dict):
         raise RuntimeError("macmini_restore_api_response_invalid")
     return value
+
+
+def _api_get(base: str, token: str, path: str) -> dict[str, object]:
+    parsed_base = urllib.parse.urlsplit(base)
+    if parsed_base.scheme not in {"http", "https"} or not parsed_base.hostname:
+        raise ValueError("macmini_restore_api_url_invalid")
+    if parsed_base.scheme == "http" and parsed_base.hostname not in {"127.0.0.1", "localhost"}:
+        raise ValueError("macmini_restore_api_http_not_loopback")
+    url = urllib.parse.urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+    if urllib.parse.urlsplit(url).netloc != parsed_base.netloc:
+        raise ValueError("macmini_restore_api_origin_mismatch")
+    request = urllib.request.Request(url, method="GET", headers=_operator_api_headers(token))
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        with opener.open(request, timeout=_API_TIMEOUT_SECONDS) as response:
+            body = response.read(_MAX_API_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError("macmini_restore_api_unavailable") from exc
+    if len(body) > _MAX_API_BYTES:
+        raise RuntimeError("macmini_restore_api_response_too_large")
+    try:
+        value = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("macmini_restore_api_response_invalid") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("macmini_restore_api_response_invalid")
+    return value
+
+
+def _api_post_exact_retry(base: str, token: str, path: str, payload: object) -> dict[str, object]:
+    for attempt in range(_API_REQUEST_ATTEMPTS):
+        try:
+            return _api_post(base, token, path, payload)
+        except RuntimeError as exc:
+            if str(exc) != "macmini_restore_api_unavailable" or attempt + 1 >= _API_REQUEST_ATTEMPTS:
+                raise
+            time.sleep(2)
+    raise RuntimeError("macmini_restore_api_unavailable")
+
+
+def _validate_and_approve_resume(
+    base: str,
+    token: str,
+    restore_id: str,
+    validation_id: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    root = f"/api/operations/backup-restore/restore-mode/{restore_id}"
+    payload = {"validationId": validation_id}
+    validation = _api_post_exact_retry(base, token, f"{root}/post-restore-validation", payload)
+    if validation.get("status") != "passed" or validation.get("validationId") != validation_id:
+        raise RuntimeError("macmini_restore_post_validation_failed")
+    try:
+        approval = _api_post_exact_retry(base, token, f"{root}/approve-resume", payload)
+    except RuntimeError as exc:
+        if str(exc) != "macmini_restore_api_unavailable":
+            raise
+        approval = _api_get(base, token, root)
+    if approval.get("status") != "resume_approved":
+        raise RuntimeError("macmini_restore_resume_approval_failed")
+    return validation, approval
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -770,6 +827,13 @@ def _write_receipt(run_id: str, payload: object) -> None:
         stream.write("\n")
 
 
+def _safe_failure_reason(exc: Exception) -> str:
+    reason = str(exc)
+    if re.fullmatch(r"[a-z0-9_.:-]{1,160}", reason):
+        return reason
+    return "macmini_restore_failed_unclassified"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
@@ -782,7 +846,18 @@ def main() -> int:
     parser.add_argument("--age-identity-file", required=True)
     parser.add_argument("--bearer-token-file", required=True)
     parser.add_argument("--source-api-base-url", default="http://127.0.0.1:30443")
-    receipt = restore(parser.parse_args())
+    args = parser.parse_args()
+    try:
+        receipt = restore(args)
+    except Exception as exc:
+        receipt = {
+            "schemaVersion": 1,
+            "status": "failed",
+            "runId": args.run_id,
+            "reason": _safe_failure_reason(exc),
+            "rawSecretsStored": False,
+        }
+        _write_receipt(args.run_id, receipt)
     print(json.dumps(receipt, sort_keys=True))
     return 0 if receipt["status"] == "passed" else 1
 

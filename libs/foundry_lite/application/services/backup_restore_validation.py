@@ -73,6 +73,20 @@ class BackupRestoreValidationService(CoreService):
             )
         return report
 
+    def existing_post_restore_validation(
+        self,
+        ctx: RequestContext,
+        restore_id: str,
+        validation_id: str | None,
+    ) -> BackupRestorePostRestoreValidationReport | None:
+        if validation_id is None:
+            return None
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        report = latest_post_restore_validation_report(snapshot["auditEvents"], restore_id)
+        if report is None or report["validationId"] != validation_id:
+            return None
+        return report
+
     def audit_restore_mode(
         self,
         conn: TransactionContext,
