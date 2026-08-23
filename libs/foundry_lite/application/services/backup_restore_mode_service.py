@@ -110,14 +110,13 @@ class BackupRestoreModeService(CoreService):
     ) -> BackupRestorePostRestoreValidationReport:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "backup_restore", restore_id)
-        existing = self.backup_restore_validation_service.existing_post_restore_validation(
+        current, existing = self.backup_restore_validation_service.post_restore_validation_candidate(
             ctx,
             restore_id,
             validation_id,
         )
         if existing is not None:
             return existing
-        current = self.backup_restore_validation_service.approval_candidate(ctx, restore_id)
         preflight = self.backup_restore_preflight_service.restore_preflight_report(
             ctx=ctx,
             backup_id=current["backupId"] or restore_id,
