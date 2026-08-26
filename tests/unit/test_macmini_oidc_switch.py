@@ -38,6 +38,10 @@ def _embedded_values() -> dict[str, object]:
     }
 
 
+def _oidc_values(desired: dict[str, object]) -> dict[str, object]:
+    return {"global": {"runtimeProfile": "test"}, **desired}
+
+
 def test_switch_performs_one_atomic_upgrade_then_reconciles_exact_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -49,7 +53,7 @@ def test_switch_performs_one_atomic_upgrade_then_reconciles_exact_values(
         "foundry-lite",
         frozenset({"chatgpt-client"}),
     )
-    responses = iter((_embedded_values(), desired))
+    responses = iter((_embedded_values(), _oidc_values(desired)))
     upgrades: list[tuple[str, ...]] = []
 
     def run(command, **_kwargs):
@@ -81,7 +85,11 @@ def test_switch_performs_one_atomic_upgrade_then_reconciles_exact_values(
     override = tmp_path / "state/run-1-external-oidc.json"
     assert override.stat().st_mode & 0o077 == 0
     assert json.loads(override.read_text(encoding="utf-8")) == desired
-    assert desired["secrets"] == {"applicationExistingSecret": "foundry-lite-runtime-application"}
+    assert "global" not in desired
+    assert "secrets" not in desired
+    assert receipt["runtimeProfile"] == "test"
+    assert receipt["runtimeProfilePreserved"] is True
+    assert receipt["authAdapter"] == "strict-external-jwt-oidc"
 
 
 def test_switch_does_not_blind_retry_an_already_reconciled_release(
@@ -99,7 +107,12 @@ def test_switch_does_not_blind_retry_an_already_reconciled_release(
 
     def run(command, **_kwargs):
         if command[1:3] == ("get", "values"):
-            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(desired).encode(), stderr=b"")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(_oidc_values(desired)).encode(),
+                stderr=b"",
+            )
         if command[1] == "upgrade":
             upgrades.append(command)
         return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
@@ -117,13 +130,47 @@ def test_switch_does_not_blind_retry_an_already_reconciled_release(
 
 
 def test_switch_rejects_unexpected_partial_auth_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    args = _args(tmp_path)
     partial = _embedded_values()
     partial["auth"] = {"profile": "oidc"}
     monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
     monkeypatch.setattr(subject, "assert_host_boundary", lambda: None)
     monkeypatch.setattr(subject, "assert_namespace", lambda namespace: None)
-    monkeypatch.setattr(subject, "_helm_values", lambda _args: partial)
+    desired = subject._desired_values(
+        "https://foundry.example.test",
+        "https://identity.example.test",
+        "foundry-lite",
+        frozenset({"chatgpt-client"}),
+    )
 
     with pytest.raises(RuntimeError, match="source_profile_unexpected"):
-        subject.switch(args)
+        subject._require_switchable_source(partial, desired)
+
+
+def test_switch_allows_client_rotation_only_on_same_external_oidc_coordinates() -> None:
+    desired = subject._desired_values(
+        "https://foundry.example.test",
+        "https://identity.example.test",
+        "foundry-lite",
+        frozenset({"new-client"}),
+    )
+    current = _oidc_values(
+        subject._desired_values(
+            "https://foundry.example.test",
+            "https://identity.example.test",
+            "foundry-lite",
+            frozenset({"old-client"}),
+        )
+    )
+
+    subject._require_switchable_source(current, desired)
+
+    other_issuer = _oidc_values(
+        subject._desired_values(
+            "https://foundry.example.test",
+            "https://other-identity.example.test",
+            "foundry-lite",
+            frozenset({"old-client"}),
+        )
+    )
+    with pytest.raises(RuntimeError, match="source_profile_unexpected"):
+        subject._require_switchable_source(other_issuer, desired)

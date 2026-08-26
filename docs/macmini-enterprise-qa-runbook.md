@@ -231,9 +231,12 @@ drain barrier를 시작한다. 2초 간격으로 pending outbox와 oldest lag가
 | 20~22h | DR | encrypted checkpoint, `foundry-qa-recovery` 비파괴 restore, RTO/RPO와 semantic validation |
 | 22~24h | quiet | 새 장애 중단, backlog drain, resource baseline 복귀, 최종 invariant scan |
 
-실제 external issuer/JWKS network path는 승인된 public/tailnet owner와 issuer가 연결된 경우에만 별도 통과할 수 있다.
-그 경로가 없으면 내부 deployed-image rotation proof와 혼동하지 않고 `blocked`로 남긴다. 단일 노드이므로
-multi-node·multi-AZ는 항상 `notProven`이다.
+실제 external issuer/JWKS network path에는 승인된 public/tailnet URL 두 개와 QA principal 파일이 필요하다.
+campaign은 이 입력이 없으면 16시간 뒤 `blocked`를 기록하는 대신 시작 전에 실패한다. 실행 시점에 일회용 DCR client와
+서로 다른 두 QA 계정의 Authorization Code + PKCE token을 새로 발급하고, strict external OIDC 전환 → Keycloak
+scale-down 중 fail-closed → 복구 후 두 principal 재검증 → client/token 폐기 → 원 Helm revision과 values hash 복원을
+한 bounded rehearsal로 수행한다. 이 자동 QA 계정 증거는 hosted ChatGPT의 실제 사용자 gesture 증거와 구분한다.
+단일 노드이므로 multi-node·multi-AZ는 항상 `notProven`이다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_enterprise_campaign.py \
@@ -244,20 +247,27 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
   --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt \
   --age-identity-file /Users/sean1234/foundry-qa/state/age-identity.txt \
   --current-commit "$CURRENT_SHA" \
-  --rollback-commit "$PREVIOUS_VERIFIED_SHA"
+  --rollback-commit "$PREVIOUS_VERIFIED_SHA" \
+  --external-oidc-public-base-url "https://<approved-foundry-host>" \
+  --external-oidc-identity-base-url "https://<approved-idp-host>" \
+  --external-oidc-principals-file /Users/sean1234/foundry-qa/state/keycloak-qa-principals.txt
 ```
 
 Tailscale owner 검증을 통과한 별도 실행에서만 loopback URL을 승인된 tailnet URL로 치환한다. campaign은 각
 이벤트 뒤 business/operations recovery probe가 둘 다 통과해야 다음 destructive fault를 허용한다. StatefulSet이나
 container가 Ready여도 API connection pool이 기존 연결을 정리하는 짧은 구간이 있을 수 있으므로 recovery probe는
 최대 120초 동안 5초 간격으로 bounded polling한다. receipt에는 첫 시도 상태, 총 시도 수, 재시도 후 복구 여부와
-최종 business/operations 증거를 남긴다. 그 뒤 Outbox `pending=0`, `oldest=0`, 장애 전 대비 DLQ 증가 0을 2초 간격으로 세 번 연속 확인한 후에만 다음 장애를 시작한다. Publisher는 일시적 stream 실패를 최대 5회까지 pending으로 되돌려 재시도하며, 한도를 모두 소진한 경우에만 DLQ로 이동한다. fault execution
+최종 business/operations 증거를 남긴다. 그 뒤 장애·복구가 끝난 시점의 Outbox `(created_at, id)` high-watermark를
+고정한다. 이후 새 업무가 만든 row는 허용하되, watermark 이하의 `pending`/`publishing`이 0이고 장애 전 대비 DLQ
+증가가 0인 관측을 2초 간격으로 세 번 연속 확인한 후에만 다음 장애를 시작한다. event receipt는 watermark 좌표,
+capture receipt, 전역 pending과 watermark 이하 미발행 수를 함께 남긴다. 24시간 종료 전 workload를 멈춘 뒤 수행하는
+최종 quiet drain은 여전히 전역 `pending=0`, `oldest=0`을 요구한다. Publisher는 일시적 stream 실패를 최대 5회까지 pending으로 되돌려 재시도하며, 한도를 모두 소진한 경우에만 DLQ로 이동한다. fault execution
 증거가 실패해도 recovery probe가 모두 통과하면 해당 이벤트 자체는 실패로 남기되 다음 장애는 계속 실행한다.
 실제 복구가 실패할 때만 남은 mutation을 중지하고 quiet observation만 유지한다. 네트워크 fault는 다른 macOS 계정이나 Docker Desktop이
 아니라 전용 `foundry-qa` Colima VM의 `cni0`에만 적용하며, 기존 qdisc가 있으면 덮어쓰지 않고 중단한다. 모든
 qdisc/iptables/Deployment command 변경은 `finally`에서 exact 원상복구한다.
 
-판정 오류나 중간 프로세스 종료 때문에 이전 campaign에서 `failed`, `skipped`, 또는 plan에는 있지만 journal에는 없는 이벤트를 즉시 다시 실행할 때는 같은 고정 event command와 recovery probe를 사용하는 remediation mode를 쓴다. 이 mode는 source journal SHA-256과 선택된 event ID, 개별 execution/recovery/outbox-drain receipt를 새 run 아래에 남긴다. `blocked`와 이미 `passed`인 이벤트는 다시 실행하지 않는다.
+판정 오류나 중간 프로세스 종료 때문에 이전 campaign에서 `failed`, `skipped`, `blocked`, 또는 plan에는 있지만 journal에는 없는 이벤트를 즉시 다시 실행할 때는 같은 고정 event command와 recovery probe를 사용하는 remediation mode를 쓴다. 이 mode는 source journal SHA-256과 선택된 event ID, 개별 execution/recovery/outbox-drain receipt를 새 run 아래에 남긴다. 외부 조건이 이제 준비된 과거 `blocked`는 다시 실행하고, 이미 `passed`인 이벤트는 다시 실행하지 않는다.
 
 ```bash
 PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macmini_enterprise_campaign.py \
@@ -269,7 +279,9 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python scripts/operations/run_macm
   --age-recipient-file /Users/sean1234/foundry-qa/state/age-recipient.txt \
   --age-identity-file /Users/sean1234/foundry-qa/state/age-identity.txt \
   --current-commit "$CURRENT_SHA" \
-  --rollback-commit "$PREVIOUS_VERIFIED_SHA"
+  --rollback-commit "$PREVIOUS_VERIFIED_SHA" \
+  --external-oidc-public-base-url "https://<approved-foundry-host>" \
+  --external-oidc-identity-base-url "https://<approved-idp-host>"
 ```
 
 remediation summary가 `passed`여도 `full24HourCampaignStatus=notProven`, `p0P1Clear=false`를 유지한다. 이는 건너뛴

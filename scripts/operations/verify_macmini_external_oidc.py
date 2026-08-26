@@ -89,7 +89,8 @@ def _require_principal(
         principal.is_human_oauth is True,
         principal.oauth_session_authority == "issuer",
         principal.authorization_server_issuer == issuer,
-        isinstance(principal.oauth_session_hash, str) and principal.oauth_session_hash.startswith("sha256:"),
+        isinstance(principal.oauth_session_hash, str)
+        and principal.oauth_session_hash.startswith("oauth-session:sha256:"),
         principal.oauth_grant_type == "authorization_code",
         principal.oauth_resource == audience,
         principal.client_id in clients,

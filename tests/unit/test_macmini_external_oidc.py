@@ -61,7 +61,10 @@ def test_verify_uses_production_adapter_and_writes_only_hashed_principal_evidenc
 ) -> None:
     state = tmp_path / "state"
     _token_files(state)
-    principals = [_principal("author-sub", "sha256:" + "a" * 64), _principal("reviewer-sub", "sha256:" + "b" * 64)]
+    principals = [
+        _principal("author-sub", "oauth-session:sha256:" + "a" * 64),
+        _principal("reviewer-sub", "oauth-session:sha256:" + "b" * 64),
+    ]
     captured_environment: dict[str, str] = {}
     monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
     monkeypatch.setattr(subject, "assert_host_boundary", lambda: None)
@@ -95,7 +98,10 @@ def test_verify_uses_production_adapter_and_writes_only_hashed_principal_evidenc
 def test_verify_rejects_same_verified_subject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     state = tmp_path / "state"
     _token_files(state)
-    principals = [_principal("same-sub", "sha256:" + "a" * 64), _principal("same-sub", "sha256:" + "b" * 64)]
+    principals = [
+        _principal("same-sub", "oauth-session:sha256:" + "a" * 64),
+        _principal("same-sub", "oauth-session:sha256:" + "b" * 64),
+    ]
     monkeypatch.setattr(subject, "QA_ROOT", tmp_path)
     monkeypatch.setattr(subject, "assert_host_boundary", lambda: None)
     monkeypatch.setattr(subject, "jwt_oidc_auth_provider_from_env", lambda _environment: _Provider(principals))
@@ -108,8 +114,8 @@ def test_verify_rejects_different_registered_clients(tmp_path: Path, monkeypatch
     state = tmp_path / "state"
     _token_files(state)
     principals = [
-        _principal("author-sub", "sha256:" + "a" * 64),
-        _principal("reviewer-sub", "sha256:" + "b" * 64, client_id="other-client"),
+        _principal("author-sub", "oauth-session:sha256:" + "a" * 64),
+        _principal("reviewer-sub", "oauth-session:sha256:" + "b" * 64, client_id="other-client"),
     ]
     args = _args(state)
     args.allowed_client_id.append("other-client")

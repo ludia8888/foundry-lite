@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 from scripts.operations.macmini_enterprise_campaign_plan import (
     CAMPAIGN_DURATION_SECONDS,
@@ -29,7 +30,7 @@ from scripts.operations.macmini_qa_guard import (
 )
 
 _PYTHONPATH = ".:libs:apps/cli:apps/api:apps/worker"
-_REMEDIATION_SOURCE_STATUSES = frozenset({"failed", "skipped"})
+_REMEDIATION_SOURCE_STATUSES = frozenset({"failed", "skipped", "blocked"})
 _RECOVERY_PROBE_DEADLINE_SECONDS = 120
 _RECOVERY_PROBE_INTERVAL_SECONDS = 5
 _OUTBOX_DRAIN_DEADLINE_SECONDS = 120
@@ -311,35 +312,44 @@ def _event_outbox_drain(
     baseline = _operation_metric(pre_fault_operations, "deadLetterCount")
     if baseline is None:
         return {"status": "failed", "reason": "dead_letter_baseline_missing"}
-    return _wait_for_outbox_drain(args, baseline)
+    capture = _execute(_operations_probe_command(args), 120)
+    watermark = _operation_watermark(capture)
+    if capture.get("status") != "passed" or watermark is None:
+        return {"status": "failed", "reason": "outbox_watermark_capture_failed", "watermarkCapture": capture}
+    return _wait_for_outbox_drain(args, baseline, watermark, capture)
 
 
-def _wait_for_outbox_drain(args: argparse.Namespace, baseline_dead_letters: int) -> dict[str, object]:
+def _wait_for_outbox_drain(
+    args: argparse.Namespace,
+    baseline_dead_letters: int,
+    watermark: tuple[str, str],
+    watermark_capture: dict[str, object] | None = None,
+) -> dict[str, object]:
     started = time.monotonic()
     deadline = started + _OUTBOX_DRAIN_DEADLINE_SECONDS
     stable = 0
     observations = 0
     latest: dict[str, object] = {}
     while True:
-        latest = _execute(_operations_probe_command(args), 120)
+        latest = _execute(_operations_probe_command(args, watermark), 120)
         observations += 1
         if _is_clean_outbox_observation(latest, baseline_dead_letters):
             stable += 1
             if stable >= _OUTBOX_DRAIN_STABLE_OBSERVATIONS:
-                return _outbox_drain_receipt("passed", latest, observations, started)
+                return _outbox_drain_receipt("passed", latest, observations, started, watermark, watermark_capture)
         else:
             stable = 0
         remaining = deadline - time.monotonic()
         if remaining <= 0 or _operation_metric(latest, "deadLetterCount") != baseline_dead_letters:
-            return _outbox_drain_receipt("failed", latest, observations, started)
+            return _outbox_drain_receipt("failed", latest, observations, started, watermark, watermark_capture)
         time.sleep(min(_OUTBOX_DRAIN_INTERVAL_SECONDS, remaining))
 
 
 def _is_clean_outbox_observation(value: dict[str, object], baseline_dead_letters: int) -> bool:
     return (
         value.get("status") == "passed"
-        and _operation_metric(value, "outboxPendingCount") == 0
-        and _operation_metric(value, "oldestOutboxPendingSeconds") == 0
+        and _operation_metric(value, "outboxUnpublishedAtWatermarkCount") == 0
+        and _operation_metric(value, "oldestOutboxUnpublishedAtWatermarkSeconds") == 0
         and _operation_metric(value, "deadLetterCount") == baseline_dead_letters
     )
 
@@ -350,11 +360,24 @@ def _operation_metric(value: dict[str, object], key: str) -> int | None:
     return metric if isinstance(metric, int) and not isinstance(metric, bool) and metric >= 0 else None
 
 
+def _operation_watermark(value: dict[str, object]) -> tuple[str, str] | None:
+    receipt = value.get("receipt")
+    watermark = receipt.get("outboxWatermark") if isinstance(receipt, dict) else None
+    if not isinstance(watermark, dict):
+        return None
+    created_at, event_id = watermark.get("createdAt"), watermark.get("eventId")
+    if not isinstance(created_at, str) or not isinstance(event_id, str):
+        return None
+    return created_at, event_id
+
+
 def _outbox_drain_receipt(
     status: str,
     latest: dict[str, object],
     observations: int,
     started: float,
+    watermark: tuple[str, str],
+    watermark_capture: dict[str, object] | None,
 ) -> dict[str, object]:
     return {
         "status": status,
@@ -362,6 +385,8 @@ def _outbox_drain_receipt(
         "observations": observations,
         "stableObservationsRequired": _OUTBOX_DRAIN_STABLE_OBSERVATIONS,
         "durationMs": int((time.monotonic() - started) * 1000),
+        "watermark": {"createdAt": watermark[0], "eventId": watermark[1]},
+        "watermarkCapture": watermark_capture,
         "finalOperations": latest,
     }
 
@@ -453,7 +478,39 @@ def _event_command(args: argparse.Namespace, event: CampaignEvent) -> tuple[tupl
             ),
             600,
         )
+    if event.kind == "external-oidc-fault":
+        return _external_oidc_fault_command(args, event, prefix)
     raise RuntimeError("macmini_campaign_event_kind_invalid")
+
+
+def _external_oidc_fault_command(
+    args: argparse.Namespace,
+    event: CampaignEvent,
+    prefix: tuple[str, ...],
+) -> tuple[tuple[str, ...], int]:
+    command = (
+        *prefix,
+        "scripts/operations/run_macmini_external_oidc_rehearsal.py",
+        "--run-id",
+        args.run_id,
+        "--namespace",
+        args.namespace,
+        "--kubeconfig",
+        args.kubeconfig,
+        "--chart",
+        args.external_oidc_chart,
+        "--public-base-url",
+        args.external_oidc_public_base_url,
+        "--identity-base-url",
+        args.external_oidc_identity_base_url,
+        "--application-id",
+        args.external_oidc_application_id,
+        "--principals-file",
+        args.external_oidc_principals_file,
+        "--duration-seconds",
+        str(event.injection_seconds),
+    )
+    return command, max(900, event.fault_window_seconds + 300)
 
 
 def _run_dr(args: argparse.Namespace, event: CampaignEvent) -> dict[str, object]:
@@ -642,8 +699,11 @@ def _business_probe_command(args: argparse.Namespace) -> tuple[str, ...]:
     )
 
 
-def _operations_probe_command(args: argparse.Namespace) -> tuple[str, ...]:
-    return (
+def _operations_probe_command(
+    args: argparse.Namespace,
+    watermark: tuple[str, str] | None = None,
+) -> tuple[str, ...]:
+    command = (
         str(QA_ROOT / "bin" / "uv"),
         "run",
         "python",
@@ -652,6 +712,15 @@ def _operations_probe_command(args: argparse.Namespace) -> tuple[str, ...]:
         args.namespace,
         "--kubeconfig",
         args.kubeconfig,
+    )
+    if watermark is None:
+        return command
+    return (
+        *command,
+        "--outbox-watermark-created-at",
+        watermark[0],
+        "--outbox-watermark-event-id",
+        watermark[1],
     )
 
 
@@ -742,7 +811,7 @@ def _blocks_later_mutations(event: CampaignEvent, receipt: dict[str, object]) ->
 
 
 def _is_mutating(event: CampaignEvent) -> bool:
-    return event.kind in {"fault", "dr"}
+    return event.kind in {"fault", "dr", "external-oidc-fault"}
 
 
 def _wait_until(target: datetime) -> None:
@@ -805,9 +874,23 @@ def _validate_paths(args: argparse.Namespace) -> None:
             args.operator_token_file,
             args.age_recipient_file,
             args.age_identity_file,
+            args.external_oidc_principals_file,
         )
     )
+    _validate_external_oidc_coordinates(args)
     _validate_release_coordinates(args.current_commit, args.rollback_commit)
+
+
+def _validate_external_oidc_coordinates(args: argparse.Namespace) -> None:
+    chart = Path(args.external_oidc_chart).resolve(strict=True)
+    if QA_ROOT not in chart.parents or not chart.is_dir():
+        raise ValueError("macmini_campaign_external_oidc_invalid")
+    for value in (args.external_oidc_public_base_url, args.external_oidc_identity_base_url):
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.path not in {"", "/"}:
+            raise ValueError("macmini_campaign_external_oidc_invalid")
+    if not args.external_oidc_application_id or len(args.external_oidc_application_id) > 128:
+        raise ValueError("macmini_campaign_external_oidc_invalid")
 
 
 def _validate_private_paths(raw_paths: tuple[str, ...]) -> None:
@@ -846,6 +929,14 @@ def main() -> int:
     parser.add_argument("--current-commit", required=True)
     parser.add_argument("--rollback-commit", required=True)
     parser.add_argument("--rerun-failed-and-skipped-from-run-id", default="")
+    parser.add_argument("--external-oidc-chart", default=str(QA_ROOT / "repo" / "deploy" / "helm" / "foundry-lite"))
+    parser.add_argument("--external-oidc-public-base-url", default="")
+    parser.add_argument("--external-oidc-identity-base-url", default="")
+    parser.add_argument("--external-oidc-application-id", default="foundry-lite")
+    parser.add_argument(
+        "--external-oidc-principals-file",
+        default=str(QA_ROOT / "state" / "keycloak-qa-principals.txt"),
+    )
     args = parser.parse_args()
     summary = run_remediation(args) if args.rerun_failed_and_skipped_from_run_id else run_campaign(args)
     print(json.dumps(summary, separators=(",", ":"), sort_keys=True))
