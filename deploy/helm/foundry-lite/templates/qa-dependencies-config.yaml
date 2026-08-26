@@ -126,6 +126,13 @@ data:
           "attributes": {"include.in.token.scope": "false", "display.on.consent.screen": "false"},
           "protocolMappers": [
             {
+              "name": "foundry-lite-subject",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-sub-mapper",
+              "consentRequired": false,
+              "config": {"access.token.claim": "true", "lightweight.claim": "true", "introspection.token.claim": "true"}
+            },
+            {
               "name": "foundry-lite-tenant",
               "protocol": "openid-connect",
               "protocolMapper": "oidc-hardcoded-claim-mapper",
@@ -149,9 +156,9 @@ data:
             {
               "name": "foundry-lite-realm-roles",
               "protocol": "openid-connect",
-              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
               "consentRequired": false,
-              "config": {"claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}
+              "config": {"claim.name": "roles", "claim.value": "[\"admin\",\"data_engineer\",\"ops_manager\",\"finance\",\"reviewer\"]", "jsonType.label": "JSON", "access.token.claim": "true", "lightweight.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "false"}
             }
           ]
         },

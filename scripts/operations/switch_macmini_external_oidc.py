@@ -1,4 +1,4 @@
-"""Atomically switch the dedicated Mac mini QA release to production OIDC."""
+"""Atomically switch the dedicated Mac mini QA release to strict external OIDC."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def switch(args: argparse.Namespace) -> dict[str, object]:
     if _is_exact_oidc(before, desired):
         phase = "already_configured"
     else:
-        _require_embedded_oauth(before)
+        _require_switchable_source(before, desired)
         override = QA_ROOT / "state" / f"{args.run_id}-external-oidc.json"
         _write_or_validate_private_json(override, desired)
         _helm_upgrade(args, chart, kubeconfig, override)
@@ -67,8 +67,6 @@ def _desired_values(
     issuer = f"{identity_base}/realms/foundry-lite"
     audience = f"{public_base}/mcp/release/{application_id}"
     return {
-        "global": {"runtimeProfile": "production"},
-        "secrets": {"applicationExistingSecret": "foundry-lite-runtime-application"},
         "auth": {
             "profile": "oidc",
             "localOAuthIssuer": "",
@@ -132,17 +130,29 @@ def _helm_values(args: argparse.Namespace) -> dict[str, object]:
     return value
 
 
-def _require_embedded_oauth(values: Mapping[str, object]) -> None:
+def _require_switchable_source(values: Mapping[str, object], desired: Mapping[str, object]) -> None:
+    if _is_embedded_oauth(values):
+        return
+    auth = _mapping(values, "auth")
+    current_oidc = _mapping(_mapping(values, "external"), "oidc")
+    desired_oidc = _mapping(_mapping(desired, "external"), "oidc")
+    stable_keys = ("issuer", "discoveryUrl", "audience", "clientIdClaim", "sessionClaim")
+    if auth.get("profile") == "oidc" and all(current_oidc.get(key) == desired_oidc.get(key) for key in stable_keys):
+        return
+    raise RuntimeError("macmini_oidc_switch_source_profile_unexpected")
+
+
+def _is_embedded_oauth(values: Mapping[str, object]) -> bool:
     global_values = _mapping(values, "global")
     auth = _mapping(values, "auth")
     oidc = _mapping(_mapping(values, "external"), "oidc")
-    expected = (
-        global_values.get("runtimeProfile") == "test",
-        auth.get("profile") == "header-trust",
-        oidc.get("discoveryUrl") == "",
+    return all(
+        (
+            global_values.get("runtimeProfile") == "test",
+            auth.get("profile") == "header-trust",
+            oidc.get("discoveryUrl") == "",
+        )
     )
-    if not all(expected):
-        raise RuntimeError("macmini_oidc_switch_source_profile_unexpected")
 
 
 def _is_exact_oidc(values: Mapping[str, object], desired: Mapping[str, object]) -> bool:
@@ -218,6 +228,7 @@ def _receipt(
     phase: str,
 ) -> dict[str, object]:
     oidc = _mapping(_mapping(desired, "external"), "oidc")
+    runtime_profile = _mapping(after, "global").get("runtimeProfile")
     return {
         "schemaVersion": 1,
         "status": "passed",
@@ -226,7 +237,9 @@ def _receipt(
         "recordedAt": utc_now(),
         "namespace": args.namespace,
         "authProfile": "oidc",
-        "runtimeProfile": "production",
+        "authAdapter": "strict-external-jwt-oidc",
+        "runtimeProfile": runtime_profile,
+        "runtimeProfilePreserved": runtime_profile == _mapping(before, "global").get("runtimeProfile"),
         "issuer": oidc["issuer"],
         "audience": oidc["audience"],
         "discoveryUrl": oidc["discoveryUrl"],

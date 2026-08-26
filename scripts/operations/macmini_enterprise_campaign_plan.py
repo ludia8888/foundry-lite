@@ -165,8 +165,10 @@ EVENTS = (
         "external-oidc-network-path",
         "security-time",
         16 * 3600 + 1800,
-        "blocked",
-        "external-issuer-not-connected",
+        "external-oidc-fault",
+        "dependency-keycloak",
+        480,
+        45,
     ),
     CampaignEvent(
         "same-digest-rolling-restart",

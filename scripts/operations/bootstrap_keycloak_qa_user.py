@@ -17,6 +17,35 @@ _QA_PRINCIPALS = (
     ("author", "KEYCLOAK_QA_AUTHOR_USER", "KEYCLOAK_QA_AUTHOR_USER_PASSWORD"),
     ("reviewer", "KEYCLOAK_QA_REVIEWER_USER", "KEYCLOAK_QA_REVIEWER_USER_PASSWORD"),
 )
+_RUNTIME_SCOPE = "foundry-lite-runtime"
+_RUNTIME_MAPPERS = (
+    {
+        "name": "foundry-lite-subject",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-sub-mapper",
+        "consentRequired": False,
+        "config": {
+            "access.token.claim": "true",
+            "lightweight.claim": "true",
+            "introspection.token.claim": "true",
+        },
+    },
+    {
+        "name": "foundry-lite-realm-roles",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-hardcoded-claim-mapper",
+        "consentRequired": False,
+        "config": {
+            "claim.name": "roles",
+            "claim.value": json.dumps(list(_ROLES), separators=(",", ":")),
+            "jsonType.label": "JSON",
+            "access.token.claim": "true",
+            "lightweight.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+        },
+    },
+)
 
 
 def bootstrap(base_url: str, environment: Mapping[str, str] = os.environ) -> dict[str, object]:
@@ -31,6 +60,7 @@ def bootstrap(base_url: str, environment: Mapping[str, str] = os.environ) -> dic
         raise ValueError("keycloak_bootstrap_principals_must_be_distinct")
     token = _admin_token(origin, admin, admin_password)
     results = [_bootstrap_principal(origin, token, role, username, password) for role, username, password in principals]
+    _ensure_runtime_claim_mappers(origin, token)
     return {
         "schemaVersion": 2,
         "status": "created" if any(result["status"] == "created" for result in results) else "updated",
@@ -39,11 +69,13 @@ def bootstrap(base_url: str, environment: Mapping[str, str] = os.environ) -> dic
         "distinctSubjectsRequired": True,
         "passwordStoredInReceipt": False,
         "tokenStoredInReceipt": False,
+        "runtimeSubjectAndRolesMapped": True,
     }
 
 
 def _bootstrap_principal(origin: str, token: str, role: str, username: str, password: str) -> dict[str, object]:
     user_id, was_created = _ensure_user(origin, token, username)
+    _update_user_profile(origin, token, user_id, role, username)
     _reset_password(origin, token, user_id, password)
     _assign_roles(origin, token, user_id)
     return {
@@ -52,6 +84,25 @@ def _bootstrap_principal(origin: str, token: str, role: str, username: str, pass
         "status": "created" if was_created else "updated",
         "roles": list(_ROLES),
     }
+
+
+def _update_user_profile(origin: str, token: str, user_id: str, role: str, username: str) -> None:
+    payload = json.dumps(
+        {
+            "username": username,
+            "enabled": True,
+            "firstName": "Enterprise QA",
+            "lastName": role.title(),
+            "email": f"{username}@example.invalid",
+            "emailVerified": True,
+            "requiredActions": [],
+        },
+        separators=(",", ":"),
+    ).encode()
+    path = f"/admin/realms/{_REALM}/users/{urllib.parse.quote(user_id, safe='')}"
+    status, _, _ = _request(origin, path, "PUT", payload, token)
+    if status != 204:
+        raise RuntimeError("keycloak_bootstrap_user_profile_failed")
 
 
 def _admin_token(origin: str, username: str, password: str) -> str:
@@ -119,6 +170,51 @@ def _realm_role(origin: str, token: str, role: str) -> dict[str, object]:
     if value.get("name") != role or not isinstance(value.get("id"), str):
         raise RuntimeError("keycloak_bootstrap_role_lookup_invalid")
     return value
+
+
+def _ensure_runtime_claim_mappers(origin: str, token: str) -> None:
+    scope = _client_scope(origin, token)
+    scope_id = str(scope["id"])
+    existing = scope.get("protocolMappers", [])
+    if not isinstance(existing, list):
+        raise RuntimeError("keycloak_bootstrap_runtime_scope_invalid")
+    by_name = {item.get("name"): item for item in existing if isinstance(item, dict)}
+    for mapper in _RUNTIME_MAPPERS:
+        current = by_name.get(mapper["name"])
+        _upsert_runtime_mapper(origin, token, scope_id, mapper, current)
+
+
+def _client_scope(origin: str, token: str) -> dict[str, object]:
+    status, payload, _ = _request(origin, f"/admin/realms/{_REALM}/client-scopes", "GET", None, token)
+    scopes = _json_list(status, payload, 200, "keycloak_bootstrap_runtime_scope_lookup_failed")
+    matches = [scope for scope in scopes if isinstance(scope, dict) and scope.get("name") == _RUNTIME_SCOPE]
+    if len(matches) != 1 or not isinstance(matches[0].get("id"), str):
+        raise RuntimeError("keycloak_bootstrap_runtime_scope_invalid")
+    scope_id = urllib.parse.quote(str(matches[0]["id"]), safe="")
+    status, payload, _ = _request(origin, f"/admin/realms/{_REALM}/client-scopes/{scope_id}", "GET", None, token)
+    return _json_object(status, payload, 200, "keycloak_bootstrap_runtime_scope_lookup_failed")
+
+
+def _upsert_runtime_mapper(
+    origin: str,
+    token: str,
+    scope_id: str,
+    mapper: dict[str, object],
+    current: object,
+) -> None:
+    base = f"/admin/realms/{_REALM}/client-scopes/{urllib.parse.quote(scope_id, safe='')}/protocol-mappers/models"
+    if isinstance(current, dict) and isinstance(current.get("id"), str):
+        mapper_id = str(current["id"])
+        path = f"{base}/{urllib.parse.quote(mapper_id, safe='')}"
+        payload = json.dumps({**mapper, "id": mapper_id}, separators=(",", ":")).encode()
+        status, _, _ = _request(origin, path, "PUT", payload, token)
+        expected = 204
+    else:
+        payload = json.dumps(mapper, separators=(",", ":")).encode()
+        status, _, _ = _request(origin, base, "POST", payload, token)
+        expected = 201
+    if status != expected:
+        raise RuntimeError("keycloak_bootstrap_runtime_mapper_failed")
 
 
 def _request(

@@ -38,6 +38,9 @@ def test_campaign_contains_all_requested_fault_families_and_quiet_soak() -> None
     } <= values
     assert PHASES[-1].phase_id == "quiet"
     assert PHASES[-1].end_second - PHASES[-1].start_second == 7200
+    external_oidc = next(event for event in EVENTS if event.event_id == "external-oidc-network-path")
+    assert external_oidc.kind == "external-oidc-fault"
+    assert external_oidc.value == "dependency-keycloak"
 
 
 def test_fault_windows_are_absolute_and_only_cover_mutating_events() -> None:
