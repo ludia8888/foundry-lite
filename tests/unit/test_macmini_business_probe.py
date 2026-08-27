@@ -196,7 +196,7 @@ def test_probe_matches_real_public_api_and_product_closed_loop(tmp_path: Path, m
         assert receipt["objectQueryMatched"] is True
         assert periodic_replay["actionRunId"] == receipt["actionRunId"]
         assert periodic_replay["idempotentReplay"] is True
-        assert periodic_replay["materializationVersionId"] != receipt["materializationVersionId"]
+        assert periodic_replay["materializationVersionId"] == receipt["materializationVersionId"]
     finally:
         foundry.close()
 
