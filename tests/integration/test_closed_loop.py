@@ -20,6 +20,8 @@ from sqlalchemy import select
 
 from tests.conftest import prepare_indexed_demo
 
+pytestmark = pytest.mark.code_execution_image
+
 
 @pytest.mark.integration_scenario("transform_clean_dataset")
 def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state(
