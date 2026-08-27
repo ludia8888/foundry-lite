@@ -14,7 +14,7 @@ from foundry_lite.application.services.outbox_publisher_service import (
     OutboxPublishAllResult,
 )
 from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload, scrub_error_text
-from foundry_lite.domain.errors import FoundryLiteError
+from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError
 from foundry_lite.infrastructure.local_runtime import create_runtime_core_dependencies
 
 
@@ -37,8 +37,8 @@ class OutboxPublisherWorkerConfig:
 
 @dataclass(frozen=True)
 class OutboxPublisherWorkerResult:
-    status: Literal["STOPPED"]
-    stop_reason: Literal["max_batches", "empty_batches"]
+    status: Literal["STOPPED", "PAUSED"]
+    stop_reason: Literal["max_batches", "empty_batches", "restore_mode"]
     stream_name: str
     iterations: int
     empty_batches: int
@@ -55,7 +55,12 @@ class OutboxPublisherWorkerResult:
 def publish_outbox_batches(config: OutboxPublisherWorkerConfig) -> OutboxPublisherWorkerResult:
     runtime = _build_foundry(config)
     try:
-        return _publish_batches(runtime, config)
+        try:
+            return _publish_batches(runtime, config)
+        except ConflictDetected as exc:
+            if _is_restore_mode_pause(exc):
+                return _paused_result(config)
+            raise
     finally:
         runtime.close()
 
@@ -167,6 +172,31 @@ def _finalize(
         event_ids=tuple(accumulator.event_ids),
         dead_letter_event_ids=tuple(accumulator.dead_letter_event_ids),
         tenant_ids=tuple(accumulator.tenant_ids),
+    )
+    _write_evidence(config, result)
+    return result
+
+
+def _is_restore_mode_pause(exc: ConflictDetected) -> bool:
+    restore_id = exc.details.get("restore_id")
+    return exc.details.get("is_outbox_publisher_paused") is True and isinstance(restore_id, str) and bool(restore_id)
+
+
+def _paused_result(config: OutboxPublisherWorkerConfig) -> OutboxPublisherWorkerResult:
+    result = OutboxPublisherWorkerResult(
+        status="PAUSED",
+        stop_reason="restore_mode",
+        stream_name=config.stream_name,
+        iterations=0,
+        empty_batches=0,
+        requested=0,
+        published=0,
+        failed=0,
+        retrying=0,
+        skipped=0,
+        event_ids=(),
+        dead_letter_event_ids=(),
+        tenant_ids=(),
     )
     _write_evidence(config, result)
     return result

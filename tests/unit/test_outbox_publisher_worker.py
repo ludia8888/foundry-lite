@@ -10,6 +10,7 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import OutboxEventRecord
 from foundry_lite.domain.context import DEMO_ADMIN_ROLES, RequestContext, demo_admin_context
+from foundry_lite.domain.errors import ConflictDetected
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_worker import outbox_publisher
 from foundry_lite_worker.outbox_publisher import (
@@ -129,6 +130,57 @@ def test_outbox_publisher_worker_closes_runtime_when_publish_raises(monkeypatch,
         publish_outbox_batches(OutboxPublisherWorkerConfig(storage_root=tmp_path))
 
     assert close_calls == ["close"]
+
+
+def test_outbox_publisher_worker_treats_restore_mode_as_a_clean_pause(monkeypatch, tmp_path: Path, capsys) -> None:
+    class PausedOutboxPublisher:
+        def publish_all_pending_outbox(self, **_kwargs: object) -> object:
+            raise ConflictDetected(
+                "restore mode keeps outbox publisher paused",
+                details={
+                    "restore_id": "enterprise-qa-backup-1",
+                    "status": "paused",
+                    "is_outbox_publisher_paused": True,
+                },
+            )
+
+    close_calls: list[str] = []
+    monkeypatch.setattr(
+        outbox_publisher,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(
+            _services=SimpleNamespace(outbox_publisher=PausedOutboxPublisher()),
+            close=lambda: close_calls.append("close"),
+        ),
+    )
+
+    exit_code = main(["--storage-root", str(tmp_path)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "PAUSED"
+    assert payload["stopReason"] == "restore_mode"
+    assert payload["iterations"] == 0
+    assert payload["published"] == 0
+    assert close_calls == ["close"]
+
+
+def test_outbox_publisher_worker_does_not_hide_unrelated_conflicts(monkeypatch, tmp_path: Path) -> None:
+    class ConflictingOutboxPublisher:
+        def publish_all_pending_outbox(self, **_kwargs: object) -> object:
+            raise ConflictDetected("unrelated publisher conflict", details={"resource": "stream"})
+
+    monkeypatch.setattr(
+        outbox_publisher,
+        "_build_foundry",
+        lambda _config: SimpleNamespace(
+            _services=SimpleNamespace(outbox_publisher=ConflictingOutboxPublisher()),
+            close=lambda: None,
+        ),
+    )
+
+    with pytest.raises(ConflictDetected, match="unrelated publisher conflict"):
+        publish_outbox_batches(OutboxPublisherWorkerConfig(storage_root=tmp_path))
 
 
 def test_outbox_publisher_worker_publishes_pending_rows_for_every_tenant(tmp_path: Path) -> None:
