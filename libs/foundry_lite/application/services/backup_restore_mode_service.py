@@ -16,9 +16,8 @@ from foundry_lite.application.services.backup_restore_overview import recovery_o
 from foundry_lite.application.services.backup_restore_preflight_service import BackupRestorePreflightService
 from foundry_lite.application.services.backup_restore_validation import (
     BackupRestoreValidationService,
-    post_restore_validation_findings,
     post_restore_validation_report,
-    restore_mode_report,
+    restore_mode_pending_report,
     resume_approved_report,
 )
 from foundry_lite.application.services.base import CoreService
@@ -53,11 +52,12 @@ class BackupRestoreModeService(CoreService):
         existing = self._existing_restore_mode_report(ctx, resolved_restore_id)
         if existing is not None:
             return existing
-        preflight = self.backup_restore_preflight_service.restore_preflight_report(
-            ctx=ctx,
-            backup_id=backup_id or resolved_restore_id,
+        report = restore_mode_pending_report(
+            ctx,
+            resolved_restore_id,
+            backup_id or resolved_restore_id,
+            self.runtime_repository.backup_restore_high_watermarks(tenant_id=ctx.tenant_id),
         )
-        report = restore_mode_report(ctx, resolved_restore_id, preflight)
         with self.engine.begin() as conn:
             self.backup_restore_validation_service.audit_restore_mode(conn, ctx, report)
         return report
@@ -90,13 +90,8 @@ class BackupRestoreModeService(CoreService):
             restore_id,
             validation_id,
         )
-        preflight = self.backup_restore_preflight_service.restore_preflight_report(
-            ctx=ctx,
-            backup_id=current["backupId"] or restore_id,
-        )
-        findings = post_restore_validation_findings(preflight)
-        require_restore_resume_ready(restore_id, findings)
-        report = resume_approved_report(ctx, current, preflight, validation["validationId"])
+        require_restore_resume_ready(restore_id, validation["findings"])
+        report = resume_approved_report(ctx, current, validation)
         with self.engine.begin() as conn:
             self.backup_restore_validation_service.audit_restore_mode(conn, ctx, report)
         return report

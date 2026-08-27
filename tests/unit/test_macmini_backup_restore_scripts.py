@@ -123,8 +123,32 @@ def test_backup_confirms_committed_restore_mode_after_lost_start_response(
 
 
 def test_backup_and_restore_allow_bounded_long_running_preflight() -> None:
-    assert backup_subject._API_TIMEOUT_SECONDS == 180
-    assert restore_subject._API_TIMEOUT_SECONDS == 300
+    assert backup_subject._API_TIMEOUT_SECONDS == 600
+    assert restore_subject._API_TIMEOUT_SECONDS == 600
+
+
+def test_backup_exactly_retries_lost_mutation_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def api_json(*_args: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("macmini_backup_api_timeout")
+        return {"status": "existing", "backupId": "backup-1"}
+
+    monkeypatch.setattr(backup_subject, "_api_json", api_json)
+    monkeypatch.setattr(backup_subject.time, "sleep", lambda _seconds: None)
+
+    result = backup_subject._api_post_exact_retry(
+        "http://127.0.0.1:30443",
+        "token",
+        "/api/operations/backup-restore/artifacts",
+        {"backupId": "backup-1"},
+    )
+
+    assert result["status"] == "existing"
+    assert calls == 2
 
 
 def test_restore_exactly_retries_lost_validation_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -633,10 +657,12 @@ def test_failed_backup_does_not_restart_workers_before_resume_approval(
     assert cleanup["status"] == "failed"
     assert cleanup["workersRestored"] is False
     assert kubectl_calls == []
-    assert not target.exists()
+    assert target.exists()
+    assert cleanup["partialFilesRemoved"] is False
 
 
 def test_worker_pause_failure_preserves_receipts_for_automatic_recovery(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inventory = {
@@ -666,11 +692,18 @@ def test_worker_pause_failure_preserves_receipts_for_automatic_recovery(
 
     monkeypatch.setattr(backup_subject, "_kubectl", kubectl)
     receipts: list[dict[str, object]] = []
+    receipt_path = tmp_path / "paused-workers.json"
+    receipt_path.with_name(f".{receipt_path.name}.tmp").write_text("interrupted", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="worker_pause_failed"):
-        backup_subject._pause_workers(argparse.Namespace(), receipts=receipts)
+        backup_subject._pause_workers(
+            argparse.Namespace(),
+            receipts=receipts,
+            receipt_path=receipt_path,
+        )
 
     assert receipts == [{"name": "foundry-lite-worker-action", "replicasBefore": 1, "replicasAfter": 0}]
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipts
 
 
 def test_restore_safe_extract_rejects_links(tmp_path: Path) -> None:

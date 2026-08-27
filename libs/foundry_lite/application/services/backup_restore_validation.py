@@ -18,6 +18,7 @@ from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.backup_restore_mode import (
     POST_RESTORE_VALIDATED_EVENT,
     RESTORE_MODE_BLOCKED_EVENT,
+    RESTORE_MODE_EVENTS,
     RESTORE_MODE_RESUME_APPROVED_EVENT,
     RESTORE_MODE_STARTED_EVENT,
 )
@@ -33,14 +34,14 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound
 class BackupRestoreValidationService(CoreService):
     """Post-restore validation and restore-mode audit boundary."""
 
-    required_dependencies = ("runtime_repository",)
+    required_dependencies = ("engine", "runtime_repository")
     required_collaborators = ("runtime_service",)
     runtime_repository: RuntimeRepository
     runtime_service: DatasetRuntimeBoundary
 
     def existing_restore_mode_report(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport | None:
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
-        return latest_restore_mode_report(snapshot["auditEvents"], restore_id)
+        events = self._restore_audit_events(ctx, restore_id, RESTORE_MODE_EVENTS)
+        return latest_restore_mode_report(events, restore_id)
 
     def approval_candidate(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport:
         current = self.existing_restore_mode_report(ctx, restore_id)
@@ -52,8 +53,11 @@ class BackupRestoreValidationService(CoreService):
         restore_id: str,
         validation_id: str | None,
     ) -> tuple[BackupRestoreModeReport, BackupRestorePostRestoreValidationReport | None]:
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
-        audit_events = snapshot["auditEvents"]
+        audit_events = self._restore_audit_events(
+            ctx,
+            restore_id,
+            (*RESTORE_MODE_EVENTS, POST_RESTORE_VALIDATED_EVENT),
+        )
         current = self._require_approval_candidate(latest_restore_mode_report(audit_events, restore_id), restore_id)
         existing = latest_post_restore_validation_report(audit_events, restore_id)
         if validation_id is None or existing is None or existing["validationId"] != validation_id:
@@ -80,8 +84,8 @@ class BackupRestoreValidationService(CoreService):
         restore_id: str,
         validation_id: str | None,
     ) -> BackupRestorePostRestoreValidationReport:
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
-        report = latest_post_restore_validation_report(snapshot["auditEvents"], restore_id)
+        events = self._restore_audit_events(ctx, restore_id, (POST_RESTORE_VALIDATED_EVENT,))
+        report = latest_post_restore_validation_report(events, restore_id)
         if report is None or report["status"] != "passed":
             raise ConflictDetected(
                 "post-restore validation must pass before publisher resume",
@@ -93,6 +97,21 @@ class BackupRestoreValidationService(CoreService):
                 details={"restore_id": restore_id, "validation_id": validation_id},
             )
         return report
+
+    def _restore_audit_events(
+        self,
+        ctx: RequestContext,
+        restore_id: str,
+        event_types: Sequence[str],
+    ) -> list[RuntimeRow]:
+        with self.engine.begin() as conn:
+            return self.runtime_repository.audit_events_for_resources(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                resource_refs=(("backup_restore", restore_id),),
+                event_types=event_types,
+                limit=32,
+            )
 
     def audit_restore_mode(
         self,
@@ -156,6 +175,38 @@ def restore_mode_report(
     }
 
 
+def restore_mode_pending_report(
+    ctx: RequestContext,
+    restore_id: str,
+    backup_id: str,
+    high_watermarks: RuntimeJsonObject,
+) -> BackupRestoreModeReport:
+    """Close traffic first; expensive storage verification follows under quiescence."""
+    return {
+        "generatedAt": _now(),
+        "tenantId": ctx.tenant_id,
+        "restoreId": restore_id,
+        "backupId": backup_id,
+        "status": "paused",
+        "preflightStatus": "pending",
+        "is_write_traffic_paused": True,
+        "is_outbox_publisher_paused": True,
+        "is_serving_traffic_open": False,
+        "is_post_restore_validation_required": True,
+        "is_operator_approval_required": True,
+        "blockingIssueCount": 0,
+        "reason": "restore traffic gate closed before storage preflight",
+        "highWatermarks": high_watermarks,
+        "summary": {
+            "activeRestoreMode": True,
+            "preflightStatus": "pending",
+            "datasetVersionCount": None,
+            "outboxResumeRequires": "post_restore_validation_and_operator_approval",
+            "restoreFailureKeepsServingTrafficClosed": True,
+        },
+    }
+
+
 def post_restore_validation_report(
     ctx: RequestContext,
     current: BackupRestoreModeReport,
@@ -182,8 +233,7 @@ def post_restore_validation_report(
 def resume_approved_report(
     ctx: RequestContext,
     current: BackupRestoreModeReport,
-    preflight: BackupRestorePreflightReport,
-    validation_id: str | None,
+    validation: BackupRestorePostRestoreValidationReport,
 ) -> BackupRestoreModeReport:
     """Build the approved status that reopens current retry/reprocess entrypoints."""
     return {
@@ -192,7 +242,7 @@ def resume_approved_report(
         "restoreId": current["restoreId"],
         "backupId": current["backupId"],
         "status": "resume_approved",
-        "preflightStatus": preflight["status"],
+        "preflightStatus": validation["preflightStatus"],
         "is_write_traffic_paused": False,
         "is_outbox_publisher_paused": False,
         "is_serving_traffic_open": True,
@@ -200,8 +250,8 @@ def resume_approved_report(
         "is_operator_approval_required": False,
         "blockingIssueCount": 0,
         "reason": "post-restore closed-loop validation passed and operator approved publisher resume",
-        "highWatermarks": preflight["highWatermarks"],
-        "summary": _resume_approved_summary(preflight, validation_id),
+        "highWatermarks": validation["highWatermarks"],
+        "summary": _resume_approved_summary(validation),
     }
 
 
@@ -281,17 +331,17 @@ def _restore_mode_summary(preflight: BackupRestorePreflightReport, is_blocked: b
 
 
 def _resume_approved_summary(
-    preflight: BackupRestorePreflightReport,
-    validation_id: str | None,
+    validation: BackupRestorePostRestoreValidationReport,
 ) -> RuntimeJsonObject:
+    validation_summary = validation["summary"]
     return {
         "activeRestoreMode": False,
-        "validationId": validation_id or f"post-restore:{preflight['backupId']}",
+        "validationId": validation["validationId"],
         "postRestoreValidation": "dataset_object_action_materialization_closed_loop",
-        "datasetVersionCount": len(preflight["datasetVersions"]),
-        "activeIndexPointerCount": len(preflight["activeIndexPointers"]),
-        "actionRunCount": _watermark_count(preflight["highWatermarks"], "actionRuns"),
-        "materializationRunCount": _watermark_count(preflight["highWatermarks"], "materializationRuns"),
+        "datasetVersionCount": validation_summary.get("datasetVersionCount", 0),
+        "activeIndexPointerCount": validation_summary.get("activeIndexPointerCount", 0),
+        "actionRunCount": _watermark_count(validation["highWatermarks"], "actionRuns"),
+        "materializationRunCount": _watermark_count(validation["highWatermarks"], "materializationRuns"),
         "outboxResumeApproved": True,
     }
 

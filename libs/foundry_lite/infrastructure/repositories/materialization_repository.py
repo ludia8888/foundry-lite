@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, or_, select
+from sqlalchemy import and_, desc, func, insert, or_, select
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.materialization_repository import (
@@ -88,6 +88,32 @@ class SqlAlchemyMaterializationRepository:
                 completed_at=record.completed_at,
             )
         )
+
+    def latest_succeeded_materialization_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        materialization_id: str,
+    ) -> dict[str, Any] | None:
+        row = (
+            transaction.execute(
+                select(db.materialization_runs)
+                .where(
+                    and_(
+                        db.materialization_runs.c.tenant_id == tenant_id,
+                        db.materialization_runs.c.materialization_id == materialization_id,
+                        db.materialization_runs.c.status == "succeeded",
+                        db.materialization_runs.c.target_dataset_version_id.is_not(None),
+                    )
+                )
+                .order_by(desc(db.materialization_runs.c.completed_at), desc(db.materialization_runs.c.id))
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row is not None else None
 
     def update_materialization_run_terminal(
         self,

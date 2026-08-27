@@ -218,6 +218,16 @@ def test_pr_plan_prepares_the_pinned_image_for_selected_sandbox_tests(monkeypatc
     assert "pnpm --silent quality:code-execution-image" in pr_job
 
 
+def test_closed_loop_selection_requires_the_pinned_code_execution_image() -> None:
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_closed_loop_image")
+
+    plan = gate.build_plan(("tests/integration/test_closed_loop.py",))
+
+    assert "tests/integration/test_closed_loop.py" in plan.selected_tests
+    assert plan.should_build_code_execution_image is True
+    assert plan.should_install_node is True
+
+
 def test_pr_plan_keeps_live_infrastructure_tests_out_of_the_budgeted_lane() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_live_infra")
     live_infra_tests = (

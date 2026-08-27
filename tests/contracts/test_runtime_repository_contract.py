@@ -129,6 +129,43 @@ class FakeRuntimeRepository:
             "objectEdits": window("object_edits"),
         }
 
+    def backup_restore_high_watermarks(self, *, tenant_id: str) -> RuntimeJsonObject:
+        definitions = {
+            "auditEvents": ("audit_events", ("created_at",)),
+            "outboxEvents": ("outbox_events", ("created_at", "published_at")),
+            "actionRuns": ("action_runs", ("created_at", "completed_at")),
+            "actionWritebacks": ("action_writebacks", ("created_at", "completed_at")),
+            "materializationRuns": ("materialization_runs", ("created_at", "completed_at")),
+        }
+        result: RuntimeJsonObject = {}
+        for output_name, (table_name, time_fields) in definitions.items():
+            rows = [row for row in self.tables[table_name] if row["tenant_id"] == tenant_id]
+            timestamps = sorted(str(row[field]) for row in rows for field in time_fields if row.get(field) is not None)
+            status_counts: dict[str, int] = {}
+            for row in rows:
+                status = row.get("status")
+                if status is not None:
+                    status_counts[str(status)] = status_counts.get(str(status), 0) + 1
+            result[output_name] = {
+                "count": len(rows),
+                "maxTimestamp": timestamps[-1] if timestamps else None,
+                "statusCounts": status_counts,
+            }
+        return result
+
+    def backup_restore_index_candidates(self, *, tenant_id: str) -> list[RuntimeRow]:
+        candidates = {
+            (str(row["object_type_id"]), str(row["object_type_api_name"]))
+            for row in self.tables["index_runs"]
+            if row["tenant_id"] == tenant_id
+            and row.get("object_type_id") is not None
+            and row.get("object_type_api_name") is not None
+        }
+        return [
+            cast(RuntimeRow, {"object_type_id": object_type_id, "object_type_api_name": api_name})
+            for object_type_id, api_name in sorted(candidates)
+        ]
+
     def query_run_rows(
         self,
         *,
@@ -1473,6 +1510,27 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
     assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
+
+
+def test_runtime_repository_contract_backup_restore_reads_are_aggregated_and_tenant_scoped(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_action_run(run_id="action-demo", tenant_id="tenant-demo")
+    harness.add_action_run(run_id="action-other", tenant_id="tenant-other")
+    harness.add_index_run(run_id="index-demo", tenant_id="tenant-demo", object_type_api_name="Order")
+    harness.add_index_run(run_id="index-other", tenant_id="tenant-other", object_type_api_name="Customer")
+    with harness.transaction() as transaction:
+        harness.repository.insert_audit_event(transaction=transaction, record=_audit_record(event_id="audit-demo"))
+        harness.repository.insert_outbox_event(transaction=transaction, record=_outbox_record(event_id="outbox-demo"))
+
+    watermarks = harness.repository.backup_restore_high_watermarks(tenant_id="tenant-demo")
+    candidates = harness.repository.backup_restore_index_candidates(tenant_id="tenant-demo")
+
+    assert watermarks["auditEvents"]["count"] == 1
+    assert watermarks["outboxEvents"]["count"] == 1
+    assert watermarks["actionRuns"]["count"] == 1
+    assert watermarks["actionRuns"]["statusCounts"] == {"SUCCEEDED": 1}
+    assert candidates == [{"object_type_id": "ot_1", "object_type_api_name": "Order"}]
 
 
 def test_runtime_repository_contract_audit_resource_window_is_exact_bounded_and_tenant_scoped(

@@ -11,7 +11,7 @@ from foundry_lite.application.ports import (
     BackupArtifactStore,
 )
 from foundry_lite.application.ports.runtime_repository import RuntimeRepository, RuntimeRow
-from foundry_lite.application.ports.transaction_context import TransactionManager
+from foundry_lite.application.ports.transaction_context import TransactionContext, TransactionManager
 from foundry_lite.application.runtime_repository_backup_restore import (
     BackupRestoreArtifactReceipt,
     BackupRestorePreflightReport,
@@ -43,7 +43,13 @@ class BackupRestoreArtifactService(CoreService):
         ctx = ctx or RequestContext()
         resolved_backup_id = backup_id or f"backup-{ctx.request_id}"
         self.runtime_service._require_or_audit(ctx, "operations:retry", "backup_restore", resolved_backup_id)
-        existing = _existing_backup_artifact_receipt(self.runtime_repository, ctx, resolved_backup_id)
+        with self.engine.begin() as conn:
+            existing = _existing_backup_artifact_receipt(
+                self.runtime_repository,
+                conn,
+                ctx,
+                resolved_backup_id,
+            )
         if existing is not None:
             return existing
         report = self.backup_restore_preflight_service.restore_preflight_report(
@@ -128,11 +134,18 @@ class BackupRestoreArtifactService(CoreService):
 
 def _existing_backup_artifact_receipt(
     repository: RuntimeRepository,
+    transaction: TransactionContext,
     ctx: RequestContext,
     backup_id: str,
 ) -> BackupRestoreArtifactReceipt | None:
-    snapshot = repository.list_runs(tenant_id=ctx.tenant_id)
-    return _latest_artifact_receipt(snapshot["auditEvents"], backup_id)
+    row = repository.audit_event_for_resource(
+        transaction=transaction,
+        tenant_id=ctx.tenant_id,
+        event_type="backup_restore.artifact_created",
+        resource_type="backup_restore",
+        resource_id=backup_id,
+    )
+    return _latest_artifact_receipt([row] if row is not None else [], backup_id)
 
 
 def _latest_artifact_receipt(

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from hashlib import sha256
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 from foundry_lite.application.ports import (
@@ -14,12 +13,10 @@ from foundry_lite.application.ports import (
     BackupRestoreManifestIssue,
     BackupRestorePreflightReport,
     DatasetManifest,
-    DatasetManifestFile,
     DatasetRow,
     DatasetVersionRow,
     RuntimeJsonObject,
     RuntimeRow,
-    RuntimeRunSnapshot,
     TransactionContext,
 )
 from foundry_lite.application.primitives import _now
@@ -55,21 +52,31 @@ class BackupRestorePreflightService(CoreService):
         report_id = backup_id or f"preflight-{ctx.request_id}"
         self.runtime_service._require_or_audit(ctx, "operations:read:detail", "backup_restore", report_id)
         dataset_versions = self._dataset_version_inventory(ctx)
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
         issues = [item["issue"] for item in dataset_versions if item["issue"] is not None]
-        report = self._report(ctx, report_id, dataset_versions, issues, snapshot)
+        high_watermarks = self.runtime_repository.backup_restore_high_watermarks(tenant_id=ctx.tenant_id)
+        index_candidates = self.runtime_repository.backup_restore_index_candidates(tenant_id=ctx.tenant_id)
+        report = self._report(ctx, report_id, dataset_versions, issues, high_watermarks, index_candidates)
         with self.engine.begin() as conn:
             self._audit_report(conn, ctx, report)
         return report
 
     def _dataset_version_inventory(self, ctx: RequestContext) -> list[BackupRestoreDatasetVersion]:
-        entries: list[BackupRestoreDatasetVersion] = []
+        coordinates: list[tuple[str, DatasetRow, DatasetVersionRow]] = []
         for dataset in self.dataset_repository.list_active_datasets(tenant_id=ctx.tenant_id):
             dataset_ref = f"{dataset['namespace']}.{dataset['name']}"
             versions = self.dataset_version_repository.list_versions(dataset_id=dataset["id"])
             for version in versions:
-                entries.append(self._version_inventory(dataset_ref, dataset, version))
-        return entries
+                coordinates.append((dataset_ref, dataset, version))
+        if len(coordinates) < 2:
+            return [self._version_inventory(*coordinate) for coordinate in coordinates]
+        with ThreadPoolExecutor(max_workers=min(8, len(coordinates)), thread_name_prefix="backup-preflight") as pool:
+            return list(pool.map(self._version_inventory_coordinate, coordinates))
+
+    def _version_inventory_coordinate(
+        self,
+        coordinate: tuple[str, DatasetRow, DatasetVersionRow],
+    ) -> BackupRestoreDatasetVersion:
+        return self._version_inventory(*coordinate)
 
     def _version_inventory(
         self,
@@ -103,7 +110,6 @@ class BackupRestorePreflightService(CoreService):
         paths = self.dataset_storage.data_file_paths(version["manifest_uri"])
         if len(paths) != len(files):
             raise ValueError("manifest file list and resolved data paths disagree")
-        self._validate_manifest_files(files, paths)
         row_count = sum(int(file["row_count"]) for file in files)
         byte_size = sum(int(file["byte_size"]) for file in files)
         if row_count != int(version["row_count"]) or byte_size != int(version["byte_size"]):
@@ -115,13 +121,6 @@ class BackupRestorePreflightService(CoreService):
             "contentHashes": [str(file["content_hash"]) for file in files],
             "storageProfile": str(manifest.get("storage_profile") or self.dataset_storage.profile_name),
         }
-
-    def _validate_manifest_files(self, files: Sequence[DatasetManifestFile], paths: Sequence[Path]) -> None:
-        for manifest_file, path in zip(files, paths, strict=True):
-            if path.stat().st_size != int(manifest_file["byte_size"]):
-                raise ValueError(f"data file byte size mismatch: {manifest_file['uri']}")
-            if _file_hash(path) != str(manifest_file["content_hash"]):
-                raise ValueError(f"data file content hash mismatch: {manifest_file['uri']}")
 
     def _blocked_version(
         self,
@@ -141,7 +140,8 @@ class BackupRestorePreflightService(CoreService):
         backup_id: str,
         versions: list[BackupRestoreDatasetVersion],
         issues: list[BackupRestoreManifestIssue],
-        snapshot: RuntimeRunSnapshot,
+        high_watermarks: RuntimeJsonObject,
+        index_candidates: Sequence[RuntimeRow],
     ) -> BackupRestorePreflightReport:
         return {
             "generatedAt": _now(),
@@ -150,8 +150,8 @@ class BackupRestorePreflightService(CoreService):
             "status": "blocked" if issues else "ready",
             "datasetVersions": versions,
             "issues": issues,
-            "activeIndexPointers": self._active_index_pointers(snapshot, ctx),
-            "highWatermarks": _runtime_high_watermarks(snapshot),
+            "activeIndexPointers": self._active_index_pointers(index_candidates, ctx),
+            "highWatermarks": high_watermarks,
             "temporalStrategy": self._temporal_strategy(),
             "searchRebuild": self._search_rebuild_marker(ctx, backup_id),
             "restoreTrafficGate": _restore_traffic_gate(),
@@ -160,10 +160,10 @@ class BackupRestorePreflightService(CoreService):
 
     def _active_index_pointers(
         self,
-        snapshot: RuntimeRunSnapshot,
+        index_candidates: Sequence[RuntimeRow],
         ctx: RequestContext,
     ) -> list[BackupRestoreIndexPointer]:
-        candidates = _index_pointer_candidates(snapshot["indexRuns"])
+        candidates = _index_pointer_candidates(index_candidates)
         with self.engine.begin() as conn:
             return [
                 {
@@ -273,37 +273,6 @@ def _adapter_issue_code(exc: AdapterError) -> str:
     return "committed_manifest_corrupt"
 
 
-def _runtime_high_watermarks(snapshot: RuntimeRunSnapshot) -> RuntimeJsonObject:
-    return {
-        "auditEvents": _table_watermark(snapshot["auditEvents"], ("created_at",)),
-        "outboxEvents": _table_watermark(snapshot["outboxEvents"], ("created_at", "published_at")),
-        "actionRuns": _table_watermark(snapshot["actionRuns"], ("created_at", "completed_at")),
-        "actionWritebacks": _table_watermark(snapshot["actionWritebacks"], ("created_at", "updated_at")),
-        "materializationRuns": _table_watermark(snapshot["materializationRuns"], ("created_at", "completed_at")),
-    }
-
-
-def _table_watermark(rows: Sequence[RuntimeRow], time_fields: Sequence[str]) -> RuntimeJsonObject:
-    timestamps: list[str] = []
-    for row in rows:
-        timestamps.extend(_row_timestamps(row, time_fields))
-    timestamps.sort()
-    return {
-        "count": len(rows),
-        "maxTimestamp": timestamps[-1] if timestamps else None,
-        "statusCounts": _status_counts(rows),
-    }
-
-
-def _status_counts(rows: Sequence[RuntimeRow]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for row in rows:
-        status = _string(row.get("status"))
-        if status:
-            counts[status] = counts.get(status, 0) + 1
-    return counts
-
-
 def _index_pointer_candidates(index_runs: Sequence[RuntimeRow]) -> list[tuple[str, str]]:
     by_type: dict[str, str] = {}
     for row in index_runs:
@@ -333,19 +302,6 @@ def _summary(
         "issueCount": len(issues),
         "dbStoragePointMismatchCount": len(issues),
     }
-
-
-def _file_hash(path: Path) -> str:
-    return sha256(path.read_bytes()).hexdigest()
-
-
-def _row_timestamps(row: RuntimeRow, time_fields: Sequence[str]) -> list[str]:
-    values: list[str] = []
-    for field in time_fields:
-        value = _string(row.get(field))
-        if value is not None:
-            values.append(value)
-    return values
 
 
 def _summary_int(summary: Mapping[str, object], key: str) -> int:

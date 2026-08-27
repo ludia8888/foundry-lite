@@ -37,6 +37,10 @@ from foundry_lite.application.ports.transaction_context import (
 from foundry_lite.application.ports.workflow_adapter import WorkflowLedgerStatus, WorkflowRunRecord, WorkflowRunRow
 from foundry_lite.application.state_transitions import observability_incident_transition
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.runtime_backup_restore_sql import (
+    backup_restore_high_watermarks,
+    backup_restore_index_candidates,
+)
 from foundry_lite.infrastructure.repositories.runtime_observability_sql import (
     _observability_incident_by_dedupe,
     _observability_incident_db_row,
@@ -178,6 +182,14 @@ class SqlAlchemyRuntimeRepository:
                 "auditEvents": window("audit_events"),
                 "objectEdits": window("object_edits"),
             }
+
+    def backup_restore_high_watermarks(self, *, tenant_id: str) -> RuntimeJsonObject:
+        with self.engine.begin() as transaction:
+            return backup_restore_high_watermarks(transaction, tenant_id)
+
+    def backup_restore_index_candidates(self, *, tenant_id: str) -> list[RuntimeRow]:
+        with self.engine.begin() as transaction:
+            return backup_restore_index_candidates(transaction, tenant_id)
 
     def audit_event_for_resource(
         self,

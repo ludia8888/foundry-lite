@@ -2,17 +2,87 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from threading import Lock
+from time import sleep
 from typing import Any, cast
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import BackupArtifactIntegrityError
+from foundry_lite.application.services.backup_restore_preflight_service import BackupRestorePreflightService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from sqlalchemy import Table, func, insert, select
 
 from tests.conftest import prepare_indexed_demo
+
+
+class _LargeHistoryDatasetRepository:
+    def list_active_datasets(self, *, tenant_id: str) -> list[dict[str, object]]:
+        assert tenant_id == "tenant-demo"
+        return [{"id": "dataset-large-history", "namespace": "ops", "name": "action_log"}]
+
+
+class _LargeHistoryVersionRepository:
+    def __init__(self, version_count: int) -> None:
+        self.version_count = version_count
+
+    def list_versions(self, *, dataset_id: str) -> list[dict[str, object]]:
+        assert dataset_id == "dataset-large-history"
+        return [
+            {
+                "id": f"version-{index}",
+                "dataset_id": dataset_id,
+                "branch": "main",
+                "version_number": index + 1,
+                "manifest_uri": f"manifest-{index}",
+                "row_count": 1,
+                "byte_size": 10,
+            }
+            for index in range(self.version_count)
+        ]
+
+
+class _ConcurrentIntegrityStorage:
+    profile_name = "test-storage"
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self.active_loads = 0
+        self.max_active_loads = 0
+        self.data_path_calls = 0
+
+    def load_manifest(self, manifest_uri: str) -> dict[str, object]:
+        with self._lock:
+            self.active_loads += 1
+            self.max_active_loads = max(self.max_active_loads, self.active_loads)
+        sleep(0.001)
+        with self._lock:
+            self.active_loads -= 1
+        return {
+            "version_id": manifest_uri,
+            "dataset": "ops.action_log",
+            "branch": "main",
+            "schema_hash": "schema-hash",
+            "created_at": "2026-08-27T00:00:00Z",
+            "storage_profile": self.profile_name,
+            "files": [
+                {
+                    "uri": f"{manifest_uri}.parquet",
+                    "format": "parquet",
+                    "row_count": 1,
+                    "byte_size": 10,
+                    "content_hash": "content-hash",
+                }
+            ],
+        }
+
+    def data_file_paths(self, manifest_uri: str) -> list[Path]:
+        del manifest_uri
+        with self._lock:
+            self.data_path_calls += 1
+        return [Path("verified-by-storage-adapter.parquet")]
 
 
 def test_restore_preflight_validates_every_committed_manifest(
@@ -39,6 +109,22 @@ def test_restore_preflight_validates_every_committed_manifest(
 
     audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "backup_restore.preflight_reported" for event in audit_events)
+
+
+def test_large_preflight_inventory_runs_integrity_checks_concurrently_once_per_version() -> None:
+    version_count = 2_048
+    storage = _ConcurrentIntegrityStorage()
+    service = object.__new__(BackupRestorePreflightService)
+    service.dataset_repository = cast(Any, _LargeHistoryDatasetRepository())
+    service.dataset_version_repository = cast(Any, _LargeHistoryVersionRepository(version_count))
+    service.dataset_storage = cast(Any, storage)
+
+    inventory = service._dataset_version_inventory(demo_admin_context())
+
+    assert len(inventory) == version_count
+    assert all(version["status"] == "valid" for version in inventory)
+    assert storage.max_active_loads > 1
+    assert storage.data_path_calls == version_count
 
 
 def test_backup_restore_create_artifact_writes_receipt_and_audit(
@@ -478,17 +564,17 @@ def test_backup_restore_recovery_overview_summarizes_active_restore_and_prefligh
 
     assert overview["activeRestoreMode"] == mode
     assert overview["latestRestoreMode"] == mode
-    assert overview["latestPreflight"] is not None
+    assert overview["latestPreflight"] is None
     assert overview["latestPostRestoreValidation"] is None
-    assert overview["latestPreflight"]["backupId"] == "backup-overview"
-    assert overview["latestPreflight"]["status"] == "ready"
+    assert mode["preflightStatus"] == "pending"
     assert overview["restoreTrafficGate"]["activeRestoreId"] == "restore-overview"
     assert overview["restoreTrafficGate"]["isWriteTrafficPaused"] is True
     assert overview["restoreTrafficGate"]["isOutboxPublisherPaused"] is True
     assert overview["restoreTrafficGate"]["isServingTrafficOpen"] is False
     assert overview["summary"]["activeRestoreMode"] is True
-    assert overview["summary"]["preflightStatus"] == "ready"
+    assert overview["summary"]["preflightStatus"] == "not_run"
     assert overview["requiredOperatorActions"] == [
+        "run_restore_preflight",
         "run_post_restore_closed_loop_validation",
         "approve_restore_resume",
     ]
@@ -654,11 +740,14 @@ def test_restore_failure_never_opens_serving_traffic(foundry: FoundryLite, tmp_p
     Path(committed.manifest_uri).unlink()
 
     mode = foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-blocked", restore_id="restore-blocked")
+    with pytest.raises(ConflictDetected, match="backup artifact requires a ready restore preflight"):
+        foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-blocked")
     status = foundry.operations.restore_mode_status("restore-blocked", ctx=ctx)
 
-    assert mode["status"] == "blocked"
+    assert mode["status"] == "paused"
     assert status == mode
-    assert mode["blockingIssueCount"] == 1
+    assert mode["preflightStatus"] == "pending"
+    assert mode["blockingIssueCount"] == 0
     assert mode["is_serving_traffic_open"] is False
     assert mode["is_outbox_publisher_paused"] is True
     assert mode["summary"]["restoreFailureKeepsServingTrafficClosed"] is True

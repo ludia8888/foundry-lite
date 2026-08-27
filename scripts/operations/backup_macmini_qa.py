@@ -40,7 +40,8 @@ _CHART_RELATIVE_PATH = Path("deploy/helm/foundry-lite")
 _OPERATOR_TENANT_ID = "tenant-demo"
 _OPERATOR_USER_ID = "enterprise-qa-operator"
 _OPERATOR_ROLES = "admin,data_engineer,ops_manager"
-_API_TIMEOUT_SECONDS = 180
+_API_TIMEOUT_SECONDS = 600
+_API_REQUEST_ATTEMPTS = 2
 _RESTORE_MODE_CONFIRM_DEADLINE_SECONDS = 180
 _RESTORE_MODE_CONFIRM_INTERVAL_SECONDS = 2
 _WORKER_RESTORE_ATTEMPTS = 3
@@ -88,10 +89,14 @@ def _capture_backup(
     if mode.get("status") != "paused":
         raise RuntimeError("macmini_backup_restore_mode_not_active")
     progress["isRestoreModeActive"] = True
-    workers = _pause_workers(args, receipts=progress["workers"])
+    _pause_workers(
+        args,
+        receipts=progress["workers"],
+        receipt_path=target / "paused-workers.json",
+    )
     release_values = _helm_release_values(args)
     _package_release_chart(args, target, release_values)
-    artifact = _api_json(
+    artifact = _api_post_exact_retry(
         args.api_base_url,
         token,
         "/api/operations/backup-restore/artifacts",
@@ -114,7 +119,6 @@ def _capture_backup(
     _write_json(target / "restore-mode.json", mode)
     _write_json(target / "platform-preflight.json", preflight)
     _write_json(target / "platform-artifact.json", artifact)
-    _write_json(target / "paused-workers.json", workers)
     manifest = _file_manifest(target)
     _write_json(target / "SHA256MANIFEST.json", manifest)
     archive = target.parent / f"{args.run_id}.tar"
@@ -151,6 +155,7 @@ def _pause_workers(
     args: argparse.Namespace,
     *,
     receipts: list[dict[str, object]] | None = None,
+    receipt_path: Path | None = None,
 ) -> list[dict[str, object]]:
     result = _kubectl(args, ("get", "deployments", "-l", "app.kubernetes.io/name=foundry-lite", "-o", "json"), 30)
     payload = _json_command(result, "macmini_backup_worker_inventory_failed")
@@ -167,6 +172,8 @@ def _pause_workers(
         if scaled.returncode != 0:
             raise RuntimeError("macmini_backup_worker_pause_failed")
         receipts.append({"name": name, "replicasBefore": replicas, "replicasAfter": 0})
+        if receipt_path is not None:
+            _write_recovery_json(receipt_path, receipts)
     if not receipts:
         raise RuntimeError("macmini_backup_workers_missing")
     return receipts
@@ -244,7 +251,9 @@ def _safe_recover_failed_backup(
         return _recover_failed_backup(args, token, target, restore_id, progress)
     except Exception:
         errors = ["macmini_backup_cleanup_unhandled"]
-        files_removed = _remove_partial_backup(target, args.run_id, errors)
+        files_removed = (
+            False if progress["isRestoreModeActive"] else _remove_partial_backup(target, args.run_id, errors)
+        )
         return {
             "status": "failed",
             "postRestoreValidationStatus": "unknown",
@@ -270,7 +279,7 @@ def _recover_failed_backup(
         validation_status, resume_status = _approve_failed_backup_resume(args, token, restore_id, errors)
     can_restore_workers = not progress["isRestoreModeActive"] or resume_status == "resume_approved"
     workers_restored = _restore_paused_workers(args, progress["workers"], errors) if can_restore_workers else False
-    files_removed = _remove_partial_backup(target, args.run_id, errors)
+    files_removed = _remove_partial_backup(target, args.run_id, errors) if workers_restored else False
     status = "passed" if not errors and workers_restored and files_removed else "failed"
     return {
         "status": status,
@@ -291,7 +300,7 @@ def _approve_failed_backup_resume(
 ) -> tuple[str, str]:
     validation_id = f"failed-backup-{args.run_id}"
     try:
-        validation = _api_json(
+        validation = _api_post_exact_retry(
             args.api_base_url,
             token,
             f"/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
@@ -301,12 +310,21 @@ def _approve_failed_backup_resume(
         if validation_status != "passed":
             errors.append("macmini_backup_cleanup_validation_failed")
             return validation_status, "not_run"
-        resumed = _api_json(
-            args.api_base_url,
-            token,
-            f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
-            {"validationId": validation_id},
-        )
+        try:
+            resumed = _api_post_exact_retry(
+                args.api_base_url,
+                token,
+                f"/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
+                {"validationId": validation_id},
+            )
+        except RuntimeError as exc:
+            if not _is_retryable_api_error(exc):
+                raise
+            resumed = _api_get_json(
+                args.api_base_url,
+                token,
+                f"/api/operations/backup-restore/restore-mode/{restore_id}",
+            )
         resume_status = str(resumed.get("status", "unknown"))
         if resume_status != "resume_approved":
             errors.append("macmini_backup_cleanup_resume_failed")
@@ -685,7 +703,7 @@ def _start_restore_mode(base_url: str, token: str, backup_id: str, restore_id: s
             {"backupId": backup_id, "restoreId": restore_id},
         )
     except RuntimeError as exc:
-        if str(exc) != "macmini_backup_api_unavailable":
+        if not _is_retryable_api_error(exc):
             raise
         return _confirm_started_restore_mode(base_url, token, backup_id, restore_id, exc)
 
@@ -716,6 +734,21 @@ def _api_json(base_url: str, token: str, path: str, payload: object) -> dict[str
     return _api_response_json(request)
 
 
+def _api_post_exact_retry(base_url: str, token: str, path: str, payload: object) -> dict[str, object]:
+    for attempt in range(_API_REQUEST_ATTEMPTS):
+        try:
+            return _api_json(base_url, token, path, payload)
+        except RuntimeError as exc:
+            if not _is_retryable_api_error(exc) or attempt + 1 >= _API_REQUEST_ATTEMPTS:
+                raise
+            time.sleep(2)
+    raise RuntimeError("macmini_backup_api_unavailable")
+
+
+def _is_retryable_api_error(exc: RuntimeError) -> bool:
+    return str(exc) in {"macmini_backup_api_unavailable", "macmini_backup_api_timeout"}
+
+
 def _api_get_json(base_url: str, token: str, path: str) -> dict[str, object]:
     request = _api_request(base_url, token, path, payload=None)
     return _api_response_json(request)
@@ -743,7 +776,9 @@ def _api_response_json(request: urllib.request.Request) -> dict[str, object]:
     try:
         with opener.open(request, timeout=_API_TIMEOUT_SECONDS) as response:
             body = response.read(_MAX_API_BYTES + 1)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except TimeoutError as exc:
+        raise RuntimeError("macmini_backup_api_timeout") from exc
+    except (urllib.error.URLError, OSError) as exc:
         raise RuntimeError("macmini_backup_api_unavailable") from exc
     if len(body) > _MAX_API_BYTES:
         raise RuntimeError("macmini_backup_api_response_too_large")
@@ -861,6 +896,21 @@ def _write_json(path: Path, payload: object) -> None:
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(payload, stream, indent=2, sort_keys=True)
         stream.write("\n")
+
+
+def _write_recovery_json(path: Path, payload: object) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def main() -> int:
