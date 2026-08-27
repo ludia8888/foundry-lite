@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.ports.runtime_repository_types import RuntimeRow
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 
@@ -116,6 +117,16 @@ class MaterializationRepository(Protocol):
 
     def insert_materialization_run(self, *, transaction: TransactionContext, record: MaterializationRunRecord) -> None:
         """Persist a newly received materialization run."""
+        ...
+
+    def latest_succeeded_materialization_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        materialization_id: str,
+    ) -> RuntimeRow | None:
+        """Return the newest successful run without loading tenant run history."""
         ...
 
     def update_materialization_run_terminal(

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
-from hashlib import sha256
 from pathlib import Path
-from typing import cast
 
-from foundry_lite.application.ports import RuntimeRow, TransactionContext
+from foundry_lite.application.ports import DatasetRow, RuntimeRow, TransactionContext
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationReplayResult,
@@ -15,6 +12,7 @@ from foundry_lite.application.ports.materialization_repository import (
 )
 from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.materialization_action_log import action_log_materialization_rows
 from foundry_lite.application.services.materialization_late_data import object_snapshot_watermark
 from foundry_lite.application.services.materialization_protocols import (
     MaterializationDatasetIngest,
@@ -23,6 +21,13 @@ from foundry_lite.application.services.materialization_protocols import (
     MaterializationOntologyLookup,
     MaterializationRuntimeBoundary,
     mark_materialization_run_succeeded,
+)
+from foundry_lite.application.services.materialization_results import (
+    commit_result_for_existing_materialization,
+    materialization_rows_hash,
+    materialization_transaction_metadata,
+    materialization_with_spec,
+    run_watermark,
 )
 from foundry_lite.application.services.materialization_specs import (
     available_materialization_specs,
@@ -35,7 +40,6 @@ from foundry_lite.application.services.materialization_types import (
     supported_materialization_type,
     unsupported_materialization_type,
 )
-from foundry_lite.application.services.materialization_watermarks import materialization_platform_watermark
 from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -46,7 +50,7 @@ from foundry_lite.domain.errors import (
 
 
 class MaterializationService(CoreService):
-    required_dependencies = ("engine", "materialization_repository", "policy")
+    required_dependencies = ("engine", "materialization_repository", "dataset_version_repository", "policy")
     required_collaborators = (
         "dataset_ingest_service",
         "dataset_registry_service",
@@ -71,11 +75,35 @@ class MaterializationService(CoreService):
         require_write_open(self.runtime_service, ctx, "materialize", "materialization", api_name)
         materialization = self._ensure_materialization(api_name, ctx=ctx)
         target_dataset = self.dataset_registry_service.get_dataset(materialization["target_ref"]["dataset"], ctx=ctx)
-        run_id = _new_id("mat_run")
+        candidate = self._materialization_plan_or_existing(ctx, api_name, materialization, target_dataset)
+        if isinstance(candidate, CommitResult):
+            return candidate
+        try:
+            return self._complete_materialization_run(ctx, candidate)
+        except Exception as exc:
+            self._abort_materialization_run(ctx, candidate, exc)
+            raise
+
+    def _materialization_plan_or_existing(
+        self,
+        ctx: RequestContext,
+        api_name: str,
+        materialization: MaterializationRow,
+        target_dataset: DatasetRow,
+    ) -> MaterializationRunPlan | CommitResult:
         with self.engine.begin() as conn:
-            tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
             materialization_type = supported_materialization_type(materialization["materialization_type"])
             watermark = self._materialization_watermark(conn, ctx, materialization)
+            existing = self._existing_materialization_result(
+                conn,
+                ctx,
+                materialization,
+                target_dataset,
+                watermark,
+            )
+            if existing is not None:
+                return existing
+            tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
             rows, fieldnames = self._materialization_rows(
                 conn,
                 materialization,
@@ -88,17 +116,42 @@ class MaterializationService(CoreService):
                 materialization_type=materialization_type,
                 target_dataset=target_dataset,
                 transaction_id=tx_id,
-                run_id=run_id,
+                run_id=_new_id("mat_run"),
                 watermark=watermark,
                 rows=rows,
                 fieldnames=fieldnames,
             )
             self._insert_materialization_run(conn, ctx, plan)
-        try:
-            return self._complete_materialization_run(ctx, plan)
-        except Exception as exc:
-            self._abort_materialization_run(ctx, plan, exc)
-            raise
+        return plan
+
+    def _existing_materialization_result(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        materialization: MaterializationRow,
+        target_dataset: DatasetRow,
+        watermark: Mapping[str, object],
+    ) -> CommitResult | None:
+        run = self.materialization_repository.latest_succeeded_materialization_run(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            materialization_id=materialization["id"],
+        )
+        if run is None or run_watermark(run) != watermark:
+            return None
+        latest = self.dataset_version_repository.latest_version_by_dataset_id(
+            transaction=conn,
+            dataset_id=str(target_dataset["id"]),
+        )
+        if latest is None or latest["id"] != run.get("target_dataset_version_id"):
+            return None
+        schema = self.dataset_version_repository.schema_for_version(
+            dataset_id=latest["dataset_id"],
+            schema_version=latest["schema_version"],
+        )
+        if schema is None:
+            raise InvariantViolation("materialization result schema is missing")
+        return commit_result_for_existing_materialization(target_dataset, latest, schema["schema_hash"])
 
     def replay_rows_for_run(
         self,
@@ -121,8 +174,8 @@ class MaterializationService(CoreService):
             # is no longer declared replays from its stored registration.
             resolved = resolve_materialization_spec(self.ontology_service, conn, ctx, str(run["api_name"]))
             if resolved is not None:
-                materialization = _materialization_with_spec(materialization, resolved)
-            watermark = _run_watermark(run)
+                materialization = materialization_with_spec(materialization, resolved)
+            watermark = run_watermark(run)
             rows, _ = self._materialization_rows(
                 conn,
                 materialization,
@@ -134,7 +187,7 @@ class MaterializationService(CoreService):
             api_name=str(run["api_name"]),
             watermark=watermark,
             row_count=len(rows),
-            row_hash=_materialization_rows_hash(rows),
+            row_hash=materialization_rows_hash(rows),
             rows=rows,
         )
 
@@ -199,7 +252,7 @@ class MaterializationService(CoreService):
                     audit_action="materialization_commit",
                     outbox_event_type="materialization.completed",
                     extra_checks=({"type": "allow_empty"},),
-                    transaction_metadata=_materialization_transaction_metadata(plan),
+                    transaction_metadata=materialization_transaction_metadata(plan),
                     after_persist=after_persist,
                 )
             except DatasetCommitBlocked as exc:
@@ -326,7 +379,7 @@ class MaterializationService(CoreService):
                 # A corrupted stored type must fail closed instead of being
                 # silently repaired by the resolved declaration.
                 supported_materialization_type(str(existing["materialization_type"]))
-                return _materialization_with_spec(existing, spec)
+                return materialization_with_spec(existing, spec)
             return self._insert_materialization(conn, ctx, api_name, spec)
 
     def _insert_materialization(
@@ -390,7 +443,13 @@ class MaterializationService(CoreService):
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
         materialization_type = supported_materialization_type(materialization["materialization_type"])
         if materialization_type == "action_log":
-            return self._action_log_materialization_rows(conn, ctx, watermark)
+            return action_log_materialization_rows(
+                self.materialization_repository,
+                self.policy,
+                conn,
+                ctx,
+                watermark,
+            )
         if materialization_type == "object_snapshot":
             return object_snapshot_rows(
                 self.ontology_service,
@@ -401,98 +460,3 @@ class MaterializationService(CoreService):
                 watermark,
             )
         unsupported_materialization_type(materialization_type)
-
-    def _action_log_materialization_rows(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        watermark: Mapping[str, object],
-    ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
-        rows = [
-            self._action_log_row(ctx, action)
-            for action in self.materialization_repository.action_log_rows_at_watermark(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                completed_at_lte=_optional_string(watermark.get("action_run_completed_at_lte")),
-                action_run_id_lte=_optional_string(watermark.get("action_run_id_lte")),
-            )
-        ]
-        return rows, [
-            "action_run_id",
-            "actor_user_id",
-            "action_type",
-            "target_object_type",
-            "target_object_id",
-            "status",
-            "parameters_json",
-            "edit_patch_json",
-            "created_at",
-        ]
-
-    def _action_log_row(self, ctx: RequestContext, action: RuntimeRow) -> Mapping[str, object]:
-        object_type = str(action["target_object_type_api_name"])
-        parameters = self._masked_action_mapping(ctx, object_type, action.get("parameters"))
-        edit_patch = self._masked_action_mapping(ctx, object_type, action.get("edit_patch"))
-        return {
-            "action_run_id": action["action_run_id"],
-            "actor_user_id": action["actor_user_id"],
-            "action_type": action["action_type_api_name"],
-            "target_object_type": action["target_object_type_api_name"],
-            "target_object_id": action["target_object_id"],
-            "status": action["status"],
-            "parameters_json": json.dumps(parameters, sort_keys=True),
-            "edit_patch_json": json.dumps(edit_patch, sort_keys=True),
-            "created_at": action["created_at"],
-        }
-
-    def _masked_action_mapping(
-        self,
-        ctx: RequestContext,
-        object_type: str,
-        value: object,
-    ) -> Mapping[str, object]:
-        if not isinstance(value, Mapping):
-            return {}
-        return self.policy.mask_sensitive_properties(ctx, object_type, dict(value))
-
-
-def _materialization_with_spec(row: MaterializationRow, spec: MaterializationSpec) -> MaterializationRow:
-    """Overlay the currently-resolved spec on the stored registration row.
-
-    The stored row anchors run identity and lineage; the ontology declaration
-    is the source of truth for what a run reads and writes, so a re-declared
-    target dataset or object type takes effect on the next run without
-    rewriting the registration history.
-    """
-    updated = dict(row)
-    updated["materialization_type"] = spec.materialization_type
-    updated["source_ref"] = spec.source.copy()
-    updated["target_ref"] = spec.target.copy()
-    return cast(MaterializationRow, updated)
-
-
-def _materialization_transaction_metadata(plan: MaterializationRunPlan) -> dict[str, object]:
-    reopen = plan.watermark.get("lateDataReopen")
-    return {
-        "platformWatermark": materialization_platform_watermark(plan),
-        "materializationDetail": {
-            "apiName": plan.api_name,
-            "materializationType": plan.materialization_type,
-            "watermark": dict(plan.watermark),
-            "reopen": reopen if isinstance(reopen, Mapping) else {"isReopened": False},
-        },
-    }
-
-
-def _optional_string(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _run_watermark(run: RuntimeRow) -> Mapping[str, object]:
-    watermark = run.get("object_store_watermark") or run.get("source_cursor")
-    return watermark if isinstance(watermark, Mapping) else {}
-
-
-def _materialization_rows_hash(rows: Sequence[Mapping[str, object]]) -> str:
-    payload = json.dumps([dict(row) for row in rows], sort_keys=True, separators=(",", ":"), default=str)
-    return sha256(payload.encode("utf-8")).hexdigest()

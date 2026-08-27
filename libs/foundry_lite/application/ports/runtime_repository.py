@@ -90,6 +90,14 @@ class RuntimeRepository(Protocol):
         """
         ...
 
+    def backup_restore_high_watermarks(self, *, tenant_id: str) -> RuntimeJsonObject:
+        """Return SQL-aggregated backup commit-point counts, status counts, and timestamps."""
+        ...
+
+    def backup_restore_index_candidates(self, *, tenant_id: str) -> list[RuntimeRow]:
+        """Return distinct object-type coordinates needed to capture active index pointers."""
+        ...
+
     def query_run_rows(
         self,
         *,

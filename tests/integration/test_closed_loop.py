@@ -296,7 +296,8 @@ def test_action_log_same_cursor_rerun_does_not_duplicate_rows(foundry: FoundryLi
     )
 
     first = foundry.materialization.run("action_log", ctx=ctx)
-    second = foundry.materialization.run("action_log", ctx=ctx)
+    repeated = [foundry.materialization.run("action_log", ctx=ctx) for _ in range(100)]
+    second = repeated[-1]
     first_run = _materialization_run_for_version(foundry, ctx, first.version_id)
     second_run = _materialization_run_for_version(foundry, ctx, second.version_id)
     first_rows = foundry.materialization.replay_rows(str(first_run["id"]), ctx=ctx).rows
@@ -304,6 +305,9 @@ def test_action_log_same_cursor_rerun_does_not_duplicate_rows(foundry: FoundryLi
 
     assert [row["action_run_id"] for row in first_rows] == [action["actionRunId"]]
     assert [row["action_run_id"] for row in second_rows] == [action["actionRunId"]]
+    assert all(result.version_id == first.version_id for result in repeated)
+    assert second.version_id == first.version_id
+    assert len(foundry.datasets.list_versions("ops.action_log", ctx=ctx)) == 1
     assert first_run["object_store_watermark"] == second_run["object_store_watermark"]
 
 

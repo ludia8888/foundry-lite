@@ -155,7 +155,7 @@ class DatasetStorageAdapter(Protocol):
         *,
         partition_filter: Mapping[str, object] | None = None,
     ) -> list[Path]:
-        """Resolve all manifest data files to readable local paths in manifest order."""
+        """Resolve files in manifest order and verify each file's declared size and content hash."""
         ...
 
     def preview_file_paths(
