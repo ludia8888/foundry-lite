@@ -29,6 +29,19 @@ def test_supervisor_rejects_unregistered_module() -> None:
         supervise("arbitrary.module", interval_seconds=1, max_cycles=1)
 
 
+def test_supervisor_allows_temporal_action_execution_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def run(arguments: tuple[str, ...], *, check: bool, shell: bool) -> CompletedProcess[str]:
+        calls.append(arguments)
+        return CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(supervisor.subprocess, "run", run)
+
+    assert supervise("foundry_lite_worker.action_runs", interval_seconds=1, max_cycles=1) == 0
+    assert calls == [(supervisor.sys.executable, "-m", "foundry_lite_worker.action_runs")]
+
+
 def test_supervisor_exits_on_failed_cycle_so_kubernetes_observes_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
