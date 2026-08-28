@@ -146,7 +146,7 @@ def _verifier_container(image: str, tenant_id: str) -> dict[str, object]:
 
 def _pod_name(run_id: str) -> str:
     suffix = re.sub(r"[^a-z0-9-]", "-", run_id.lower().replace("_", "-")).strip("-")
-    return f"foundry-lite-postgres-object-store-{suffix[:25]}"
+    return f"foundry-lite-postgres-object-store-{suffix[:25].rstrip('-')}"
 
 
 def _wait_for_completion(args: argparse.Namespace, kubeconfig: Path, pod_name: str) -> None:
