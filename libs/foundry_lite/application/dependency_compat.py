@@ -42,6 +42,8 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "metadata_repository",
         "destructive_development_admin",
         "osdk_application_repository",
+        "osdk_download_token_signer",
+        "osdk_release_artifact_store",
         "oauth_session_repository",
         "oauth_token_issuer",
         "secret_provider",
@@ -69,10 +71,13 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "materialization_repository",
         "dataset_quality_repository",
         "compute_adapter",
+        "code_execution_adapter",
         "dataset_repository",
         "dataset_transaction_repository",
         "dataset_version_repository",
         "dataset_storage",
+        "transform_source_store",
+        "ontology_definition_reader",
     ),
     "object_store": (
         "object_index_repository",
@@ -109,6 +114,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "media_reference_binding_repository",
         "media_access_cache_repository",
         "media_storage",
+        "media_source_workspace",
         "media_processor",
         "media_processor_registry",
         "media_preview_renderer",
@@ -122,6 +128,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "source_management_repository",
         "source_database_adapter",
         "source_stream_adapter",
+        "source_upload_staging_store",
     ),
 }
 

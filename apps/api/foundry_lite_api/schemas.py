@@ -2,20 +2,137 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
-
 from fastapi import File, Query
-from foundry_lite.application.services.pipeline_graph_contracts import (
-    DEFAULT_PIPELINE_PREVIEW_ROWS,
-    MAX_PIPELINE_PREVIEW_ROWS,
+from pydantic import BaseModel, ConfigDict, Field
+
+from foundry_lite_api.schema_types import JsonObject as JsonObject
+from foundry_lite_api.schema_types import ValidationErrorPayload as ValidationErrorPayload
+from foundry_lite_api.schemas_actions import (  # noqa: F401 - compatibility re-exports
+    ActionApplyBatchRequest,
+    ActionApplyRequest,
+    ActionBatchTargetItemRequest,
+    ActionEffectCancelRequest,
+    ActionEffectReconcileRequest,
+    ActionEffectReconciliationEvidenceRequest,
+    ActionFunctionBatchItemRequest,
+    ActionFunctionBatchRunRequest,
+    ActionNotificationPolicyCreateRequest,
+    ActionNotificationPolicyDisableRequest,
+    ActionNotificationPolicyUpdateRequest,
+    ActionNotificationRecipientRequest,
+    ActionRunCancelRequest,
+    ActionTargetRequest,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-JsonObject = dict[str, object]
-
-
-ValidationErrorPayload = dict[str, object]
-
+from foundry_lite_api.schemas_aip import (  # noqa: F401 - compatibility re-exports
+    AipAgentRunRequest,
+    AipBuilderContextSourceRequest,
+    AipBuilderLogicBlockRequest,
+    AipBuilderRunRequest,
+    AipBuilderToolSpecRequest,
+    AipBuilderValidateRequest,
+    AipCitationNavigationResolveRequest,
+    AipEvalCaseRequest,
+    AipEvalRunRequest,
+    AipFdeRunRequest,
+    AipPilotActionRequest,
+    AipPilotDomainBriefRequest,
+    AipPilotFieldRequest,
+    AipPilotGenerateRequest,
+    AipPilotPlanRequest,
+    AipPilotPolicyConditionRequest,
+    AipPilotPolicyRequest,
+    AipPilotRecordRequest,
+    AipReleasePromotionRequest,
+)
+from foundry_lite_api.schemas_media import (  # noqa: F401 - compatibility re-exports
+    MediaBindReferenceRequest,
+    MediaContentPromoteRequest,
+    MediaIndexDerivativeRequest,
+    MediaOpenTransactionRequest,
+    MediaProcessRequest,
+    MediaSearchRequest,
+    MediaSetCreateRequest,
+    MediaVisualPromoteRequest,
+    MediaVisualSearchRequest,
+)
+from foundry_lite_api.schemas_ontology import (  # noqa: F401 - compatibility re-exports
+    FunctionExecuteRequest,
+    OntologyApplyRequest,
+    OntologyBranchActionTypeDeleteRequest,
+    OntologyBranchActionTypeRequest,
+    OntologyBranchCreateRequest,
+    OntologyBranchProposeRequest,
+    OntologyBranchRebaseRequest,
+    OntologyBranchRebaseResolution,
+    OntologyBranchUpdateRequest,
+    OntologyProposalAssignRequest,
+    OntologyProposalDecisionRequest,
+    OntologyProposalExecuteRequest,
+    OntologyProposalSubmitRequest,
+    OntologyProposalUpdateRequest,
+    OntologyProposalWithdrawRequest,
+    OntologyRollbackRequest,
+    OntologyValidateRequest,
+)
+from foundry_lite_api.schemas_osdk import (  # noqa: F401 - compatibility re-exports
+    OsdkApplicationClientRequest,
+    OsdkApplicationCreateRequest,
+    OsdkApplicationResourceRequest,
+    OsdkApplicationResourcesUpdateRequest,
+    OsdkArtifactDownloadTokenRequest,
+    OsdkClientSecretRotateRequest,
+    OsdkMcpServerConfigureRequest,
+    OsdkOAuthRefreshRequest,
+    OsdkOAuthTokenRequest,
+    OsdkSdkCompatibilityWindowCreateRequest,
+    OsdkSdkVersionCreateRequest,
+)
+from foundry_lite_api.schemas_pipelines import (  # noqa: F401 - compatibility re-exports
+    DeadLetterBulkRetryRequest,
+    PipelineBranchCreateRequest,
+    PipelineBranchProposeRequest,
+    PipelineBranchRebaseRequest,
+    PipelineDeployRequest,
+    PipelineGraphUpdateRequest,
+    PipelinePreviewLimitsRequest,
+    PipelinePreviewNodeRequest,
+    PipelinePreviewRunCreateRequest,
+    PipelineProposalAssignRequest,
+    PipelineProposalDecisionRequest,
+    PipelineRunCancelRequest,
+    PipelineRunStartRequest,
+    PipelineScheduleSpecRequest,
+    PipelineScheduleUpsertRequest,
+    TransformSchedulerTickRequest,
+    TransformSqlRegisterRequest,
+)
+from foundry_lite_api.schemas_sources import (  # noqa: F401 - compatibility re-exports
+    ConnectorResourceSyncStartRequest,
+    ConnectorSyncWorkflowStartRequest,
+    RestConnectorAuthRequest,
+    RestConnectorConnectionCreateRequest,
+    RestConnectorConnectionUpdateRequest,
+    RestConnectorPaginationRequest,
+    RestConnectorResourceUpsertRequest,
+    SourceAgentRegisterRequest,
+    SourceBatchFileManifest,
+    SourceBatchFileManifestItem,
+    SourceConnectionTestRequest,
+    SourceCredentialCreateRequest,
+    SourceDebeziumCreateRequest,
+    SourceDebeziumObjectIndexStartRequest,
+    SourceDebeziumSyncStartRequest,
+    SourceExploreRequest,
+    SourceManagedStreamingSyncStateRequest,
+    SourceManagedSyncCreateRequest,
+    SourceManagedSyncRunStartRequest,
+    SourceManagedSyncScheduleStateRequest,
+    SourceManagedSyncScheduleUpdateRequest,
+    SourceNetworkPolicyCreateRequest,
+    SourceSchedulerTickRequest,
+    SourceStatusUpdateRequest,
+    SourceWebhookListenerCreateRequest,
+)
 
 MEDIA_UPLOAD_FILE = File(...)
 
@@ -125,108 +242,6 @@ class OutboxPublishRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
-class ActionTargetRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    object_type: str = Field(alias="objectType")
-    object_id: str = Field(alias="objectId")
-
-
-class ActionApplyRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    target: ActionTargetRequest
-    expected_object_version: int = Field(alias="expectedObjectVersion")
-    params: JsonObject
-    branch_id: str | None = Field(default=None, alias="branchId")
-
-
-class ActionRunCancelRequest(BaseModel):
-    reason: str | None = None
-
-
-class ActionEffectCancelRequest(BaseModel):
-    reason: str | None = Field(default=None, max_length=500)
-
-
-class ActionEffectReconciliationEvidenceRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    verification_method: Literal["provider_query", "provider_dashboard", "support_confirmation"] = Field(
-        alias="verificationMethod"
-    )
-    provider_reference: str = Field(alias="providerReference", min_length=1, max_length=200)
-    verified_at: str = Field(alias="verifiedAt", min_length=1, max_length=80)
-    external_execution_id: str | None = Field(default=None, alias="externalExecutionId", max_length=200)
-
-
-class ActionEffectReconcileRequest(BaseModel):
-    resolution: Literal["confirmed_delivered", "confirmed_not_delivered"]
-    evidence: ActionEffectReconciliationEvidenceRequest
-
-
-class ActionNotificationRecipientRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    user_id: str = Field(alias="userId", min_length=1, max_length=200)
-    roles: list[str] = Field(min_length=1, max_length=50)
-
-
-class ActionNotificationPolicyCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    policy_name: str = Field(alias="policyName", min_length=2, max_length=64)
-    display_name: str = Field(alias="displayName", min_length=1, max_length=120)
-    delivery_mode: Literal["strict", "best_effort"] = Field(alias="deliveryMode")
-    recipients: list[ActionNotificationRecipientRequest] = Field(min_length=1, max_length=500)
-
-
-class ActionNotificationPolicyUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    display_name: str = Field(alias="displayName", min_length=1, max_length=120)
-    delivery_mode: Literal["strict", "best_effort"] = Field(alias="deliveryMode")
-    recipients: list[ActionNotificationRecipientRequest] = Field(min_length=1, max_length=500)
-    status: Literal["active", "disabled"] = "active"
-    expected_fingerprint: str = Field(alias="expectedFingerprint", min_length=1)
-
-
-class ActionNotificationPolicyDisableRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_fingerprint: str = Field(alias="expectedFingerprint", min_length=1)
-
-
-class ActionBatchTargetItemRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    object_id: str = Field(alias="objectId")
-    expected_object_version: int = Field(alias="expectedObjectVersion")
-
-
-class ActionApplyBatchRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    object_type: str = Field(alias="objectType")
-    targets: list[ActionBatchTargetItemRequest]
-    params: JsonObject
-
-
-class ActionFunctionBatchItemRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    object_id: str = Field(alias="objectId")
-    expected_object_version: int = Field(alias="expectedObjectVersion", ge=0)
-    params: JsonObject
-
-
-class ActionFunctionBatchRunRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    object_type: str = Field(alias="objectType")
-    items: list[ActionFunctionBatchItemRequest] = Field(min_length=1, max_length=10_000)
-
-
 class ObjectSetCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -320,902 +335,12 @@ class ObjectSubscriptionRequest(BaseModel):
     )
 
 
-class OsdkApplicationResourceRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    resource_type: str = Field(alias="resourceType")
-    resource_api_name: str = Field(alias="resourceApiName")
-    scopes: list[str]
-
-
-class OsdkApplicationCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    app_api_name: str = Field(alias="appApiName")
-    display_name: str = Field(alias="displayName")
-    client_id: str | None = Field(default=None, alias="clientId")
-    resources: list[OsdkApplicationResourceRequest] = Field(default_factory=list)
-
-
-class OsdkApplicationResourcesUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    resources: list[OsdkApplicationResourceRequest]
-
-
-class OsdkApplicationClientRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    client_id: str = Field(alias="clientId")
-    redirect_uris: list[str] = Field(default_factory=list, alias="redirectUris")
-    allowed_scopes: list[str] = Field(default_factory=list, alias="allowedScopes")
-    access_token_ttl_seconds: int = Field(default=900, alias="accessTokenTtlSeconds")
-    refresh_token_ttl_seconds: int = Field(default=2_592_000, alias="refreshTokenTtlSeconds")
-    status: str = "active"
-
-
-class OsdkSdkVersionCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    language: str
-    package_name: str | None = Field(default=None, alias="packageName")
-    requested_bump: str | None = Field(default=None, alias="requestedBump")
-
-
-class OsdkSdkCompatibilityWindowCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    from_version_id: str = Field(alias="fromVersionId")
-    to_version_id: str = Field(alias="toVersionId")
-    supported_until: str | None = Field(default=None, alias="supportedUntil")
-
-
-class OsdkArtifactDownloadTokenRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    ttl_seconds: int = Field(default=900, alias="ttlSeconds")
-
-
-class OsdkOAuthTokenRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    grant_type: Literal["authorization_code", "client_credentials", "refresh_token"] = Field(
-        default="authorization_code", alias="grantType"
-    )
-    client_id: str = Field(alias="clientId")
-    client_secret: str | None = Field(default=None, alias="clientSecret")
-    tenant_id: str | None = Field(default=None, alias="tenantId")
-    resource: str | None = None
-    scope: str | None = None
-    code: str | None = None
-    refresh_token: str | None = Field(default=None, alias="refreshToken")
-    redirect_uri: str | None = Field(default=None, alias="redirectUri")
-    code_verifier: str | None = Field(default=None, alias="codeVerifier")
-
-
-class OsdkOAuthRefreshRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    refresh_token: str = Field(alias="refreshToken")
-
-
-class OsdkMcpServerConfigureRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    status: Literal["enabled", "disabled"]
-    description_markdown: str = Field(alias="descriptionMarkdown", min_length=1, max_length=8_000)
-    allowed_origins: list[str] = Field(default_factory=list, alias="allowedOrigins")
-
-
-class OsdkClientSecretRotateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    reason: str | None = Field(default=None, max_length=500)
-
-
 class WebhookPayloadRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class FunctionExecuteRequest(BaseModel):
-    inputs: JsonObject = Field(default_factory=dict)
-
-
-class OntologyValidateRequest(BaseModel):
-    yaml_text: str = Field(alias="yaml")
-
-
-class OntologyApplyRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    yaml_text: str = Field(alias="yamlText")
-
-
-class OntologyRollbackRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    version_number: int = Field(alias="versionNumber", ge=1)
-
-
-class OntologyProposalSubmitRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    yaml_text: str = Field(alias="yamlText")
-    title: str
-    description: str | None = None
-
-
-class OntologyProposalUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    yaml_text: str = Field(alias="yamlText")
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-    title: str | None = None
-    description: str | None = None
-
-
-class OntologyProposalAssignRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    reviewer_user_id: str = Field(alias="reviewerUserId")
-
-
-class OntologyProposalDecisionRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    decision: str
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-    comment: str | None = None
-
-
-class OntologyProposalExecuteRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-
-
-class OntologyProposalWithdrawRequest(BaseModel):
-    reason: str | None = None
-
-
-class OntologyBranchCreateRequest(BaseModel):
-    name: str
-
-
-class OntologyBranchUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    yaml_text: str = Field(alias="yamlText")
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-
-
-class OntologyBranchActionTypeRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    definition: JsonObject
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-
-
-class OntologyBranchActionTypeDeleteRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-
-
-class OntologyBranchRebaseResolution(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    kind: str
-    api_name: str = Field(alias="apiName")
-    use: str
-
-
-class OntologyBranchRebaseRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-    resolutions: list[OntologyBranchRebaseResolution] = Field(default_factory=list)
-
-
-class OntologyBranchProposeRequest(BaseModel):
-    title: str
-    description: str | None = None
-
-
-class AipBuilderContextSourceRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    source_id: str = Field(alias="sourceId")
-    kind: str
-    security_partition: str = Field(alias="securityPartition")
-    selected_properties: list[str] = Field(default_factory=list, alias="selectedProperties")
-    token_budget: int = Field(default=800, alias="tokenBudget")
-
-
-class AipBuilderToolSpecRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    tool_id: str = Field(alias="toolId")
-    version: str
-    description: str = ""
-    input_schema: JsonObject = Field(default_factory=dict, alias="inputSchema")
-    output_schema: JsonObject = Field(default_factory=dict, alias="outputSchema")
-    effect: str = "READ"
-    required_permission: str = Field(default="object:read", alias="requiredPermission")
-    confirmation_policy: str = Field(default="NONE", alias="confirmationPolicy")
-    object_type_allowlist: list[str] = Field(default_factory=list, alias="objectTypeAllowlist")
-    property_allowlist: list[str] = Field(default_factory=list, alias="propertyAllowlist")
-    timeout_seconds: int = Field(default=30, alias="timeoutSeconds")
-    max_result_items: int = Field(default=50, alias="maxResultItems")
-    result_classification: str = Field(default="public", alias="resultClassification")
-    status: str = "published"
-
-
-class AipBuilderLogicBlockRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    block_id: str = Field(alias="blockId")
-    kind: str
-    inputs: JsonObject = Field(default_factory=dict)
-    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
-
-
-class AipBuilderValidateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_version_id: str = Field(alias="agentVersionId")
-    release_channel: str = Field(alias="releaseChannel")
-    model_alias_version: str = Field(alias="modelAliasVersion")
-    prompt_version_id: str = Field(alias="promptVersionId")
-    context_sources: list[AipBuilderContextSourceRequest] = Field(alias="contextSources")
-    tool_manifest: list[AipBuilderToolSpecRequest] = Field(alias="toolManifest")
-    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks", max_length=500)
-    eval_axes: list[str] = Field(alias="evalAxes")
-    agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
-    max_logic_blocks: int = Field(default=25, ge=1, le=500, alias="maxLogicBlocks")
-
-
-class AipBuilderRunRequest(AipBuilderValidateRequest):
-    logic_run_id: str = Field(alias="logicRunId")
-    ai_run_id: str | None = Field(default=None, alias="aiRunId")
-    session_id: str | None = Field(default=None, alias="sessionId")
-    input_json: JsonObject = Field(default_factory=dict, alias="inputJson")
-    user_message: str = Field(default="", alias="userMessage")
-    agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
-    model_allowed_classifications: list[str] = Field(
-        default_factory=lambda: ["public", "internal"],
-        alias="modelAllowedClassifications",
-    )
-    policy_version: str = Field(default="policy-v1", alias="policyVersion")
-
-
-class AipAgentRunRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_run_id: str = Field(default="agent-run-default", alias="agentRunId")
-    agent_version_id: str = Field(alias="agentVersionId")
-    model_alias: str = Field(default="default-completion", alias="modelAlias")
-    prompt_version_id: str = Field(alias="promptVersionId")
-    user_message: str = Field(alias="userMessage")
-    agent_instruction: str = Field(
-        default="Answer the operator using cited context.",
-        alias="agentInstruction",
-    )
-    security_partition: str = Field(alias="securityPartition")
-    allowed_security_partitions: list[str] = Field(alias="allowedSecurityPartitions")
-    state_json: JsonObject = Field(default_factory=dict, alias="stateJson")
-    output_schema: JsonObject | None = Field(default=None, alias="outputSchema")
-    ai_run_id: str | None = Field(default=None, alias="aiRunId")
-    session_id: str | None = Field(default=None, alias="sessionId")
-    ontology_version_id: str = Field(default="active-ontology", alias="ontologyVersionId")
-    data_classification: str = Field(default="internal", alias="dataClassification")
-    model_allowed_classifications: list[str] | None = Field(default=None, alias="modelAllowedClassifications")
-    region_requirement: str | None = Field(default=None, alias="regionRequirement")
-    max_context_items: int = Field(default=4, alias="maxContextItems")
-    max_context_tokens: int = Field(default=1200, alias="maxContextTokens")
-    max_model_calls: int = Field(default=1, alias="maxModelCalls")
-    max_loop_iterations: int = Field(default=1, alias="maxLoopIterations")
-    max_tool_calls: int = Field(default=0, alias="maxToolCalls")
-    max_tool_output_bytes: int = Field(default=4096, alias="maxToolOutputBytes")
-    max_output_tokens: int = Field(default=512, alias="maxOutputTokens")
-    policy_version: str = Field(default="policy-v1", alias="policyVersion")
-    tool_manifest: list[AipBuilderToolSpecRequest] = Field(default_factory=list, alias="toolManifest")
-    agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
-    agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
-
-
-class AipFdeRunRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    user_message: str = Field(alias="userMessage", min_length=1, max_length=20000)
-    workspace_ref: str | None = Field(default=None, alias="workspaceRef", min_length=1, max_length=512)
-    branch_id: str | None = Field(default=None, alias="branchId", min_length=1, max_length=255)
-    mode: str = Field(default="ontology_editing", max_length=64)
-    capabilities: list[str] = Field(default_factory=list, max_length=20)
-    approved_tool_ids: list[str] = Field(default_factory=list, alias="approvedToolIds", max_length=20)
-    attached_context_refs: list[str] = Field(default_factory=list, alias="attachedContextRefs", max_length=20)
-    model_alias: str = Field(default="default-completion", alias="modelAlias", max_length=255)
-    session_id: str | None = Field(default=None, alias="sessionId", max_length=255)
-    agent_run_id: str | None = Field(default=None, alias="agentRunId", max_length=255)
-    tool_discovery: str = Field(default="eager", alias="toolDiscovery", pattern="^(eager|lazy)$")
-    max_context_items: int = Field(default=6, ge=1, le=20, alias="maxContextItems")
-    max_context_tokens: int = Field(default=2400, ge=128, le=32000, alias="maxContextTokens")
-    max_tool_calls: int = Field(default=4, ge=1, le=8, alias="maxToolCalls")
-    max_output_tokens: int = Field(default=512, ge=64, le=16000, alias="maxOutputTokens")
-
-
-class AipPilotFieldRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(min_length=1, max_length=120)
-    api_name: str | None = Field(default=None, alias="apiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
-    type: str = Field(default="string", pattern="^(string|integer|float|boolean|date|timestamp)$")
-    required: bool = False
-    description: str = Field(default="", max_length=300)
-
-
-class AipPilotRecordRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(min_length=1, max_length=120)
-    api_name: str | None = Field(default=None, alias="apiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
-    description: str = Field(default="", max_length=500)
-    fields: list[AipPilotFieldRequest] = Field(default_factory=list, max_length=20)
-
-
-class AipPilotActionRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(min_length=1, max_length=120)
-    api_name: str | None = Field(default=None, alias="apiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
-    description: str = Field(default="", max_length=500)
-    from_states: list[str] = Field(default_factory=list, alias="fromStates", max_length=8)
-    to_state: str = Field(alias="toState", min_length=1, max_length=120)
-    required_information: list[str] = Field(default_factory=list, alias="requiredInformation", max_length=12)
-    allowed_actors: list[str] = Field(default_factory=list, alias="allowedActors", max_length=12)
-    requires_approval: bool = Field(default=False, alias="requiresApproval")
-
-
-class AipPilotPolicyConditionRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    property_api_name: str = Field(alias="propertyApiName", pattern="^[A-Za-z][A-Za-z0-9]{0,63}$")
-    operator: Literal[
-        "eq", "neq", "in", "notIn", "lt", "lte", "gt", "gte", "contains", "startsWith", "matches", "exists"
-    ]
-    value: object | None = None
-
-    @model_validator(mode="after")
-    def validate_value_presence(self) -> Self:
-        has_value = "value" in self.model_fields_set
-        if self.operator == "exists" and has_value:
-            raise ValueError("exists policy conditions must omit value")
-        if self.operator != "exists" and not has_value:
-            raise ValueError(f"{self.operator} policy conditions require value")
-        return self
-
-
-class AipPilotPolicyRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(min_length=1, max_length=160)
-    statement: str = Field(min_length=1, max_length=1000)
-    enforcement: str = Field(default="blocking", pattern="^(blocking|warning|manual_review)$")
-    evidence: str = Field(default="", max_length=500)
-    applies_to_actions: list[str] = Field(default_factory=list, alias="appliesToActions", max_length=20)
-    conditions: list[AipPilotPolicyConditionRequest] = Field(default_factory=list, max_length=12)
-
-
-class AipPilotDomainBriefRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    actors: list[str] = Field(default_factory=list, max_length=12)
-    records: list[AipPilotRecordRequest] = Field(default_factory=list, max_length=8)
-    lifecycle_states: list[str] = Field(default_factory=list, alias="lifecycleStates", max_length=16)
-    actions: list[AipPilotActionRequest] = Field(default_factory=list, max_length=20)
-    policies: list[AipPilotPolicyRequest] = Field(default_factory=list, max_length=20)
-    evidence: list[str] = Field(default_factory=list, max_length=20)
-    integrations: list[str] = Field(default_factory=list, max_length=20)
-    success_measures: list[str] = Field(default_factory=list, alias="successMeasures", max_length=20)
-
-
-class AipPilotPlanRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    application_name: str = Field(alias="applicationName", min_length=1, max_length=255)
-    domain_description: str = Field(alias="domainDescription", min_length=1, max_length=10000)
-    domain_brief: AipPilotDomainBriefRequest = Field(alias="domainBrief")
-
-
-class AipPilotGenerateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    plan: JsonObject
-
-
-class AipCitationNavigationResolveRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    navigation_ref: str = Field(alias="navigationRef", min_length=1, max_length=32768)
-
-
-class AipEvalCaseRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    case_api_name: str = Field(alias="caseApiName")
-    axis: str
-    input_json: JsonObject = Field(default_factory=dict, alias="inputJson")
-    expected_json: JsonObject = Field(default_factory=dict, alias="expectedJson")
-    actual_json: JsonObject = Field(default_factory=dict, alias="actualJson")
-    rubric_json: JsonObject = Field(default_factory=dict, alias="rubricJson")
-    tags: list[str] = Field(default_factory=list)
-    sample_index: int = Field(default=1, alias="sampleIndex")
-    evaluator: str = "exact_subset_v1"
-    weight: float = 1.0
-
-
-class AipEvalRunRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    eval_run_id: str = Field(alias="evalRunId")
-    suite_api_name: str = Field(alias="suiteApiName")
-    suite_version: str = Field(alias="suiteVersion")
-    suite_description: str = Field(default="", alias="suiteDescription")
-    agent_version_id: str = Field(alias="agentVersionId")
-    candidate_release_channel: str = Field(alias="candidateReleaseChannel")
-    cases: list[AipEvalCaseRequest] = Field(max_length=500)
-    min_score: float = Field(default=1.0, alias="minScore")
-    required_axes: list[str] = Field(default_factory=list, alias="requiredAxes")
-
-
-class AipReleasePromotionRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_version_id: str = Field(alias="agentVersionId")
-    target_release_channel: str = Field(alias="targetReleaseChannel")
-    eval_run_id: str = Field(alias="evalRunId")
-    policy_version: str = Field(default="release-policy-v1", alias="policyVersion")
-
-
-class MediaSetCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    namespace: str
-    name: str
-    schema_type: str = Field(alias="schemaType")
-    primary_format: str = Field(alias="primaryFormat")
-    allowed_input_formats: list[str] = Field(alias="allowedInputFormats")
-    classification: str
-    transaction_policy: str = Field(default="transactional", alias="transactionPolicy")
-    storage_profile: str = Field(default="local", alias="storageProfile")
-    processing_profile: str = Field(default="local", alias="processingProfile")
-    retention_policy_id: str | None = Field(default=None, alias="retentionPolicyId")
-
-
-class MediaOpenTransactionRequest(BaseModel):
-    mode: str = "APPEND"
-
-
-class MediaProcessRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    processor: str
-    processor_version: str = Field(alias="processorVersion")
-    model: str | None = None
-    model_version: str | None = Field(default=None, alias="modelVersion")
-    parameters: JsonObject = Field(default_factory=dict)
-
-
-class MediaIndexDerivativeRequest(BaseModel):
-    generation: str
-
-
-class MediaContentPromoteRequest(BaseModel):
-    """Compare-and-swap promotion of one text content-index generation."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_active: str = Field(alias="expectedActive")
-    generation: str
-
-
-class MediaVisualPromoteRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_active: str = Field(alias="expectedActive")
-    generation: str
-
-
-class MediaSearchRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    text: str | None = None
-    top_k: int = Field(default=10, alias="topK")
-    allowed_classifications: list[str] | None = Field(default=None, alias="allowedClassifications")
-    # Narrow the search to these media sets. Omitting it searches every media set the caller can
-    # read, which is the right default for a global search box and the wrong one for a screen
-    # that already has a media set selected.
-    media_set_ids: list[str] | None = Field(default=None, alias="mediaSetIds")
-
-
-class MediaVisualSearchRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    text: str
-    top_k: int = Field(default=10, alias="topK")
-
-
-class MediaBindReferenceRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    holder_type: str = Field(alias="holderType")
-    holder_id: str = Field(alias="holderId")
-    property_name: str = Field(alias="propertyName")
-    media_item_version_id: str = Field(alias="mediaItemVersionId")
-
-
-class TransformSqlRegisterRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    api_name: str = Field(alias="apiName")
-    sql: str
-    inputs: dict[str, str]
-    output_dataset_ref: str = Field(alias="outputDatasetRef")
-    checks: list[JsonObject] = Field(default_factory=list)
-    mode: str = "snapshot"
-
-
-class TransformSchedulerTickRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    max_runs: int = Field(default=50, ge=1, le=500, alias="maxRuns")
-
-
-class PipelineBranchCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    pipeline_id: str = Field(alias="pipelineId")
-    name: str
-
-
-class PipelineGraphUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    graph: JsonObject
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-
-
-class PipelineBranchRebaseRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_fingerprint: str = Field(alias="expectedFingerprint")
-
-
-class PipelineBranchProposeRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    title: str
-    description: str | None = None
-
-
-class PipelineProposalAssignRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    assignee_user_id: str = Field(alias="assigneeUserId")
-
-
-class PipelineProposalDecisionRequest(BaseModel):
-    decision: str
-    comment: str | None = None
-
-
-class PipelinePreviewNodeRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    limit: int = Field(
-        default=DEFAULT_PIPELINE_PREVIEW_ROWS,
-        ge=1,
-        le=MAX_PIPELINE_PREVIEW_ROWS,
-        description="General Pipeline Builder table preview row limit; defaults to and is capped at 500.",
-    )
-
-
-class PipelinePreviewLimitsRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    table_rows: int = Field(
-        default=DEFAULT_PIPELINE_PREVIEW_ROWS,
-        ge=1,
-        le=MAX_PIPELINE_PREVIEW_ROWS,
-        alias="tableRows",
-        description=(
-            "General table preview row budget. Defaults to and is capped at 500; "
-            "Use LLM output preview is server-capped at 50 rows."
-        ),
-    )
-    media_items: int = Field(default=5, ge=1, le=20, alias="mediaItems")
-    pdf_pages: int = Field(default=3, ge=1, le=10, alias="pdfPages")
-    audio_video_seconds: int = Field(default=60, ge=1, le=60, alias="audioVideoSeconds")
-    scene_count: int = Field(default=12, ge=1, le=12, alias="sceneCount")
-    search_hits: int = Field(default=10, ge=1, le=10, alias="searchHits")
-    total_bytes: int = Field(default=32 * 1024 * 1024, ge=1, le=32 * 1024 * 1024, alias="totalBytes")
-    timeout_seconds: int = Field(default=30, ge=1, le=30, alias="timeoutSeconds")
-
-
-class PipelinePreviewRunCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    graph: JsonObject
-    target_node_id: str | None = Field(default=None, alias="targetNodeId")
-    limits: PipelinePreviewLimitsRequest = Field(default_factory=PipelinePreviewLimitsRequest)
-
-
-class PipelineDeployRequest(BaseModel):
-    options: JsonObject = Field(default_factory=dict)
-
-
-class PipelineRunStartRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    version_id: str | None = Field(default=None, alias="versionId")
-    parameters: JsonObject = Field(default_factory=dict)
-    target_node_ids: list[str] = Field(default_factory=list, alias="targetNodeIds")
-
-
-class PipelineRunCancelRequest(BaseModel):
-    reason: str | None = None
-
-
-class PipelineScheduleSpecRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    trigger_type: Literal["cron", "interval"] = Field(alias="triggerType")
-    timezone: str = "UTC"
-    cron_expression: str | None = Field(default=None, alias="cronExpression")
-    interval_seconds: int | None = Field(default=None, ge=1, alias="intervalSeconds")
-    start_at: str | None = Field(default=None, alias="startAt")
-    auto_pause_after_failures: int | None = Field(default=None, ge=1, alias="autoPauseAfterFailures")
-
-
-class PipelineScheduleUpsertRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    version_id: str = Field(alias="versionId")
-    schedule: PipelineScheduleSpecRequest
-    enabled: bool = True
-
-
-class DeadLetterBulkRetryRequest(BaseModel):
-    ids: list[str]
-
-
-class ConnectorSyncWorkflowStartRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    dataset_ref: str = Field(alias="datasetRef")
-    connector_name: str = Field(alias="connectorName")
-    resource_name: str = Field(alias="resourceName")
-    sync_name: str | None = Field(default=None, alias="syncName")
-
-
 class ProductWorkflowCancelRequest(BaseModel):
     reason: str | None = None
-
-
-class RestConnectorAuthRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    mode: str = "none"
-    token_secret_ref: str | None = Field(default=None, alias="tokenSecretRef")
-    basic_credentials_secret_ref: str | None = Field(default=None, alias="basicCredentialsSecretRef")
-    header_name: str | None = Field(default=None, alias="headerName")
-    header_value_secret_ref: str | None = Field(default=None, alias="headerValueSecretRef")
-    token: str | None = None
-    header_value: str | None = Field(default=None, alias="headerValue")
-
-
-class RestConnectorPaginationRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    items_path: str = Field(default="items", alias="itemsPath")
-    next_cursor_path: str = Field(default="nextCursor", alias="nextCursorPath")
-    cursor_query_param: str = Field(default="cursor", alias="cursorQueryParam")
-    cursor_key: str = Field(default="cursor", alias="cursorKey")
-    strategy: str = "cursor"
-    max_pages_per_snapshot: int = Field(default=1, ge=1, le=100, alias="maxPagesPerSnapshot")
-
-
-class RestConnectorConnectionCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    connector_name: str = Field(alias="connectorName")
-    display_name: str = Field(alias="displayName")
-    base_url: str = Field(alias="baseUrl")
-    auth: RestConnectorAuthRequest = Field(default_factory=RestConnectorAuthRequest)
-    rate_limit_per_minute: int | None = Field(default=None, alias="rateLimitPerMinute")
-    allow_private_network: bool = Field(default=False, alias="allowPrivateNetwork")
-
-
-class RestConnectorConnectionUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    display_name: str | None = Field(default=None, alias="displayName")
-    base_url: str | None = Field(default=None, alias="baseUrl")
-    auth: RestConnectorAuthRequest | None = None
-    rate_limit_per_minute: int | None = Field(default=None, alias="rateLimitPerMinute")
-    allow_private_network: bool | None = Field(default=None, alias="allowPrivateNetwork")
-    status: str | None = None
-
-
-class RestConnectorResourceUpsertRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    dataset_ref: str = Field(alias="datasetRef")
-    resource_path: str = Field(alias="resourcePath")
-    pagination: RestConnectorPaginationRequest = Field(default_factory=RestConnectorPaginationRequest)
-    schema_columns: list[str] = Field(default_factory=list, alias="schemaColumns")
-    primary_key: list[str] = Field(default_factory=list, alias="primaryKey")
-
-
-class ConnectorResourceSyncStartRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    sync_name: str | None = Field(default=None, alias="syncName")
-
-
-class SourceWebhookListenerCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    source_name: str = Field(alias="sourceName")
-    display_name: str = Field(alias="displayName")
-    dataset_ref: str = Field(alias="datasetRef")
-    connector_name: str = Field(alias="connectorName")
-    resource_name: str = Field(alias="resourceName")
-    signing_secret_ref: str = Field(alias="signingSecretRef")
-
-
-class SourceDebeziumCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    source_name: str = Field(alias="sourceName")
-    display_name: str = Field(alias="displayName")
-    dataset_ref: str = Field(alias="datasetRef")
-    stream_name: str = Field(alias="streamName")
-    topic: str
-    consumer_group: str = Field(default="foundry-lite-cdc", alias="consumerGroup")
-    secret_refs: JsonObject = Field(default_factory=dict, alias="secretRefs")
-    primary_key: list[str] = Field(default_factory=list, alias="primaryKey")
-
-
-class SourceDebeziumSyncStartRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_config_fingerprint: str | None = Field(default=None, alias="expectedConfigFingerprint")
-    after_offset: int | None = Field(default=None, alias="afterOffset")
-    limit: int | None = None
-
-
-class SourceDebeziumObjectIndexStartRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    object_type_api_name: str = Field(default="Order", alias="objectTypeApiName")
-    expected_config_fingerprint: str | None = Field(default=None, alias="expectedConfigFingerprint")
-    max_rows_per_version: int = Field(default=10_000, alias="maxRowsPerVersion")
-
-
-class SourceCredentialCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    credential_name: str = Field(alias="credentialName")
-    display_name: str = Field(alias="displayName")
-    kind: str
-    auth_scheme: str = Field(alias="authScheme")
-    secret_value: str = Field(alias="secretValue")
-    secret_name: str | None = Field(default=None, alias="secretName")
-
-
-class SourceAgentRegisterRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_id: str = Field(alias="agentId")
-    display_name: str = Field(alias="displayName")
-    mode: str
-    capabilities: JsonObject = Field(default_factory=dict)
-    network_summary: JsonObject = Field(default_factory=dict, alias="networkSummary")
-
-
-class SourceNetworkPolicyCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    policy_name: str = Field(alias="policyName")
-    display_name: str = Field(alias="displayName")
-    mode: str
-    agent_id: str | None = Field(default=None, alias="agentId")
-    allowed_hosts: list[str] = Field(default_factory=list, alias="allowedHosts")
-
-
-class SourceExploreRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    source_name: str = Field(alias="sourceName")
-    source_type: str = Field(alias="sourceType")
-    request: JsonObject = Field(default_factory=dict)
-
-
-class SourceManagedSyncCreateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    sync_name: str = Field(alias="syncName")
-    source_name: str = Field(alias="sourceName")
-    display_name: str = Field(alias="displayName")
-    source_type: str = Field(alias="sourceType")
-    capability: str
-    mode: str = "APPEND"
-    target_dataset_ref: str | None = Field(default=None, alias="targetDatasetRef")
-    target_media_set_id: str | None = Field(default=None, alias="targetMediaSetId")
-    schedule: JsonObject = Field(default_factory=dict)
-    config_summary: JsonObject = Field(default_factory=dict, alias="configSummary")
-
-
-class SourceManagedSyncRunStartRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    trigger_type: Literal["manual", "recovery"] = Field(default="manual", alias="triggerType")
-    batch_limit: int | None = Field(default=None, alias="batchLimit")
-
-
-class SourceManagedStreamingSyncStateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
-
-
-class SourceManagedSyncScheduleUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    schedule: JsonObject
-    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
-
-
-class SourceManagedSyncScheduleStateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
-
-
-class SourceStatusUpdateRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    status: Literal["active", "disabled"]
-    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
-
-
-class SourceConnectionTestRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
-
-
-class SourceSchedulerTickRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    max_runs: int = Field(default=50, ge=1, le=500, alias="maxRuns")
-
-
-class SourceBatchFileManifestItem(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    file_name: str = Field(alias="fileName")
-    dataset_ref: str = Field(alias="datasetRef")
-
-
-class SourceBatchFileManifest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    source_name: str = Field(alias="sourceName")
-    display_name: str = Field(alias="displayName")
-    sync_name: str | None = Field(default=None, alias="syncName")
-    files: list[SourceBatchFileManifestItem]
 
 
 class ActionWritebackReconciliationRequest(BaseModel):

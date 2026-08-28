@@ -155,7 +155,7 @@ def test_osdk_sdk_lifecycle_blocks_major_removal_without_major_bump(foundry: Fou
         app_api_name="OrdersMajorGate",
     )
     app_id = cast(str, app["application"]["id"])
-    foundry.developer_console.create_osdk_sdk_version(
+    released = foundry.developer_console.create_osdk_sdk_version(
         app_id,
         language="typescript",
         requested_bump="minor",
@@ -180,6 +180,10 @@ def test_osdk_sdk_lifecycle_blocks_major_removal_without_major_bump(foundry: Fou
     assert blocked["sdkVersion"]["release_status"] == "blocked"
     assert blocked["sdkVersion"]["compatibility_status"] == "major_version_required"
     assert blocked.get("artifacts", []) == []
+    released_artifacts = cast(list[Mapping[str, object]], released["artifacts"])
+    artifact_root = Path(str(released_artifacts[0]["storage_uri"])).parents[3]
+    blocked_version = str(blocked["sdkVersion"]["version"])
+    assert not (artifact_root / ctx.tenant_id / app_id / blocked_version).exists()
 
 
 def test_osdk_sdk_lifecycle_mutations_are_replay_safe_idempotency_contract(

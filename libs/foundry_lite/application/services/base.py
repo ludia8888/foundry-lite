@@ -12,6 +12,12 @@ from foundry_lite.application.dependencies import (
     ActionFunctionExecutor,
     ActionRunOrchestrator,
     CoreDependencies,
+    MediaSourceWorkspace,
+    OntologyDefinitionReader,
+    OsdkDownloadTokenSigner,
+    OsdkReleaseArtifactStore,
+    SourceUploadStagingStore,
+    TransformSourceStore,
 )
 from foundry_lite.application.dependency_release import (
     GovernedReleaseDeliveryConfig,
@@ -239,6 +245,7 @@ class CoreService:
     source_management_repository: SourceManagementRepository
     source_registry_repository: SourceRegistryRepository
     source_stream_adapter: SourceStreamAdapter
+    source_upload_staging_store: SourceUploadStagingStore
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
@@ -264,6 +271,7 @@ class CoreService:
     media_reference_binding_repository: MediaReferenceBindingRepository
     media_access_cache_repository: MediaAccessCacheRepository
     media_storage: MediaStorageAdapter
+    media_source_workspace: MediaSourceWorkspace
     media_processor: MediaProcessorAdapter
     media_processor_registry: MediaProcessorRegistry | None
     media_preview_renderer: MediaPreviewRendererAdapter
@@ -304,10 +312,14 @@ class CoreService:
     governed_release_live_authority: GovernedReleaseLiveAuthority
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
+    ontology_definition_reader: OntologyDefinitionReader
     pipeline_repository: PipelineRepository
     pipeline_execution_repository: PipelineExecutionRepository
     resource_catalog_repository: ResourceCatalogRepository
     transform_repository: TransformRepository
+    transform_source_store: TransformSourceStore
+    osdk_release_artifact_store: OsdkReleaseArtifactStore
+    osdk_download_token_signer: OsdkDownloadTokenSigner
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
 

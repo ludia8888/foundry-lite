@@ -18,6 +18,7 @@ from foundry_lite.application.ports import (
     TransactionContext,
     TransactionManager,
 )
+from foundry_lite.application.ports.source_upload_staging_store import SourceUploadStagingStore
 from foundry_lite.application.services.media.uploads import MediaUploadInput
 from foundry_lite.application.services.source_onboarding_config import (
     StagedMediaSourceUpload,
@@ -46,6 +47,7 @@ from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFai
 
 
 def commit_batch_uploads(
+    staging_store: SourceUploadStagingStore,
     engine: TransactionManager,
     dataset_transaction_repository: DatasetTransactionRepository,
     dataset_registry_service: DatasetRegistryBoundary,
@@ -58,13 +60,15 @@ def commit_batch_uploads(
     for upload in staged:
         dataset_ref = upload.dataset_ref
         dataset_registry_service.ensure_dataset(dataset_ref, ctx=ctx)
-        commit = dataset_ingest_service.upload_csv(dataset_ref, upload.path, ctx=ctx, sync_name=sync_name)
+        with staging_store.materialize_path(upload.storage_uri) as csv_path:
+            commit = dataset_ingest_service.upload_csv(dataset_ref, csv_path, ctx=ctx, sync_name=sync_name)
         run_id = sync_run_id(engine, dataset_transaction_repository, ctx, commit.transaction_id)
         commits.append(commit_payload(commit, run_id))
     return commits
 
 
 def commit_staged_media(
+    staging_store: SourceUploadStagingStore,
     media_transaction_service: MediaTransactionBoundary,
     media_upload_service: MediaUploadBoundary,
     ctx: RequestContext,
@@ -78,7 +82,7 @@ def commit_staged_media(
     probe_metadata: Mapping[str, object] | None,
     idempotency_key: str,
 ) -> dict[str, object]:
-    with staged.path.open("rb") as media_source:
+    with staging_store.open_upload(staged.storage_uri) as media_source:
         return upload_and_commit_media(
             media_transaction_service,
             media_upload_service,

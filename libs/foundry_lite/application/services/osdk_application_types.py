@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 from foundry_lite.application.ports import OsdkReleaseStatus, RuntimeJsonObject, TransactionContext
@@ -48,6 +47,6 @@ class _ReleaseDecision:
 @dataclass(frozen=True)
 class _ArtifactDraft:
     kind: str
-    path: Path
+    storage_uri: str | None
     content_hash: str
     metadata_json: RuntimeJsonObject

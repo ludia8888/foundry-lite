@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     TransformExecutionResult,
     TransformRetryResult,
 )
+from foundry_lite.application.ports.transform_source_store import TransformSourceStore
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
@@ -55,7 +56,13 @@ TransformCommitHook = Callable[[TransactionContext, CommitResult], None]
 class TransformRunService(CoreService):
     """Open, execute, finalize, and retry transform runs."""
 
-    required_dependencies = ("engine", "compute_adapter", "dataset_transaction_repository", "transform_repository")
+    required_dependencies = (
+        "engine",
+        "compute_adapter",
+        "dataset_transaction_repository",
+        "transform_repository",
+        "transform_source_store",
+    )
     required_collaborators = (
         "dataset_registry_service",
         "dataset_transaction_service",
@@ -68,6 +75,7 @@ class TransformRunService(CoreService):
     dataset_transaction_service: TransformDatasetTransactions
     dataset_version_service: TransformDatasetVersions
     runtime_service: TransformRuntimeBoundary
+    transform_source_store: TransformSourceStore
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()
@@ -237,6 +245,7 @@ class TransformRunService(CoreService):
                 dataset_transaction_service=self.dataset_transaction_service,
                 dataset_version_service=self.dataset_version_service,
                 transform_repository=self.transform_repository,
+                transform_source_store=self.transform_source_store,
             )
 
     def _start_failed_transform_retry(self, ctx: RequestContext, transform_run_id: str) -> TransformRunPlan:

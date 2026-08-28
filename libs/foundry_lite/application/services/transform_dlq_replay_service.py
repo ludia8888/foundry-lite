@@ -53,6 +53,10 @@ class _TransformReplayRunner(Protocol):
         """Abort a failed transform replay plan."""
         ...
 
+    def _start_transform_run(self, ctx: RequestContext, api_name: str) -> TransformRunPlan:
+        """Open one run from the current transform definition."""
+        ...
+
 
 class TransformDlqReplayService(CoreService):
     """Replay transform-owned dead-letter records."""
@@ -95,6 +99,9 @@ class TransformDlqReplayService(CoreService):
 
     def _execute_transform_plan(self, plan: TransformRunPlan, staged: Path) -> TransformExecutionResult:
         return self.transform_run_service.execute_transform_plan(plan, staged)
+
+    def _start_transform_run(self, ctx: RequestContext, api_name: str) -> TransformRunPlan:
+        return self.transform_run_service._start_transform_run(ctx, api_name)
 
     def _finalize_executed_transform(
         self,

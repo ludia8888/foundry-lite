@@ -38,6 +38,7 @@ from foundry_lite.infrastructure.adapters.asr_processor import AsrProcessorAdapt
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.video_probe_processor import (
     VideoProbeProcessorAdapter,
@@ -83,6 +84,7 @@ def _processing(engine, repo, deriv, storage, runtime, processor) -> MediaProces
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_processor=processor,
     )
     service.bind_collaborators({"runtime_service": runtime})

@@ -34,6 +34,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_vision_embedding import (
     CLIP_MODEL_VERSION,
@@ -153,6 +154,7 @@ def env(tmp_path: Path) -> _Env:
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_processor=VideoSceneVisionProcessorAdapter(vision, scene_frame_path_extractor=_fake_frame_path_extractor),
     )
     processing.bind_collaborators({"runtime_service": runtime})

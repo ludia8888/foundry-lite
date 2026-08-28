@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from typing import Protocol
 
 from foundry_lite.application.services.media.read_access import require_media_version_clearance
@@ -15,6 +14,8 @@ from foundry_lite.application.services.pipeline_preview_media_execution import (
     exact_processor_identity,
     invoke_preview_processor,
     processor_descriptor,
+    require_total_media_bytes,
+    version_with_source_security,
 )
 from foundry_lite.application.services.pipeline_preview_media_payloads import _derivative_payload
 from foundry_lite.application.services.pipeline_preview_port_types import (
@@ -27,6 +28,7 @@ from foundry_lite.application.services.pipeline_preview_port_types import (
     MediaRepository,
     MediaSetRecord,
     MediaSetSelectionRecord,
+    MediaSourceWorkspace,
     MediaStorageAdapter,
     ProcessorSpec,
     SemanticRowCacheRepository,
@@ -79,6 +81,7 @@ def build_pipeline_preview_runtime(
     source_management_repository: SourceManagementRepository,
     media_repository: MediaRepository,
     media_storage: MediaStorageAdapter,
+    media_source_workspace: MediaSourceWorkspace,
     media_processor_registry: MediaProcessorRegistry | None,
     embedding_model_adapter: EmbeddingModelAdapter,
     model_gateway: GovernedSemanticModelPort,
@@ -97,6 +100,7 @@ def build_pipeline_preview_runtime(
         source_management_repository=source_management_repository,
         media_repository=media_repository,
         media_storage=media_storage,
+        media_source_workspace=media_source_workspace,
         media_processor_registry=media_processor_registry,
         embedding_model_adapter=embedding_model_adapter,
         model_gateway=model_gateway,
@@ -147,6 +151,7 @@ class PipelinePreviewRuntime:
         source_management_repository: SourceManagementRepository,
         media_repository: MediaRepository,
         media_storage: MediaStorageAdapter,
+        media_source_workspace: MediaSourceWorkspace,
         media_processor_registry: MediaProcessorRegistry | None,
         embedding_model_adapter: EmbeddingModelAdapter,
         model_gateway: GovernedSemanticModelPort,
@@ -162,6 +167,7 @@ class PipelinePreviewRuntime:
         self._source_management_repository = source_management_repository
         self._media_repository = media_repository
         self._media_storage = media_storage
+        self._media_source_workspace = media_source_workspace
         self._processor_registry = media_processor_registry
         self._embedding_model = embedding_model_adapter
         self._model_gateway = model_gateway
@@ -235,7 +241,7 @@ class PipelinePreviewRuntime:
             )
         _require_exact_selection(version_ids, selected, media_set_ref)
         versions = [item.version for item in selected]
-        _require_total_bytes(versions, total_byte_limit)
+        require_total_media_bytes(versions, total_byte_limit)
         for version in versions:
             require_media_version_clearance(self._ctx, version)
         envelopes = [
@@ -356,39 +362,20 @@ class PipelinePreviewRuntime:
         descriptor: MediaProcessorDescriptor,
     ) -> JsonObject:
         version_id = str(item.get("mediaItemVersionId") or "")
-        version = _version_with_source_security(self._committed_version(version_id), item)
+        version = version_with_source_security(self._committed_version(version_id), item)
         registry = self._processor_registry
         assert registry is not None
         processor = registry.resolve(spec, input_format=version.format)
-        result = invoke_preview_processor(processor, self._media_storage, self._ctx, version, spec)
+        result = invoke_preview_processor(
+            processor,
+            self._media_storage,
+            self._media_source_workspace,
+            self._ctx,
+            version,
+            spec,
+        )
         reference = required_source_media_reference(item)
         return _derivative_payload(result, version, descriptor, reference)
-
-
-def _version_with_source_security(
-    version: MediaItemVersionRecord,
-    item: Mapping[str, object],
-) -> MediaItemVersionRecord:
-    envelope = item.get("securityEnvelope")
-    if not isinstance(envelope, Mapping):
-        raise ValidationFailed(
-            "media preview source security envelope is missing",
-            details={"mediaItemVersionId": version.media_item_version_id},
-        )
-    return replace(
-        version,
-        security_envelope={str(key): value for key, value in envelope.items()},
-        has_legal_hold=bool(envelope.get("hasLegalHold", version.has_legal_hold)),
-    )
-
-
-def _require_total_bytes(versions: Sequence[MediaItemVersionRecord], byte_limit: int) -> None:
-    total = sum(version.byte_size for version in versions)
-    if total > byte_limit:
-        raise ValidationFailed(
-            "media preview exceeds the byte budget",
-            details={"totalBytes": total, "byteLimit": byte_limit},
-        )
 
 
 def _require_model_ref(adapter: EmbeddingModelAdapter, model_ref: str) -> None:

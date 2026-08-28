@@ -16,6 +16,7 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRunRecord,
     TransformRunRow,
 )
+from foundry_lite.application.ports.transform_source_store import TransformSourceRead, TransformSourceStore
 from foundry_lite.application.primitives import INPUT_PATTERN, CommitResult, _new_id, _now
 from foundry_lite.application.services.transform_partition_pushdown import (
     infer_sql_partition_filters as infer_sql_partition_filters,
@@ -70,10 +71,11 @@ def start_transform_run(
     dataset_transaction_service: TransformDatasetTransactions,
     dataset_version_service: TransformDatasetVersions,
     transform_repository: TransformRepository,
+    transform_source_store: TransformSourceStore,
 ) -> TransformRunPlan:
     transform = _get_transform(conn, ctx, api_name, transform_repository)
     language = str(transform["language"])
-    source = _read_transform_source(str(transform["entrypoint"]), language)
+    source = _read_transform_source(transform_source_store, str(transform["entrypoint"]), language)
     input_versions = _resolve_transform_inputs(
         conn,
         ctx,
@@ -313,25 +315,31 @@ def _version_input_paths(
     return paths if paths else dataset_transaction_service._version_file_paths(version)
 
 
-def _read_transform_sql_template(entrypoint: str) -> str:
-    return Path(entrypoint).read_text(encoding="utf-8")
-
-
-def _read_transform_source(entrypoint: str, language: str) -> TransformSource:
+def _read_transform_source(
+    source_store: TransformSourceStore,
+    entrypoint: str,
+    language: str,
+) -> TransformSource:
     if language == "sql":
-        return TransformSource(sql_template=_read_transform_sql_template(entrypoint))
+        content = source_store.read_source(TransformSourceRead(entrypoint))
+        return TransformSource(sql_template=content.source_code)
     if language == "python":
         path, function_name = _python_entrypoint_parts(entrypoint)
+        content = source_store.read_source(TransformSourceRead(path))
         return TransformSource(
             sql_template="",
-            python_source=Path(path).read_text(encoding="utf-8"),
+            python_source=content.source_code,
             python_function=function_name,
         )
     raise ValidationFailed("unsupported transform language", details={"language": language})
 
 
 def _python_entrypoint_parts(entrypoint: str) -> tuple[str, str | None]:
-    path, separator, function_name = entrypoint.partition(":")
+    path, separator, function_name = entrypoint.rpartition(":")
+    if separator and ("/" in function_name or "\\" in function_name):
+        return entrypoint, None
+    if not separator:
+        return entrypoint, None
     if separator and not function_name.strip():
         raise ValidationFailed("Python transform entrypoint function is empty", details={"entrypoint": entrypoint})
     return path, function_name.strip() or None

@@ -52,6 +52,8 @@ from foundry_lite.application.dependency_core import (
     ObjectReadRepository,
     ObjectSetRepository,
     OsdkApplicationRepository,
+    OsdkDownloadTokenSigner,
+    OsdkReleaseArtifactStore,
     Path,
     PathDependencies,
     PolicyService,
@@ -61,7 +63,26 @@ from foundry_lite.application.dependency_core import (
     SecurityDependencies,
     TransactionManager,
 )
-from foundry_lite.application.dependency_data import DataDependencies
+from foundry_lite.application.dependency_data import (
+    CodeExecutionAdapter,
+    ComputeAdapter,
+    DataDependencies,
+    DataDependencyAccessors,
+    DatasetQualityRepository,
+    DatasetRepository,
+    DatasetStorageAdapter,
+    DatasetTransactionRepository,
+    DatasetVersionRepository,
+    MaterializationRepository,
+    OntologyBranchRepository,
+    OntologyDefinitionReader,
+    OntologyRepository,
+    PipelineExecutionRepository,
+    PipelineRepository,
+    ResourceCatalogRepository,
+    TransformRepository,
+    TransformSourceStore,
+)
 from foundry_lite.application.dependency_media import (
     ContentIndexAdapter,
     ExternalMediaReader,
@@ -73,6 +94,7 @@ from foundry_lite.application.dependency_media import (
     MediaProcessorRegistry,
     MediaReferenceBindingRepository,
     MediaRepository,
+    MediaSourceWorkspace,
     MediaStorageAdapter,
 )
 from foundry_lite.application.dependency_release import (
@@ -88,36 +110,22 @@ from foundry_lite.application.dependency_release import (
 from foundry_lite.application.dependency_release import (
     GovernedReleaseMcpAuthority as GovernedReleaseMcpAuthority,
 )
-from foundry_lite.application.dependency_source import SourceDependencies
+from foundry_lite.application.dependency_source import SourceDependencies, SourceUploadStagingStore
 from foundry_lite.application.ports import (
     AiEvalRepository,
     AiRunRepository,
-    ComputeAdapter,
     ContextProvider,
-    DatasetQualityRepository,
-    DatasetRepository,
-    DatasetStorageAdapter,
-    DatasetTransactionRepository,
-    DatasetVersionRepository,
-    MaterializationRepository,
-    OntologyRepository,
-    PipelineRepository,
-    ResourceCatalogRepository,
     RuntimeRepository,
-    TransformRepository,
 )
 from foundry_lite.application.ports.backup_artifact_store import BackupArtifactStore
-from foundry_lite.application.ports.code_execution import CodeExecutionAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
-from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.pipeline_dag_orchestrator import (
     PipelineDagOrchestrator,
     UnavailablePipelineDagOrchestrator,
 )
-from foundry_lite.application.ports.pipeline_execution_repository import PipelineExecutionRepository
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
@@ -139,7 +147,7 @@ class RuntimeDependencies:
 
 
 @dataclass(frozen=True, init=False)
-class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAccessors):
+class CoreDependencies(ActionDependencyAccessors, DataDependencyAccessors, GovernedReleaseDependencyAccessors):
     """Dependencies that compose the core facade without hard-coding local infrastructure."""
 
     action_repository: ActionRepository
@@ -151,6 +159,22 @@ class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAcces
     action_run_orchestrator: ActionRunOrchestrator
     action_notification_policy_repository: ActionNotificationPolicyRepository
     action_notification_recipient_directory: ActionNotificationRecipientDirectory
+    ontology_repository: OntologyRepository
+    ontology_branch_repository: OntologyBranchRepository
+    pipeline_repository: PipelineRepository
+    pipeline_execution_repository: PipelineExecutionRepository
+    transform_repository: TransformRepository
+    resource_catalog_repository: ResourceCatalogRepository
+    materialization_repository: MaterializationRepository
+    dataset_quality_repository: DatasetQualityRepository
+    compute_adapter: ComputeAdapter
+    code_execution_adapter: CodeExecutionAdapter
+    dataset_repository: DatasetRepository
+    dataset_transaction_repository: DatasetTransactionRepository
+    dataset_version_repository: DatasetVersionRepository
+    dataset_storage: DatasetStorageAdapter
+    transform_source_store: TransformSourceStore
+    ontology_definition_reader: OntologyDefinitionReader
     governed_release_delivery_config: ClassVar[GovernedReleaseDeliveryConfig]
     source_control_release_adapter: ClassVar[SourceControlReleasePort]
     infrastructure_deployment_adapter: ClassVar[InfrastructureDeploymentAdapter]
@@ -233,6 +257,14 @@ class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAcces
         return self.security.osdk_application_repository
 
     @property
+    def osdk_download_token_signer(self) -> OsdkDownloadTokenSigner:
+        return self.security.osdk_download_token_signer
+
+    @property
+    def osdk_release_artifact_store(self) -> OsdkReleaseArtifactStore:
+        return self.security.osdk_release_artifact_store
+
+    @property
     def oauth_session_repository(self) -> OAuthSessionRepository:
         return self.security.oauth_session_repository
 
@@ -251,62 +283,6 @@ class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAcces
     @property
     def mcp_rate_limiter(self) -> McpRateLimiter:
         return self.security.mcp_rate_limiter
-
-    @property
-    def ontology_repository(self) -> OntologyRepository:
-        return self.data.ontology_repository
-
-    @property
-    def ontology_branch_repository(self) -> OntologyBranchRepository:
-        return self.data.ontology_branch_repository
-
-    @property
-    def pipeline_repository(self) -> PipelineRepository:
-        return self.data.pipeline_repository
-
-    @property
-    def pipeline_execution_repository(self) -> PipelineExecutionRepository:
-        return self.data.pipeline_execution_repository
-
-    @property
-    def transform_repository(self) -> TransformRepository:
-        return self.data.transform_repository
-
-    @property
-    def resource_catalog_repository(self) -> ResourceCatalogRepository:
-        return self.data.resource_catalog_repository
-
-    @property
-    def materialization_repository(self) -> MaterializationRepository:
-        return self.data.materialization_repository
-
-    @property
-    def dataset_quality_repository(self) -> DatasetQualityRepository:
-        return self.data.dataset_quality_repository
-
-    @property
-    def compute_adapter(self) -> ComputeAdapter:
-        return self.data.compute_adapter
-
-    @property
-    def code_execution_adapter(self) -> CodeExecutionAdapter:
-        return self.data.code_execution_adapter
-
-    @property
-    def dataset_repository(self) -> DatasetRepository:
-        return self.data.dataset_repository
-
-    @property
-    def dataset_transaction_repository(self) -> DatasetTransactionRepository:
-        return self.data.dataset_transaction_repository
-
-    @property
-    def dataset_version_repository(self) -> DatasetVersionRepository:
-        return self.data.dataset_version_repository
-
-    @property
-    def dataset_storage(self) -> DatasetStorageAdapter:
-        return self.data.dataset_storage
 
     @property
     def object_index_repository(self) -> ObjectIndexRepository:
@@ -436,6 +412,10 @@ class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAcces
         return self.media.media_storage
 
     @property
+    def media_source_workspace(self) -> MediaSourceWorkspace:
+        return self.media.media_source_workspace
+
+    @property
     def media_processor(self) -> MediaProcessorAdapter:
         return self.media.media_processor
 
@@ -466,6 +446,10 @@ class CoreDependencies(ActionDependencyAccessors, GovernedReleaseDependencyAcces
     @property
     def source_registry_repository(self) -> SourceRegistryRepository:
         return self.source.source_registry_repository
+
+    @property
+    def source_upload_staging_store(self) -> SourceUploadStagingStore:
+        return self.source.source_upload_staging_store
 
     @property
     def source_management_repository(self) -> SourceManagementRepository:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Protocol, cast
 
 from foundry_lite.application.ports import (
@@ -19,6 +18,11 @@ from foundry_lite.application.ports import (
     TransactionContext,
     TransactionManager,
 )
+from foundry_lite.application.ports.osdk_download_token_signer import (
+    OsdkDownloadTokenClaims,
+    OsdkDownloadTokenSigner,
+)
+from foundry_lite.application.ports.osdk_release_artifact_store import OsdkReleaseArtifactStore
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_application_artifacts import (
@@ -33,11 +37,10 @@ from foundry_lite.application.services.osdk_application_artifacts import (
     _release_manifest,
     _sdk_bundle,
     _sdk_record,
-    _signed_download_token,
     artifact_payload,
-    write_release_artifact,
 )
 from foundry_lite.application.services.osdk_application_idempotency import OsdkApplicationIdempotencyService
+from foundry_lite.application.services.osdk_application_package_builder import build_release_artifact
 from foundry_lite.application.services.osdk_application_records import (
     _channel,
     _language,
@@ -68,13 +71,20 @@ class _AuditCallable(Protocol):
 
 
 class OsdkApplicationSdkService(CoreService):
-    required_dependencies = ("engine", "policy", "osdk_application_repository", "root")
+    required_dependencies = (
+        "engine",
+        "policy",
+        "osdk_application_repository",
+        "osdk_download_token_signer",
+        "osdk_release_artifact_store",
+    )
     required_collaborators = ("osdk_application_scope_service", "osdk_application_idempotency_service")
 
     engine: TransactionManager
     osdk_application_repository: OsdkApplicationRepository
+    osdk_download_token_signer: OsdkDownloadTokenSigner
+    osdk_release_artifact_store: OsdkReleaseArtifactStore
     policy: PolicyService
-    root: Path
     osdk_application_scope_service: OsdkApplicationScopeService
     osdk_application_idempotency_service: OsdkApplicationIdempotencyService
 
@@ -255,7 +265,7 @@ class OsdkApplicationSdkService(CoreService):
             )
         if artifact is None:
             raise NotFound("OSDK release artifact not found")
-        return artifact_payload(artifact)
+        return artifact_payload(self.osdk_release_artifact_store, artifact)
 
     def list_sdk_versions(self, app_id: str, *, ctx: RequestContext | None = None) -> list[OsdkSdkVersionRow]:
         ctx = ctx or RequestContext()
@@ -290,7 +300,7 @@ class OsdkApplicationSdkService(CoreService):
             )
         if row is None:
             raise NotFound("OSDK release artifact not found")
-        return artifact_payload(row)
+        return artifact_payload(self.osdk_release_artifact_store, row)
 
     def _promote_sdk_version_json(
         self, conn: TransactionContext, ctx: RequestContext, app_id: str, version_id: str, channel: str
@@ -336,7 +346,9 @@ class OsdkApplicationSdkService(CoreService):
         self._require_sdk_version(conn, ctx, app_id, version_id)
         artifact = self._require_release_artifact(conn, ctx, version_id, artifact_kind)
         expires_at = _expires_in_seconds(_now(), _positive_ttl(ttl_seconds))
-        raw_token = _signed_download_token(self.root, ctx.tenant_id, artifact["id"], expires_at, request_hash)
+        raw_token = self.osdk_download_token_signer.sign_token(
+            OsdkDownloadTokenClaims(ctx.tenant_id, artifact["id"], expires_at, request_hash)
+        )
         row = self.osdk_application_repository.insert_artifact_download_token_or_get_existing(
             transaction=conn,
             record=_download_token_record(ctx, artifact, raw_token, expires_at),
@@ -386,7 +398,12 @@ class OsdkApplicationSdkService(CoreService):
         package_name: str | None,
     ) -> _ArtifactDraft:
         manifest = _release_manifest(app, resources, decision, language, package_name)
-        return write_release_artifact(self.root / "osdk-artifacts", manifest, language)
+        return build_release_artifact(
+            self.osdk_release_artifact_store,
+            manifest,
+            language,
+            should_persist=decision.release_status == "released",
+        )
 
     def _insert_sdk_version(
         self,

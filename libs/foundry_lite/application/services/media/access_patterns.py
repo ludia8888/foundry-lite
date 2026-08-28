@@ -14,13 +14,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
 
-from foundry_lite.application.media_byte_verification import (
+from foundry_lite.application.media_source_materialization import (
     MediaByteVerificationFailure,
-    copy_verified_committed_media,
+    materialized_verified_media,
 )
 from foundry_lite.application.ports.media_access_cache_repository import MediaAccessCacheRecord
 from foundry_lite.application.ports.media_preview_renderer import (
@@ -43,6 +41,7 @@ class MediaAccessPatternService(CoreService):
         "engine",
         "media_repository",
         "media_storage",
+        "media_source_workspace",
         "media_access_cache_repository",
         "media_preview_renderer",
     )
@@ -143,27 +142,30 @@ class MediaAccessPatternService(CoreService):
         return self._grant(ctx, version.media_item_version_id, blob_key)
 
     def _render(self, version: MediaItemVersionRecord, access_pattern: str, spec: dict[str, object]) -> RenderedPreview:
-        with tempfile.TemporaryDirectory() as sandbox:
-            source_path = Path(sandbox) / "source"
-            try:
-                with source_path.open("wb") as sink:
-                    copy_verified_committed_media(self.media_storage, version, sink)
-            except MediaByteVerificationFailure as exc:
-                raise InvariantViolation(
-                    "committed_media_version_storage_unverifiable",
-                    details={
-                        "media_item_version_id": version.media_item_version_id,
-                        "reason": exc.reason,
-                    },
-                ) from exc
-            request = PreviewRenderRequest(access_pattern=access_pattern, source_path=str(source_path), spec=spec)
-            try:
-                return self.media_preview_renderer.render(request)
-            except PreviewRenderError as exc:
-                raise InvariantViolation(
-                    "access_pattern_render_failed",
-                    details={"media_item_version_id": version.media_item_version_id, "reason": exc.reason},
-                ) from exc
+        try:
+            workspace = materialized_verified_media(
+                self.media_source_workspace, self.media_storage, version, file_name="source"
+            )
+            with workspace as source_path:
+                request = PreviewRenderRequest(access_pattern=access_pattern, source_path=source_path, spec=spec)
+                return self._render_request(version, request)
+        except MediaByteVerificationFailure as exc:
+            raise InvariantViolation(
+                "committed_media_version_storage_unverifiable",
+                details={
+                    "media_item_version_id": version.media_item_version_id,
+                    "reason": exc.reason,
+                },
+            ) from exc
+
+    def _render_request(self, version: MediaItemVersionRecord, request: PreviewRenderRequest) -> RenderedPreview:
+        try:
+            return self.media_preview_renderer.render(request)
+        except PreviewRenderError as exc:
+            raise InvariantViolation(
+                "access_pattern_render_failed",
+                details={"media_item_version_id": version.media_item_version_id, "reason": exc.reason},
+            ) from exc
 
     def _grant(self, ctx: RequestContext, media_item_version_id: str, object_key: str) -> MediaReadGrant:
         return self.media_storage.issue_read_grant(

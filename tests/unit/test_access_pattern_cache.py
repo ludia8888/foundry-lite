@@ -29,6 +29,7 @@ from foundry_lite.application.services.media.uploads import MediaUploadInput, Me
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, NotFound
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
 from foundry_lite.infrastructure.repositories import (
@@ -159,6 +160,7 @@ def _service(env: _Env, renderer: object) -> MediaAccessPatternService:
         engine=env.engine,
         media_repository=env.repo,
         media_storage=env.storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_access_cache_repository=env.cache_repo,
         media_preview_renderer=renderer,
     )

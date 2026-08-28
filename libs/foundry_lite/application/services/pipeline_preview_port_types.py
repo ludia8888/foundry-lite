@@ -1,25 +1,22 @@
 """Port types used by the bounded Pipeline Builder preview runtime."""
 
-from foundry_lite.application.ports.dataset_repository import DatasetRow
-from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
-from foundry_lite.application.ports.language_model import GovernedSemanticModelPort
-from foundry_lite.application.ports.media_processor import (
+from foundry_lite.application.media_processing_ports import (
+    MediaItemVersionRecord,
     MediaProcessingRequest,
     MediaProcessingResult,
     MediaProcessorAdapter,
-    ProcessorSpec,
-)
-from foundry_lite.application.ports.media_processor_registry import (
     MediaProcessorDescriptor,
     MediaProcessorRegistry,
-)
-from foundry_lite.application.ports.media_repository import (
-    MediaItemVersionRecord,
     MediaRepository,
     MediaSetRecord,
     MediaSetSelectionRecord,
+    MediaSourceWorkspace,
+    MediaStorageAdapter,
+    ProcessorSpec,
 )
-from foundry_lite.application.ports.media_storage import MediaStorageAdapter
+from foundry_lite.application.ports.dataset_repository import DatasetRow
+from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
+from foundry_lite.application.ports.language_model import GovernedSemanticModelPort
 from foundry_lite.application.ports.semantic_row_cache_repository import (
     SemanticRowCacheRepository,
 )
@@ -41,6 +38,7 @@ __all__ = [
     "MediaRepository",
     "MediaSetRecord",
     "MediaSetSelectionRecord",
+    "MediaSourceWorkspace",
     "MediaStorageAdapter",
     "ProcessorSpec",
     "SemanticRowCacheRepository",

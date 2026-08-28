@@ -31,6 +31,7 @@ from foundry_lite.infrastructure.adapters.asr_processor import (
     AsrProcessorAdapter,
     TranscriptSegment,
 )
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from foundry_lite.security.policy import PolicyService
@@ -92,6 +93,7 @@ def _processing(
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_processor=processor,
     )
     svc.bind_collaborators({"runtime_service": _FakeRuntime()})
