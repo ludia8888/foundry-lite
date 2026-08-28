@@ -5,10 +5,12 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from threading import Event
 from time import monotonic
+from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -22,6 +24,27 @@ from testcontainers.postgres import PostgresContainer
 DEBEZIUM_CONNECT_IMAGE = "quay.io/debezium/connect:3.5"
 CONNECT_READY_TIMEOUT_SECONDS = 240
 DEFAULT_WAIT_TIMEOUT_SECONDS = 120
+
+
+def test_connector_registration_reconciles_ambiguous_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    connect = cast(DockerContainer, object())
+    existence_checks = iter((False, True))
+    post_attempts: list[str] = []
+
+    monkeypatch.setattr(f"{__name__}._connector_exists", lambda *_args: next(existence_checks))
+
+    def ambiguous_post(*_args: object) -> None:
+        post_attempts.append("attempted")
+        raise TimeoutError("server may have committed the connector")
+
+    monkeypatch.setattr(f"{__name__}._post_json", ambiguous_post)
+    attempt = _condition_without_transient_errors(
+        lambda: _register_connector_once(connect, "orders", {"name": "orders"})
+    )
+
+    assert attempt() is False
+    assert attempt() is True
+    assert post_attempts == ["attempted"]
 
 
 def test_live_debezium_postgres_changes_archive_through_worker(tmp_path: Path) -> None:
@@ -166,30 +189,51 @@ def _register_postgres_connector(
     topic_prefix: str,
     suffix: str,
 ) -> None:
-    _post_json(
-        connect,
-        "/connectors",
-        {
-            "name": name,
-            "config": {
-                "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-                "tasks.max": "1",
-                "database.hostname": "postgres",
-                "database.port": "5432",
-                "database.user": "postgres",
-                "database.password": "postgres",
-                "database.dbname": "inventory",
-                "topic.prefix": topic_prefix,
-                "table.include.list": "public.orders",
-                "plugin.name": "pgoutput",
-                "slot.name": _replication_slot_name(suffix),
-                "publication.name": _publication_name(suffix),
-                "publication.autocreate.mode": "filtered",
-                "snapshot.mode": "no_data",
-                "tombstones.on.delete": "false",
-            },
+    payload = {
+        "name": name,
+        "config": {
+            "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+            "tasks.max": "1",
+            "database.hostname": "postgres",
+            "database.port": "5432",
+            "database.user": "postgres",
+            "database.password": "postgres",
+            "database.dbname": "inventory",
+            "topic.prefix": topic_prefix,
+            "table.include.list": "public.orders",
+            "plugin.name": "pgoutput",
+            "slot.name": _replication_slot_name(suffix),
+            "publication.name": _publication_name(suffix),
+            "publication.autocreate.mode": "filtered",
+            "snapshot.mode": "no_data",
+            "tombstones.on.delete": "false",
         },
+    }
+    _wait_until(
+        lambda: _register_connector_once(connect, name, payload),
+        timeout_seconds=CONNECT_READY_TIMEOUT_SECONDS,
+        timeout_message=lambda: (
+            f"Kafka Connect did not register connector {name} within {CONNECT_READY_TIMEOUT_SECONDS}s. "
+            f"container_logs_tail={_connect_logs_tail(connect)}"
+        ),
     )
+
+
+def _register_connector_once(connect: DockerContainer, name: str, payload: Mapping[str, object]) -> bool:
+    if _connector_exists(connect, name):
+        return True
+    _post_json(connect, "/connectors", payload)
+    return True
+
+
+def _connector_exists(connect: DockerContainer, name: str) -> bool:
+    try:
+        status = _get_json(connect, f"/connectors/{name}/status")
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False
+        raise
+    return status.get("name") == name
 
 
 def _wait_for_connect(connect: DockerContainer) -> None:

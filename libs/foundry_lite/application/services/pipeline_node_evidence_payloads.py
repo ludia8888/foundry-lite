@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.pipeline_execution_repository import (
@@ -64,11 +65,21 @@ def _merged_timeline(row: PipelineRunRow, events: list[PipelineRunEventRow]) -> 
         }
         if _timeline_identity(item) not in identities:
             timeline.append(item)
-    return sorted(timeline, key=lambda item: str(item.get("at") or ""))
+    return sorted(timeline, key=_timeline_timestamp)
 
 
 def _timeline_identity(item: Mapping[str, object]) -> tuple[object, object, object]:
     return item.get("event"), item.get("nodeId"), item.get("attemptNumber")
+
+
+def _timeline_timestamp(item: Mapping[str, object]) -> float:
+    value = item.get("at")
+    if not isinstance(value, str):
+        return float("inf")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("inf")
 
 
 def _node_payloads(
