@@ -13,7 +13,7 @@ from foundry_lite.application.services.aip.fde_pilot_osdk_source import (
     ontology_reexport,
     react_hook_source,
 )
-from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, required_text
+from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json, required_text
 
 JsonObject = Mapping[str, object]
 
@@ -159,6 +159,49 @@ def ci_workflow() -> str:
     )
 
 
+def deployment_plan(
+    application: JsonObject,
+    plan: JsonObject,
+    files: Mapping[str, str],
+) -> dict[str, object]:
+    """Describe Workshop as the visual artifact and Vite as compatibility evidence."""
+
+    app = _mapping(application.get("application"), "application")
+    app_id = str(app.get("id"))
+    definition = _mapping(plan.get("businessSystemDefinition"), "businessSystemDefinition")
+    return {
+        "schemaVersion": "foundry-lite-domain-os-deployment/v2",
+        "artifactKind": "foundry_workshop_application",
+        "applicationId": app_id,
+        "sourceFingerprint": definition["definitionFingerprint"],
+        "runtimePath": f"/apps/{app_id}",
+        "workshopPath": f"/workshop/{app_id}",
+        "status": "awaiting_ontology_review",
+        "compatibilityArtifact": _compatibility_artifact(files),
+        "requiredBeforeHosting": [
+            "workshop_definition_persisted",
+            "consumer_osdk_strict_passed",
+            "ontology_proposal_activated",
+            "production_data_access_reviewed",
+            "actor_role_mapping_configured",
+            "authenticated_session_bootstrap_configured",
+            "host_target_configured",
+        ],
+        "releaseBoundary": "governed_release_required",
+    }
+
+
+def _compatibility_artifact(files: Mapping[str, str]) -> dict[str, object]:
+    return {
+        "kind": "vite_consumer_osdk_proof",
+        "sourceFingerprint": hash_json(files),
+        "buildCommand": (
+            "pnpm install --no-frozen-lockfile && pnpm consumer-osdk:check && pnpm typecheck && pnpm build"
+        ),
+        "outputDirectory": "dist",
+    }
+
+
 def _application_package_json(package_name: str) -> str:
     value = {
         "name": package_name.removesuffix("-osdk") + "-app",
@@ -298,4 +341,4 @@ def _mapping(value: object, field: str) -> dict[str, object]:
     return {str(name): item for name, item in value.items()}
 
 
-__all__ = ["ci_workflow", "consumer_osdk_plan", "react_files"]
+__all__ = ["ci_workflow", "consumer_osdk_plan", "deployment_plan", "react_files"]

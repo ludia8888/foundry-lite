@@ -203,9 +203,10 @@ def _application_literals(plan: JsonObject) -> tuple[dict[str, object], str, str
         _business_system_definition(plan).get("experience"),
         "businessSystemDefinition.experience",
     )
+    workshop = _mapping(experience.get("workshopApp"), "businessSystemDefinition.experience.workshopApp")
     screens = [
-        {"id": row["id"], "title": row["title"]}
-        for row in _mapping_items(experience.get("screens"), "businessSystemDefinition.experience.screens")
+        {"id": row["id"], "title": row["name"]}
+        for row in _mapping_items(workshop.get("pages"), "businessSystemDefinition.experience.workshopApp.pages")
     ]
     return (
         blueprint,

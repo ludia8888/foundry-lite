@@ -63,6 +63,8 @@ export type WidgetConfig = {
   actionApiName?: string | null;
   /** 다중 액션 apiName (buttonGroup). */
   actionApiNames?: string[];
+  /** 실행 전에 명시적인 사람 확인 단계를 보여줄 고위험 액션 apiName. */
+  humanApprovalActionApiNames?: string[];
   /** 표시할 속성 apiName 목록 (테이블 컬럼 / 상세 속성 / 필터 대상). */
   propertyApiNames?: string[];
   /** 집계 메트릭 (metricCard / 차트). */
@@ -768,12 +770,13 @@ function isSectionBorder(value: unknown): value is SectionBorder {
 
 export function findWorkshopAppResource(
   resources: readonly ResourceItem[],
+  sourceRef: string = WORKSHOP_APP_SOURCE_REF,
 ): ResourceItem | null {
   return (
     resources.find(
       (resource) =>
         resource.sourceSurface === WORKSHOP_APP_SOURCE_SURFACE &&
-        resource.sourceRef === WORKSHOP_APP_SOURCE_REF &&
+        resource.sourceRef === sourceRef &&
         resource.resourceType === WORKSHOP_APP_RESOURCE_TYPE,
     ) ?? null
   );

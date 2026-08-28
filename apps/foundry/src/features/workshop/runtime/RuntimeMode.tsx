@@ -22,29 +22,73 @@ import {
   useRuntimeStateReducer,
 } from "../lib/runtime-state";
 import { WidgetRenderer } from "./widgets/registry";
+import { WorkshopRuntimeApplicationProvider } from "./runtime-application-context";
 
 interface RuntimeModeProps {
   definition: AppDefinition;
   objectViewsByApiName: Record<string, FoundryLiteOntologyObjectView>;
   actionViews: readonly FoundryLiteOntologyActionView[];
+  applicationId?: string | null;
 }
 
 type RuntimeBindings = Pick<RuntimeModeProps, "objectViewsByApiName" | "actionViews">;
 
 /** Render the published Workshop contract with the same widget graph authored by the Builder. */
-export function RuntimeMode({ definition, objectViewsByApiName, actionViews }: RuntimeModeProps) {
+export function RuntimeMode({
+  definition,
+  objectViewsByApiName,
+  actionViews,
+  applicationId = null,
+}: RuntimeModeProps) {
   const [state, dispatch] = useRuntimeStateReducer(initialVariableValues(definition.variables));
+  const defaultPage = definition.pages.find((page) => page.isDefault) ?? definition.page;
+  const [selectedPageId, setSelectedPageId] = useState(defaultPage.id);
+  const selectedPage = definition.pages.find((page) => page.id === selectedPageId) ?? defaultPage;
   const bindings = { objectViewsByApiName, actionViews };
   return (
-    <RuntimeStateProvider value={state}>
-      <RuntimeDispatchProvider value={dispatch}>
-        <main aria-label="Workshop runtime canvas" className="h-full overflow-auto bg-[#f6f8fa]">
-          <RuntimeHeader definition={definition} bindings={bindings} />
-          <RuntimeSections sections={definition.page.sections} bindings={bindings} />
-          <RuntimeOverlay overlays={definition.overlays} bindings={bindings} />
-        </main>
-      </RuntimeDispatchProvider>
-    </RuntimeStateProvider>
+    <WorkshopRuntimeApplicationProvider applicationId={applicationId}>
+      <RuntimeStateProvider value={state}>
+        <RuntimeDispatchProvider value={dispatch}>
+          <main aria-label="Workshop runtime canvas" className="h-full overflow-auto bg-[#f6f8fa]">
+            <RuntimeHeader definition={definition} bindings={bindings} />
+            <RuntimePageTabs
+              pages={definition.pages}
+              selectedPageId={selectedPage.id}
+              onSelect={setSelectedPageId}
+            />
+            <RuntimeSections sections={selectedPage.sections} bindings={bindings} />
+            <RuntimeOverlay overlays={definition.overlays} bindings={bindings} />
+          </main>
+        </RuntimeDispatchProvider>
+      </RuntimeStateProvider>
+    </WorkshopRuntimeApplicationProvider>
+  );
+}
+
+function RuntimePageTabs({ pages, selectedPageId, onSelect }: {
+  pages: AppDefinition["pages"];
+  selectedPageId: string;
+  onSelect(pageId: string): void;
+}) {
+  if (pages.length < 2) return null;
+  return (
+    <nav aria-label="Workshop 앱 페이지" className="flex gap-1 overflow-auto border-b border-[#d5dce1] bg-white px-4">
+      {pages.map((page) => (
+        <button
+          key={page.id}
+          type="button"
+          onClick={() => onSelect(page.id)}
+          className={cn(
+            "whitespace-nowrap border-b-2 px-3 py-2 text-[12px] font-medium",
+            page.id === selectedPageId
+              ? "border-[#2d72d2] text-[#215db0]"
+              : "border-transparent text-[#5f6b7c] hover:text-[#1c2127]",
+          )}
+        >
+          {page.name}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -65,7 +109,7 @@ function RuntimeHeader({ definition, bindings }: { definition: AppDefinition; bi
 
 function RuntimeSections({ sections, bindings }: { sections: AppSection[]; bindings: RuntimeBindings }) {
   return (
-    <div className="grid min-h-full gap-3 p-4 lg:grid-cols-12">
+    <div className="grid content-start gap-3 p-4 lg:grid-cols-12">
       {sections.map((section) => (
         <div key={section.id} className="min-w-0 lg:col-span-12">
           <RuntimeSection section={section} bindings={bindings} />

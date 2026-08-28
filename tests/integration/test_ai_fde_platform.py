@@ -1998,9 +1998,10 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
         "exceptions": [],
     }
     assert plan["domainOsBlueprint"]["readiness"]["isReady"] is True
-    assert plan["businessSystemDefinition"]["schemaVersion"] == "foundry-lite-business-system-definition/v1"
+    assert plan["businessSystemDefinition"]["schemaVersion"] == "foundry-lite-business-system-definition/v2"
     assert plan["businessSystemDefinition"]["experience"]["surfaces"][0]["id"] == "chatgpt"
     assert plan["businessSystemDefinition"]["experience"]["surfaces"][1]["id"] == "external_app"
+    assert plan["businessSystemDefinition"]["experience"]["surfaces"][2]["id"] == "workshop"
     assert [item["apiName"] for item in plan["domainOsBlueprint"]["records"]] == ["WorkOrder", "PropertyAsset"]
     assert len(plan["ontologyResources"]) == 5
     plan["consumerOsdk"] = {
@@ -2041,6 +2042,10 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
         assert len(foundry.datasets.list_versions(item["datasetRef"], ctx=FDE_USER)) == 1
     assert replay["isReplayed"] is True
     assert replay["seed"]["versionId"] == first["seed"]["versionId"]
+    assert first["workshopResource"]["resourceType"] == "workshop_app"
+    assert first["workshopResource"]["sourceRef"] == first["osdkApplication"]["application"]["id"]
+    assert first["workshopResource"]["operationsPath"].startswith("/workshop/")
+    assert replay["workshopResource"]["rid"] == first["workshopResource"]["rid"]
 
     response = client.get(f"/api/aip/pilot/applications/{resource['rid']}", headers=_api_headers())
     assert planned.status_code == 200
@@ -2070,7 +2075,10 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     assert all("@foundry-lite/sdk" not in content for name, content in files.items() if name.endswith((".ts", ".tsx")))
     assert "typescript" in files["scripts/check-consumer-osdk.mjs"]
     assert "pnpm consumer-osdk:check" in bundle["ciWorkflow"]
-    assert bundle["deploymentPlan"]["artifactKind"] == "vite_static_web_app"
+    assert bundle["deploymentPlan"]["artifactKind"] == "foundry_workshop_application"
+    assert bundle["deploymentPlan"]["runtimePath"] == bundle["operatingPath"]
+    assert bundle["deploymentPlan"]["workshopPath"] == first["workshopResource"]["operationsPath"]
+    assert bundle["deploymentPlan"]["compatibilityArtifact"]["kind"] == "vite_consumer_osdk_proof"
     assert bundle["deploymentPlan"]["status"] == "awaiting_ontology_review"
     assert bundle["deploymentPlan"]["sourceFingerprint"].startswith("sha256:")
     assert "actor_role_mapping_configured" in bundle["deploymentPlan"]["requiredBeforeHosting"]

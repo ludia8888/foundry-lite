@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json
+from foundry_lite.application.services.aip.fde_workshop_definition import (
+    WORKSHOP_COMPONENT_CATALOG_VERSION,
+    build_workshop_app_definition,
+)
 
 JsonObject = Mapping[str, object]
 
-_SCHEMA_VERSION = "foundry-lite-business-system-definition/v1"
-_COMPONENT_CATALOG_VERSION = "foundry-lite-work-components/v1"
+_SCHEMA_VERSION = "foundry-lite-business-system-definition/v2"
 
 
 def build_business_system_definition(
@@ -28,7 +31,7 @@ def build_business_system_definition(
         "identity": _identity(application_name, blueprint, consumer_osdk),
         "businessModel": _business_model(blueprint, workflow),
         "access": _access_contract(roles, actions),
-        "experience": _experience_contract(records, actions, roles, blueprint),
+        "experience": _experience_contract(application_name, blueprint),
         "agentWork": _agent_work_contract(records, actions, blueprint, consumer_osdk),
         "deployment": _deployment_contract(consumer_osdk),
     }
@@ -86,119 +89,18 @@ def _access_contract(roles: list[dict[str, object]], actions: list[dict[str, obj
     }
 
 
-def _experience_contract(
-    records: list[dict[str, object]],
-    actions: list[dict[str, object]],
-    roles: list[dict[str, object]],
-    blueprint: JsonObject,
-) -> dict[str, object]:
-    primary = records[0]
-    role_names = [str(role["role"]) for role in roles]
-    screens = _screens(primary, records, actions, role_names, blueprint)
-    screen_ids = [str(screen["id"]) for screen in screens]
+def _experience_contract(application_name: str, blueprint: JsonObject) -> dict[str, object]:
+    workshop_app = build_workshop_app_definition(application_name, blueprint)
+    page_ids = [str(page["pageId"]) for page in _items(workshop_app.get("pages"), "workshop.pages")]
     return {
-        "componentCatalogVersion": _COMPONENT_CATALOG_VERSION,
-        "screens": screens,
+        "componentCatalogVersion": WORKSHOP_COMPONENT_CATALOG_VERSION,
+        "workshopApp": workshop_app,
         "surfaces": [
-            {"id": "chatgpt", "screenIds": screen_ids, "interactionMode": "conversation_embedded"},
-            {"id": "external_app", "screenIds": screen_ids, "interactionMode": "authenticated_web"},
+            {"id": "chatgpt", "pageIds": page_ids, "runtime": "workshop"},
+            {"id": "external_app", "pageIds": page_ids, "runtime": "workshop"},
+            {"id": "workshop", "pageIds": page_ids, "runtime": "workshop"},
         ],
     }
-
-
-def _screens(
-    primary: JsonObject,
-    records: list[dict[str, object]],
-    actions: list[dict[str, object]],
-    roles: list[str],
-    blueprint: JsonObject,
-) -> list[dict[str, object]]:
-    screens = [
-        _today_screen(primary, actions, roles),
-        _record_screen(primary, actions, roles),
-        _evidence_screen(primary, roles),
-    ]
-    if _items(blueprint.get("policies"), "domainOsBlueprint.policies"):
-        screens.insert(2, _policy_screen(primary, actions, roles))
-    if len(records) > 1:
-        screens.append(_relationship_screen(records, roles))
-    if _items(blueprint.get("functions") or [], "domainOsBlueprint.functions"):
-        screens.insert(1, _kpi_screen(blueprint, roles))
-    return screens
-
-
-def _today_screen(primary: JsonObject, actions: list[dict[str, object]], roles: list[str]) -> dict[str, object]:
-    object_type = str(primary["apiName"])
-    return _screen(
-        "today",
-        "오늘 할 일",
-        roles,
-        [
-            _component("work_queue", "업무 대기열", {"objectType": object_type, "pageSize": 50}),
-            _component("action_panel", "다음 업무", {"actionTypes": _action_names(actions)}),
-            _component("ai_suggestion_panel", "AI 업무 제안", {"objectType": object_type, "requiresEvidence": True}),
-        ],
-    )
-
-
-def _record_screen(primary: JsonObject, actions: list[dict[str, object]], roles: list[str]) -> dict[str, object]:
-    object_type = str(primary["apiName"])
-    return _screen(
-        "record",
-        f"{primary['displayName']} 상세",
-        roles,
-        [
-            _component("record_detail", "업무 정보", {"objectType": object_type}),
-            _component("action_form", "업무 처리", {"actionTypes": _action_names(actions)}),
-            _component("status_timeline", "상태 흐름", {"objectType": object_type}),
-        ],
-    )
-
-
-def _policy_screen(primary: JsonObject, actions: list[dict[str, object]], roles: list[str]) -> dict[str, object]:
-    components = [_component("policy_panel", "업무 규칙", {"objectType": primary["apiName"]})]
-    if any(action.get("requiresApproval") is True for action in actions):
-        components.append(_component("approval_inbox", "사람 확인 대기", {"actionTypes": _action_names(actions)}))
-    return _screen("policy", "규칙과 승인", roles, components)
-
-
-def _evidence_screen(primary: JsonObject, roles: list[str]) -> dict[str, object]:
-    return _screen(
-        "evidence",
-        "변경 기록과 증거",
-        roles,
-        [
-            _component("evidence_panel", "업무 증거", {"objectType": primary["apiName"]}),
-            _component("audit_timeline", "변경 기록", {"objectType": primary["apiName"]}),
-        ],
-    )
-
-
-def _relationship_screen(records: list[dict[str, object]], roles: list[str]) -> dict[str, object]:
-    return _screen(
-        "relationships",
-        "업무 관계 탐색",
-        roles,
-        [_component("relationship_graph", "연결된 업무", {"objectTypes": _record_names(records)})],
-    )
-
-
-def _kpi_screen(blueprint: JsonObject, roles: list[str]) -> dict[str, object]:
-    functions = _items(blueprint.get("functions") or [], "domainOsBlueprint.functions")
-    return _screen(
-        "kpi",
-        "업무 현황",
-        roles,
-        [_component("kpi_summary", "핵심 지표", {"functionTypes": [row["apiName"] for row in functions]})],
-    )
-
-
-def _screen(screen_id: str, title: str, roles: list[str], components: list[dict[str, object]]) -> dict[str, object]:
-    return {"id": screen_id, "title": title, "audienceRoles": roles, "components": components}
-
-
-def _component(kind: str, title: str, binding: dict[str, object]) -> dict[str, object]:
-    return {"id": kind.replace("_", "-"), "kind": kind, "title": title, "binding": binding}
 
 
 def _agent_work_contract(

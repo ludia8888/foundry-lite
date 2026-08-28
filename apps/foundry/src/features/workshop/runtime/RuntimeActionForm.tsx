@@ -6,6 +6,7 @@ import {
 } from "@foundry-lite/sdk";
 import {
   useFoundryLiteMutation,
+  useFoundryLiteClient,
   useFoundryLiteOsdkClient,
   useFoundryLiteProvidedActionForm,
   useFoundryLiteSession,
@@ -19,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
 import { StatusPill } from "@/components/shared/StatusPill";
+import { useWorkshopRuntimeApplicationId } from "./runtime-application-context";
 
 /** apply 성공 evidence 형태. */
 type ActionRunResult = {
@@ -42,6 +44,7 @@ interface RuntimeActionFormProps {
   targetObject: GenericObject;
   onApplied: () => void;
   onCancel: () => void;
+  requiresHumanConfirmation?: boolean;
 }
 
 /**
@@ -53,6 +56,7 @@ export function RuntimeActionForm({
   targetObject,
   onApplied,
   onCancel,
+  requiresHumanConfirmation = false,
 }: RuntimeActionFormProps) {
   const initialIdempotencyKey = useMemo(
     () => createIdempotencyKey(actionView.apiName, targetObject.objectId),
@@ -63,12 +67,15 @@ export function RuntimeActionForm({
     initialIdempotencyKey,
   });
   const osdk = useFoundryLiteOsdkClient();
+  const client = useFoundryLiteClient();
+  const applicationId = useWorkshopRuntimeApplicationId();
   const session = useFoundryLiteSession();
   const [pinnedRequest, setPinnedRequest] = useState<PinnedRequest | null>(
     null,
   );
   const [runEvidence, setRunEvidence] = useState<ActionRunResult | null>(null);
   const [successRequestId, setSuccessRequestId] = useState<string | null>(null);
+  const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
 
   const issueIdempotencyKey = useCallback(
     () => createIdempotencyKey(actionView.apiName, targetObject.objectId),
@@ -76,11 +83,30 @@ export function RuntimeActionForm({
   );
 
   const applyMutation = useFoundryLiteMutation(
-    (request: PinnedRequest) =>
-      osdk(request.actionType).applyAction(request.payload),
+    async (request: PinnedRequest) => {
+      if (!applicationId) return osdk(request.actionType).applyAction(request.payload);
+      const payload = request.payload as {
+        objectType?: string;
+        params?: Record<string, unknown>;
+      };
+      return client.aip.pilot.startAction(
+        applicationId,
+        request.actionType.apiName,
+        {
+          target: {
+            objectType: payload.objectType ?? targetObject.objectType,
+            objectId: targetObject.objectId,
+          },
+          expectedObjectVersion: request.expectedObjectVersion,
+          params: payload.params ?? {},
+        },
+        { idempotencyKey: request.idempotencyKey, waitSeconds: 30 },
+      );
+    },
     {
       onSuccess: (result) => {
         setRunEvidence(result as ActionRunResult);
+        setIsConfirmationOpen(false);
         onApplied();
       },
       onError: (error) => {
@@ -126,6 +152,10 @@ export function RuntimeActionForm({
   };
 
   const handleSubmit = () => {
+    if (requiresHumanConfirmation && !isConfirmationOpen) {
+      setIsConfirmationOpen(true);
+      return;
+    }
     const request =
       pinnedRequest ??
       (form.idempotencyKey ? buildRequest(form.idempotencyKey) : null);
@@ -239,6 +269,15 @@ export function RuntimeActionForm({
 
       {applyMutation.error ? <ErrorState error={applyMutation.error} /> : null}
 
+      {requiresHumanConfirmation && isConfirmationOpen ? (
+        <div className="space-y-2 rounded border border-[#d99a3d] bg-[#fff8e8] p-3">
+          <p className="text-[12px] font-semibold text-[#7a4b08]">사람 확인이 필요한 업무입니다</p>
+          <p className="text-[11px] leading-5 text-[#6d5a3d]">
+            대상, 입력값, 현재 버전을 확인하세요. “확인하고 실행”을 누르기 전에는 아무것도 바뀌지 않습니다.
+          </p>
+        </div>
+      ) : null}
+
       {runEvidence ? (
         <div className="space-y-1 rounded border border-success/40 bg-success/5 p-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -288,7 +327,11 @@ export function RuntimeActionForm({
             ? "실행 중..."
             : pinnedRequest
               ? "동일 요청 재전송"
-              : actionView.displayName}
+              : requiresHumanConfirmation && isConfirmationOpen
+                ? "확인하고 실행"
+                : requiresHumanConfirmation
+                  ? "내용 검토"
+                  : actionView.displayName}
         </button>
       </div>
     </div>

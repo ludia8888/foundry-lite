@@ -82,7 +82,8 @@ export function App() {
               <Route path="ontology/*" element={<OntologyPage />} />
               <Route path="objects/*" element={<ObjectExplorerPage />} />
               <Route path="actions/*" element={<ActionsPage />} />
-              <Route path="workshop/*" element={<WorkshopPage />} />
+              <Route path="workshop" element={<WorkshopPage />} />
+              <Route path="workshop/:applicationId" element={<WorkshopPage />} />
               <Route path="aip/*" element={<AipPage />} />
               <Route path="approvals/*" element={<ApprovalsPage />} />
               <Route path="developer/*" element={<DeveloperConsolePage />} />
