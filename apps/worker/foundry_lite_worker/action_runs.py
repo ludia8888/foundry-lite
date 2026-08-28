@@ -53,7 +53,7 @@ def run_activity() -> None:
     foundry = FoundryLite(
         dependencies=create_runtime_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
-            storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT"),
+            storage_root=os.getenv("FOUNDRY_LITE_STORAGE_ROOT") or os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
         ),
         should_initialize_schema=False,
     )

@@ -89,6 +89,27 @@ def test_activity_frames_its_result_with_the_agreed_prefix(
     assert json.loads(body) == {"status": "SUCCEEDED", "actionRunId": "run-1"}
 
 
+def test_activity_uses_mounted_runtime_home_when_storage_root_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    captured: dict[str, object] = {}
+    recorded = _RecordingDistributed()
+
+    def create_dependencies(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.delenv("FOUNDRY_LITE_STORAGE_ROOT", raising=False)
+    monkeypatch.setenv("FOUNDRY_LITE_HOME", str(tmp_path / "runtime"))
+    monkeypatch.setattr(action_runs, "create_runtime_core_dependencies", create_dependencies)
+    monkeypatch.setattr(action_runs, "FoundryLite", lambda **_: _StubFoundry(recorded))
+    monkeypatch.setattr(action_runs, "action_run_dispatch_request_from_payload", lambda payload: payload)
+
+    _run_activity_with({"worker_id": "pod-7", "action_run_id": "run-1"}, monkeypatch)
+
+    assert captured["storage_root"] == str(tmp_path / "runtime")
+
+
 def test_activity_result_is_deterministically_ordered(
     driven: _RecordingDistributed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
