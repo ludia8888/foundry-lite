@@ -9,9 +9,7 @@ from foundry_lite.application.primitives import _now
 from foundry_lite.application.services import pipeline_run_recovery, pipeline_run_unknown_commit_recovery
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
-from foundry_lite.application.services.pipeline_execution_plan_backfill import (
-    ensure_pipeline_execution_plan,
-)
+from foundry_lite.application.services.pipeline_execution_plan_backfill import ensure_pipeline_execution_plan
 from foundry_lite.application.services.pipeline_run_component_types import (
     DatasetPipelineNodeCommitter,
     GovernedCandidatePipelineOutputCommitter,
@@ -60,14 +58,6 @@ from foundry_lite.application.services.pipeline_run_terminal import (
     fail_pipeline_run,
     succeed_pipeline_run,
 )
-
-_ACTIVE_OR_TERMINAL_RUN_STATUSES = frozenset(
-    {"cancelled", "cancelling", "running", "executing", "succeeded", "partial", "failed"}
-)
-
-
-def _is_active_or_terminal_run(row: PipelineRunRow) -> bool:
-    return str(row["status"]) in _ACTIVE_OR_TERMINAL_RUN_STATUSES
 
 
 class PipelineRunService(CoreService):
@@ -164,7 +154,15 @@ class PipelineRunService(CoreService):
         ):
             raise
         except Exception as exc:
-            fail_pipeline_run(self.engine, self.pipeline_repository, self.runtime_service, ctx, row, exc)
+            fail_pipeline_run(
+                self.engine,
+                self.pipeline_repository,
+                self.pipeline_execution_repository,
+                self.runtime_service,
+                ctx,
+                row,
+                exc,
+            )
             return self.get_run(str(row["id"]), ctx=ctx)
 
     def reconcile_unknown_commit_output_for_run(self, ctx: RequestContext, row: PipelineRunRow) -> bool:
@@ -391,6 +389,7 @@ class PipelineRunService(CoreService):
             complete_unsuccessful_pipeline_run(
                 self.engine,
                 self.pipeline_repository,
+                self.pipeline_execution_repository,
                 self.runtime_service,
                 ctx,
                 row,
@@ -404,6 +403,7 @@ class PipelineRunService(CoreService):
         succeed_pipeline_run(
             self.engine,
             self.pipeline_repository,
+            self.pipeline_execution_repository,
             self.runtime_service,
             ctx,
             row,
@@ -440,7 +440,7 @@ class PipelineRunService(CoreService):
                 audit_pipeline_execution_claim(self.runtime_service, conn, ctx, row, lease.expires_at)
                 return claimed
             current = required_pipeline_run(self.pipeline_repository, conn, ctx, run_id)
-            if _is_active_or_terminal_run(current):
+            if pipeline_run_recovery.is_active_or_terminal_run(current):
                 return None
         raise ConflictDetected(
             "pipeline run execution claim changed concurrently",

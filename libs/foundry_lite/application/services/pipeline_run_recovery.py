@@ -147,6 +147,18 @@ def replayed_pipeline_run_action(row: Mapping[str, object]) -> str:
     return "read"
 
 
+def is_active_or_terminal_run(row: Mapping[str, object]) -> bool:
+    return str(row.get("status")) in {
+        "cancelled",
+        "cancelling",
+        "running",
+        "executing",
+        "succeeded",
+        "partial",
+        "failed",
+    }
+
+
 def new_pipeline_execution_lease(*, now: datetime | None = None) -> PipelineExecutionLease:
     heartbeat = (now or datetime.now(UTC)).astimezone(UTC)
     return PipelineExecutionLease(

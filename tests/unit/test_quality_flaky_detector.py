@@ -256,6 +256,15 @@ def test_flaky_detector_rejects_non_positive_or_non_finite_timeout(tmp_path: Pat
         )
 
 
+def test_process_group_signal_tolerates_darwin_exit_race(monkeypatch: pytest.MonkeyPatch) -> None:
+    def deny_signal(_process_group_id: int, _signal_number: int) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(gate.os, "killpg", deny_signal)
+
+    gate._signal_process_group(12345, gate.signal.SIGKILL)
+
+
 def _wait_until_not_live(process_id: int) -> bool:
     deadline = time.monotonic() + 3
     poll_interval = threading.Event()

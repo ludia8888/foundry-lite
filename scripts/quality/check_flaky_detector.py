@@ -190,7 +190,11 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
 def _signal_process_group(process_group_id: int, signal_number: int) -> None:
     try:
         os.killpg(process_group_id, signal_number)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
+        # Darwin can report EPERM when SIGTERM has already moved the last
+        # same-user group member into an unsignalable exit/zombie state. The
+        # group was created by this gate via start_new_session, so there is no
+        # unrelated process to protect; communicate() still confirms pipe EOF.
         return
 
 
