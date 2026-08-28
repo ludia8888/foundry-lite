@@ -24,6 +24,7 @@ from testcontainers.postgres import PostgresContainer
 DEBEZIUM_CONNECT_IMAGE = "quay.io/debezium/connect:3.5"
 CONNECT_READY_TIMEOUT_SECONDS = 240
 DEFAULT_WAIT_TIMEOUT_SECONDS = 120
+TRANSIENT_HTTP_STATUS_CODES = frozenset({404, 409, 429, 500, 502, 503, 504})
 
 
 def test_connector_registration_reconciles_ambiguous_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,6 +46,24 @@ def test_connector_registration_reconciles_ambiguous_timeout(monkeypatch: pytest
     assert attempt() is False
     assert attempt() is True
     assert post_attempts == ["attempted"]
+
+
+def test_permanent_connector_http_error_is_not_retried() -> None:
+    def invalid_configuration() -> bool:
+        raise HTTPError("http://connect/connectors", 400, "invalid connector configuration", {}, None)
+
+    attempt = _condition_without_transient_errors(invalid_configuration)
+
+    with pytest.raises(HTTPError) as exc_info:
+        attempt()
+    assert exc_info.value.code == 400
+
+
+def test_connect_container_uses_single_service_loader_discovery() -> None:
+    connect = _connect_container(Network())
+
+    assert connect.env["CONNECT_PLUGIN_PATH"] == "/kafka/connect"
+    assert connect.env["CONNECT_PLUGIN_DISCOVERY"] == "service_load"
 
 
 def test_live_debezium_postgres_changes_archive_through_worker(tmp_path: Path) -> None:
@@ -142,6 +161,8 @@ def _connect_container(network: Network) -> DockerContainer:
         .with_env("OFFSET_STORAGE_TOPIC", f"foundry-lite-connect-offsets-{uuid4().hex}")
         .with_env("STATUS_STORAGE_TOPIC", f"foundry-lite-connect-status-{uuid4().hex}")
         .with_env("CONNECT_REST_ADVERTISED_HOST_NAME", "connect")
+        .with_env("CONNECT_PLUGIN_PATH", "/kafka/connect")
+        .with_env("CONNECT_PLUGIN_DISCOVERY", "service_load")
     )
 
 
@@ -354,7 +375,11 @@ def _condition_without_transient_errors(condition: Callable[[], bool]) -> Callab
     def wrapped() -> bool:
         try:
             return condition()
-        except (ConnectionError, HTTPError, TimeoutError, URLError):
+        except HTTPError as exc:
+            if exc.code not in TRANSIENT_HTTP_STATUS_CODES:
+                raise
+            return False
+        except (ConnectionError, TimeoutError, URLError):
             return False
 
     return wrapped
@@ -369,8 +394,13 @@ def _get_json(connect: DockerContainer, path: str) -> Mapping[str, object]:
 
 def _post_json(connect: DockerContainer, path: str, payload: Mapping[str, object]) -> None:
     body = json.dumps(dict(payload), sort_keys=True).encode("utf-8")
-    with urlopen(_request(connect, path, method="POST", body=body), timeout=10) as response:
-        response.read()
+    try:
+        with urlopen(_request(connect, path, method="POST", body=body), timeout=10) as response:
+            response.read()
+    except HTTPError as exc:
+        detail = exc.read(2_000).decode("utf-8", errors="replace")
+        message = f"{exc.reason}; response={detail}" if detail else str(exc.reason)
+        raise HTTPError(exc.url, exc.code, message, exc.headers, None) from exc
 
 
 def _request(connect: DockerContainer, path: str, *, method: str = "GET", body: bytes | None = None) -> Request:
