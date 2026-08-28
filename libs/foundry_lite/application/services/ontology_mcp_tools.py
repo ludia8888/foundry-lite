@@ -7,6 +7,18 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.domain.platform.scopes import resource_scope
 
 
+def business_system_tool() -> dict[str, object]:
+    """Describe the application-owned work-screen contract without developer vocabulary."""
+
+    return _tool(
+        "business_system.get",
+        "Open this application's shared work screens, roles, governed actions, and evidence rules.",
+        {},
+        [],
+        is_write=False,
+    )
+
+
 def object_tools(name: str, scopes: tuple[str, ...]) -> list[dict[str, object]]:
     if resource_scope("object", name, "read") not in scopes:
         return []

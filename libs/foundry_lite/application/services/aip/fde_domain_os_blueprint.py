@@ -6,11 +6,15 @@ import hashlib
 import re
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.services.aip.fde_business_system_definition import (
+    build_business_system_definition as build_business_system_definition,
+)
 from foundry_lite.application.services.aip.fde_domain_os_functions import (
     compile_domain_functions,
     function_application_resources,
     function_ontology_resource,
 )
+from foundry_lite.application.services.aip.fde_domain_os_ontology_properties import ontology_property
 from foundry_lite.application.services.aip.fde_domain_os_policy import (
     compile_domain_policies,
     policy_preconditions,
@@ -102,7 +106,10 @@ def application_resources(blueprint: JsonObject) -> list[dict[str, object]]:
         {
             "resourceType": "action",
             "resourceApiName": row["apiName"],
-            "scopes": [f"osdk:action:{row['apiName']}:execute"],
+            "scopes": [
+                f"osdk:action:{row['apiName']}:validate",
+                f"osdk:action:{row['apiName']}:execute",
+            ],
         }
         for row in actions
     ]
@@ -329,22 +336,9 @@ def _object_resource(record: JsonObject, dataset_ref: str) -> dict[str, object]:
             "mode": "snapshot",
             "primaryKeyColumns": [_snake(str(record["primaryKey"]))],
         },
-        "properties": [_ontology_property(field) for field in fields],
+        "properties": [ontology_property(field) for field in fields],
     }
     return {"kind": "objectType", "definition": definition}
-
-
-def _ontology_property(field: JsonObject) -> dict[str, object]:
-    is_status = field["apiName"] == "status"
-    return {
-        "apiName": field["apiName"],
-        "displayName": field["displayName"],
-        "column": _snake(str(field["apiName"])),
-        "type": field["type"],
-        "nullable": field.get("required") is not True,
-        "indexed": field["apiName"] in {"status"} or str(field["apiName"]).endswith("Id"),
-        "editable": is_status,
-    }
 
 
 def _action_resource(action: JsonObject, policies: list[dict[str, object]]) -> dict[str, object]:
@@ -353,9 +347,15 @@ def _action_resource(action: JsonObject, policies: list[dict[str, object]]) -> d
         for value in _mapping_items(action.get("parameters"), "action.parameters", 12)
     ]
     definition: dict[str, object] = {
+        "contractVersion": 3,
         "apiName": action["apiName"],
         "displayName": action["displayName"],
+        "description": action["description"],
         "target": action["targetRecord"],
+        "targetKind": "object",
+        "riskLevel": "high" if action.get("requiresApproval") is True else "low",
+        "agentExecutionPolicy": ("approval_required" if action.get("requiresApproval") is True else "autonomous"),
+        "agentToolDescription": f"{action['displayName']} 업무를 규칙과 권한을 확인한 뒤 실행합니다.",
         "parameters": params,
         "permissions": {"allowedRoles": action["allowedRoles"]},
         "mutations": [{"type": "setProperty", "property": "status", "value": action["toState"]}],

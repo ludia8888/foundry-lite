@@ -36,6 +36,11 @@ from foundry_lite_api.mcp_protocol import (
     validate_mcp_message,
 )
 from foundry_lite_api.mcp_rate_limit import mcp_rate_limit_http_error, mcp_result_headers
+from foundry_lite_api.ontology_mcp_ui import (
+    business_system_resource_descriptors,
+    decorate_ontology_tools,
+    read_business_system_resource,
+)
 
 router = APIRouter()
 _LOGGER = logging.getLogger(__name__)
@@ -221,9 +226,13 @@ def _dispatch(
         return {}
     if method == "tools/list":
         tools = runtime.foundry.ontology_mcp.list_tools(ctx, application_id, origin=request.headers.get("origin"))
-        return tools
+        return decorate_ontology_tools(tools)
     if method == "tools/call":
         return _call_tool(application_id, session_id, request, payload, ctx)
+    if method == "resources/list":
+        return _resource_list(application_id, request, payload, ctx)
+    if method == "resources/read":
+        return read_business_system_resource(payload.params)
     raise method_not_found("Ontology", method)
 
 
@@ -254,13 +263,41 @@ def _initialize_result(protocol_version: str) -> dict[str, object]:
         "protocolVersion": protocol_version,
         # The catalog is a projection of the application's granted resources, so a Developer
         # Console edit changes it mid-session; the server emits notifications/tools/list_changed.
-        "capabilities": {"tools": {"listChanged": True}},
+        "capabilities": {"tools": {"listChanged": True}, "resources": {"listChanged": False}},
         "serverInfo": {"name": "foundry-lite-ontology-mcp", "version": "1.0.0"},
         "instructions": (
             "Only application-restricted Ontology resources are exposed. "
-            "Low-risk autonomous Actions may run; all other Action apply calls return approval_required."
+            "Low-risk autonomous Actions may run; all other Action apply calls return approval_required. "
+            "When business_system.get is available, render its application-owned work screen instead of raw JSON."
         ),
     }
+
+
+def _resource_list(
+    application_id: str,
+    request: Request,
+    payload: JsonRpcEnvelope,
+    ctx: RequestContext,
+) -> dict[str, object]:
+    _require_unpaginated_resource_list(payload.params)
+    tools = runtime.foundry.ontology_mcp.list_tools(ctx, application_id, origin=request.headers.get("origin"))
+    has_business_system = any(tool.get("name") == "business_system.get" for tool in _mapping_tools(tools))
+    return {"resources": business_system_resource_descriptors() if has_business_system else []}
+
+
+def _require_unpaginated_resource_list(params: Mapping[str, object]) -> None:
+    if params.get("cursor") is not None:
+        raise ValidationFailed("Ontology MCP resources/list pagination is not supported")
+    metadata = params.get("_meta")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise ValidationFailed("Ontology MCP resources/list _meta must be an object")
+
+
+def _mapping_tools(value: Mapping[str, object]) -> list[Mapping[str, object]]:
+    tools = value.get("tools")
+    if not isinstance(tools, Sequence) or isinstance(tools, str | bytes):
+        raise ValidationFailed("Ontology MCP tool registry returned an invalid tools list")
+    return [tool for tool in tools if isinstance(tool, Mapping)]
 
 
 async def _session_events(

@@ -7,6 +7,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from foundry_lite.application.services.aip.fde_business_system_definition import (
+    build_business_system_definition,
+)
 from foundry_lite.application.services.aip.fde_domain_os_blueprint import build_domain_os_blueprint
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import consumer_osdk_plan, react_files
 
@@ -88,8 +91,13 @@ def _portable_plan() -> dict[str, object]:
             "successMeasures": ["미완료 누락 0건"],
         },
     }
+    blueprint = build_domain_os_blueprint(arguments)
+    consumer_osdk = consumer_osdk_plan("Property Care Portable", "property-care-portable")
     return {
         **arguments,
-        "domainOsBlueprint": build_domain_os_blueprint(arguments),
-        "consumerOsdk": consumer_osdk_plan("Property Care Portable", "property-care-portable"),
+        "domainOsBlueprint": blueprint,
+        "consumerOsdk": consumer_osdk,
+        "businessSystemDefinition": build_business_system_definition(
+            "Property Care Portable", blueprint, consumer_osdk
+        ),
     }

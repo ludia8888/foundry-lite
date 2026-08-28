@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import cast
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Query, Request
 from foundry_lite.application.services.aip.citation_service import CitationServiceError
 from foundry_lite.application.services.aip.eval_types import AiEvalError, EvalCaseInput
 from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
@@ -15,6 +15,7 @@ from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
 from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import (
+    ActionApplyRequest,
     AipAgentRunRequest,
     AipBuilderRunRequest,
     AipBuilderValidateRequest,
@@ -26,6 +27,7 @@ from foundry_lite_api.schemas import (
     AipPilotPlanRequest,
     AipReleasePromotionRequest,
     JsonObject,
+    ObjectQueryRequest,
 )
 
 router = APIRouter()
@@ -106,6 +108,69 @@ def generate_aip_pilot(
 def get_aip_pilot(request: Request, rid: str) -> JsonObject:
     try:
         return cast(JsonObject, runtime.foundry.aip.get_pilot_application(rid, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/aip/pilot/operating-applications/{application_id}")
+def get_operating_aip_pilot(request: Request, application_id: str) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            runtime.foundry.aip.get_operating_pilot_application(application_id, ctx=_ctx(request)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/aip/pilot/operating-applications/{application_id}/objects/{object_type}/query")
+def query_operating_aip_pilot_objects(
+    request: Request,
+    application_id: str,
+    object_type: str,
+    payload: ObjectQueryRequest,
+) -> JsonObject:
+    try:
+        actor = runtime.foundry.aip.operating_pilot_context(application_id, "object", object_type, ctx=_ctx(request))
+        return cast(
+            JsonObject,
+            runtime.foundry.objects.query(
+                object_type,
+                ctx=actor,
+                filter_ast=payload.filter_ast,
+                order_by=payload.order_by,
+                limit=payload.limit,
+                cursor=payload.cursor,
+                search_text=payload.search_text,
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/aip/pilot/operating-applications/{application_id}/actions/{action_type}/runs")
+def run_operating_aip_pilot_action(
+    request: Request,
+    application_id: str,
+    action_type: str,
+    payload: ActionApplyRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+    wait_seconds: int = Query(default=0, ge=0, le=30, alias="waitSeconds"),
+) -> JsonObject:
+    try:
+        if payload.branch_id is not None:
+            raise ValidationFailed("운영 업무 앱에서는 검토 중인 branch Action을 실행할 수 없습니다.")
+        actor = runtime.foundry.aip.operating_pilot_context(application_id, "action", action_type, ctx=_ctx(request))
+        return runtime.foundry.actions.start_run(
+            action_type,
+            object_type=payload.target.object_type,
+            object_id=payload.target.object_id,
+            expected_object_version=payload.expected_object_version,
+            params=payload.params,
+            idempotency_key=idempotency_key,
+            wait_seconds=wait_seconds,
+            ctx=actor,
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

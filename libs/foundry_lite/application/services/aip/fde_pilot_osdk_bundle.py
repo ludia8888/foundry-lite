@@ -134,6 +134,7 @@ def react_files(plan: JsonObject) -> dict[str, str]:
         "tsconfig.json": _tsconfig_json(),
         "vite.config.ts": _vite_config_source(),
         "consumer-osdk.contract.json": consumer_contract(plan),
+        "public/business-system.json": _business_system_json(plan),
         "src/App.tsx": application_source(plan, package_name),
         "src/main.tsx": _main_source(package_name),
         "src/styles.css": _styles_source(),
@@ -179,6 +180,11 @@ def _application_package_json(package_name: str) -> str:
         },
     }
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _business_system_json(plan: JsonObject) -> str:
+    value = _mapping(plan.get("businessSystemDefinition"), "businessSystemDefinition")
+    return json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
 def _index_html() -> str:

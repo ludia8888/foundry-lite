@@ -6,6 +6,10 @@ from copy import deepcopy
 
 import pytest
 from foundry_lite.application.services.aip import fde_domain_os_policy
+from foundry_lite.application.services.aip.fde_business_system_definition import (
+    build_business_system_definition,
+    require_business_system_definition,
+)
 from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     application_resources,
     build_domain_os_blueprint,
@@ -52,7 +56,14 @@ def test_property_maintenance_brief_compiles_independent_objects_actions_and_see
     assert len(resources) == 5
     assert resources[0]["definition"]["backing"]["dataset"] == "seed.property_maintenance"
     assert resources[1]["definition"]["backing"]["dataset"] == "seed.property_maintenance_property_asset"
+    status_property = next(item for item in resources[0]["definition"]["properties"] if item["apiName"] == "status")
+    assert status_property["editable"] is True
+    assert status_property["editPolicy"] == "edit_wins"
     assert resources[2]["definition"]["preconditions"][0]["safeExpression"] == "object.status in ['REPORTED']"
+    assert resources[2]["definition"]["riskLevel"] == "high"
+    assert resources[2]["definition"]["agentExecutionPolicy"] == "approval_required"
+    assert resources[4]["definition"]["riskLevel"] == "low"
+    assert resources[4]["definition"]["agentExecutionPolicy"] == "autonomous"
     assert resources[2]["definition"]["permissions"] == {
         "allowedRoles": blueprint["workflow"]["actions"][0]["allowedRoles"]
     }
@@ -79,17 +90,26 @@ def test_property_maintenance_brief_compiles_independent_objects_actions_and_see
         {
             "resourceType": "action",
             "resourceApiName": "TriageWorkOrder",
-            "scopes": ["osdk:action:TriageWorkOrder:execute"],
+            "scopes": [
+                "osdk:action:TriageWorkOrder:validate",
+                "osdk:action:TriageWorkOrder:execute",
+            ],
         },
         {
             "resourceType": "action",
             "resourceApiName": "ScheduleRepair",
-            "scopes": ["osdk:action:ScheduleRepair:execute"],
+            "scopes": [
+                "osdk:action:ScheduleRepair:validate",
+                "osdk:action:ScheduleRepair:execute",
+            ],
         },
         {
             "resourceType": "action",
             "resourceApiName": "CompleteRepair",
-            "scopes": ["osdk:action:CompleteRepair:execute"],
+            "scopes": [
+                "osdk:action:CompleteRepair:validate",
+                "osdk:action:CompleteRepair:execute",
+            ],
         },
     ]
 
@@ -101,6 +121,37 @@ def test_property_maintenance_brief_compiles_independent_objects_actions_and_see
     assert seed["datasets"][0]["primaryKey"] == ["work_order_id"]
     assert seed["datasets"][1]["primaryKey"] == ["property_asset_id"]
     assert set(seed["datasets"][0]["rows"][0]) == {"work_order_id", "name", "status", "location", "severity"}
+
+
+def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfaces_and_gpt_work() -> None:
+    arguments = property_maintenance_arguments()
+    blueprint = build_domain_os_blueprint(arguments)
+    consumer_osdk = consumer_osdk_plan("Property Care Desk", "property-care-desk")
+
+    definition = build_business_system_definition("Property Care Desk", blueprint, consumer_osdk)
+
+    assert definition["schemaVersion"] == "foundry-lite-business-system-definition/v1"
+    assert definition["definitionFingerprint"].startswith("sha256:")
+    experience = definition["experience"]
+    screen_ids = [screen["id"] for screen in experience["screens"]]
+    assert experience["surfaces"] == [
+        {"id": "chatgpt", "screenIds": screen_ids, "interactionMode": "conversation_embedded"},
+        {"id": "external_app", "screenIds": screen_ids, "interactionMode": "authenticated_web"},
+    ]
+    today = experience["screens"][0]
+    assert [component["kind"] for component in today["components"]] == [
+        "work_queue",
+        "action_panel",
+        "ai_suggestion_panel",
+    ]
+    assert today["components"][0]["binding"]["objectType"] == "WorkOrder"
+    assert definition["agentWork"]["actionTypes"][0]["execution"] == "proposal_then_human"
+    assert require_business_system_definition(definition) == definition
+
+    changed = deepcopy(definition)
+    changed["experience"]["screens"][0]["title"] = "변조된 화면"
+    with pytest.raises(FdePlatformToolError, match="정의서가 변경"):
+        require_business_system_definition(changed)
 
 
 def test_incomplete_brief_returns_plain_language_questions_and_cannot_generate() -> None:
@@ -156,12 +207,16 @@ def test_a_natural_language_aggregation_compiles_to_python_osdk_and_least_privil
         "resourceApiName": "CountUrgentWorkOrders",
         "scopes": ["osdk:function:CountUrgentWorkOrders:execute"],
     }
+    consumer_osdk = consumer_osdk_plan("Property Care Desk", "property-care-desk")
     files = react_files(
         {
             **arguments,
             "applicationName": "Property Care Desk",
             "domainOsBlueprint": blueprint,
-            "consumerOsdk": consumer_osdk_plan("Property Care Desk", "property-care-desk"),
+            "consumerOsdk": consumer_osdk,
+            "businessSystemDefinition": build_business_system_definition(
+                "Property Care Desk", blueprint, consumer_osdk
+            ),
         }
     )
     generated = files["packages/application-osdk/src/generated.ts"]

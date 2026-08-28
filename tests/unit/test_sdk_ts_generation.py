@@ -474,7 +474,7 @@ def test_sdk_package_output_matches_the_ontology_client_surface() -> None:
         "builder": ["validate", "run"],
         "agent": ["run"],
         "fde": ["catalog", "run", "approveMcpConfirmation"],
-        "pilot": ["plan", "generate", "get"],
+        "pilot": ["plan", "generate", "get", "getOperating", "queryObjects", "startAction"],
         "citations": ["resolveNavigation"],
         "evals": ["run"],
         "releases": ["promote"],
