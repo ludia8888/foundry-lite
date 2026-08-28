@@ -13,6 +13,9 @@ const ProjectsPage = lazy(() => import("@/features/projects/ProjectsPage"));
 const PilotApplicationPage = lazy(
   () => import("@/features/aip/PilotApplicationPage"),
 );
+const BusinessSystemApplicationPage = lazy(
+  () => import("@/features/aip/BusinessSystemApplicationPage"),
+);
 const DataConnectionPage = lazy(
   () => import("@/features/data-connection/DataConnectionPage"),
 );
@@ -59,6 +62,7 @@ export function App() {
         <BrowserRouter>
           <Routes>
             <Route path="book/mcp-bistro-seoul" element={<CustomerReservationPage />} />
+            <Route path="apps/:applicationId" element={<BusinessSystemApplicationPage />} />
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
               <Route path="projects/:projectId/pilot/:slug" element={<PilotApplicationPage />} />

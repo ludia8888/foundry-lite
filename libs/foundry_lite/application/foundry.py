@@ -239,6 +239,7 @@ class FoundryLite:
             approvals=services.action_proposal,
             access_sessions=services.osdk_access_sessions,
             rate_limits=services.mcp_rate_limits,
+            business_systems=services.fde_pilot,
         )
         fde_mcp = FdeMcpGateway(
             engine=self.engine,

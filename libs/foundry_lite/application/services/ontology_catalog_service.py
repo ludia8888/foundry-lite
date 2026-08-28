@@ -36,6 +36,13 @@ class OntologyCatalogService(CoreService):
             "activatedAt": active["activated_at"],
         }
 
+    def release_active_catalog(self, *, ctx: RequestContext | None = None) -> OntologyCatalogResult:
+        """Read the active catalog for release readiness without an audit mutation."""
+
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "ontology:read")
+        return self._active_catalog_read(ctx)
+
     def _active_catalog_read(self, ctx: RequestContext) -> OntologyCatalogResult:
         with self.engine.begin() as conn:
             active = self.ontology_lookup_service._active_ontology_version(conn, ctx)

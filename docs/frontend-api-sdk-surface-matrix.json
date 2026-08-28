@@ -623,6 +623,43 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.pilot.getOperating",
+      "route": "GET /api/aip/pilot/operating-applications/{application_id}",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.getOperating",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The stable hosted work-app route compares the exact shared business-system fingerprint, active Ontology resources, and restricted OSDK application grants on every load; approval or rollback therefore opens or blocks the same URL without trusting a separate deployment flag.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.pilot.queryObjects",
+      "route": "POST /api/aip/pilot/operating-applications/{application_id}/objects/{object_type}/query",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.queryObjects",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "The hosted app queries only an Object named by the shared business-system definition; the server adds the durable principal-to-business-role mapping and exact OSDK application/client/scopes after authenticating the caller.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.pilot.startAction",
+      "route": "POST /api/aip/pilot/operating-applications/{application_id}/actions/{action_type}/runs",
+      "productArea": "ai-fde-pilot",
+      "sdkSurface": "aip.pilot.startAction",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "A human operating-app request can start only an Action named by the exact shared definition; server-owned role mapping and OSDK grants are applied before the normal Action transaction, audit, outbox, Idempotency-Key replay, and version checks run.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract",
+      "requiresIdempotencyKey": true
+    },
+    {
       "id": "aip.citations.resolveNavigation",
       "route": "POST /api/aip/citations/navigation/resolve",
       "productArea": "aip-citation-navigation",

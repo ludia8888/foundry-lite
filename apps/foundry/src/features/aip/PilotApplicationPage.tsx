@@ -1,6 +1,6 @@
 import type { AipPilotApplicationBundle, TabularRow } from "@foundry-lite/sdk";
 import { useFoundryLiteClient } from "@foundry-lite/sdk/react";
-import { ArrowLeft, Database, GitBranch, PackageCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Database, GitBranch, PackageCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 
@@ -48,9 +48,14 @@ export default function PilotApplicationPage() {
         description="AI FDE가 만든 branch-first OSDK 애플리케이션 미리보기"
         meta={<StatusPill intent="info">{state.bundle.status}</StatusPill>}
         actions={
-          <Button asChild variant="outline" size="sm">
-            <Link to="/aip/fde"><ArrowLeft /> AI FDE로 돌아가기</Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/aip/fde"><ArrowLeft /> AI FDE로 돌아가기</Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link to={state.bundle.operatingPath}><ArrowUpRight /> 운영 앱 열기</Link>
+            </Button>
+          </div>
         }
       />
       <div className="grid gap-3 md:grid-cols-3">

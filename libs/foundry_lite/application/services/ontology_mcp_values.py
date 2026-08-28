@@ -65,7 +65,7 @@ def grant_scopes(grant: Mapping[str, object]) -> tuple[str, ...]:
 
 
 def parse_tool_name(name: str) -> tuple[str, str, str]:
-    if name in {"action_run.get", "action_approval.get"}:
+    if name in {"action_run.get", "action_approval.get", "business_system.get"}:
         kind, operation = name.split(".")
         return (kind, "", operation)
     parts = name.split(".")

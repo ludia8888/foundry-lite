@@ -18,6 +18,7 @@ from foundry_lite.application.services.ontology_mcp_contracts import (
     OntologyMcpActionRuntime,
     OntologyMcpApplicationRuntime,
     OntologyMcpApprovalRuntime,
+    OntologyMcpBusinessSystemRuntime,
     OntologyMcpFunctionRuntime,
     OntologyMcpObjectRuntime,
     OntologyMcpToolCall,
@@ -27,6 +28,7 @@ from foundry_lite.application.services.ontology_mcp_schema import validate_tool_
 from foundry_lite.application.services.ontology_mcp_tools import (
     action_tool,
     approval_status_tool,
+    business_system_tool,
     function_tools,
     object_tools,
     run_status_tool,
@@ -103,6 +105,7 @@ class OntologyMcpGateway:
     approvals: OntologyMcpApprovalRuntime
     access_sessions: OntologyMcpAccessSessionValidator
     rate_limits: McpRateLimitService
+    business_systems: OntologyMcpBusinessSystemRuntime
 
     def __init__(
         self,
@@ -115,6 +118,7 @@ class OntologyMcpGateway:
         approvals: OntologyMcpApprovalRuntime,
         access_sessions: OntologyMcpAccessSessionValidator,
         rate_limits: McpRateLimitService,
+        business_systems: OntologyMcpBusinessSystemRuntime,
     ) -> None:
         self.applications = applications
         self.objects = objects
@@ -124,6 +128,7 @@ class OntologyMcpGateway:
         self.approvals = approvals
         self.access_sessions = access_sessions
         self.rate_limits = rate_limits
+        self.business_systems = business_systems
 
     def consume_endpoint_rate_limit(self, ctx: RequestContext, application_id: str) -> None:
         self.rate_limits.consume_endpoint(ctx, plane="ontology", application_id=application_id)
@@ -132,6 +137,8 @@ class OntologyMcpGateway:
         grants = self._grants(ctx, application_id, origin=origin)
         effective_scopes = frozenset(scope for grant in grants for scope in _effective_grant_scopes(ctx, grant))
         tools: list[dict[str, object]] = []
+        if self.business_systems.find_business_system(ctx, application_id) is not None:
+            tools.append(business_system_tool())
         for grant in sorted(grants, key=_grant_sort_key):
             tools.extend(self._tools_for_grant(ctx, grant, effective_scopes))
         if any(_is_action_apply_tool(tool) for tool in tools):
@@ -207,7 +214,19 @@ class OntologyMcpGateway:
             return self._execute_function(ctx, resource_name, operation, call.arguments)
         if tool_kind == "action_run":
             return self._execute_run_status(ctx, operation, call.arguments)
+        if tool_kind == "business_system":
+            return self._execute_business_system(ctx, call.application_id, operation)
         return self._execute_approval_status(ctx, call, operation)
+
+    def _execute_business_system(
+        self, ctx: RequestContext, application_id: str, operation: str
+    ) -> Mapping[str, object]:
+        if operation != "get":
+            raise ValidationFailed("unsupported Ontology MCP business-system operation")
+        definition = self.business_systems.find_business_system(ctx, application_id)
+        if definition is None:
+            raise ValidationFailed("business system is not available for this application")
+        return {"operationType": "business_system_definition", "businessSystemDefinition": definition}
 
     def _record_completed(self, ctx: RequestContext, call: OntologyMcpToolCall, result: Mapping[str, object]) -> None:
         self.applications.record_mcp_session_event(

@@ -87,6 +87,10 @@ class OntologyMcpAccessSessionValidator(Protocol):
     def require_active(self, ctx: RequestContext, application_id: str) -> None: ...
 
 
+class OntologyMcpBusinessSystemRuntime(Protocol):
+    def find_business_system(self, ctx: RequestContext, application_id: str) -> dict[str, object] | None: ...
+
+
 class OntologyMcpObjectRuntime(Protocol):
     def get(self, object_type_api_name: str, object_id: str, *, ctx: RequestContext | None = None) -> ObjectPayload: ...
 

@@ -1998,6 +1998,9 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
         "exceptions": [],
     }
     assert plan["domainOsBlueprint"]["readiness"]["isReady"] is True
+    assert plan["businessSystemDefinition"]["schemaVersion"] == "foundry-lite-business-system-definition/v1"
+    assert plan["businessSystemDefinition"]["experience"]["surfaces"][0]["id"] == "chatgpt"
+    assert plan["businessSystemDefinition"]["experience"]["surfaces"][1]["id"] == "external_app"
     assert [item["apiName"] for item in plan["domainOsBlueprint"]["records"]] == ["WorkOrder", "PropertyAsset"]
     assert len(plan["ontologyResources"]) == 5
     plan["consumerOsdk"] = {
@@ -2025,6 +2028,12 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     assert replay_response.status_code == 200, replay_response.text
     resource = first["resource"]
     assert first["status"] == "generated_on_branch"
+    pending_app = foundry.aip.get_operating_pilot_application(
+        str(first["osdkApplication"]["application"]["id"]), ctx=FDE_USER
+    )
+    assert pending_app["operatingApplication"]["status"] == "awaiting_release"
+    assert pending_app["operatingApplication"]["blockers"][0]["code"] == "ontology_not_activated"
+    assert pending_app["operatingPath"] == first["operatingPath"]
     assert len(first["ontologyBranch"]["diff"]["resources"]) == 5
     assert first["osdkApplication"]["application"]["app_api_name"] == "property_care_desk"
     assert [item["recordApiName"] for item in first["seed"]["datasets"]] == ["WorkOrder", "PropertyAsset"]
@@ -2041,6 +2050,10 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     bundle = response.json()
     files = bundle["reactFiles"]
     assert bundle["consumerOsdk"]["profile"] == "consumer_osdk_strict"
+    assert (
+        bundle["businessSystemDefinition"]["definitionFingerprint"]
+        == plan["businessSystemDefinition"]["definitionFingerprint"]
+    )
     assert bundle["consumerOsdk"]["exceptions"] == []
     assert "@foundry-lite/property-care-desk-osdk/react" in files["src/App.tsx"]
     assert "@foundry-lite/sdk" not in files["src/App.tsx"]
@@ -2062,7 +2075,10 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     assert bundle["deploymentPlan"]["sourceFingerprint"].startswith("sha256:")
     assert "actor_role_mapping_configured" in bundle["deploymentPlan"]["requiredBeforeHosting"]
     assert {"index.html", "vite.config.ts", "src/styles.css"}.issubset(files)
+    assert json.loads(files["public/business-system.json"]) == bundle["businessSystemDefinition"]
+    assert "오늘 할 일" in files["src/App.tsx"]
     assert response.json()["applicationPath"].startswith("/projects/")
+    assert response.json()["operatingPath"].startswith("/apps/")
 
     for name, content in files.items():
         target = tmp_path / name

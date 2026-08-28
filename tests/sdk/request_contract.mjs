@@ -1175,6 +1175,16 @@ const pilotPlan = {
   domainDescription: "Booking operations",
   domainBrief: pilotDomainBrief,
   domainOsBlueprint: {},
+  businessSystemDefinition: {
+    schemaVersion: "foundry-lite-business-system-definition/v1",
+    definitionFingerprint: "sha256:pilot-definition",
+    identity: { applicationId: "dining_concierge", name: "Dining Concierge", summary: "Booking operations" },
+    businessModel: {},
+    access: {},
+    experience: { componentCatalogVersion: "foundry-lite-work-components/v1", screens: [], surfaces: [] },
+    agentWork: {},
+    deployment: {},
+  },
   slug: "dining-concierge",
   projectDisplayName: "Dining Concierge Pilot",
   seed: {},
@@ -1198,6 +1208,44 @@ await expectSdkCall(
   "aip.pilot.get",
   () => client.aip.pilot.get("ri.foundry-lite.pilot.abc"),
   { path: "/api/aip/pilot/applications/ri.foundry-lite.pilot.abc", method: "GET", headers: {} },
+);
+await expectSdkCall(
+  "aip.pilot.getOperating",
+  () => client.aip.pilot.getOperating("osdk app/1"),
+  { path: "/api/aip/pilot/operating-applications/osdk%20app%2F1", method: "GET", headers: {} },
+);
+await expectSdkCall(
+  "aip.pilot.queryObjects",
+  () => client.aip.pilot.queryObjects("osdk app/1", "Work Item", { limit: 12, search: "긴급" }),
+  {
+    path: "/api/aip/pilot/operating-applications/osdk%20app%2F1/objects/Work%20Item/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { limit: 12, search: "긴급" },
+  },
+);
+const pilotActionPlan = {
+  target: { objectType: "WorkItem", objectId: "work/1" },
+  expectedObjectVersion: 2,
+  params: { completionEvidence: "photo/1" },
+};
+await expectSdkCall(
+  "aip.pilot.startAction",
+  () => client.aip.pilot.startAction("osdk app/1", "Complete Work", pilotActionPlan, {
+    idempotencyKey: "pilot-action-1",
+    waitSeconds: 10,
+  }),
+  {
+    path: "/api/aip/pilot/operating-applications/osdk%20app%2F1/actions/Complete%20Work/runs?waitSeconds=10",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "pilot-action-1" },
+    body: pilotActionPlan,
+  },
+);
+assertMissingIdempotencyFailFast(
+  "aip.pilot.startAction",
+  () => client.aip.pilot.startAction("osdk app/1", "Complete Work", pilotActionPlan),
+  "aip.pilot.startAction",
 );
 assertMissingIdempotencyFailFast(
   "aip.pilot.generate",

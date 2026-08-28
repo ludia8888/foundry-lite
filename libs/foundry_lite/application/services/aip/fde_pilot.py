@@ -5,13 +5,24 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
 from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     application_resources,
+    build_business_system_definition,
     build_domain_os_blueprint,
     ontology_resources,
     require_ready_blueprint,
     seed_plan,
+)
+from foundry_lite.application.services.aip.fde_pilot_operating import (
+    OntologyReleaseReader,
+    active_application_coordinates,
+    assigned_roles,
+    is_role_mapping,
+    operating_application_view,
+    require_operating_application,
+    require_operating_resource,
 )
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import (
     ci_workflow,
@@ -39,12 +50,14 @@ class FdePilotService(CoreService):
         "dataset_ingest_service",
         "dataset_registry_service",
         "ontology_branch_service",
+        "ontology_catalog_service",
         "osdk_application_service",
         "resource_catalog_service",
     )
     dataset_ingest_service: DatasetIngestService
     dataset_registry_service: DatasetRegistryService
     ontology_branch_service: OntologyBranchService
+    ontology_catalog_service: OntologyReleaseReader
     osdk_application_service: OsdkApplicationService
     resource_catalog_service: ResourceCatalogService
 
@@ -59,18 +72,21 @@ class FdePilotService(CoreService):
         workflow = _mapping(blueprint.get("workflow"), "domainOsBlueprint.workflow")
         actions = _mapping_items(workflow.get("actions"))
         functions = _mapping_items(blueprint.get("functions") or [])
+        consumer_osdk = consumer_osdk_plan(app_name, slug)
+        business_system = build_business_system_definition(app_name, blueprint, consumer_osdk)
         return {
             "operationType": "pilot_generation_plan",
             "applicationName": app_name,
             "domainDescription": description,
             "domainBrief": dict(_mapping(arguments.get("domainBrief"), "domainBrief")),
             "domainOsBlueprint": blueprint,
+            "businessSystemDefinition": business_system,
             "slug": slug,
             "projectDisplayName": f"{app_name} Pilot",
             "seed": seed_plan(identifier, blueprint),
             "ontologyResources": ontology_resources(blueprint, dataset_ref),
             "applicationResources": application_resources(blueprint),
-            "consumerOsdk": consumer_osdk_plan(app_name, slug),
+            "consumerOsdk": consumer_osdk,
             "react": {
                 "routes": ["/", "/work", "/policies", "/evidence"],
                 "objectTypes": [row["apiName"] for row in records],
@@ -90,7 +106,8 @@ class FdePilotService(CoreService):
     ) -> dict[str, object]:
         existing = self._existing_bundle(ctx, idempotency_key)
         if existing is not None:
-            return {**existing, "isReplayed": True}
+            role_mapping = self._ensure_creator_role_mapping(ctx, existing, idempotency_key)
+            return {**existing, "roleMapping": role_mapping, "isReplayed": True}
         normalized = _normalized_plan(plan)
         project = self._project(ctx, normalized, idempotency_key)
         seed = self._seed(ctx, normalized, idempotency_key)
@@ -110,7 +127,13 @@ class FdePilotService(CoreService):
             idempotency_key=f"{idempotency_key}:pilot-resource",
             ctx=ctx,
         )
-        return {**bundle, "resource": resource["resource"], "isReplayed": False}
+        role_mapping = self._ensure_creator_role_mapping(ctx, bundle, idempotency_key)
+        return {
+            **bundle,
+            "resource": resource["resource"],
+            "roleMapping": role_mapping,
+            "isReplayed": False,
+        }
 
     def get_bundle(self, ctx: RequestContext, rid: str) -> dict[str, object]:
         payload = self.resource_catalog_service.get_resource(rid, ctx=ctx)
@@ -119,6 +142,95 @@ class FdePilotService(CoreService):
             raise FdePlatformToolError("resource_type_mismatch", "resource is not a Pilot application")
         metadata = _mapping(resource.get("metadata"), "resource.metadata")
         return {**metadata, "resource": resource}
+
+    def find_business_system(self, ctx: RequestContext, application_id: str) -> dict[str, object] | None:
+        """Find the shared definition owned by one tenant-visible consumer application."""
+
+        resources = self.resource_catalog_service.list_resources(
+            project_id=None, folder_id=None, include_trashed=False, ctx=ctx
+        )
+        for item in _mapping_items(resources.get("items")):
+            definition = _business_system_for_application(item, application_id)
+            if definition is not None:
+                return definition
+        return None
+
+    def get_operating_application(self, ctx: RequestContext, application_id: str) -> dict[str, object]:
+        """Return one stable hosted app plus readiness from the active governed state."""
+
+        bundle = self._bundle_for_application(ctx, application_id)
+        application = self.osdk_application_service.get_application(application_id, ctx=ctx)
+        catalog = self.ontology_catalog_service.release_active_catalog(ctx=ctx)
+        role_mappings = self._role_mappings(ctx, application_id)
+        operating = operating_application_view(
+            bundle.get("businessSystemDefinition"), catalog, application, has_role_mapping=bool(role_mappings)
+        )
+        return {**bundle, "operatingApplication": operating}
+
+    def operating_context(
+        self,
+        ctx: RequestContext,
+        application_id: str,
+        resource_kind: str,
+        api_name: str,
+    ) -> RequestContext:
+        bundle = self.get_operating_application(ctx, application_id)
+        operating = _mapping(bundle.get("operatingApplication"), "operatingApplication")
+        require_operating_application(operating)
+        require_operating_resource(bundle.get("businessSystemDefinition"), resource_kind, api_name)
+        roles = assigned_roles(self._role_mappings(ctx, application_id), ctx.actor_user_id)
+        application = self.osdk_application_service.get_application(application_id, ctx=ctx)
+        client_id, scopes = active_application_coordinates(application)
+        return replace(
+            ctx,
+            roles=tuple(sorted(set(ctx.roles) | roles)),
+            application_id=application_id,
+            client_id=client_id,
+            token_scopes=scopes,
+        )
+
+    def _bundle_for_application(self, ctx: RequestContext, application_id: str) -> dict[str, object]:
+        resources = self.resource_catalog_service.list_resources(
+            project_id=None, folder_id=None, include_trashed=False, ctx=ctx
+        )
+        for item in _mapping_items(resources.get("items")):
+            metadata = _pilot_metadata_for_application(item, application_id)
+            if metadata is not None:
+                return {**metadata, "resource": item}
+        raise FdePlatformToolError("pilot_application_not_found", "운영할 업무 앱을 찾지 못했습니다.")
+
+    def _ensure_creator_role_mapping(
+        self, ctx: RequestContext, bundle: JsonObject, idempotency_key: str
+    ) -> dict[str, object]:
+        blueprint = _mapping(bundle.get("domainOsBlueprint"), "domainOsBlueprint")
+        roles = [str(item["role"]) for item in _mapping_items(blueprint.get("actorRoles"))]
+        application = _mapping(bundle.get("osdkApplication"), "osdkApplication")
+        app_record = _mapping(application.get("application"), "osdkApplication.application")
+        project = _mapping(bundle.get("project"), "project")
+        result = self.resource_catalog_service.register_resource(
+            resource_type="business_application_role_mapping",
+            display_name=f"{bundle['applicationName']} creator access",
+            project_id=str(project["id"]),
+            folder_id=None,
+            source_surface="ai_fde_business_application_role_mapping",
+            source_ref=f"{app_record['id']}:{ctx.actor_user_id}",
+            operations_path=None,
+            metadata={
+                "applicationId": app_record["id"],
+                "principalId": ctx.actor_user_id,
+                "roles": roles,
+                "mappingMode": "creator_preview",
+            },
+            idempotency_key=f"{idempotency_key}:creator-role-mapping",
+            ctx=ctx,
+        )
+        return _mapping(result.get("resource"), "roleMapping.resource")
+
+    def _role_mappings(self, ctx: RequestContext, application_id: str) -> list[dict[str, object]]:
+        resources = self.resource_catalog_service.list_resources(
+            project_id=None, folder_id=None, include_trashed=False, ctx=ctx
+        )
+        return [item for item in _mapping_items(resources.get("items")) if is_role_mapping(item, application_id)]
 
     def _existing_bundle(self, ctx: RequestContext, key: str) -> dict[str, object] | None:
         resources = self.resource_catalog_service.list_resources(
@@ -238,7 +350,9 @@ def _normalized_plan(plan: JsonObject) -> dict[str, object]:
     normalized["seed"] = seed_plan(_identifier(slug), blueprint)
     normalized["ontologyResources"] = ontology_resources(blueprint, f"seed.{_identifier(slug)}")
     normalized["applicationResources"] = application_resources(blueprint)
-    normalized["consumerOsdk"] = consumer_osdk_plan(app_name, slug)
+    consumer_osdk = consumer_osdk_plan(app_name, slug)
+    normalized["consumerOsdk"] = consumer_osdk
+    normalized["businessSystemDefinition"] = build_business_system_definition(app_name, blueprint, consumer_osdk)
     return normalized
 
 
@@ -252,11 +366,13 @@ def _bundle(
 ) -> dict[str, object]:
     slug = str(plan["slug"])
     files = react_files(plan)
+    application_record = _mapping(application.get("application"), "application")
     return {
         "operationType": "pilot_application_bundle",
         "pilotIdempotencyKey": key,
         "applicationName": plan["applicationName"],
         "domainOsBlueprint": dict(_mapping(plan.get("domainOsBlueprint"), "domainOsBlueprint")),
+        "businessSystemDefinition": dict(_mapping(plan.get("businessSystemDefinition"), "businessSystemDefinition")),
         "project": dict(project),
         "seed": dict(seed),
         "ontologyBranch": dict(branch),
@@ -266,6 +382,7 @@ def _bundle(
         "ciWorkflow": ci_workflow(),
         "deploymentPlan": _deployment_plan(application, files),
         "applicationPath": f"/projects/{project['id']}/pilot/{slug}",
+        "operatingPath": f"/apps/{application_record['id']}",
         "status": "generated_on_branch",
         "nextStep": "예시 데이터로 확인한 뒤 Ontology를 검토·활성화하고 호스팅 배포를 승인하세요.",
     }
@@ -327,6 +444,25 @@ def _fieldnames(rows: list[dict[str, object]]) -> list[str]:
     if not names:
         raise FdePlatformToolError("schema_invalid", "Pilot seed rows must include at least one field")
     return names
+
+
+def _business_system_for_application(resource: JsonObject, application_id: str) -> dict[str, object] | None:
+    metadata = _pilot_metadata_for_application(resource, application_id)
+    if metadata is None:
+        return None
+    definition = metadata.get("businessSystemDefinition")
+    return _mapping(definition, "businessSystemDefinition")
+
+
+def _pilot_metadata_for_application(resource: JsonObject, application_id: str) -> dict[str, object] | None:
+    metadata = resource.get("metadata")
+    if resource.get("resourceType") != "pilot_application" or not isinstance(metadata, Mapping):
+        return None
+    application = metadata.get("osdkApplication")
+    app_record = application.get("application") if isinstance(application, Mapping) else None
+    if not isinstance(app_record, Mapping) or app_record.get("id") != application_id:
+        return None
+    return {str(name): value for name, value in metadata.items()}
 
 
 def _slug(value: str) -> str:

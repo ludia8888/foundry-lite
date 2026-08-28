@@ -222,7 +222,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("builder", ("validate", "run")),
             OperationClientSurface("agent", ("run",)),
             OperationClientSurface("fde", ("catalog", "run", "approveMcpConfirmation")),
-            OperationClientSurface("pilot", ("plan", "generate", "get")),
+            OperationClientSurface("pilot", ("plan", "generate", "get", "getOperating", "queryObjects", "startAction")),
             OperationClientSurface("citations", ("resolveNavigation",)),
             OperationClientSurface("evals", ("run",)),
             OperationClientSurface("releases", ("promote",)),

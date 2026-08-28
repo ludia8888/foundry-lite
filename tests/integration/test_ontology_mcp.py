@@ -15,6 +15,7 @@ from foundry_lite.domain.errors import NotFound, PermissionDenied, ValidationFai
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
+from foundry_lite_api.ontology_mcp_ui import BUSINESS_SYSTEM_RESOURCE_URI
 from foundry_lite_api.routers import ontology_mcp as ontology_mcp_router
 
 from tests.integration.test_action_contract_v3_apply import _prepare_demo, _prepare_v3_demo, _v3_ontology
@@ -224,6 +225,154 @@ def test_ontology_mcp_projects_only_app_resources_and_enforces_action_risk(
     assert completed["actionRunId"] == executed.action_run_id
     assert run["actionRunId"] == executed.action_run_id
     assert foundry.objects.get("Order", "O-1002", ctx=MCP_USER)["properties"]["status"] == "APPROVED"
+
+
+def test_pilot_business_system_opens_the_same_live_work_screen_inside_gpt(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    foundry.ontology.apply_text("objectTypes: []\nactionTypes: []\nlinkTypes: []\n", ctx=MCP_USER)
+    arguments = _pilot_business_arguments()
+    plan = foundry.aip.plan_pilot_application(arguments, ctx=MCP_USER)
+    bundle = foundry.aip.generate_pilot_application(plan, idempotency_key="pilot-live-work", ctx=MCP_USER)
+    branch = foundry.ontology.get_branch(str(bundle["ontologyBranch"]["id"]), ctx=MCP_USER)
+    foundry.ontology.apply_text(str(branch["yamlText"]), ctx=MCP_USER)
+    foundry.objects.reindex("WorkItem", ctx=MCP_USER)
+    app_id = str(bundle["osdkApplication"]["application"]["id"])
+    foundry.developer_console.configure_ontology_mcp_server(
+        app_id,
+        status="enabled",
+        description_markdown="비개발자 업무 운영 화면",
+        allowed_origins=("https://chat.example.test",),
+        idempotency_key="pilot-live-work-mcp",
+        ctx=MCP_USER,
+    )
+    scopes = tuple(str(scope) for resource in plan["applicationResources"] for scope in resource["scopes"])
+    generated_role = str(plan["domainOsBlueprint"]["actorRoles"][0]["role"])
+    operator = RequestContext(
+        tenant_id=MCP_USER.tenant_id,
+        actor_user_id=MCP_USER.actor_user_id,
+        roles=(*MCP_USER.roles, generated_role),
+        request_id="pilot-live-work-operator",
+    )
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    headers = _user_mcp_headers(
+        foundry,
+        monkeypatch,
+        app_id,
+        scopes=scopes,
+        actor_ctx=operator,
+        suffix="pilot-live-work",
+        is_default_scope_included=False,
+    )
+    client = TestClient(app)
+    initialized = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": "pilot-init", "method": "initialize", "params": _mcp_initialize_params()},
+    )
+    session_headers = {**headers, "Mcp-Session-Id": initialized.headers["Mcp-Session-Id"]}
+    tools_response = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "pilot-tools", "method": "tools/list", "params": {}},
+    )
+    resources_response = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=session_headers,
+        json={"jsonrpc": "2.0", "id": "pilot-resources", "method": "resources/list", "params": {}},
+    )
+    resource_response = client.post(
+        f"/mcp/ontology/{app_id}",
+        headers=session_headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": "pilot-resource",
+            "method": "resources/read",
+            "params": {"uri": BUSINESS_SYSTEM_RESOURCE_URI},
+        },
+    )
+
+    tools = {tool["name"]: tool for tool in tools_response.json()["result"]["tools"]}
+    assert tools["business_system.get"]["_meta"]["ui"]["resourceUri"] == BUSINESS_SYSTEM_RESOURCE_URI
+    assert "object.WorkItem.search" in tools
+    assert "action.CompleteWorkItem.apply" in tools
+    assert resources_response.json()["result"]["resources"][0]["uri"] == BUSINESS_SYSTEM_RESOURCE_URI
+    html = resource_response.json()["result"]["contents"][0]["text"]
+    content_hash = hashlib.sha256(html.encode()).hexdigest()[:12]
+    assert BUSINESS_SYSTEM_RESOURCE_URI == f"ui://foundry-lite/business-system-v1-{content_hash}.html"
+    assert "createFoundryLiteBusinessSystemOsdk" in html
+
+    definition_result = _call(
+        client,
+        app_id,
+        session_headers,
+        rpc_id="business-system-get",
+        name="business_system.get",
+        arguments={},
+    )
+    definition = definition_result["businessSystemDefinition"]
+    assert definition["definitionFingerprint"] == bundle["businessSystemDefinition"]["definitionFingerprint"]
+    assert definition["experience"]["surfaces"][0]["screenIds"] == definition["experience"]["surfaces"][1]["screenIds"]
+    operating = foundry.aip.get_operating_pilot_application(app_id, ctx=operator)
+    assert operating["operatingApplication"]["status"] == "operating"
+    assert operating["operatingApplication"]["definitionFingerprint"] == definition["definitionFingerprint"]
+    assert operating["operatingApplication"]["operatingPath"] == bundle["operatingPath"]
+    with pytest.raises(PermissionDenied, match="배정된 역할"):
+        foundry.aip.operating_pilot_context(
+            app_id,
+            "object",
+            "WorkItem",
+            ctx=MCP_REVIEWER,
+        )
+
+    work = _call(
+        client,
+        app_id,
+        session_headers,
+        rpc_id="business-system-work",
+        name="object.WorkItem.search",
+        arguments={"limit": 50},
+    )
+    item = work["items"][0]
+    proposed = _call(
+        client,
+        app_id,
+        session_headers,
+        rpc_id="business-system-action",
+        name="action.CompleteWorkItem.apply",
+        arguments={
+            "objectType": "WorkItem",
+            "objectId": item["objectId"],
+            "expectedObjectVersion": item["objectVersion"],
+            "params": {"completionNote": "현장 확인 완료"},
+        },
+    )
+    assert proposed["status"] == "approval_required"
+    assert foundry.objects.get("WorkItem", str(item["objectId"]), ctx=operator)["properties"]["status"] == "NEW"
+
+    app_headers = _human_control_headers(foundry)
+    queried = client.post(
+        f"/api/aip/pilot/operating-applications/{app_id}/objects/WorkItem/query",
+        headers=app_headers,
+        json={"limit": 50},
+    )
+    assert queried.status_code == 200, queried.text
+    app_item = queried.json()["items"][0]
+    executed = client.post(
+        f"/api/aip/pilot/operating-applications/{app_id}/actions/CompleteWorkItem/runs",
+        params={"waitSeconds": 5},
+        headers={**app_headers, "Idempotency-Key": "pilot-operating-complete"},
+        json={
+            "target": {"objectType": "WorkItem", "objectId": app_item["objectId"]},
+            "expectedObjectVersion": app_item["objectVersion"],
+            "params": {"completionNote": "사람이 운영 앱에서 확인하고 완료"},
+        },
+    )
+    assert executed.status_code == 200
+    assert executed.json()["status"] == "succeeded"
+    completed = foundry.objects.get("WorkItem", str(app_item["objectId"]), ctx=operator)
+    assert completed["properties"]["status"] == "DONE", executed.text
 
 
 def test_ontology_mcp_rejects_untrusted_origin_and_application_mismatch(
@@ -1727,8 +1876,10 @@ def _user_mcp_headers(
     scopes: tuple[str, ...] | None = None,
     actor_ctx: RequestContext = MCP_USER,
     suffix: str = "default",
+    is_default_scope_included: bool = True,
 ) -> dict[str, str]:
     requested_scopes = scopes or _mcp_scopes()
+    default_scopes = _mcp_scopes() if is_default_scope_included else ()
     client_id = f"ontology-mcp-user-{suffix}"
     redirect_uri = f"https://chat.example.test/oauth/{suffix}"
     verifier = f"foundry-lite-ontology-user-{suffix}-verifier"
@@ -1736,7 +1887,7 @@ def _user_mcp_headers(
         app_id,
         client_id=client_id,
         redirect_uris=(redirect_uri,),
-        allowed_scopes=tuple({*_mcp_scopes(), *requested_scopes}),
+        allowed_scopes=tuple({*default_scopes, *requested_scopes}),
         idempotency_key=f"{client_id}-public-client",
         ctx=MCP_USER,
     )
@@ -1767,6 +1918,47 @@ def _user_mcp_headers(
         "Authorization": f"Bearer {token['accessToken']}",
         "MCP-Protocol-Version": "2025-06-18",
         "X-Request-ID": f"ontology-mcp-{suffix}",
+    }
+
+
+def _pilot_business_arguments() -> dict[str, object]:
+    return {
+        "applicationName": "현장 업무 도우미",
+        "domainDescription": "접수된 현장 업무를 담당자가 확인하고 완료 증거를 남길 때까지 한곳에서 처리합니다.",
+        "domainBrief": {
+            "actors": ["ops_manager"],
+            "records": [
+                {
+                    "name": "현장 업무",
+                    "apiName": "WorkItem",
+                    "fields": [{"name": "우선순위", "apiName": "priority", "type": "string", "required": True}],
+                }
+            ],
+            "lifecycleStates": ["NEW", "DONE"],
+            "actions": [
+                {
+                    "name": "업무 완료",
+                    "apiName": "CompleteWorkItem",
+                    "fromStates": ["NEW"],
+                    "toState": "DONE",
+                    "requiredInformation": ["completionNote"],
+                    "allowedActors": ["ops_manager"],
+                    "requiresApproval": True,
+                }
+            ],
+            "policies": [
+                {
+                    "name": "완료 확인",
+                    "statement": "완료 전 담당자가 처리 내용을 확인합니다.",
+                    "enforcement": "manual_review",
+                    "appliesToActions": ["CompleteWorkItem"],
+                    "evidence": "담당자와 완료 시각",
+                }
+            ],
+            "evidence": ["상태 변경 전후", "담당자", "완료 메모"],
+            "integrations": [],
+            "successMeasures": ["미처리 누락 0건"],
+        },
     }
 
 
