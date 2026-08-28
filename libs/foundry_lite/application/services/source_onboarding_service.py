@@ -25,14 +25,14 @@ from foundry_lite.application.services.source_onboarding_cdc_backlog import CdcB
 from foundry_lite.application.services.source_onboarding_config import (
     SourceUpload,
     StagedMediaSourceUpload,
-    StagedSourceUpload,
+    batch_upload_source_record,
     cleanup_media_upload,
     cleanup_uploads,
     copy_media_upload,
     copy_uploads,
+    csv_upload_source_record,
+    media_upload_source_record,
     require_idempotency_key,
-    source_record,
-    upload_summary,
 )
 from foundry_lite.application.services.source_onboarding_helpers import (
     DatasetRegistryBoundary,
@@ -65,7 +65,7 @@ class SourceOnboardingService(CoreService):
     required_dependencies = (
         "engine",
         "policy",
-        "root",
+        "source_upload_staging_store",
         "connector_registry_repository",
         "source_registry_repository",
         "runtime_repository",
@@ -135,15 +135,18 @@ class SourceOnboardingService(CoreService):
         ctx = ctx or RequestContext()
         require_write(self.policy, self.runtime_service, ctx, "upload_csv", source_name)
         require_idempotency_key(idempotency_key)
-        staged = copy_uploads(self.root, source_name, [SourceUpload(file_name, dataset_ref, source)])
+        staged = copy_uploads(
+            self.source_upload_staging_store, source_name, [SourceUpload(file_name, dataset_ref, source)]
+        )
         try:
-            row, is_replayed = self._create_upload_source(
-                ctx, source_name, display_name, staged, sync_name, primary_key
+            row, is_replayed = self._create_source(
+                ctx, csv_upload_source_record(ctx, source_name, display_name, staged, sync_name, primary_key)
             )
             if is_replayed and row["last_commit_ref"]:
                 return source_result(row, commit=row["last_commit_ref"], is_replayed=True)
             self.dataset_registry_service.ensure_dataset(dataset_ref, ctx=ctx, primary_key=list(primary_key))
-            commit = self.dataset_ingest_service.upload_csv(dataset_ref, staged[0].path, ctx=ctx, sync_name=sync_name)
+            with self.source_upload_staging_store.materialize_path(staged[0].storage_uri) as csv_path:
+                commit = self.dataset_ingest_service.upload_csv(dataset_ref, csv_path, ctx=ctx, sync_name=sync_name)
             return record_single_commit(
                 self.engine,
                 self.source_registry_repository,
@@ -154,7 +157,7 @@ class SourceOnboardingService(CoreService):
                 is_replayed,
             )
         finally:
-            cleanup_uploads(staged)
+            cleanup_uploads(self.source_upload_staging_store, staged)
 
     def upload_batch_files(
         self,
@@ -169,12 +172,15 @@ class SourceOnboardingService(CoreService):
         ctx = ctx or RequestContext()
         require_write(self.policy, self.runtime_service, ctx, "upload_batch_files", source_name)
         require_idempotency_key(idempotency_key)
-        staged = copy_uploads(self.root, source_name, uploads)
+        staged = copy_uploads(self.source_upload_staging_store, source_name, uploads)
         try:
-            row, is_replayed = self._create_batch_source(ctx, source_name, display_name, staged, sync_name)
+            row, is_replayed = self._create_source(
+                ctx, batch_upload_source_record(ctx, source_name, display_name, staged, sync_name)
+            )
             if is_replayed and row["last_commit_ref"]:
                 return source_result(row, commits=commit_list(row["last_commit_ref"]), is_replayed=True)
             commits = commit_batch_uploads(
+                self.source_upload_staging_store,
                 self.engine,
                 self.dataset_transaction_repository,
                 self.dataset_registry_service,
@@ -192,7 +198,7 @@ class SourceOnboardingService(CoreService):
                 is_replayed,
             )
         finally:
-            cleanup_uploads(staged)
+            cleanup_uploads(self.source_upload_staging_store, staged)
 
     def create_webhook_listener(
         self,
@@ -345,7 +351,7 @@ class SourceOnboardingService(CoreService):
         ctx = ctx or RequestContext()
         require_write(self.policy, self.runtime_service, ctx, "upload_media", source_name)
         require_idempotency_key(idempotency_key)
-        staged = copy_media_upload(self.root, source_name, file_name, source)
+        staged = copy_media_upload(self.source_upload_staging_store, source_name, file_name, source)
         try:
             return self._finish_media_upload(
                 ctx,
@@ -362,7 +368,7 @@ class SourceOnboardingService(CoreService):
                 idempotency_key,
             )
         finally:
-            cleanup_media_upload(staged)
+            cleanup_media_upload(self.source_upload_staging_store, staged)
 
     def _finish_media_upload(
         self,
@@ -379,10 +385,12 @@ class SourceOnboardingService(CoreService):
         probe_metadata: Mapping[str, object] | None,
         idempotency_key: str,
     ) -> dict[str, object]:
-        row, is_replayed = self._create_media_source(
-            ctx, source_name, display_name, media_set_id, logical_path, staged.content_hash, staged.byte_size
+        row, is_replayed = self._create_source(
+            ctx,
+            media_upload_source_record(ctx, source_name, display_name, media_set_id, logical_path, staged),
         )
         media_result = commit_staged_media(
+            self.source_upload_staging_store,
             self.media_transaction_service,
             self.media_upload_service,
             ctx,
@@ -396,6 +404,15 @@ class SourceOnboardingService(CoreService):
             probe_metadata,
             idempotency_key,
         )
+        return self._record_media_result(ctx, row, media_result, is_replayed)
+
+    def _record_media_result(
+        self,
+        ctx: RequestContext,
+        row: SourceConnectionRow,
+        media_result: Mapping[str, object],
+        is_replayed: bool,
+    ) -> dict[str, object]:
         return record_media_commit(
             self.engine,
             self.source_registry_repository,
@@ -433,68 +450,3 @@ class SourceOnboardingService(CoreService):
                 after_ref=source_view(row),
             )
             return row, False
-
-    def _create_upload_source(
-        self,
-        ctx: RequestContext,
-        source_name: str,
-        display_name: str,
-        staged: Sequence[StagedSourceUpload],
-        sync_name: str | None,
-        primary_key: Sequence[str],
-    ) -> tuple[SourceConnectionRow, bool]:
-        upload = staged[0]
-        summary = upload_summary("csv_upload", staged, {"syncName": sync_name, "primaryKey": list(primary_key)})
-        record = source_record(
-            ctx,
-            source_name=source_name,
-            display_name=display_name,
-            kind="csv_upload",
-            target_dataset_ref=upload.dataset_ref,
-            target_media_set_id=None,
-            config_summary=summary,
-        )
-        return self._create_source(ctx, record)
-
-    def _create_batch_source(
-        self,
-        ctx: RequestContext,
-        source_name: str,
-        display_name: str,
-        staged: Sequence[StagedSourceUpload],
-        sync_name: str | None,
-    ) -> tuple[SourceConnectionRow, bool]:
-        dataset_refs = [upload.dataset_ref for upload in staged]
-        summary = upload_summary("batch_file", staged, {"syncName": sync_name, "datasetRefs": dataset_refs})
-        record = source_record(
-            ctx,
-            source_name=source_name,
-            display_name=display_name,
-            kind="batch_file",
-            target_dataset_ref=dataset_refs[0] if dataset_refs else None,
-            target_media_set_id=None,
-            config_summary=summary,
-        )
-        return self._create_source(ctx, record)
-
-    def _create_media_source(
-        self,
-        ctx: RequestContext,
-        source_name: str,
-        display_name: str,
-        media_set_id: str,
-        logical_path: str,
-        content_hash: str,
-        byte_size: int,
-    ) -> tuple[SourceConnectionRow, bool]:
-        summary = dict(mediaSetId=media_set_id, logicalPath=logical_path, contentHash=content_hash, byteSize=byte_size)
-        record = source_record(
-            ctx,
-            source_name=source_name,
-            display_name=display_name,
-            kind="media_upload",
-            target_dataset_ref=None,
-            target_media_set_id=media_set_id,
-            config_summary=summary,
-        )
-        return self._create_source(ctx, record)

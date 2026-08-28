@@ -2,30 +2,26 @@
 
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
-from foundry_lite.application.media_byte_verification import (
+from foundry_lite.application.media_processing_ports import (
+    ContentUnitRecord,
+    MediaDerivativeRecord,
+    MediaItemVersionRecord,
+    MediaProcessingRequest,
+    MediaProcessingResult,
+    MediaProcessingRunRecord,
+    MediaProcessorAdapter,
+    MediaProcessorRegistry,
+    ProcessorSpec,
+)
+from foundry_lite.application.media_source_materialization import (
     MediaByteVerificationFailure,
-    copy_verified_committed_media,
+    materialized_verified_media,
     raise_media_byte_domain_error,
 )
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
-from foundry_lite.application.ports.media_derivative_repository import (
-    ContentUnitRecord,
-    MediaDerivativeRecord,
-    MediaProcessingRunRecord,
-)
-from foundry_lite.application.ports.media_processor import (
-    MediaProcessingRequest,
-    MediaProcessingResult,
-    MediaProcessorAdapter,
-    ProcessorSpec,
-)
-from foundry_lite.application.ports.media_processor_registry import MediaProcessorRegistry
-from foundry_lite.application.ports.media_repository import MediaItemVersionRecord
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.media.content_unit_paging import (
@@ -85,6 +81,7 @@ class MediaProcessingService(CoreService):
         "media_repository",
         "media_derivative_repository",
         "media_storage",
+        "media_source_workspace",
         "media_processor",
         "media_processor_registry",
     )
@@ -99,6 +96,7 @@ class MediaProcessingService(CoreService):
         media_repository: object,
         media_derivative_repository: object,
         media_storage: object,
+        media_source_workspace: object,
         media_processor_registry: MediaProcessorRegistry | None = None,
         media_processor: MediaProcessorAdapter | None = None,
     ) -> None:
@@ -110,6 +108,7 @@ class MediaProcessingService(CoreService):
             media_repository=media_repository,
             media_derivative_repository=media_derivative_repository,
             media_storage=media_storage,
+            media_source_workspace=media_source_workspace,
             media_processor=media_processor,
             media_processor_registry=media_processor_registry,
         )
@@ -268,31 +267,31 @@ class MediaProcessingService(CoreService):
             processor = self._resolve_processor(spec, input_format=version.format)
         except AdapterError as err:
             return err
-        with tempfile.TemporaryDirectory() as sandbox:
-            source_path = Path(sandbox) / "source"
-            try:
-                with source_path.open("wb") as sink:
-                    copy_verified_committed_media(self.media_storage, version, sink)
-            except MediaByteVerificationFailure as exc:
-                raise_media_byte_domain_error(exc, operation="media_processing")
-            request = MediaProcessingRequest(
-                tenant_id=ctx.tenant_id,
-                media_item_version_id=version_id,
-                blob_key=version.blob_key,
-                spec=spec,
-                processing_spec_hash=spec_hash,
-                source_path=str(source_path),
-                source_format=version.format,
-                source_mime_type=version.sniffed_mime_type,
+        try:
+            workspace = materialized_verified_media(
+                self.media_source_workspace, self.media_storage, version, file_name="source"
             )
-            if not processor.supports(request):
-                return _unsupported_processor_request(processor, request)
-            try:
-                return processor.process(request)
-            except AdapterError as err:
-                return err
-            except Exception as err:
-                return _unexpected_processor_error(processor.profile_name, spec.processor, err)
+            with workspace as source_path:
+                request = MediaProcessingRequest(
+                    tenant_id=ctx.tenant_id,
+                    media_item_version_id=version_id,
+                    blob_key=version.blob_key,
+                    spec=spec,
+                    processing_spec_hash=spec_hash,
+                    source_path=source_path,
+                    source_format=version.format,
+                    source_mime_type=version.sniffed_mime_type,
+                )
+                if not processor.supports(request):
+                    return _unsupported_processor_request(processor, request)
+                try:
+                    return processor.process(request)
+                except AdapterError as err:
+                    return err
+                except Exception as err:
+                    return _unexpected_processor_error(processor.profile_name, spec.processor, err)
+        except MediaByteVerificationFailure as exc:
+            raise_media_byte_domain_error(exc, operation="media_processing")
 
     def _resolve_processor(self, spec: ProcessorSpec, *, input_format: str) -> MediaProcessorAdapter:
         if self.media_processor_registry is not None:

@@ -13,16 +13,27 @@ from sqlalchemy.engine import Engine
 
 from foundry_lite.application.dependencies import (
     ActionDependencies,
+    ActionFileScanner,
+    ActionFunctionExecutor,
+    ActionRunOrchestrator,
     AipDependencies,
+    BackupArtifactStore,
+    CitationSourceVerifier,
+    CompletionModelAdapter,
+    ConnectorAdapter,
     CoreDependencies,
     DataDependencies,
+    EmbeddingModelAdapter,
     GovernedReleaseMcpAuthority,
+    LanguageModelAdapter,
     MediaDependencies,
     MediaProcessorRegistry,
     ObjectDependencies,
     PathDependencies,
+    PipelineDagOrchestrator,
     RuntimeDependencies,
     RuntimeProfile,
+    SecretVault,
     SecurityDependencies,
     SourceDependencies,
 )
@@ -145,6 +156,10 @@ from foundry_lite.infrastructure.auth import (
     LocalOAuthTokenIssuer,
 )
 from foundry_lite.infrastructure.local_database_url import local_database_url, local_storage_root
+from foundry_lite.infrastructure.local_file_boundary_composition import (
+    LocalFileBoundaryAdapters,
+    local_file_boundary_adapters,
+)
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.protected_runtime_host import require_protected_runtime_host
 from foundry_lite.infrastructure.release_dependencies import build_governed_release_dependencies
@@ -260,6 +275,82 @@ class RuntimeAdapterProfiles:
             language_model=_env_profile(source, "FOUNDRY_LITE_LANGUAGE_MODEL_PROFILE", base),
             action_file_scanner=_env_profile(source, "FOUNDRY_LITE_ACTION_FILE_SCANNER_PROFILE", "local-signature"),
         )
+
+
+@dataclass(frozen=True)
+class _RuntimeRoots:
+    root: Path
+    object_storage: Path
+    media_storage: Path
+    prompt_artifacts: Path
+    backup_artifacts: Path
+
+
+@dataclass(frozen=True)
+class _MediaAdapterGroup:
+    dataset_storage: DatasetStorageAdapter
+    media_storage: MediaStorageAdapter
+    vision_embedding: VisionEmbeddingModelAdapter
+    media_processor: MediaProcessorAdapter
+    media_processor_registry: MediaProcessorRegistry | None
+    content_index: ContentIndexAdapter
+
+
+@dataclass(frozen=True)
+class _ModelAdapterGroup:
+    embedding: EmbeddingModelAdapter
+    completion: CompletionModelAdapter
+
+
+@dataclass(frozen=True)
+class _ArtifactAdapterGroup:
+    secret_provider: SecretProvider
+    secret_vault: SecretVault
+    prompt_store: object
+    backup_store: BackupArtifactStore
+
+
+@dataclass(frozen=True)
+class _ExecutionAdapterGroup:
+    code_execution: CodeExecutionAdapter
+    compute: ComputeAdapter
+    connector: ConnectorAdapter
+    search: SearchAdapter
+    stream: StreamAdapter
+    workflow: WorkflowAdapter
+    pipeline_dag: PipelineDagOrchestrator
+    action_run: ActionRunOrchestrator
+    action_function: ActionFunctionExecutor
+    action_file_scanner: ActionFileScanner
+
+
+@dataclass(frozen=True)
+class _SharedRuntime:
+    engine: Engine
+    ontology_repository: SqlAlchemyOntologyRepository
+    connector_registry_repository: SqlAlchemyConnectorRegistryRepository
+    media_repository: SqlAlchemyMediaRepository
+    media_derivative_repository: SqlAlchemyMediaDerivativeRepository
+    policy: PolicyService
+    citation_source_verifier: CitationSourceVerifier
+    language_model: LanguageModelAdapter
+    notification_policy_repository: SqlAlchemyActionNotificationPolicyRepository
+
+
+@dataclass(frozen=True)
+class _RuntimeComposition:
+    profile: RuntimeProfile
+    profiles: RuntimeAdapterProfiles
+    roots: _RuntimeRoots
+    media: _MediaAdapterGroup
+    models: _ModelAdapterGroup
+    artifacts: _ArtifactAdapterGroup
+    local_files: LocalFileBoundaryAdapters
+    execution: _ExecutionAdapterGroup
+    shared: _SharedRuntime
+    governed_release_mcp_authority: GovernedReleaseMcpAuthority | None
+    oauth_issuer: str | None
+    oauth_audience: str | None
 
 
 def _classification_provider(
@@ -414,59 +505,126 @@ def _create_core_dependencies(
 ) -> CoreDependencies:
     require_object_query_cursor_signing_key_for_runtime()
     require_operations_cursor_signing_key_for_runtime()
-    root = local_storage_root(storage_root)
-    root.mkdir(parents=True, exist_ok=True)
-    object_storage_root = root / "object-storage"
-    object_storage_root.mkdir(parents=True, exist_ok=True)
-    media_storage_root = root / "media-storage"
-    media_storage_root.mkdir(parents=True, exist_ok=True)
-    prompt_artifacts_root = root / "prompt-artifacts"
-    prompt_artifacts_root.mkdir(parents=True, exist_ok=True)
-    backup_artifacts_root = root / "backup-artifacts"
-    backup_artifacts_root.mkdir(parents=True, exist_ok=True)
+    roots = _runtime_roots(storage_root)
+    media = _media_adapter_group(profiles, roots)
+    models = _model_adapter_group()
+    artifacts = _artifact_adapter_group(roots)
+    local_files = local_file_boundary_adapters(roots.root)
+    execution = _execution_adapter_group(profiles, runtime_profile, artifacts.secret_provider)
+    shared = _shared_runtime(
+        db_url,
+        runtime_profile,
+        profiles,
+        roots,
+        media,
+        artifacts,
+    )
+    composition = _RuntimeComposition(
+        profile=runtime_profile,
+        profiles=profiles,
+        roots=roots,
+        media=media,
+        models=models,
+        artifacts=artifacts,
+        local_files=local_files,
+        execution=execution,
+        shared=shared,
+        governed_release_mcp_authority=governed_release_mcp_authority,
+        oauth_issuer=oauth_issuer,
+        oauth_audience=oauth_audience,
+    )
+    return _assemble_core_dependencies(composition)
 
-    storage_adapter = _dataset_storage_adapter(profiles.dataset_storage, object_storage_root)
-    media_storage = _media_storage_adapter(profiles.media_storage, media_storage_root)
-    vision_embedding_model_adapter = LocalVisionEmbeddingAdapter(
+
+def _runtime_roots(storage_root: str | Path | None) -> _RuntimeRoots:
+    root = local_storage_root(storage_root)
+    paths = _RuntimeRoots(
+        root=root,
+        object_storage=root / "object-storage",
+        media_storage=root / "media-storage",
+        prompt_artifacts=root / "prompt-artifacts",
+        backup_artifacts=root / "backup-artifacts",
+    )
+    for path in (
+        paths.root,
+        paths.object_storage,
+        paths.media_storage,
+        paths.prompt_artifacts,
+        paths.backup_artifacts,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def _media_adapter_group(profiles: RuntimeAdapterProfiles, roots: _RuntimeRoots) -> _MediaAdapterGroup:
+    vision_embedding = LocalVisionEmbeddingAdapter(
         image_engine=_fastembed_clip_image_engine,
         text_engine=_fastembed_clip_text_engine,
         model_version=CLIP_MODEL_VERSION,
     )
-    media_processor = _media_processor_adapter(profiles.media_processor, vision_embedding_model_adapter)
-    media_processor_registry = _media_processor_registry(
-        profiles.media_processor,
-        vision_embedding_model_adapter,
+    return _MediaAdapterGroup(
+        dataset_storage=_dataset_storage_adapter(profiles.dataset_storage, roots.object_storage),
+        media_storage=_media_storage_adapter(profiles.media_storage, roots.media_storage),
+        vision_embedding=vision_embedding,
+        media_processor=_media_processor_adapter(profiles.media_processor, vision_embedding),
+        media_processor_registry=_media_processor_registry(profiles.media_processor, vision_embedding),
+        content_index=_content_index_adapter(profiles.content_index),
     )
-    content_index_adapter = _content_index_adapter(profiles.content_index)
-    embedding_model_adapter = LocalEmbeddingAdapter(
-        embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
+
+
+def _model_adapter_group() -> _ModelAdapterGroup:
+    return _ModelAdapterGroup(
+        embedding=LocalEmbeddingAdapter(
+            embedding_engine=_fastembed_embedding_engine,
+            model_version=FASTEMBED_MODEL_VERSION,
+        ),
+        completion=LocalCompletionAdapter(),
     )
-    completion_model_adapter = LocalCompletionAdapter()
+
+
+def _artifact_adapter_group(roots: _RuntimeRoots) -> _ArtifactAdapterGroup:
+    env_secret_provider = secret_provider_from_env()
+    secret_vault = local_secret_vault_provider(roots.root, fallback=env_secret_provider)
+    prompt_store, backup_store = artifact_stores(
+        roots.prompt_artifacts,
+        roots.backup_artifacts,
+        secret_vault,
+    )
+    return _ArtifactAdapterGroup(secret_vault, secret_vault, prompt_store, backup_store)
+
+
+def _execution_adapter_group(
+    profiles: RuntimeAdapterProfiles,
+    runtime_profile: RuntimeProfile,
+    secret_provider: SecretProvider,
+) -> _ExecutionAdapterGroup:
     # One sandbox serves both callers. A Python transform reaches it through the compute
     # adapter and a Python ontology function through the application layer, and they are the
     # same threat model, so they must not drift onto separate policies.
-    code_execution_adapter = _code_execution_adapter(profiles.compute, runtime_profile)
-    compute_adapter = _compute_adapter(
-        profiles.compute,
-        code_execution_adapter=code_execution_adapter,
+    code_execution = _code_execution_adapter(profiles.compute, runtime_profile)
+    return _ExecutionAdapterGroup(
+        code_execution=code_execution,
+        compute=_compute_adapter(profiles.compute, code_execution_adapter=code_execution),
+        connector=_connector_adapter(profiles.connector, secret_provider),
+        search=_search_adapter(profiles.search),
+        stream=_stream_adapter(profiles.stream),
+        workflow=_workflow_adapter(profiles.workflow),
+        pipeline_dag=_pipeline_dag_orchestrator(profiles.workflow),
+        action_run=_action_run_orchestrator(profiles.workflow),
+        action_function=InProcessActionFunctionExecutor(),
+        action_file_scanner=action_file_scanner_adapter(profiles.action_file_scanner),
     )
-    env_secret_provider = secret_provider_from_env()
-    secret_vault = local_secret_vault_provider(root, fallback=env_secret_provider)
-    secret_provider = secret_vault
-    prompt_artifact_store, backup_artifact_store = artifact_stores(
-        prompt_artifacts_root,
-        backup_artifacts_root,
-        secret_provider,
-    )
-    connector_adapter = _connector_adapter(profiles.connector, secret_provider)
-    search_adapter = _search_adapter(profiles.search)
-    stream_adapter = _stream_adapter(profiles.stream)
-    workflow_adapter = _workflow_adapter(profiles.workflow)
-    pipeline_dag_orchestrator = _pipeline_dag_orchestrator(profiles.workflow)
-    action_run_orchestrator = _action_run_orchestrator(profiles.workflow)
-    action_function_executor = InProcessActionFunctionExecutor()
-    action_file_scanner = action_file_scanner_adapter(profiles.action_file_scanner)
-    database_url = db_url or local_database_url(root)
+
+
+def _shared_runtime(
+    db_url: str | None,
+    runtime_profile: RuntimeProfile,
+    profiles: RuntimeAdapterProfiles,
+    roots: _RuntimeRoots,
+    media: _MediaAdapterGroup,
+    artifacts: _ArtifactAdapterGroup,
+) -> _SharedRuntime:
+    database_url = db_url or local_database_url(roots.root)
     engine = create_engine(database_url, future=True)
     install_postgres_rls_tenant_context(engine)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
@@ -477,145 +635,222 @@ def _create_core_dependencies(
         classification_provider=_classification_provider(engine, ontology_repository),
         action_role_provider=_action_role_provider(engine, ontology_repository),
     )
+    citation_source_verifier = _citation_source_verifier(
+        engine=engine,
+        policy=policy,
+        media_repository=media_repository,
+        media_derivative_repository=media_derivative_repository,
+    )
+    language_model = _language_model_adapter(
+        profiles.language_model,
+        artifacts.secret_provider,
+        engine,
+        media_repository,
+        media.media_storage,
+    )
+    notification_policy_repository = SqlAlchemyActionNotificationPolicyRepository(
+        engine,
+        fallback=action_notification_recipient_directory_adapter(is_protected=runtime_profile.is_protected),
+    )
+    return _SharedRuntime(
+        engine,
+        ontology_repository,
+        connector_registry_repository,
+        media_repository,
+        media_derivative_repository,
+        policy,
+        citation_source_verifier,
+        language_model,
+        notification_policy_repository,
+    )
+
+
+def _citation_source_verifier(
+    *,
+    engine: Engine,
+    policy: PolicyService,
+    media_repository: SqlAlchemyMediaRepository,
+    media_derivative_repository: SqlAlchemyMediaDerivativeRepository,
+) -> CitationSourceVerifier:
     content_unit_evidence_service = ContentUnitEvidenceService(
         engine=engine,
         policy=policy,
         media_repository=media_repository,
         media_derivative_repository=media_derivative_repository,
     )
-    citation_source_verifier = AuthoritativeCitationSourceVerifier(
-        content_unit_evidence_service,
-        FakeCitationSourceVerifier(),
-    )
-    language_model_adapter = _language_model_adapter(
-        profiles.language_model,
-        secret_provider,
-        engine,
-        media_repository,
-        media_storage,
-    )
-    notification_policy_repository = SqlAlchemyActionNotificationPolicyRepository(
-        engine,
-        fallback=action_notification_recipient_directory_adapter(is_protected=runtime_profile.is_protected),
-    )
-    allow_schema_mutation = not runtime_profile.is_protected
+    return AuthoritativeCitationSourceVerifier(content_unit_evidence_service, FakeCitationSourceVerifier())
+
+
+def _assemble_core_dependencies(composition: _RuntimeComposition) -> CoreDependencies:
     return CoreDependencies(
-        profile=runtime_profile,
-        pipeline_dag_orchestrator=pipeline_dag_orchestrator,
-        paths=PathDependencies(root=root, storage_root=object_storage_root),
-        security=SecurityDependencies(
-            engine=engine,
-            policy=policy,
-            metadata_repository=SqlAlchemyMetadataRepository(
-                engine,
-                allow_schema_mutation=allow_schema_mutation,
-            ),
-            destructive_development_admin=SqlAlchemyDestructiveDevelopmentAdmin(
-                engine,
-                allow_schema_mutation=allow_schema_mutation,
-            ),
-            osdk_application_repository=SqlAlchemyOsdkApplicationRepository(engine),
-            oauth_session_repository=SqlAlchemyOAuthSessionRepository(engine),
-            oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(
-                _oauth_private_key_path(root),
-                issuer=oauth_issuer or os.getenv(OAUTH_ISSUER_ENV),
-                audience=oauth_audience or os.getenv(OAUTH_AUDIENCE_ENV),
-            ),
-            secret_provider=secret_provider,
-            secret_vault=secret_vault,
-            mcp_rate_limiter=SqlAlchemyMcpRateLimiter(),
+        profile=composition.profile,
+        pipeline_dag_orchestrator=composition.execution.pipeline_dag,
+        paths=PathDependencies(
+            root=composition.roots.root,
+            storage_root=composition.roots.object_storage,
         ),
-        action=ActionDependencies(
-            action_repository=SqlAlchemyActionRepository(engine),
-            action_branch_repository=SqlAlchemyActionBranchRepository(engine),
-            action_execution_repository=SqlAlchemyActionExecutionRepository(engine),
-            action_effect_executor=ConnectorActionEffectExecutor(
-                engine,
-                connector_registry_repository,
-                secret_provider,
-                stream_adapter,
-            ),
-            action_function_executor=action_function_executor,
-            action_run_orchestrator=action_run_orchestrator,
-            action_file_scanner=action_file_scanner,
-            action_notification_recipient_directory=notification_policy_repository,
-            action_notification_policy_repository=notification_policy_repository,
+        security=_security_dependencies(composition),
+        action=_action_dependencies(composition),
+        data=_data_dependencies(composition),
+        object_store=_object_dependencies(composition),
+        runtime=_runtime_dependencies(composition),
+        aip=_aip_dependencies(composition),
+        media=_media_dependencies(composition),
+        source=_source_dependencies(composition),
+    )
+
+
+def _security_dependencies(composition: _RuntimeComposition) -> SecurityDependencies:
+    shared = composition.shared
+    artifacts = composition.artifacts
+    allow_schema_mutation = not composition.profile.is_protected
+    return SecurityDependencies(
+        engine=shared.engine,
+        policy=shared.policy,
+        metadata_repository=SqlAlchemyMetadataRepository(
+            shared.engine,
+            allow_schema_mutation=allow_schema_mutation,
         ),
-        data=DataDependencies(
-            ontology_repository=ontology_repository,
-            ontology_branch_repository=SqlAlchemyOntologyBranchRepository(engine),
-            pipeline_repository=SqlAlchemyPipelineRepository(engine),
-            pipeline_execution_repository=SqlAlchemyPipelineExecutionRepository(engine),
-            resource_catalog_repository=SqlAlchemyResourceCatalogRepository(engine),
-            transform_repository=SqlAlchemyTransformRepository(engine),
-            materialization_repository=SqlAlchemyMaterializationRepository(engine),
-            dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
-            compute_adapter=compute_adapter,
-            code_execution_adapter=code_execution_adapter,
-            dataset_repository=SqlAlchemyDatasetRepository(engine),
-            dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
-            dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
-            dataset_storage=storage_adapter,
+        destructive_development_admin=SqlAlchemyDestructiveDevelopmentAdmin(
+            shared.engine,
+            allow_schema_mutation=allow_schema_mutation,
         ),
-        object_store=ObjectDependencies(
-            object_index_repository=SqlAlchemyObjectIndexRepository(engine),
-            object_index_row_hash_repository=SqlAlchemyObjectIndexRowHashRepository(engine),
-            object_read_repository=SqlAlchemyObjectReadRepository(engine),
-            object_set_repository=SqlAlchemyObjectSetRepository(engine),
-            search_adapter=search_adapter,
+        osdk_application_repository=SqlAlchemyOsdkApplicationRepository(shared.engine),
+        osdk_download_token_signer=composition.local_files.osdk_download_token_signer,
+        osdk_release_artifact_store=composition.local_files.osdk_release_artifact_store,
+        oauth_session_repository=SqlAlchemyOAuthSessionRepository(shared.engine),
+        oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(
+            _oauth_private_key_path(composition.roots.root),
+            issuer=composition.oauth_issuer or os.getenv(OAUTH_ISSUER_ENV),
+            audience=composition.oauth_audience or os.getenv(OAUTH_AUDIENCE_ENV),
         ),
-        runtime=RuntimeDependencies(
-            runtime_repository=SqlAlchemyRuntimeRepository(engine),
-            erasure_repository=SqlAlchemyErasureRepository(engine),
-            insight_review_repository=SqlAlchemyInsightReviewRepository(engine),
-            stream_adapter=stream_adapter,
-            workflow_adapter=workflow_adapter,
-            backup_artifact_store=backup_artifact_store,
+        secret_provider=artifacts.secret_provider,
+        secret_vault=artifacts.secret_vault,
+        mcp_rate_limiter=SqlAlchemyMcpRateLimiter(),
+    )
+
+
+def _action_dependencies(composition: _RuntimeComposition) -> ActionDependencies:
+    shared = composition.shared
+    execution = composition.execution
+    return ActionDependencies(
+        action_repository=SqlAlchemyActionRepository(shared.engine),
+        action_branch_repository=SqlAlchemyActionBranchRepository(shared.engine),
+        action_execution_repository=SqlAlchemyActionExecutionRepository(shared.engine),
+        action_effect_executor=ConnectorActionEffectExecutor(
+            shared.engine,
+            shared.connector_registry_repository,
+            composition.artifacts.secret_provider,
+            execution.stream,
         ),
-        aip=AipDependencies(
-            ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
-            ai_run_repository=SqlAlchemyAiRunRepository(engine),
-            embedding_model_adapter=embedding_model_adapter,
-            completion_model_adapter=completion_model_adapter,
-            vision_embedding_model_adapter=vision_embedding_model_adapter,
-            language_model_adapter=language_model_adapter,
-            model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
-            semantic_row_cache_repository=SqlAlchemySemanticRowCacheRepository(engine),
-            context_provider=FakeContextProvider(),
-            prompt_artifact_store=prompt_artifact_store,
-            citation_source_verifier=citation_source_verifier,
-            tool_executor=FakeToolExecutor(),
-            model_catalog_seed=_language_model_catalog_seed(profiles.language_model),
-            trained_model_inference_port=_trained_model_inference_adapter(runtime_profile),
-            governed_release=build_governed_release_dependencies(
-                engine,
-                secret_provider,
-                runtime_profile=runtime_profile,
-                mcp_authority=governed_release_mcp_authority,
-            ),
+        action_function_executor=execution.action_function,
+        action_run_orchestrator=execution.action_run,
+        action_file_scanner=execution.action_file_scanner,
+        action_notification_recipient_directory=shared.notification_policy_repository,
+        action_notification_policy_repository=shared.notification_policy_repository,
+    )
+
+
+def _data_dependencies(composition: _RuntimeComposition) -> DataDependencies:
+    engine = composition.shared.engine
+    return DataDependencies(
+        ontology_repository=composition.shared.ontology_repository,
+        ontology_branch_repository=SqlAlchemyOntologyBranchRepository(engine),
+        pipeline_repository=SqlAlchemyPipelineRepository(engine),
+        pipeline_execution_repository=SqlAlchemyPipelineExecutionRepository(engine),
+        resource_catalog_repository=SqlAlchemyResourceCatalogRepository(engine),
+        transform_repository=SqlAlchemyTransformRepository(engine),
+        materialization_repository=SqlAlchemyMaterializationRepository(engine),
+        dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
+        compute_adapter=composition.execution.compute,
+        code_execution_adapter=composition.execution.code_execution,
+        dataset_repository=SqlAlchemyDatasetRepository(engine),
+        dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
+        dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
+        dataset_storage=composition.media.dataset_storage,
+        transform_source_store=composition.local_files.transform_source_store,
+        ontology_definition_reader=composition.local_files.ontology_definition_reader,
+    )
+
+
+def _object_dependencies(composition: _RuntimeComposition) -> ObjectDependencies:
+    engine = composition.shared.engine
+    return ObjectDependencies(
+        object_index_repository=SqlAlchemyObjectIndexRepository(engine),
+        object_index_row_hash_repository=SqlAlchemyObjectIndexRowHashRepository(engine),
+        object_read_repository=SqlAlchemyObjectReadRepository(engine),
+        object_set_repository=SqlAlchemyObjectSetRepository(engine),
+        search_adapter=composition.execution.search,
+    )
+
+
+def _runtime_dependencies(composition: _RuntimeComposition) -> RuntimeDependencies:
+    engine = composition.shared.engine
+    return RuntimeDependencies(
+        runtime_repository=SqlAlchemyRuntimeRepository(engine),
+        erasure_repository=SqlAlchemyErasureRepository(engine),
+        insight_review_repository=SqlAlchemyInsightReviewRepository(engine),
+        stream_adapter=composition.execution.stream,
+        workflow_adapter=composition.execution.workflow,
+        backup_artifact_store=composition.artifacts.backup_store,
+    )
+
+
+def _aip_dependencies(composition: _RuntimeComposition) -> AipDependencies:
+    engine = composition.shared.engine
+    return AipDependencies(
+        ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
+        ai_run_repository=SqlAlchemyAiRunRepository(engine),
+        embedding_model_adapter=composition.models.embedding,
+        completion_model_adapter=composition.models.completion,
+        vision_embedding_model_adapter=composition.media.vision_embedding,
+        language_model_adapter=composition.shared.language_model,
+        model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
+        semantic_row_cache_repository=SqlAlchemySemanticRowCacheRepository(engine),
+        context_provider=FakeContextProvider(),
+        prompt_artifact_store=composition.artifacts.prompt_store,
+        citation_source_verifier=composition.shared.citation_source_verifier,
+        tool_executor=FakeToolExecutor(),
+        model_catalog_seed=_language_model_catalog_seed(composition.profiles.language_model),
+        trained_model_inference_port=_trained_model_inference_adapter(composition.profile),
+        governed_release=build_governed_release_dependencies(
+            engine,
+            composition.artifacts.secret_provider,
+            runtime_profile=composition.profile,
+            mcp_authority=composition.governed_release_mcp_authority,
         ),
-        media=MediaDependencies(
-            media_repository=media_repository,
-            media_derivative_repository=media_derivative_repository,
-            media_reference_binding_repository=SqlAlchemyMediaReferenceBindingRepository(engine),
-            media_access_cache_repository=SqlAlchemyMediaAccessCacheRepository(engine),
-            media_storage=media_storage,
-            media_processor=media_processor,
-            media_processor_registry=media_processor_registry,
-            media_preview_renderer=LocalPreviewRendererAdapter(),
-            external_media_reader=_external_media_reader(profiles.external_media),
-            content_index_adapter=content_index_adapter,
-        ),
-        source=SourceDependencies(
-            connector_adapter=connector_adapter,
-            connector_registry_repository=connector_registry_repository,
-            source_registry_repository=SqlAlchemySourceRegistryRepository(engine),
-            source_management_repository=SqlAlchemySourceManagementRepository(engine),
-            source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
-            source_stream_adapter=KafkaSourceStreamAdapter(),
-            virtual_table_repository=SqlAlchemyVirtualTableRepository(engine),
-            virtual_table_reader=PostgresVirtualTableReader(),
-        ),
+    )
+
+
+def _media_dependencies(composition: _RuntimeComposition) -> MediaDependencies:
+    engine = composition.shared.engine
+    return MediaDependencies(
+        media_repository=composition.shared.media_repository,
+        media_derivative_repository=composition.shared.media_derivative_repository,
+        media_reference_binding_repository=SqlAlchemyMediaReferenceBindingRepository(engine),
+        media_access_cache_repository=SqlAlchemyMediaAccessCacheRepository(engine),
+        media_storage=composition.media.media_storage,
+        media_source_workspace=composition.local_files.media_source_workspace,
+        media_processor=composition.media.media_processor,
+        media_processor_registry=composition.media.media_processor_registry,
+        media_preview_renderer=LocalPreviewRendererAdapter(),
+        external_media_reader=_external_media_reader(composition.profiles.external_media),
+        content_index_adapter=composition.media.content_index,
+    )
+
+
+def _source_dependencies(composition: _RuntimeComposition) -> SourceDependencies:
+    engine = composition.shared.engine
+    return SourceDependencies(
+        connector_adapter=composition.execution.connector,
+        connector_registry_repository=composition.shared.connector_registry_repository,
+        source_registry_repository=SqlAlchemySourceRegistryRepository(engine),
+        source_management_repository=SqlAlchemySourceManagementRepository(engine),
+        source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
+        source_stream_adapter=KafkaSourceStreamAdapter(),
+        source_upload_staging_store=composition.local_files.source_upload_staging_store,
+        virtual_table_repository=SqlAlchemyVirtualTableRepository(engine),
+        virtual_table_reader=PostgresVirtualTableReader(),
     )
 
 

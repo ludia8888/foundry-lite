@@ -14,6 +14,12 @@ from foundry_lite.application.ports.ontology_repository import (
     PropertyTypeRow,
 )
 from foundry_lite.application.services.ontology_action_import import import_action_types
+from foundry_lite.application.services.ontology_activation_imports import (
+    import_link_types,
+    import_properties_for_object_type,
+    insert_property_type,
+    object_type_config,
+)
 from foundry_lite.application.services.ontology_activation_service import OntologyActivationService
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan, reindex_operation
 from foundry_lite.application.services.ontology_validation import (
@@ -340,12 +346,7 @@ def test_persisted_link_validation_rejects_missing_backing_key() -> None:
 
 
 def test_ontology_activation_cas_conflict_reports_lost_draft_state() -> None:
-    service = OntologyActivationService(
-        engine=object(),
-        ontology_repository=_ActivationConflictRepository(),
-        resource_catalog_repository=object(),
-        media_repository=object(),
-    )
+    service = _ontology_activation_service(_ActivationConflictRepository())
 
     with pytest.raises(ConflictDetected, match="lost its draft state") as exc_info:
         service._activate_ontology_version(FakeTransaction(), demo_admin_context(), "ont_candidate")
@@ -355,12 +356,7 @@ def test_ontology_activation_cas_conflict_reports_lost_draft_state() -> None:
 
 def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
     runtime = _RecordingRuntimeService()
-    service = OntologyActivationService(
-        engine=object(),
-        ontology_repository=_RecordingOntologyRepository(),
-        resource_catalog_repository=object(),
-        media_repository=object(),
-    )
+    service = _ontology_activation_service(_RecordingOntologyRepository())
     service.bind_collaborators(
         {
             "dataset_registry_service": object(),
@@ -389,15 +385,11 @@ def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
 
 
 def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() -> None:
-    service = OntologyActivationService(
-        engine=object(),
-        ontology_repository=_RecordingOntologyRepository(),
-        resource_catalog_repository=object(),
-        media_repository=object(),
-    )
+    repository = _RecordingOntologyRepository()
 
     with pytest.raises(ValidationFailed, match="duplicate property apiName") as exc_info:
-        service._import_properties_for_object_type(
+        import_properties_for_object_type(
+            repository,
             FakeTransaction(),
             demo_admin_context(),
             "otype_Order",
@@ -413,15 +405,11 @@ def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() ->
 
 
 def test_ontology_import_rejects_null_property_source() -> None:
-    service = OntologyActivationService(
-        engine=object(),
-        ontology_repository=_RecordingOntologyRepository(),
-        resource_catalog_repository=object(),
-        media_repository=object(),
-    )
+    repository = _RecordingOntologyRepository()
 
     with pytest.raises(ValidationFailed, match="property source must be set") as exc_info:
-        service._insert_property_type(
+        insert_property_type(
+            repository,
             FakeTransaction(),
             demo_admin_context(),
             "otype_Order",
@@ -432,15 +420,11 @@ def test_ontology_import_rejects_null_property_source() -> None:
 
 
 def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
-    service = OntologyActivationService(
-        engine=object(),
-        ontology_repository=_RecordingOntologyRepository(),
-        resource_catalog_repository=object(),
-        media_repository=object(),
-    )
+    repository = _RecordingOntologyRepository()
 
     with pytest.raises(ValidationFailed, match="link references unknown object type"):
-        service._import_link_types(
+        import_link_types(
+            repository,
             FakeTransaction(),
             demo_admin_context(),
             "ont_candidate",
@@ -449,13 +433,45 @@ def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
         )
     with pytest.raises(ValidationFailed, match="action target reference was not found"):
         import_action_types(
-            service.ontology_repository,
+            repository,
             FakeTransaction(),
             demo_admin_context(),
             "ont_candidate",
             {"actionTypes": [{"apiName": "ApproveOrder", "target": "Customer"}]},
             {"Order": "otype_Order"},
         )
+
+
+def test_ontology_activation_import_config_preserves_sequence_and_media_shapes() -> None:
+    config = object_type_config(
+        {
+            "apiName": "Order",
+            "backing": {"dataset": "clean.orders"},
+            "titleProperty": "orderId",
+            "implements": ["Asset"],
+            "rowPolicies": [{"role": "ops", "filter": {"property": "region", "op": "eq", "value": "NA"}}],
+            "properties": [
+                {
+                    "apiName": "receipt",
+                    "type": "attachment",
+                    "mediaSet": "case.documents",
+                    "allowMultiple": True,
+                }
+            ],
+        },
+        OntologyMigrationPlan(None, (), ()),
+        "Order",
+    )
+
+    assert config["implements"] == ["Asset"]
+    assert config["rowPolicies"] == [{"role": "ops", "filter": {"property": "region", "op": "eq", "value": "NA"}}]
+    assert config["mediaProperties"] == {
+        "receipt": {
+            "mediaSet": "case.documents",
+            "referenceKind": "attachment",
+            "allowMultiple": True,
+        }
+    }
 
 
 class _ActivationConflictRepository:
@@ -492,6 +508,21 @@ class _RecordingRuntimeService:
         after_ref = kwargs["after_ref"]
         assert isinstance(after_ref, dict)
         self.audit_after_refs.append(after_ref)
+
+
+class _UnusedOntologyDefinitionReader:
+    def read_definition(self, request: object) -> object:
+        raise AssertionError(f"unexpected ontology definition read: {request}")
+
+
+def _ontology_activation_service(repository: object) -> OntologyActivationService:
+    return OntologyActivationService(
+        engine=object(),
+        media_repository=object(),
+        ontology_definition_reader=_UnusedOntologyDefinitionReader(),
+        ontology_repository=repository,
+        resource_catalog_repository=object(),
+    )
 
 
 def _dataset_columns(

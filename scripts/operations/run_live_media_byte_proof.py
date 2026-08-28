@@ -28,6 +28,7 @@ from foundry_lite.infrastructure.adapters.asr_processor import AsrProcessorAdapt
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter, _tesseract_ocr_engine
 from foundry_lite.infrastructure.adapters.video_probe_processor import (
@@ -266,6 +267,7 @@ def _build_media_plane(storage_root: Path) -> _MediaPlane:
     media_repository = SqlAlchemyMediaRepository(engine)
     derivative_repository = SqlAlchemyMediaDerivativeRepository(engine)
     storage = LocalMediaStorageAdapter(storage_root / "media")
+    media_source_workspace = LocalMediaSourceWorkspace(storage_root)
     runtime = _FakeRuntime()
     catalog = MediaCatalogService(engine=engine, media_repository=media_repository)
     catalog.bind_collaborators({"runtime_service": runtime})
@@ -300,6 +302,7 @@ def _build_media_plane(storage_root: Path) -> _MediaPlane:
             media_repository,
             derivative_repository,
             storage,
+            media_source_workspace,
             runtime,
             OcrProcessorAdapter(ocr_engine=_tesseract_ocr_engine),
         ),
@@ -308,6 +311,7 @@ def _build_media_plane(storage_root: Path) -> _MediaPlane:
             media_repository,
             derivative_repository,
             storage,
+            media_source_workspace,
             runtime,
             AsrProcessorAdapter(asr_engine=_faster_whisper_asr_engine),
         ),
@@ -316,6 +320,7 @@ def _build_media_plane(storage_root: Path) -> _MediaPlane:
             media_repository,
             derivative_repository,
             storage,
+            media_source_workspace,
             runtime,
             VideoProbeProcessorAdapter(probe_runner=_ffprobe_video_probe_runner),
         ),
@@ -329,6 +334,7 @@ def _processing(
     media_repository: SqlAlchemyMediaRepository,
     derivative_repository: SqlAlchemyMediaDerivativeRepository,
     storage: LocalMediaStorageAdapter,
+    media_source_workspace: LocalMediaSourceWorkspace,
     runtime: _FakeRuntime,
     processor: MediaProcessorAdapter,
 ) -> MediaProcessingService:
@@ -338,6 +344,7 @@ def _processing(
         media_repository=media_repository,
         media_derivative_repository=derivative_repository,
         media_storage=storage,
+        media_source_workspace=media_source_workspace,
         media_processor=processor,
     )
     service.bind_collaborators({"runtime_service": runtime})

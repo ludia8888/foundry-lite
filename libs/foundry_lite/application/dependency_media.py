@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from foundry_lite.application.media_processing_ports import (
+    MediaDerivativeRepository,
+    MediaProcessorAdapter,
+    MediaProcessorRegistry,
+    MediaRepository,
+    MediaSourceWorkspace,
+    MediaStorageAdapter,
+)
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
 from foundry_lite.application.ports.media_access_cache_repository import MediaAccessCacheRepository
-from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
 from foundry_lite.application.ports.media_preview_renderer import MediaPreviewRendererAdapter
-from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
-from foundry_lite.application.ports.media_processor_registry import MediaProcessorRegistry
 from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRepository
-from foundry_lite.application.ports.media_repository import MediaRepository
-from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ class MediaDependencies:
     media_reference_binding_repository: MediaReferenceBindingRepository
     media_access_cache_repository: MediaAccessCacheRepository
     media_storage: MediaStorageAdapter
+    media_source_workspace: MediaSourceWorkspace
     media_processor: MediaProcessorAdapter
     media_preview_renderer: MediaPreviewRendererAdapter
     external_media_reader: ExternalMediaReader
@@ -43,5 +47,6 @@ __all__ = [
     "MediaProcessorRegistry",
     "MediaReferenceBindingRepository",
     "MediaRepository",
+    "MediaSourceWorkspace",
     "MediaStorageAdapter",
 ]

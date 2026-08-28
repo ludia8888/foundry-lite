@@ -61,6 +61,7 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
     LocalEmbeddingAdapter,
     _fastembed_embedding_engine,
 )
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter, _tesseract_ocr_engine
 from foundry_lite.infrastructure.adapters.s3_client import build_s3_client
@@ -285,6 +286,7 @@ def plane(minio_server: MinioServer, es_url: str, tmp_path: Path) -> _Plane:
         engine=engine,
         media_repository=repo,
         media_storage=storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_access_cache_repository=cache_repo,
         media_preview_renderer=LocalPreviewRendererAdapter(),
     )

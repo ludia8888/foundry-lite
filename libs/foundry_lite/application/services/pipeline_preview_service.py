@@ -14,7 +14,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelinePreviewRunRecord,
     PipelinePreviewRunRow,
 )
-from foundry_lite.application.ports.pipeline_repository import PipelineBranchRow, PipelineRepository
+from foundry_lite.application.ports.pipeline_repository import PipelineRepository
 from foundry_lite.application.ports.semantic_row_cache_repository import SemanticRowCacheRepository
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.pipeline_preview_dispatch import (
@@ -26,6 +26,7 @@ from foundry_lite.application.services.pipeline_preview_executor import (
     execute_pipeline_preview,
     normalize_preview_limits,
 )
+from foundry_lite.application.services.pipeline_preview_queries import require_pipeline_preview_branch
 from foundry_lite.application.services.pipeline_preview_recovery import (
     PipelinePreviewExecutionLeaseLost,
     PipelinePreviewRecoveryCursor,
@@ -70,6 +71,7 @@ class PipelinePreviewService(CoreService):
         "pipeline_dag_orchestrator",
         "media_repository",
         "media_storage",
+        "media_source_workspace",
         "media_processor_registry",
         "embedding_model_adapter",
         "governed_semantic_model_port",
@@ -102,7 +104,7 @@ class PipelinePreviewService(CoreService):
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "pipeline:write", "pipeline_branch", branch_id)
         self._require_write_open(ctx, branch_id)
-        branch = self._branch(branch_id, ctx)
+        branch = require_pipeline_preview_branch(self.engine, self.pipeline_repository, ctx, branch_id)
         pipeline_id = str(branch["pipeline_id"])
         _require_valid_preview_graph(graph)
         normalized_limits = normalize_preview_limits(limits)
@@ -440,6 +442,7 @@ class PipelinePreviewService(CoreService):
             source_management_repository=self.source_management_repository,
             media_repository=self.media_repository,
             media_storage=self.media_storage,
+            media_source_workspace=self.media_source_workspace,
             media_processor_registry=self.media_processor_registry,
             embedding_model_adapter=self.embedding_model_adapter,
             model_gateway=self.governed_semantic_model_port,
@@ -451,17 +454,6 @@ class PipelinePreviewService(CoreService):
             sensitive_fields=sensitive_fields,
             masked_fields=tuple(self.policy.masked_column_names(ctx)),
         )
-
-    def _branch(self, branch_id: str, ctx: RequestContext) -> PipelineBranchRow:
-        with self.engine.begin() as conn:
-            row = self.pipeline_repository.branch_by_id(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                branch_id=branch_id,
-            )
-        if row is None:
-            raise NotFound("pipeline branch not found", details={"branch_id": branch_id})
-        return row
 
     def _require_preview(self, conn: object, ctx: RequestContext, preview_run_id: str) -> PipelinePreviewRunRow:
         row = self.pipeline_execution_repository.preview_by_id(

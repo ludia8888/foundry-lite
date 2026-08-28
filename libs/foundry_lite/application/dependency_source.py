@@ -14,6 +14,7 @@ from foundry_lite.application.ports.source_database_adapter import SourceDatabas
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
 from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
+from foundry_lite.application.ports.source_upload_staging_store import SourceUploadStagingStore
 from foundry_lite.application.ports.virtual_table import VirtualTableReader, VirtualTableRepository
 
 
@@ -25,5 +26,6 @@ class SourceDependencies:
     source_management_repository: SourceManagementRepository
     source_database_adapter: SourceDatabaseAdapter
     source_stream_adapter: SourceStreamAdapter
+    source_upload_staging_store: SourceUploadStagingStore
     virtual_table_repository: VirtualTableRepository
     virtual_table_reader: VirtualTableReader

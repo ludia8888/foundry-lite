@@ -24,6 +24,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.image_processor import ImageDescription, ImageProcessorAdapter
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from foundry_lite.security.policy import PolicyService
@@ -64,6 +65,7 @@ def _processing(env: _Env, processor: object) -> MediaProcessingService:
         media_repository=env.repo,
         media_derivative_repository=env.deriv,
         media_storage=env.storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_processor=processor,
     )
     svc.bind_collaborators({"runtime_service": _FakeRuntime()})

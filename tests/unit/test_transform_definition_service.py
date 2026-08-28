@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.ports.transform_repository import TransformRecord, TransformRow
+from foundry_lite.application.ports.transform_source_store import TransformSourceArtifact, TransformSourceWrite
 from foundry_lite.application.services.transform_definition_service import (
     TransformDefinitionService,
     _normalized_python_function,
-    _registered_python_entrypoint,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
@@ -106,6 +106,24 @@ class _TransformRepository:
         return self.row
 
 
+class _TransformSourceStore:
+    profile_name = "test-transform-source-store"
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.writes: list[TransformSourceWrite] = []
+
+    def write_source(self, request: TransformSourceWrite) -> TransformSourceArtifact:
+        self.writes.append(request)
+        extension = "py" if request.language == "python" else "sql"
+        entrypoint = self.root / "registered-transforms" / request.tenant_id / f"{request.api_name}.{extension}"
+        return TransformSourceArtifact(
+            entrypoint=str(entrypoint),
+            content_hash="sha256:test-source",
+            byte_size=len(request.source_code.encode("utf-8")),
+        )
+
+
 def _existing_row() -> TransformRow:
     return {
         "id": "tf_existing",
@@ -127,9 +145,9 @@ def _service(
     registry = _DatasetRegistry()
     runtime = _Runtime()
     service = TransformDefinitionService(
-        root=tmp_path,
         engine=_TransactionManager(),
         transform_repository=repository,
+        transform_source_store=_TransformSourceStore(tmp_path),
     )
     service.bind_collaborators(
         {
@@ -140,7 +158,7 @@ def _service(
     return service, registry, runtime
 
 
-def test_register_python_transform_creates_file_and_definition(tmp_path: Path) -> None:
+def test_register_python_transform_persists_source_and_definition(tmp_path: Path) -> None:
     repository = _TransformRepository()
     service, registry, runtime = _service(tmp_path, repository)
 
@@ -154,13 +172,50 @@ def test_register_python_transform_creates_file_and_definition(tmp_path: Path) -
     )
 
     entrypoint, function_name = row["entrypoint"].rsplit(":", 1)
-    assert Path(entrypoint).read_text(encoding="utf-8").startswith("def transform")
+    assert entrypoint.endswith("clean_rows.py")
     assert function_name == "transform"
+    source_store = service.transform_source_store
+    assert isinstance(source_store, _TransformSourceStore)
+    assert source_store.writes == [
+        TransformSourceWrite(
+            tenant_id="tenant-demo",
+            api_name="clean_rows",
+            language="python",
+            source_code="def transform(rows):\n    return rows\n",
+        )
+    ]
     assert row["language"] == "python"
     assert registry.refs == ["output"]
     assert runtime.permissions == [("transform:run", "clean_rows")]
     assert runtime.write_operations == ["register_python_transform"]
     assert runtime.audit_events[0]["event_type"] == "transform.definition.created"
+
+
+def test_register_sql_transform_persists_sql_through_source_store(tmp_path: Path) -> None:
+    repository = _TransformRepository()
+    service, registry, runtime = _service(tmp_path, repository)
+
+    row = service.register_sql_transform(
+        "clean_rows",
+        sql="select * from source",
+        inputs={"source": "input"},
+        output_dataset_ref="output",
+    )
+
+    source_store = service.transform_source_store
+    assert isinstance(source_store, _TransformSourceStore)
+    assert source_store.writes == [
+        TransformSourceWrite(
+            tenant_id="tenant-demo",
+            api_name="clean_rows",
+            language="sql",
+            source_code="select * from source",
+        )
+    ]
+    assert row["entrypoint"].endswith("clean_rows.sql")
+    assert row["language"] == "sql"
+    assert registry.refs == ["output"]
+    assert runtime.write_operations == ["register_sql_transform"]
 
 
 def test_register_python_transform_replaces_definition_without_function_suffix(tmp_path: Path) -> None:
@@ -197,15 +252,6 @@ def test_python_transform_registration_rejects_blank_source_and_function(tmp_pat
 
     with pytest.raises(ValidationFailed, match="functionName"):
         _normalized_python_function(" \t")
-
-
-def test_python_entrypoint_is_tenant_scoped_and_stable(tmp_path: Path) -> None:
-    first = _registered_python_entrypoint(tmp_path, "tenant-demo", "clean_rows")
-    second = _registered_python_entrypoint(tmp_path, "tenant-demo", "clean_rows")
-
-    assert first == second
-    assert first.parent.name == "tenant-demo"
-    assert first.name.startswith("clean_rows-")
 
 
 @pytest.mark.parametrize("existing", [None, _existing_row()])

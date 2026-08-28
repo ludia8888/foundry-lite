@@ -28,6 +28,7 @@ from foundry_lite.application.services.source_onboarding_service import SourceOn
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
+from foundry_lite.infrastructure.adapters.local_source_upload_staging_store import LocalSourceUploadStagingStore
 from foundry_lite.infrastructure.secrets.local_vault import (
     LocalSecretVaultProvider,
     _redacted_details,
@@ -1528,6 +1529,23 @@ def test_local_secret_vault_and_preview_adapters_fail_closed(tmp_path) -> None:
     assert timed_out.value.reason == "render_timeout"
 
 
+def test_source_onboarding_rejects_path_escape_before_staging(tmp_path) -> None:
+    service = _source_onboarding_service(tmp_path)
+
+    with pytest.raises(ValidationFailed):
+        service.upload_csv(
+            source_name="../escape",
+            display_name="Escaping Source",
+            dataset_ref="raw.orders",
+            file_name="orders.csv",
+            source=BytesIO(b"order_id\nO-1\n"),
+            idempotency_key="escape-1",
+            ctx=RequestContext(tenant_id="tenant-demo", actor_user_id="user-demo"),
+        )
+
+    assert not (tmp_path / "source-uploads").exists()
+
+
 def test_source_onboarding_service_covers_batch_webhook_cdc_and_replay_paths(tmp_path) -> None:
     ctx = RequestContext(tenant_id="tenant-demo", actor_user_id="user-demo", request_id="req-source-service")
     service = _source_onboarding_service(tmp_path)
@@ -2070,7 +2088,7 @@ def _source_onboarding_service(tmp_path) -> SourceOnboardingService:
     service = object.__new__(SourceOnboardingService)
     service.engine = _Engine()
     service.policy = _AllowPolicy()
-    service.root = tmp_path
+    service.source_upload_staging_store = LocalSourceUploadStagingStore(tmp_path)
     service.connector_registry_repository = _ConnectorRegistry()
     service.source_registry_repository = _SourceRegistry()
     service.runtime_repository = _RuntimeRepository()

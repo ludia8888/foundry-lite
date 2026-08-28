@@ -34,6 +34,7 @@ from foundry_lite.application.services.media.uploads import MediaUploadInput, Me
 from foundry_lite.application.services.runtime_error_payloads import runtime_error_payload
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.local_media_source_workspace import LocalMediaSourceWorkspace
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from foundry_lite.security.policy import PolicyService
@@ -117,6 +118,7 @@ def env(tmp_path: Path) -> _Env:
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_processor=processor,
     )
     processing.bind_collaborators({"runtime_service": runtime})

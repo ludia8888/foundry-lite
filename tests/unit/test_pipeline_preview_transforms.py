@@ -8,6 +8,10 @@ import pytest
 from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaSetSelectionRecord
 from foundry_lite.application.services.pipeline_graph_contracts import PipelineV2Node
 from foundry_lite.application.services.pipeline_preview_errors import PipelineCodeIsolationRequired
+from foundry_lite.application.services.pipeline_preview_media_execution import (
+    require_total_media_bytes,
+    version_with_source_security,
+)
 from foundry_lite.application.services.pipeline_preview_runtime import (
     PipelinePreviewRuntime,
     _dataset_security_envelope,
@@ -15,11 +19,9 @@ from foundry_lite.application.services.pipeline_preview_runtime import (
     _media_set_ref_parts,
     _require_exact_selection,
     _require_model_ref,
-    _require_total_bytes,
     _selection_coordinates,
     _selection_path_prefix,
     _selection_version_ids,
-    _version_with_source_security,
 )
 from foundry_lite.application.services.pipeline_preview_structured import (
     output_geospatial,
@@ -375,7 +377,7 @@ def test_preview_runtime_selection_and_security_helpers_fail_closed() -> None:
         version=version,
     )
 
-    secured = _version_with_source_security(
+    secured = version_with_source_security(
         version,
         {"securityEnvelope": {"classification": "restricted", "hasLegalHold": True}},
     )
@@ -395,9 +397,9 @@ def test_preview_runtime_selection_and_security_helpers_fail_closed() -> None:
     )
 
     with pytest.raises(ValidationFailed, match="security envelope"):
-        _version_with_source_security(version, {})
+        version_with_source_security(version, {})
     with pytest.raises(ValidationFailed, match="byte budget"):
-        _require_total_bytes([replace(version, byte_size=13)], 12)
+        require_total_media_bytes([replace(version, byte_size=13)], 12)
 
 
 def test_preview_runtime_selection_coordinates_are_bounded_and_exact() -> None:

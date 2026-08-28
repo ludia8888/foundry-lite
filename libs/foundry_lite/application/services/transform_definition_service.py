@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRepository,
     TransformRow,
 )
+from foundry_lite.application.ports.transform_source_store import TransformSourceStore, TransformSourceWrite
 from foundry_lite.application.primitives import _new_id
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.transform_protocols import (
@@ -33,11 +33,12 @@ from foundry_lite.domain.transform import (
 class TransformDefinitionService(CoreService):
     """Register and replace transform definitions inside the Transform context."""
 
-    required_dependencies = ("root", "engine", "transform_repository")
+    required_dependencies = ("engine", "transform_repository", "transform_source_store")
     required_collaborators = ("dataset_registry_service", "runtime_service")
     dataset_registry_service: TransformDatasetRegistry
     runtime_service: TransformRuntimeBoundary
     transform_repository: TransformRepository
+    transform_source_store: TransformSourceStore
 
     def register_transform(
         self,
@@ -122,10 +123,15 @@ class TransformDefinitionService(CoreService):
         if not sql.strip():
             raise ValidationFailed("SQL transform body is required", details={"api_name": api_name})
         validate_sql_transform_uses_declared_inputs(sql)
-        entrypoint = _registered_sql_entrypoint(self.root, ctx.tenant_id, api_name)
-        entrypoint.parent.mkdir(parents=True, exist_ok=True)
-        entrypoint.write_text(sql, encoding="utf-8")
-        return entrypoint
+        artifact = self.transform_source_store.write_source(
+            TransformSourceWrite(
+                tenant_id=ctx.tenant_id,
+                api_name=api_name,
+                language="sql",
+                source_code=sql,
+            )
+        )
+        return Path(artifact.entrypoint)
 
     def _write_registered_python(
         self,
@@ -137,11 +143,17 @@ class TransformDefinitionService(CoreService):
         if not source_code.strip():
             raise ValidationFailed("Python transform sourceCode is required", details={"api_name": api_name})
         normalized_function = _normalized_python_function(function_name)
-        entrypoint = _registered_python_entrypoint(self.root, ctx.tenant_id, api_name)
-        entrypoint.parent.mkdir(parents=True, exist_ok=True)
-        entrypoint.write_text(source_code, encoding="utf-8")
+        artifact = self.transform_source_store.write_source(
+            TransformSourceWrite(
+                tenant_id=ctx.tenant_id,
+                api_name=api_name,
+                language="python",
+                source_code=source_code,
+            )
+        )
+        entrypoint = artifact.entrypoint
         if normalized_function is None:
-            return str(entrypoint)
+            return entrypoint
         return f"{entrypoint}:{normalized_function}"
 
     def _register_definition(
@@ -339,20 +351,6 @@ class TransformDefinitionService(CoreService):
         if row is None:
             raise InvariantViolation("transform row missing after update", details={"transform_id": existing["id"]})
         return row
-
-
-def _registered_sql_entrypoint(root: Path, tenant_id: str, api_name: str) -> Path:
-    tenant_slug = safe_transform_path_token(tenant_id, "tenant_id")
-    slug = safe_transform_path_token(api_name, "api_name")
-    digest = hashlib.sha256(f"{tenant_id}:{api_name}".encode()).hexdigest()[:12]
-    return root / "registered-transforms" / tenant_slug / f"{slug}-{digest}.sql"
-
-
-def _registered_python_entrypoint(root: Path, tenant_id: str, api_name: str) -> Path:
-    tenant_slug = safe_transform_path_token(tenant_id, "tenant_id")
-    slug = safe_transform_path_token(api_name, "api_name")
-    digest = hashlib.sha256(f"{tenant_id}:{api_name}".encode()).hexdigest()[:12]
-    return root / "registered-transforms" / tenant_slug / f"{slug}-{digest}.py"
 
 
 def _normalized_python_function(function_name: str | None) -> str | None:

@@ -7,6 +7,7 @@ import pytest
 from foundry_lite.application.ports.pipeline_dag_orchestrator import PipelineDagDispatchResult
 from foundry_lite.application.ports.pipeline_execution_repository import PipelinePreviewRunRow
 from foundry_lite.application.services.pipeline_preview_executor import PreviewExecutionResult
+from foundry_lite.application.services.pipeline_preview_queries import require_pipeline_preview_branch
 from foundry_lite.application.services.pipeline_preview_service import (
     PipelinePreviewService,
     _require_valid_preview_graph,
@@ -166,7 +167,7 @@ def test_pipeline_preview_service_not_found_boundaries_and_invalid_graph() -> No
     with pytest.raises(NotFound, match="preview run"):
         service.get_preview_run("missing", ctx=ctx)
     with pytest.raises(NotFound, match="pipeline branch"):
-        service._branch("missing", ctx)
+        require_pipeline_preview_branch(service.engine, service.pipeline_repository, ctx, "missing")
     with pytest.raises(NotFound, match="preview run"):
         service._require_preview(object(), ctx, "missing")
 

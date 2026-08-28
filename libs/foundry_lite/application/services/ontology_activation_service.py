@@ -6,14 +6,16 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from foundry_lite.application.ports import (
-    LinkTypeRecord,
     ObjectTypeRecord,
     OntologyApplyResult,
     OntologyValidationResult,
     OntologyVersionRecord,
-    PropertyTypeRecord,
     ResourceCatalogRepository,
     TransactionContext,
+)
+from foundry_lite.application.ports.ontology_definition_reader import (
+    OntologyDefinitionRead,
+    OntologyDefinitionReader,
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
@@ -22,9 +24,13 @@ from foundry_lite.application.services.ontology_activation_contracts import (
     import_action_types,
     import_function_types,
     import_interface_types,
-    object_type_implements,
     ontology_validation_result,
     validate_activation_contracts,
+)
+from foundry_lite.application.services.ontology_activation_imports import (
+    import_link_types,
+    import_properties_for_object_type,
+    object_type_config,
 )
 from foundry_lite.application.services.ontology_activation_receipts import (
     activation_fingerprint,
@@ -32,12 +38,10 @@ from foundry_lite.application.services.ontology_activation_receipts import (
     replay_activation,
     required_activation_key,
 )
-from foundry_lite.application.services.ontology_datasource_validation import yaml_property_datasources
 from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     plan_ontology_migration,
 )
-from foundry_lite.application.services.ontology_migration_types import object_type_serving_config
 from foundry_lite.application.services.ontology_persisted_validation import validate_persisted_ontology
 from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
@@ -48,28 +52,28 @@ from foundry_lite.application.services.ontology_protocols import (
 )
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
-    link_type_backing,
     mapping_sequence,
     object_type_backing,
-    object_type_materialization_config,
-    object_type_media_properties,
-    object_type_row_policies,
-    optional_bool,
     optional_str,
-    property_derivation,
     require_yaml_text_within_limit,
     required_str,
     schema_columns,
 )
 from foundry_lite.application.services.ontology_yaml_loading import load_ontology_yaml_text
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected
 
 
 class OntologyActivationService(CoreService):
     """Validate, import, and activate ontology YAML definitions."""
 
-    required_dependencies = ("engine", "media_repository", "ontology_repository", "resource_catalog_repository")
+    required_dependencies = (
+        "engine",
+        "media_repository",
+        "ontology_definition_reader",
+        "ontology_repository",
+        "resource_catalog_repository",
+    )
     required_collaborators = (
         "dataset_registry_service",
         "dataset_version_service",
@@ -81,10 +85,12 @@ class OntologyActivationService(CoreService):
     runtime_service: OntologyRuntimeBoundary
     visual_builder_service: VisualBuilderService
     resource_catalog_repository: ResourceCatalogRepository
+    ontology_definition_reader: OntologyDefinitionReader
 
     def apply_ontology(self, yaml_path: str | Path, *, ctx: RequestContext | None = None) -> OntologyApplyResult:
         """Apply ontology YAML from a file through the one text-apply path."""
-        return self.apply_ontology_text(Path(yaml_path).read_text(encoding="utf-8"), ctx=ctx)
+        content = self.ontology_definition_reader.read_definition(OntologyDefinitionRead(str(yaml_path)))
+        return self.apply_ontology_text(content.yaml_text, ctx=ctx)
 
     def apply_ontology_text(
         self,
@@ -176,7 +182,7 @@ class OntologyActivationService(CoreService):
         import_interface_types(self.ontology_repository, conn, ctx, ontology_version_id, definition)
         import_function_types(self.ontology_repository, conn, ctx, ontology_version_id, functions)
         object_map = self._import_object_types(conn, ctx, ontology_version_id, definition, migration_plan)
-        self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
+        import_link_types(self.ontology_repository, conn, ctx, ontology_version_id, definition, object_map)
         import_action_types(self.ontology_repository, conn, ctx, ontology_version_id, definition, object_map)
         self._validate_ontology(conn, ctx, ontology_version_id)
         self._activate_ontology_version(conn, ctx, ontology_version_id)
@@ -246,7 +252,7 @@ class OntologyActivationService(CoreService):
             api_name = required_str(item, "apiName")
             object_id = self._insert_object_type(conn, ctx, ontology_version_id, item, migration_plan)
             object_map[api_name] = object_id
-            self._import_properties_for_object_type(conn, ctx, object_id, item)
+            import_properties_for_object_type(self.ontology_repository, conn, ctx, object_id, item)
         return object_map
 
     def _insert_object_type(
@@ -270,130 +276,10 @@ class OntologyActivationService(CoreService):
                 description=optional_str(item, "description"),
                 primary_key_property=required_str(item, "primaryKey"),
                 backing=object_type_backing(item),
-                config=self._object_type_config(item, migration_plan, api_name),
+                config=object_type_config(item, migration_plan, api_name),
             ),
         )
         return object_id
-
-    def _object_type_config(
-        self,
-        item: YamlObject,
-        migration_plan: OntologyMigrationPlan,
-        api_name: str,
-    ) -> dict[str, object]:
-        # titleProperty, materialization, rowPolicies, implements, and the
-        # resolved property→datasource map ride in the existing config JSON so
-        # no schema migration is needed; they coexist with the reindex
-        # serving-contract entries.
-        config = object_type_serving_config(migration_plan, api_name)
-        title_property = optional_str(item, "titleProperty")
-        if title_property is not None:
-            config["titleProperty"] = title_property
-        materialization = object_type_materialization_config(item)
-        if materialization is not None:
-            config["materialization"] = materialization
-        row_policies = object_type_row_policies(item)
-        if row_policies:
-            config["rowPolicies"] = list(row_policies)
-        implements = object_type_implements(item)
-        if implements:
-            config["implements"] = list(implements)
-        property_datasources = yaml_property_datasources(item)
-        if property_datasources is not None:
-            config["propertyDatasources"] = property_datasources
-        media_properties = object_type_media_properties(item)
-        if media_properties:
-            config["mediaProperties"] = media_properties
-        return config
-
-    def _import_properties_for_object_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_id: str,
-        item: YamlObject,
-    ) -> None:
-        seen_properties: set[str] = set()
-        for prop in mapping_sequence(item, "properties"):
-            prop_api = required_str(prop, "apiName")
-            if prop_api in seen_properties:
-                raise ValidationFailed("duplicate property apiName", details={"property": prop_api})
-            seen_properties.add(prop_api)
-            self._insert_property_type(conn, ctx, object_id, prop)
-
-    def _insert_property_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_id: str,
-        prop: YamlObject,
-    ) -> None:
-        prop_api = required_str(prop, "apiName")
-        source = optional_str(prop, "source", "dataset" if "column" in prop else "edit_layer")
-        if source is None:
-            raise ValidationFailed("property source must be set", details={"property": prop_api})
-        self.ontology_repository.insert_property_type(
-            transaction=conn,
-            record=PropertyTypeRecord(
-                property_type_id=_new_id("ptype"),
-                tenant_id=ctx.tenant_id,
-                object_type_id=object_id,
-                api_name=prop_api,
-                display_name=optional_str(prop, "displayName", prop_api) or prop_api,
-                data_type=required_str(prop, "type"),
-                nullable=optional_bool(prop, "nullable", True),
-                indexed=optional_bool(prop, "indexed", False),
-                searchable=optional_bool(prop, "searchable", False),
-                editable=optional_bool(prop, "editable", False),
-                classification=optional_str(prop, "classification"),
-                source=source,
-                column_name=optional_str(prop, "column"),
-                edit_policy=optional_str(prop, "editPolicy", "edit_only" if source == "edit_layer" else "source_wins")
-                or "source_wins",
-                derivation=property_derivation(prop),
-            ),
-        )
-
-    def _import_link_types(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        ontology_version_id: str,
-        definition: YamlObject,
-        object_map: dict[str, str],
-    ) -> None:
-        for item in mapping_sequence(definition, "linkTypes"):
-            self._insert_link_type(conn, ctx, ontology_version_id, item, object_map)
-
-    def _insert_link_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        ontology_version_id: str,
-        item: YamlObject,
-        object_map: dict[str, str],
-    ) -> None:
-        from_api = required_str(item, "from")
-        to_api = required_str(item, "to")
-        if from_api not in object_map or to_api not in object_map:
-            raise ValidationFailed("link references unknown object type", details=dict(item))
-        api_name = required_str(item, "apiName")
-        self.ontology_repository.insert_link_type(
-            transaction=conn,
-            record=LinkTypeRecord(
-                link_type_id=_new_id("ltype"),
-                tenant_id=ctx.tenant_id,
-                ontology_version_id=ontology_version_id,
-                api_name=api_name,
-                display_name=optional_str(item, "displayName", api_name) or api_name,
-                from_object_type_id=object_map[from_api],
-                from_api_name=from_api,
-                to_object_type_id=object_map[to_api],
-                to_api_name=to_api,
-                cardinality=optional_str(item, "cardinality", "many_to_one") or "many_to_one",
-                backing=link_type_backing(item),
-            ),
-        )
 
     def _validate_ontology(
         self,

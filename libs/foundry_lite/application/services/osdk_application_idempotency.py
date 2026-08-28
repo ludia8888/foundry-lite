@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import cast
 
 from foundry_lite.application.ports import (
@@ -12,6 +11,7 @@ from foundry_lite.application.ports import (
     RuntimeJsonObject,
     TransactionContext,
 )
+from foundry_lite.application.ports.osdk_download_token_signer import OsdkDownloadTokenSigner
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_application_artifacts import _request_hash, _with_download_token
@@ -21,11 +21,11 @@ from foundry_lite.domain.platform.idempotency import StoredIdempotency, decide_i
 
 
 class OsdkApplicationIdempotencyService(CoreService):
-    required_dependencies = ("osdk_application_repository", "root")
+    required_dependencies = ("osdk_application_repository", "osdk_download_token_signer")
     required_collaborators = ()
 
     osdk_application_repository: OsdkApplicationRepository
-    root: Path
+    osdk_download_token_signer: OsdkDownloadTokenSigner
 
     def _idempotent_response(
         self,
@@ -57,7 +57,7 @@ class OsdkApplicationIdempotencyService(CoreService):
             conn, ctx, "osdk.release_artifact.download_token.create", idempotency_key, request_hash
         )
         if existing is not None:
-            return _with_download_token(self.root, ctx, existing, request_hash)
+            return _with_download_token(self.osdk_download_token_signer, ctx, existing, request_hash)
         response = create_response(request_hash)
         record_response = {key: value for key, value in response.items() if key != "downloadToken"}
         stored = self._store_idempotency_record(
@@ -68,7 +68,7 @@ class OsdkApplicationIdempotencyService(CoreService):
             request_hash,
             cast(RuntimeJsonObject, record_response),
         )
-        return _with_download_token(self.root, ctx, stored, request_hash)
+        return _with_download_token(self.osdk_download_token_signer, ctx, stored, request_hash)
 
     def _idempotent_one_time_secret_response(
         self,

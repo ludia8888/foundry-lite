@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
-import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import BinaryIO, cast
 
 from foundry_lite.application.ports import SourceConnectionRecord
 from foundry_lite.application.ports.source_registry_repository import SourceConnectionKind
+from foundry_lite.application.ports.source_upload_staging_store import (
+    SourceUploadStageRequest,
+    SourceUploadStagingStore,
+)
 from foundry_lite.application.primitives import SQL_IDENTIFIER_PATTERN, _dataset_ref_parts, _json_hash, _new_id, _now
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
@@ -31,7 +32,7 @@ class StagedSourceUpload:
 
     file_name: str
     dataset_ref: str
-    path: Path
+    storage_uri: str
     content_hash: str
     byte_size: int
 
@@ -41,7 +42,7 @@ class StagedMediaSourceUpload:
     """A media upload copied to local staging with byte evidence."""
 
     file_name: str
-    path: Path
+    storage_uri: str
     content_hash: str
     byte_size: int
 
@@ -115,74 +116,56 @@ def source_config(
     }
 
 
-def copy_uploads(root: Path, source_name: str, uploads: Sequence[SourceUpload]) -> list[StagedSourceUpload]:
+def copy_uploads(
+    store: SourceUploadStagingStore, source_name: str, uploads: Sequence[SourceUpload]
+) -> list[StagedSourceUpload]:
     """Stage all dataset uploads for a source connection."""
 
-    staged_root = root / "source-uploads" / source_name
-    staged_root.mkdir(parents=True, exist_ok=True)
-    return [copy_upload(staged_root, upload) for upload in uploads]
-
-
-def copy_upload(staged_root: Path, upload: SourceUpload) -> StagedSourceUpload:
-    """Copy one dataset upload and compute its content hash."""
-
-    require_text(upload.file_name, "fileName")
-    _dataset_ref_parts(upload.dataset_ref)
-    safe_name = Path(upload.file_name).name
-    target = staged_root / f"{_new_id('upload')}-{safe_name}"
-    digest = hashlib.sha256()
-    byte_size = 0
-    with target.open("wb") as output:
-        for chunk in iter(lambda: upload.source.read(1024 * 1024), b""):
-            byte_size += len(chunk)
-            digest.update(chunk)
-            output.write(chunk)
-    return StagedSourceUpload(
-        file_name=safe_name,
-        dataset_ref=upload.dataset_ref,
-        path=target,
-        content_hash=f"sha256:{digest.hexdigest()}",
-        byte_size=byte_size,
+    require_identifier(source_name, "sourceName")
+    for upload in uploads:
+        require_text(upload.file_name, "fileName")
+        _dataset_ref_parts(upload.dataset_ref)
+    artifacts = store.stage_uploads(
+        [SourceUploadStageRequest(source_name, upload.file_name, upload.source) for upload in uploads]
     )
+    return [
+        StagedSourceUpload(
+            file_name=artifact.file_name,
+            dataset_ref=upload.dataset_ref,
+            storage_uri=artifact.storage_uri,
+            content_hash=artifact.content_hash,
+            byte_size=artifact.byte_size,
+        )
+        for upload, artifact in zip(uploads, artifacts, strict=True)
+    ]
 
 
-def copy_media_upload(root: Path, source_name: str, file_name: str, source: BinaryIO) -> StagedMediaSourceUpload:
+def copy_media_upload(
+    store: SourceUploadStagingStore, source_name: str, file_name: str, source: BinaryIO
+) -> StagedMediaSourceUpload:
     """Copy one media upload and compute its content hash."""
 
+    require_identifier(source_name, "sourceName")
     require_text(file_name, "fileName")
-    staged_root = root / "source-uploads" / source_name
-    staged_root.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(file_name).name
-    target = staged_root / f"{_new_id('media_upload')}-{safe_name}"
-    digest = hashlib.sha256()
-    byte_size = 0
-    with target.open("wb") as output:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            byte_size += len(chunk)
-            digest.update(chunk)
-            output.write(chunk)
+    artifact = store.stage_uploads([SourceUploadStageRequest(source_name, file_name, source)])[0]
     return StagedMediaSourceUpload(
-        file_name=safe_name,
-        path=target,
-        content_hash=f"sha256:{digest.hexdigest()}",
-        byte_size=byte_size,
+        file_name=artifact.file_name,
+        storage_uri=artifact.storage_uri,
+        content_hash=artifact.content_hash,
+        byte_size=artifact.byte_size,
     )
 
 
-def cleanup_uploads(staged: Sequence[StagedSourceUpload]) -> None:
+def cleanup_uploads(store: SourceUploadStagingStore, staged: Sequence[StagedSourceUpload]) -> None:
     """Remove staged dataset uploads after commit or failure."""
 
-    for upload in staged:
-        upload.path.unlink(missing_ok=True)
-    for parent in {upload.path.parent for upload in staged}:
-        shutil.rmtree(parent, ignore_errors=True)
+    store.cleanup_uploads([upload.storage_uri for upload in staged])
 
 
-def cleanup_media_upload(staged: StagedMediaSourceUpload) -> None:
+def cleanup_media_upload(store: SourceUploadStagingStore, staged: StagedMediaSourceUpload) -> None:
     """Remove one staged media upload after commit or failure."""
 
-    staged.path.unlink(missing_ok=True)
-    shutil.rmtree(staged.path.parent, ignore_errors=True)
+    store.cleanup_uploads([staged.storage_uri])
 
 
 def upload_summary(kind: str, staged: Sequence[StagedSourceUpload], extra: Mapping[str, object]) -> dict[str, object]:
@@ -201,6 +184,78 @@ def upload_summary(kind: str, staged: Sequence[StagedSourceUpload], extra: Mappi
         ],
         **dict(extra),
     }
+
+
+def csv_upload_source_record(
+    ctx: RequestContext,
+    source_name: str,
+    display_name: str,
+    staged: Sequence[StagedSourceUpload],
+    sync_name: str | None,
+    primary_key: Sequence[str],
+) -> SourceConnectionRecord:
+    """Build a Source row for one staged CSV upload."""
+
+    upload = staged[0]
+    summary = upload_summary("csv_upload", staged, {"syncName": sync_name, "primaryKey": list(primary_key)})
+    return source_record(
+        ctx,
+        source_name=source_name,
+        display_name=display_name,
+        kind="csv_upload",
+        target_dataset_ref=upload.dataset_ref,
+        target_media_set_id=None,
+        config_summary=summary,
+    )
+
+
+def batch_upload_source_record(
+    ctx: RequestContext,
+    source_name: str,
+    display_name: str,
+    staged: Sequence[StagedSourceUpload],
+    sync_name: str | None,
+) -> SourceConnectionRecord:
+    """Build a Source row for one staged batch upload."""
+
+    dataset_refs = [upload.dataset_ref for upload in staged]
+    summary = upload_summary("batch_file", staged, {"syncName": sync_name, "datasetRefs": dataset_refs})
+    return source_record(
+        ctx,
+        source_name=source_name,
+        display_name=display_name,
+        kind="batch_file",
+        target_dataset_ref=dataset_refs[0] if dataset_refs else None,
+        target_media_set_id=None,
+        config_summary=summary,
+    )
+
+
+def media_upload_source_record(
+    ctx: RequestContext,
+    source_name: str,
+    display_name: str,
+    media_set_id: str,
+    logical_path: str,
+    staged: StagedMediaSourceUpload,
+) -> SourceConnectionRecord:
+    """Build a Source row for one staged media upload."""
+
+    summary = dict(
+        mediaSetId=media_set_id,
+        logicalPath=logical_path,
+        contentHash=staged.content_hash,
+        byteSize=staged.byte_size,
+    )
+    return source_record(
+        ctx,
+        source_name=source_name,
+        display_name=display_name,
+        kind="media_upload",
+        target_dataset_ref=None,
+        target_media_set_id=media_set_id,
+        config_summary=summary,
+    )
 
 
 def source_fingerprint(value: Mapping[str, object]) -> str:

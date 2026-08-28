@@ -15,6 +15,8 @@ from foundry_lite.application.ports.destructive_development_admin import Destruc
 from foundry_lite.application.ports.mcp_rate_limiter import McpRateLimiter
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
+from foundry_lite.application.ports.osdk_download_token_signer import OsdkDownloadTokenSigner
+from foundry_lite.application.ports.osdk_release_artifact_store import OsdkReleaseArtifactStore
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.security.policy import PolicyService
@@ -33,6 +35,8 @@ class SecurityDependencies:
     metadata_repository: MetadataRepository
     destructive_development_admin: DestructiveDevelopmentAdmin
     osdk_application_repository: OsdkApplicationRepository
+    osdk_download_token_signer: OsdkDownloadTokenSigner
+    osdk_release_artifact_store: OsdkReleaseArtifactStore
     oauth_session_repository: OAuthSessionRepository
     oauth_token_issuer: OAuthTokenIssuer
     secret_provider: SecretProvider

@@ -47,10 +47,7 @@ from foundry_lite.application.services.transform_record_dlq_replay_helpers impor
     _transform_api_name,
     _transform_mode,
 )
-from foundry_lite.application.services.transform_runs import (
-    TransformRunPlan,
-    start_transform_run,
-)
+from foundry_lite.application.services.transform_runs import TransformRunPlan
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
@@ -81,6 +78,8 @@ class TransformRecordDlqReplayRuntime(Protocol):
     ) -> CommitResult: ...
 
     def _abort_transform_run(self, ctx: RequestContext, plan: TransformRunPlan, exc: Exception) -> None: ...
+
+    def _start_transform_run(self, ctx: RequestContext, api_name: str) -> TransformRunPlan: ...
 
 
 @dataclass(frozen=True)
@@ -149,16 +148,7 @@ def _open_current_transform_run(
     ctx: RequestContext,
     row: DeadLetterRecordRow,
 ) -> TransformRunPlan:
-    with runtime.engine.begin() as conn:
-        return start_transform_run(
-            conn=conn,
-            ctx=ctx,
-            api_name=_transform_api_name(row),
-            dataset_registry_service=runtime.dataset_registry_service,
-            dataset_transaction_service=runtime.dataset_transaction_service,
-            dataset_version_service=runtime.dataset_version_service,
-            transform_repository=runtime.transform_repository,
-        )
+    return runtime._start_transform_run(ctx, _transform_api_name(row))
 
 
 def _reject_replayed_dead_letters(
