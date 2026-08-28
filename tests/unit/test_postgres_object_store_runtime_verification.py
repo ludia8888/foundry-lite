@@ -112,3 +112,9 @@ def test_collector_rejects_incomplete_runtime_evidence() -> None:
 
     with pytest.raises(RuntimeError, match="evidence_invalid"):
         collector._validated_evidence(evidence)
+
+
+def test_collector_pod_name_does_not_end_with_hyphen_after_truncation() -> None:
+    pod_name = collector._pod_name("ai-fde-d57c0dd5-postgres-20260828T062537Z")
+
+    assert pod_name == "foundry-lite-postgres-object-store-ai-fde-d57c0dd5-postgres"
