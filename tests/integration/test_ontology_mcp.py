@@ -827,7 +827,7 @@ def test_ontology_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(
     unknown_request = client.post(
         path,
         headers=session_headers,
-        json={"jsonrpc": "2.0", "id": "unknown", "method": "resources/list", "params": {}},
+        json={"jsonrpc": "2.0", "id": "unknown", "method": "prompts/list", "params": {}},
     )
     unknown_notification = client.post(
         path,
