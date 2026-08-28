@@ -101,10 +101,12 @@ def test_official_mcp_client_uses_postgres_application_scope_and_action_approval
         "action_approval.get",
         "action_run.get",
         "object.Order.get",
+        "object.Order.links",
         "object.Order.search",
-        # Added when unified search landed. The list is exact on purpose -- an official MCP
-        # client sees precisely these tools, and a tool appearing without anyone deciding it
-        # should is the failure this assertion exists to catch.
+        "object.Order.searchAround",
+        # The list is exact on purpose: the live official client must see the same governed
+        # object-read surface as the in-process contract, including link traversal and unified
+        # search. A tool appearing without anyone deciding it should remains a failure.
         "object.Order.unifiedSearch",
     ]
     assert evidence["objectId"] == "ORDER-1"
