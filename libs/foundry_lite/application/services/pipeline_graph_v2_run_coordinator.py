@@ -13,6 +13,7 @@ from foundry_lite.application.ports.pipeline_repository import (
 )
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_async_run_events import append_terminal_event
 from foundry_lite.application.services.pipeline_graph_v2_execution_service import (
     PipelineGraphV2ExecutionService,
 )
@@ -134,6 +135,7 @@ class PipelineGraphV2RunCoordinatorService(CoreService):
             )
             if after is None:
                 raise ConflictDetected("pipeline Graph v2 terminal state changed concurrently")
+            append_terminal_event(self.pipeline_execution_repository, transaction, ctx, after)
             self._audit_terminal(transaction, ctx, row, version, terminal)
         return str(after["id"])
 

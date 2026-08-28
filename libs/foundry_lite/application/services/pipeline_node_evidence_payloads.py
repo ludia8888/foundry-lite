@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.pipeline_execution_repository import (
@@ -10,6 +11,7 @@ from foundry_lite.application.ports.pipeline_execution_repository import (
     PipelineNodeAttemptRow,
     PipelineNodeRunRow,
     PipelineRunArtifactRow,
+    PipelineRunEventRow,
 )
 from foundry_lite.application.ports.pipeline_repository import PipelineRunRow
 from foundry_lite.application.services.pipeline_node_evidence_plan import PipelineEvidencePlan
@@ -45,19 +47,39 @@ def run_with_evidence_payload(
         after_sequence=0,
         limit=500,
     )
-    if events:
-        payload["timeline"] = [
-            {
-                "sequence": event["sequence"],
-                "event": event["event_type"],
-                "at": event["created_at"],
-                **event["payload"],
-            }
-            for event in events
-        ]
+    payload["timeline"] = _merged_timeline(row, events)
     payload["nodeRuns"] = _node_payloads(transaction, repository, tenant_id, node_rows, plan)
     payload["artifacts"] = [_artifact_payload(item) for item in _ordered_artifacts(artifacts, plan)]
     return payload
+
+
+def _merged_timeline(row: PipelineRunRow, events: list[PipelineRunEventRow]) -> list[JsonObject]:
+    timeline = [dict(item) for item in row["timeline"]]
+    identities = {_timeline_identity(item) for item in timeline}
+    for event in events:
+        item = {
+            "sequence": event["sequence"],
+            "event": event["event_type"],
+            "at": event["created_at"],
+            **event["payload"],
+        }
+        if _timeline_identity(item) not in identities:
+            timeline.append(item)
+    return sorted(timeline, key=_timeline_timestamp)
+
+
+def _timeline_identity(item: Mapping[str, object]) -> tuple[object, object, object]:
+    return item.get("event"), item.get("nodeId"), item.get("attemptNumber")
+
+
+def _timeline_timestamp(item: Mapping[str, object]) -> float:
+    value = item.get("at")
+    if not isinstance(value, str):
+        return float("inf")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("inf")
 
 
 def _node_payloads(

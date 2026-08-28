@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import signal
@@ -32,6 +33,8 @@ from foundry_lite.infrastructure.local_runtime import create_runtime_core_depend
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import Engine
 
+from tests.integration.helpers.temporal_readiness import wait_for_temporal_namespace
+
 HELPER = Path(__file__).parent / "helpers" / "action_async_runtime_live_worker.py"
 REVERT_RACER = Path(__file__).parent / "helpers" / "action_revert_live_racer.py"
 CONTROL = Path(__file__).parents[2] / "apps" / "worker" / "foundry_lite_worker" / "action_control.py"
@@ -58,6 +61,7 @@ def action_live_database() -> Iterator[tuple[Engine, str]]:
     endpoint = urlsplit(admin_url)
     _wait_port(endpoint.hostname or "127.0.0.1", endpoint.port or 15433, 30)
     _wait_port("127.0.0.1", 7233, 60)
+    asyncio.run(wait_for_temporal_namespace("127.0.0.1:7233", timeout=60))
     database_name = f"foundry_lite_action_{uuid4().hex[:12]}"
     admin = create_engine(admin_url, future=True, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:

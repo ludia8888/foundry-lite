@@ -26,10 +26,10 @@ def append_legacy_terminal_event(
 
     with engine.begin() as transaction:
         row = required_pipeline_run(pipeline_repository, transaction, ctx, run_id)
-        _append_terminal_event(repository, transaction, ctx, row)
+        append_terminal_event(repository, transaction, ctx, row)
 
 
-def _append_terminal_event(
+def append_terminal_event(
     repository: PipelineExecutionRepository,
     transaction: TransactionContext,
     ctx: RequestContext,

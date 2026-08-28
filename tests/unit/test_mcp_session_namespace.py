@@ -68,6 +68,7 @@ def test_ontology_gateway_rejects_foreign_read_and_close_before_delegation(
         approvals=MagicMock(),
         access_sessions=access_sessions,
         rate_limits=MagicMock(),
+        business_systems=MagicMock(),
     )
 
     with pytest.raises(ValidationFailed):

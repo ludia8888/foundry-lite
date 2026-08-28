@@ -6,6 +6,9 @@ from collections.abc import Mapping
 from typing import cast
 
 import pytest
+from foundry_lite.application.services.aip.fde_business_system_definition import (
+    build_business_system_definition,
+)
 from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
     application_resources,
     build_domain_os_blueprint,
@@ -419,10 +422,14 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
     )
 
     slug = str(spec["id"])
+    consumer_osdk = consumer_osdk_plan(str(spec["applicationName"]), slug)
     plan = {
         **arguments,
         "domainOsBlueprint": blueprint,
-        "consumerOsdk": consumer_osdk_plan(str(spec["applicationName"]), slug),
+        "consumerOsdk": consumer_osdk,
+        "businessSystemDefinition": build_business_system_definition(
+            str(spec["applicationName"]), blueprint, consumer_osdk
+        ),
     }
     files = react_files(plan)
     package_name = f"@foundry-lite/{slug}-osdk"

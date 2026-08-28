@@ -1,0 +1,1 @@
+{"name":"@foundry-lite/chatgpt-business-system-widget","version":"0.1.0","private":true,"scripts":{"test":"node --test widget.test.mjs"}}

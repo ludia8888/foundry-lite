@@ -439,6 +439,21 @@ class AipWorkspace:
     def get_pilot_application(self, rid: str, *, ctx: RequestContext | None = None) -> Mapping[str, object]:
         return self._fde_pilot.get_bundle(ctx or RequestContext(), rid)
 
+    def get_operating_pilot_application(
+        self, application_id: str, *, ctx: RequestContext | None = None
+    ) -> Mapping[str, object]:
+        return self._fde_pilot.get_operating_application(ctx or RequestContext(), application_id)
+
+    def operating_pilot_context(
+        self,
+        application_id: str,
+        resource_kind: str,
+        api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> RequestContext:
+        return self._fde_pilot.operating_context(ctx or RequestContext(), application_id, resource_kind, api_name)
+
     def resolve_citation_navigation(
         self,
         *,

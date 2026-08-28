@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: light dark; font-family: "Avenir Next", "Pretendard", system-ui, sans-serif; --ink:#172033; --muted:#637083; --paper:#f4f7fa; --card:#fff; --line:#d8e0e9; --navy:#10243b; --sky:#0a789e; --soft:#e3f4fa; --good:#17643e; --warn:#8a570b; }
+      * { box-sizing: border-box; } body { margin:0; color:var(--ink); background:transparent; } button,input { font:inherit; }
+      .shell { overflow:hidden; border:1px solid var(--line); border-radius:20px; background:var(--paper); box-shadow:0 18px 45px -38px #10243b; }
+      .hero { padding:22px; color:#f8fbff; background:linear-gradient(135deg,var(--navy),#183f5a); }
+      .eyebrow { margin:0 0 7px; color:#8ad8f3; font:800 10px/1.2 ui-monospace,monospace; letter-spacing:.12em; }
+      h1 { margin:0; font-size:clamp(23px,5vw,35px); line-height:1.08; } .hero p:last-child { max-width:70ch; margin:11px 0 0; color:#cbd9e8; font-size:13px; line-height:1.5; }
+      .tabs { display:flex; gap:7px; overflow:auto; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+      .tab { white-space:nowrap; border:1px solid var(--line); border-radius:999px; padding:7px 11px; color:var(--muted); background:var(--card); cursor:pointer; font-size:11px; font-weight:750; }
+      .tab.active { border-color:var(--sky); color:white; background:var(--sky); }
+      .body { display:grid; gap:13px; padding:16px; } .component { border:1px solid var(--line); border-radius:15px; background:var(--card); padding:15px; }
+      .component>h2 { margin:0 0 10px; color:var(--navy); font-size:13px; } .muted { color:var(--muted); font-size:11px; line-height:1.5; }
+      .toolbar { display:flex; gap:8px; margin-bottom:11px; } .toolbar input { min-width:0; flex:1; border:1px solid var(--line); border-radius:9px; padding:9px 10px; background:var(--card); color:var(--ink); }
+      .button { border:0; border-radius:9px; padding:9px 12px; color:#fff; background:var(--sky); cursor:pointer; font-size:11px; font-weight:800; }
+      .button.secondary { border:1px solid var(--line); color:var(--navy); background:var(--card); } .button:disabled { opacity:.5; cursor:not-allowed; }
+      .queue { display:grid; gap:10px; } .item { border:1px solid var(--line); border-radius:12px; padding:13px; background:var(--paper); }
+      .item-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; } .item h3 { margin:0; color:var(--navy); font-size:13px; }
+      .state { border-radius:999px; padding:4px 7px; color:#155a72; background:var(--soft); font-size:9px; font-weight:800; }
+      dl { display:grid; gap:5px; margin:10px 0 0; } dl div { display:grid; grid-template-columns:minmax(90px,1fr) 2fr; gap:10px; font-size:10px; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+      .actions { display:grid; gap:8px; margin-top:11px; } form { display:grid; gap:7px; border-top:1px solid var(--line); padding-top:9px; }
+      form strong { font-size:11px; } label { display:grid; gap:4px; color:var(--muted); font-size:10px; } label input { border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--card); color:var(--ink); }
+      .list { display:grid; gap:8px; margin:0; padding:0; list-style:none; } .list li { border-top:1px solid var(--line); padding-top:8px; font-size:11px; line-height:1.5; } .list li:first-child { border:0; padding-top:0; }
+      .suggestion { border-left:3px solid var(--sky); padding-left:11px; } .status { margin:0; border-radius:10px; padding:10px 13px; color:var(--muted); background:var(--card); font-size:11px; }
+      .status.good { color:var(--good); } .status.warn { color:var(--warn); } .empty { padding:28px 18px; text-align:center; }
+      .receipt { display:flex; flex-wrap:wrap; gap:7px 18px; padding:10px 16px; border-top:1px solid var(--line); color:var(--muted); font:9px/1.4 ui-monospace,monospace; }
+      @media (prefers-color-scheme:dark) { :root { --ink:#edf3f8; --muted:#a6b3c3; --paper:#0f1822; --card:#172431; --line:#334454; --navy:#dcecf7; --sky:#1685ad; --soft:#153b49; } .hero { --navy:#09131f; } .button.secondary { color:var(--ink); } .state { color:#a5e3f7; } }
+    </style>
+  </head>
+  <body>
+    <main id="app" class="shell"><div class="empty"><strong>업무 화면을 불러오는 중입니다.</strong><p class="muted">이 앱에 허용된 기록과 업무만 확인합니다.</p></div></main>
+    <script>/*__FOUNDRY_LITE_BUSINESS_SYSTEM_OSDK__*/</script>
+    <script>
+      (() => {
+        "use strict";
+        const osdk = globalThis.createFoundryLiteBusinessSystemOsdk();
+        const business = osdk(globalThis.FoundryLiteBusinessSystemResources.BusinessSystem);
+        const state = { definition:null, items:[], selected:"today", busy:false, message:"", tone:"", lastResult:null };
+        const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+        const list = (value) => Array.isArray(value) ? value : [];
+        const text = (value) => String(value ?? "");
+        const escapeHtml = (value) => text(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+
+        function structured(value) {
+          if (!isObject(value)) return null;
+          if (isObject(value.structuredContent)) return value.structuredContent;
+          if (isObject(value.toolOutput)) return structured(value.toolOutput) || value.toolOutput;
+          return value;
+        }
+
+        function receive(value) {
+          const output = structured(value);
+          if (!isObject(output)) return false;
+          const definition = isObject(output.businessSystemDefinition) ? output.businessSystemDefinition : null;
+          if (!definition) return false;
+          state.definition = definition;
+          state.selected = list(definition.experience?.screens)[0]?.id || "today";
+          render(); void loadWork();
+          return true;
+        }
+
+        function model() { return isObject(state.definition?.businessModel) ? state.definition.businessModel : {}; }
+        function primaryRecord() { return list(model().records)[0] || {}; }
+        function actions() { return list(model().actions); }
+        function currentScreen() { return list(state.definition?.experience?.screens).find((screen) => screen.id === state.selected) || {}; }
+        function title(item) { return text(item.properties?.name || item.objectId || "이름 없는 업무"); }
+        function status(item) { return text(item.properties?.status || "확인 필요"); }
+        function allowedActions(item) { return actions().filter((action) => !list(action.fromStates).length || list(action.fromStates).includes(status(item))); }
+
+        async function loadDefinition() {
+          try { receive(await business.loadDefinition()); }
+          catch (error) { state.message = text(error?.message || error); state.tone = "warn"; render(); }
+        }
+
+        async function loadWork(search = "") {
+          const objectType = text(primaryRecord().apiName);
+          if (!objectType || state.busy) return;
+          state.busy = true; state.message = "업무 기록을 새로 확인하고 있습니다."; state.tone = ""; render();
+          try {
+            const result = await business.searchWork(objectType, search ? { search } : {});
+            state.items = list(result.items || result.data);
+            state.message = `${state.items.length}건을 확인했습니다.`; state.tone = "good";
+          } catch (error) { state.message = text(error?.message || error); state.tone = "warn"; }
+          finally { state.busy = false; render(); }
+        }
+
+        async function runAction(form) {
+          if (state.busy) return;
+          let shouldRefresh = false;
+          const item = state.items.find((row) => text(row.objectId) === form.dataset.objectId);
+          const action = actions().find((row) => text(row.apiName) === form.dataset.action);
+          if (!item || !action) return;
+          const values = new FormData(form); const params = {};
+          list(action.parameters).forEach((parameter) => { params[parameter.apiName] = text(values.get(parameter.apiName)); });
+          state.busy = true; state.message = `${action.displayName} 업무를 확인하고 있습니다.`; state.tone = ""; render();
+          try {
+            const result = await business.executeAction(action.apiName, {
+              objectType: primaryRecord().apiName, objectId:item.objectId,
+              expectedObjectVersion:item.objectVersion, params,
+            });
+            state.lastResult = result;
+            if (result.status === "approval_required") {
+              state.message = "중요한 업무라 사람 확인 대기함에 올렸습니다. 승인 전에는 아무것도 바뀌지 않습니다."; state.tone = "warn";
+            } else { state.message = "업무를 완료했습니다."; state.tone = "good"; shouldRefresh = true; }
+          } catch (error) { state.message = text(error?.message || error); state.tone = "warn"; }
+          finally {
+            state.busy = false;
+            if (shouldRefresh) await loadWork(); else render();
+          }
+        }
+
+        function actionForm(item, action) {
+          const inputs = list(action.parameters).map((parameter) => `<label>${escapeHtml(parameter.displayName)}<input name="${escapeHtml(parameter.apiName)}" required /></label>`).join("");
+          const approval = action.requiresApproval ? '<span class="muted">실행 전에 사람 확인이 필요합니다.</span>' : '';
+          return `<form data-object-id="${escapeHtml(item.objectId)}" data-action="${escapeHtml(action.apiName)}"><strong>${escapeHtml(action.displayName)}</strong>${approval}${inputs}<button class="button" type="submit" ${state.busy ? "disabled" : ""}>${escapeHtml(action.displayName)}</button></form>`;
+        }
+
+        function workQueue() {
+          if (!state.items.length) return '<p class="muted">현재 조건에 맞는 업무가 없습니다.</p>';
+          return `<div class="queue">${state.items.map((item) => {
+            const visible = Object.entries(item.properties || {}).filter(([key]) => ![primaryRecord().primaryKey,"name","status"].includes(key)).slice(0,6);
+            return `<article class="item"><div class="item-head"><h3>${escapeHtml(title(item))}</h3><span class="state">${escapeHtml(status(item))}</span></div><dl>${visible.map(([key,value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl><div class="actions">${allowedActions(item).map((action) => actionForm(item,action)).join("") || '<p class="muted">현재 상태에서 실행할 다음 업무가 없습니다.</p>'}</div></article>`;
+          }).join("")}</div>`;
+        }
+
+        function componentMarkup(component) {
+          if (["work_queue","record_detail","action_form"].includes(component.kind)) return `<section class="component"><h2>${escapeHtml(component.title)}</h2>${component.kind === "work_queue" ? '<div class="toolbar"><input id="search" placeholder="업무 기록 검색"/><button id="search-button" class="button secondary">검색</button></div>' : ''}${workQueue()}</section>`;
+              if (component.kind === "ai_suggestion_panel") {
+                const item = state.items[0]; const action = item ? allowedActions(item)[0] : null;
+                return `<section class="component" aria-label="AI 업무 제안"><h2>${escapeHtml(component.title)}</h2><div class="suggestion">${action ? `<strong>${escapeHtml(title(item))}</strong><p class="muted">현재 상태와 허용된 규칙을 근거로 다음 업무는 “${escapeHtml(action.displayName)}”입니다. 실행은 위 업무 카드에서 확인하세요.</p>` : '<p class="muted">지금 제안할 다음 업무가 없습니다.</p>'}</div></section>`;
+          }
+          if (["policy_panel","approval_inbox"].includes(component.kind)) return `<section class="component"><h2>${escapeHtml(component.title)}</h2><ul class="list">${list(model().policies).map((policy) => `<li><strong>${escapeHtml(policy.name)}</strong><div class="muted">${escapeHtml(policy.statement)}</div></li>`).join("") || '<li>등록된 규칙이 없습니다.</li>'}</ul></section>`;
+          if (["evidence_panel","audit_timeline","status_timeline"].includes(component.kind)) return `<section class="component"><h2>${escapeHtml(component.title)}</h2><p class="muted">${state.lastResult ? escapeHtml(JSON.stringify(state.lastResult)) : "이 화면에서 실행한 업무의 결과와 사람 확인 상태가 여기에 표시됩니다."}</p></section>`;
+          if (component.kind === "relationship_graph") return `<section class="component"><h2>${escapeHtml(component.title)}</h2><p class="muted">${list(model().records).map((record) => escapeHtml(record.displayName)).join(" · ")}</p></section>`;
+          if (component.kind === "kpi_summary") return `<section class="component"><h2>${escapeHtml(component.title)}</h2><p class="muted">허용된 계산 ${list(model().functions).length}개가 이 화면 정의에 연결되어 있습니다.</p></section>`;
+          return `<section class="component"><h2>${escapeHtml(component.title)}</h2></section>`;
+        }
+
+        function render() {
+          const root = document.getElementById("app");
+          if (!state.definition) { root.innerHTML = '<div class="empty"><strong>업무 화면을 불러오는 중입니다.</strong><p class="muted">이 앱에 허용된 기록과 업무만 확인합니다.</p></div>'; return; }
+          const screens = list(state.definition.experience?.screens); const screen = currentScreen();
+          root.innerHTML = `<header class="hero"><p class="eyebrow">AI FDE · LIVE BUSINESS SYSTEM</p><h1>${escapeHtml(state.definition.identity?.name)}</h1><p>${escapeHtml(state.definition.identity?.summary)}</p></header><nav class="tabs" aria-label="업무 화면">${screens.map((item) => `<button class="tab ${item.id === state.selected ? "active" : ""}" data-screen="${escapeHtml(item.id)}">${escapeHtml(item.title)}</button>`).join("")}</nav><section class="body">${list(screen.components).map(componentMarkup).join("")}<p class="status ${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p></section><footer class="receipt"><span>${escapeHtml(state.definition.schemaVersion)}</span><span>${escapeHtml(state.definition.definitionFingerprint)}</span><span>외부 앱과 같은 화면 정의</span></footer>`;
+          root.querySelectorAll("[data-screen]").forEach((button) => button.addEventListener("click", () => { state.selected = button.dataset.screen; render(); }));
+          root.querySelectorAll("form[data-action]").forEach((form) => form.addEventListener("submit", (event) => { event.preventDefault(); void runAction(form); }));
+          document.getElementById("search-button")?.addEventListener("click", () => void loadWork(text(document.getElementById("search")?.value)));
+        }
+
+        osdk.subscribe(receive);
+        const initial = osdk.aliasSnapshot();
+        if (!initial || !receive(initial)) void loadDefinition();
+        void osdk.initialize(); render();
+        globalThis.__foundryBusinessSystemWidgetTest = Object.freeze({ receive, loadDefinition, loadWork, getState:() => ({...state}) });
+      })();
+    </script>
+  </body>
+</html>

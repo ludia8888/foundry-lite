@@ -20,6 +20,7 @@ def consumer_contract(plan: JsonObject) -> str:
         "schemaVersion": "foundry-lite-generated-consumer-osdk/v1",
         **boundary,
         "domainOsBlueprint": blueprint,
+        "businessSystemDefinition": _business_system_definition(plan),
         "objects": _records(blueprint),
         "actions": _actions(blueprint),
         "functions": _functions(blueprint),
@@ -127,9 +128,9 @@ def _react_hook_state_lines(object_name: str) -> list[str]:
 def application_source(plan: JsonObject, package_name: str) -> str:
     """Render a calm, task-first customer app shell using only the app hook."""
 
-    blueprint, title, summary, policies, states, record_fields = _application_literals(plan)
+    blueprint, title, summary, policies, screens, record_fields = _application_literals(plan)
     action_forms = "\n".join(_action_form_source(row) for row in _actions(blueprint))
-    prelude = _application_prelude(package_name, title, summary, policies, states, record_fields)
+    prelude = _application_prelude(package_name, title, summary, policies, screens, record_fields)
     return prelude + (
         "export default function App() { const screen = usePilotApplicationScreen(); "
         'const [message, setMessage] = useState(""); const [isRunning, setIsRunning] = useState(false); '
@@ -144,7 +145,7 @@ def application_source(plan: JsonObject, package_name: str) -> str:
         "if (screen.error) return <main><h1>{title}</h1>"
         "<p>기록을 불러오지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.</p></main>; "
         "return <main><header><p>업무 홈</p><h1>{title}</h1><p>{summary}</p></header>"
-        '<nav aria-label="업무 상태">{lifecycle.map((state) => <span key={state}>{state}</span>)}</nav>'
+        '<nav aria-label="업무 화면">{screens.map((screen) => <span key={screen.id}>{screen.title}</span>)}</nav>'
         "<section><h2>지금 처리할 일</h2><p>{screen.items.length}건</p>"
         "{screen.items.length ? screen.items.map((item) => <article "
         "key={`${item.objectType}:${item.objectId}`}><h3>{String(item.properties.name ?? item.objectId)}</h3>"
@@ -167,7 +168,7 @@ def _application_prelude(
     title: str,
     summary: str,
     policies: str,
-    states: str,
+    screens: str,
     record_fields: str,
 ) -> str:
     return (
@@ -178,7 +179,7 @@ def _application_prelude(
         'const policyLabels = { executable_precondition: "조건 불충족 시 자동 차단", '
         'human_confirmation: "실행 전 사람이 확인", '
         'documented_for_review: "검토용 규칙 · 아직 자동화 안 됨" } as const;\n'
-        f"const lifecycle = {states} as const;\n"
+        f"const screens = {screens} as const;\n"
     )
 
 
@@ -198,12 +199,20 @@ def _application_literals(plan: JsonObject) -> tuple[dict[str, object], str, str
         for row in _mapping_items(primary.get("fields"), "record.fields")
         if row["apiName"] not in {primary["primaryKey"], "name", "status"}
     ]
+    experience = _mapping(
+        _business_system_definition(plan).get("experience"),
+        "businessSystemDefinition.experience",
+    )
+    screens = [
+        {"id": row["id"], "title": row["title"]}
+        for row in _mapping_items(experience.get("screens"), "businessSystemDefinition.experience.screens")
+    ]
     return (
         blueprint,
         json.dumps(str(plan["applicationName"]), ensure_ascii=False),
         json.dumps(str(blueprint.get("summary") or ""), ensure_ascii=False),
         json.dumps(policies, ensure_ascii=False),
-        json.dumps(_workflow_states(blueprint), ensure_ascii=False),
+        json.dumps(screens, ensure_ascii=False),
         json.dumps(fields, ensure_ascii=False),
     )
 
@@ -352,7 +361,12 @@ def _manifest(
         "objectApiNames": object_names,
         "actionApiNames": action_names,
         "functionApiNames": function_names,
+        "businessSystemDefinitionFingerprint": _business_system_definition(plan)["definitionFingerprint"],
     }
+
+
+def _business_system_definition(plan: JsonObject) -> dict[str, object]:
+    return _mapping(plan.get("businessSystemDefinition"), "businessSystemDefinition")
 
 
 def _blueprint(plan: JsonObject) -> dict[str, object]:

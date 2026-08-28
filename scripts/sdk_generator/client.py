@@ -660,6 +660,15 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 "Promise<AipPilotApplicationBundle>;"
             ),
             "      get(rid: string): Promise<AipPilotApplicationBundle>;",
+            "      getOperating(applicationId: string): Promise<AipPilotOperatingApplicationBundle>;",
+            (
+                "      queryObjects(applicationId: string, objectType: string, payload?: ObjectQueryRequest): "
+                "Promise<ObjectQueryResult<GenericObject>>;"
+            ),
+            (
+                "      startAction(applicationId: string, actionType: string, payload: ActionPlanRequest, "
+                "options: { idempotencyKey: string; waitSeconds?: number }): Promise<ActionRun>;"
+            ),
             "    };",
             "    citations: {",
             (
@@ -3952,6 +3961,36 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "          }),",
         "        get: (rid: string) =>",
         "          request<AipPilotApplicationBundle>(`/api/aip/pilot/applications/${encodeURIComponent(rid)}`),",
+        "        getOperating: (applicationId: string) =>",
+        (
+            "          request<AipPilotOperatingApplicationBundle>(`/api/aip/pilot/operating-applications/"
+            "${encodeURIComponent(applicationId)}`),"
+        ),
+        "        queryObjects: (applicationId: string, objectType: string, payload: ObjectQueryRequest = {}) =>",
+        (
+            "          request<ObjectQueryResult<GenericObject>>(`/api/aip/pilot/operating-applications/"
+            "${encodeURIComponent(applicationId)}/objects/${encodeURIComponent(objectType)}/query`, {"
+        ),
+        '            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),',
+        "          }),",
+        (
+            "        startAction: (applicationId: string, actionType: string, payload: ActionPlanRequest, "
+            "options: { idempotencyKey: string; waitSeconds?: number }) => {"
+        ),
+        "          const params = new URLSearchParams();",
+        "          if (options?.waitSeconds !== undefined) params.set('waitSeconds', String(options.waitSeconds));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        (
+            "          return request<ActionRun>(`/api/aip/pilot/operating-applications/"
+            "${encodeURIComponent(applicationId)}/actions/${encodeURIComponent(actionType)}/runs${suffix}`, {"
+        ),
+        (
+            '            method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "aip.pilot.startAction") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          });",
+        "        },",
         "      },",
         "      citations: {",
         "        resolveNavigation: (payload: AipCitationNavigationResolveRequest) =>",
