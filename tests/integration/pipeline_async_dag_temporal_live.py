@@ -27,6 +27,8 @@ from sqlalchemy import create_engine, func, insert, select, text, update
 from sqlalchemy.engine import Engine
 from temporalio.client import Client
 
+from tests.integration.helpers.temporal_readiness import wait_for_temporal_namespace
+
 TENANT = "pipeline-live-tenant"
 NOW = "2026-07-29T00:00:00Z"
 HELPER = Path(__file__).parent / "helpers" / "pipeline_async_dag_live_worker.py"
@@ -41,6 +43,7 @@ def live_database() -> Iterator[tuple[Engine, str]]:
     postgres = urlsplit(admin_url)
     _wait_port(postgres.hostname or "127.0.0.1", postgres.port or 15433, timeout=30)
     _wait_port("127.0.0.1", 7233, timeout=60)
+    asyncio.run(wait_for_temporal_namespace("127.0.0.1:7233", timeout=60))
     database_name = f"foundry_lite_pipeline_{uuid4().hex[:12]}"
     admin = create_engine(admin_url, future=True, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
