@@ -1,5 +1,5 @@
 {{- $root := . -}}
-{{- range $name := list "outbox" "scheduler" "pipeline" "action" }}
+{{- range $name := list "outbox" "scheduler" "pipeline" "action" "action-runs" }}
 {{- $worker := index $root.Values.workers $name }}
 {{- if $worker.enabled }}
 apiVersion: apps/v1

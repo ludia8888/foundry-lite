@@ -67,6 +67,9 @@ workers:
   action:
     enabled: true
     module: foundry_lite_worker.action_control
+  action-runs:
+    enabled: true
+    module: foundry_lite_worker.action_runs
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: "1", memory: 1Gi}

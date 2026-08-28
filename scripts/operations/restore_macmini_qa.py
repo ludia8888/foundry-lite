@@ -43,6 +43,7 @@ _APP_DEPLOYMENTS = (
     ("foundry-lite-worker-scheduler", 1),
     ("foundry-lite-worker-pipeline", 1),
     ("foundry-lite-worker-action", 1),
+    ("foundry-lite-worker-action-runs", 1),
 )
 _SOURCE_CAPACITY_HANDOFF = (
     ("statefulset", "foundry-lite-clamav", 0),

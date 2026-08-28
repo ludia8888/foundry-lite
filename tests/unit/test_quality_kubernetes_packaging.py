@@ -204,6 +204,15 @@ def test_api_and_workers_can_read_oauth_key_as_the_image_nonroot_principal() -> 
         assert "defaultMode: 0440" in template
 
 
+def test_helm_deploys_action_control_and_temporal_execution_workers() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    workers = (ROOT / "deploy/helm/foundry-lite/templates/workers.yaml").read_text(encoding="utf-8")
+
+    assert values["workers"]["action"]["module"] == "foundry_lite_worker.action_control"
+    assert values["workers"]["action-runs"]["module"] == "foundry_lite_worker.action_runs"
+    assert '"action" "action-runs"' in workers
+
+
 def test_otlp_http_trace_endpoint_includes_the_collector_path() -> None:
     base = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
     macmini = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.macmini-qa.yaml").read_text(encoding="utf-8"))

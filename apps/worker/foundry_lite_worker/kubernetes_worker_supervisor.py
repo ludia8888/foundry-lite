@@ -15,6 +15,7 @@ _ALLOWED_MODULES: Final = frozenset(
         "foundry_lite_worker.source_scheduler",
         "foundry_lite_worker.pipeline_control",
         "foundry_lite_worker.action_control",
+        "foundry_lite_worker.action_runs",
     }
 )
 
