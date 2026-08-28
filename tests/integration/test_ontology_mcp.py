@@ -300,7 +300,7 @@ def test_pilot_business_system_opens_the_same_live_work_screen_inside_gpt(
     assert resources_response.json()["result"]["resources"][0]["uri"] == BUSINESS_SYSTEM_RESOURCE_URI
     html = resource_response.json()["result"]["contents"][0]["text"]
     content_hash = hashlib.sha256(html.encode()).hexdigest()[:12]
-    assert BUSINESS_SYSTEM_RESOURCE_URI == f"ui://foundry-lite/business-system-v1-{content_hash}.html"
+    assert BUSINESS_SYSTEM_RESOURCE_URI == f"ui://foundry-lite/business-system-v2-{content_hash}.html"
     assert "createFoundryLiteBusinessSystemOsdk" in html
 
     definition_result = _call(
@@ -313,7 +313,9 @@ def test_pilot_business_system_opens_the_same_live_work_screen_inside_gpt(
     )
     definition = definition_result["businessSystemDefinition"]
     assert definition["definitionFingerprint"] == bundle["businessSystemDefinition"]["definitionFingerprint"]
-    assert definition["experience"]["surfaces"][0]["screenIds"] == definition["experience"]["surfaces"][1]["screenIds"]
+    surfaces = definition["experience"]["surfaces"]
+    assert surfaces[0]["pageIds"] == surfaces[1]["pageIds"] == surfaces[2]["pageIds"]
+    assert all(surface["runtime"] == "workshop" for surface in surfaces)
     operating = foundry.aip.get_operating_pilot_application(app_id, ctx=operator)
     assert operating["operatingApplication"]["status"] == "operating"
     assert operating["operatingApplication"]["definitionFingerprint"] == definition["definitionFingerprint"]

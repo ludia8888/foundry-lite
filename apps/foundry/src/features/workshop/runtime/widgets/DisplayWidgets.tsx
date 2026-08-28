@@ -163,7 +163,7 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
         subtitle={
           checkedIds.size > 0
             ? `${checkedIds.size}개 선택 · ${sortedObjects.length}`
-            : `objects.generic.query · ${sortedObjects.length}`
+            : `총 ${sortedObjects.length}건`
         }
         className="min-h-[220px]"
         bodyClassName="overflow-auto"

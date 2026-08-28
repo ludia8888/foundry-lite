@@ -180,16 +180,18 @@
 
         function screensMarkup(definition) {
           const experience = isObject(definition?.experience) ? definition.experience : {};
-          const screens = list(experience.screens);
+          const workshop = isObject(experience.workshopApp) ? experience.workshopApp : {};
+          const pages = list(workshop.pages);
           const componentNames = {
-            work_queue: "업무 대기열", action_panel: "다음 업무", ai_suggestion_panel: "AI 업무 제안",
-            record_detail: "업무 정보", action_form: "업무 처리", status_timeline: "상태 흐름",
-            policy_panel: "업무 규칙", approval_inbox: "사람 확인 대기", evidence_panel: "업무 증거",
-            audit_timeline: "변경 기록", relationship_graph: "업무 관계", kpi_summary: "핵심 지표",
+            objectTable: "업무 테이블", objectList: "업무 목록", objectDetail: "업무 상세",
+            objectSetTitle: "업무 제목", searchBar: "검색", metricCard: "핵심 지표",
+            buttonGroup: "업무 버튼", actionForm: "업무 폼", timeline: "타임라인",
+            markdown: "업무 안내", barChart: "상태 차트",
           };
-          return screens.map((screen) => {
-            const components = list(screen.components).map((item) => componentNames[item.kind] || item.title || item.kind);
-            return `<div class="screen-card"><strong>${escapeHtml(screen.title)}</strong><div class="muted">${components.map(escapeHtml).join(" · ")}</div></div>`;
+          return pages.map((page) => {
+            const widgets = list(page.sections).flatMap((section) => list(section.widgets));
+            const components = widgets.map((item) => componentNames[item.kind] || item.config?.title || item.kind);
+            return `<div class="screen-card"><strong>${escapeHtml(page.name)}</strong><div class="muted">${components.map(escapeHtml).join(" · ")}</div></div>`;
           }).join("");
         }
 
@@ -203,7 +205,7 @@
             <section class="body">
               <div class="flow" aria-label="업무 운영 지도">${counts(blueprint).map(([label, value]) => `<div class="flow-step"><span class="flow-label">${label}</span><strong class="flow-value">${value}</strong></div>`).join("")}</div>
               <div class="card"><h2>업무가 움직이는 순서</h2><div class="rail">${list(workflow.states).map((item, index) => `${index ? '<span class="arrow">→</span>' : ""}<span class="state">${escapeHtml(item)}</span>`).join("")}</div></div>
-              <div class="card"><h2>GPT와 외부 앱이 함께 쓰는 화면</h2><div class="screen-grid">${screensMarkup(definition)}</div></div>
+              <div class="card"><h2>Workshop에서 함께 쓰는 화면</h2><div class="screen-grid">${screensMarkup(definition)}</div></div>
               <div class="grid">
                 <section class="card"><h2>계속 추적할 업무 기록</h2><ul class="list">${list(blueprint.records).map(recordMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>
                 <section class="card"><h2>사람이 실행할 업무 버튼</h2><ul class="list">${list(workflow.actions).map(actionMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>

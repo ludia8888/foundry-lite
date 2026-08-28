@@ -866,15 +866,15 @@ export type BusinessSystemScreen = {
   components: BusinessSystemComponent[];
 };
 export type BusinessSystemDefinition = {
-  schemaVersion: "foundry-lite-business-system-definition/v1";
+  schemaVersion: "foundry-lite-business-system-definition/v2";
   definitionFingerprint: string;
   identity: { applicationId: string; name: string; summary: string };
   businessModel: Record<string, unknown>;
   access: Record<string, unknown>;
   experience: {
     componentCatalogVersion: string;
-    screens: BusinessSystemScreen[];
-    surfaces: Array<{ id: string; screenIds: string[]; interactionMode: string }>;
+    workshopApp: Record<string, unknown>;
+    surfaces: Array<{ id: string; pageIds: string[]; runtime: "workshop" }>;
   };
   agentWork: Record<string, unknown>;
   deployment: Record<string, unknown>;

@@ -130,26 +130,36 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
 
     definition = build_business_system_definition("Property Care Desk", blueprint, consumer_osdk)
 
-    assert definition["schemaVersion"] == "foundry-lite-business-system-definition/v1"
+    assert definition["schemaVersion"] == "foundry-lite-business-system-definition/v2"
     assert definition["definitionFingerprint"].startswith("sha256:")
     experience = definition["experience"]
-    screen_ids = [screen["id"] for screen in experience["screens"]]
+    workshop = experience["workshopApp"]
+    page_ids = [page["pageId"] for page in workshop["pages"]]
     assert experience["surfaces"] == [
-        {"id": "chatgpt", "screenIds": screen_ids, "interactionMode": "conversation_embedded"},
-        {"id": "external_app", "screenIds": screen_ids, "interactionMode": "authenticated_web"},
+        {"id": "chatgpt", "pageIds": page_ids, "runtime": "workshop"},
+        {"id": "external_app", "pageIds": page_ids, "runtime": "workshop"},
+        {"id": "workshop", "pageIds": page_ids, "runtime": "workshop"},
     ]
-    today = experience["screens"][0]
-    assert [component["kind"] for component in today["components"]] == [
-        "work_queue",
-        "action_panel",
-        "ai_suggestion_panel",
+    today = workshop["pages"][0]
+    widgets = [widget for section in today["sections"] for widget in section["widgets"]]
+    assert [widget["kind"] for widget in widgets] == [
+        "objectSetTitle",
+        "searchBar",
+        "metricCard",
+        "objectTable",
+        "objectDetail",
+        "buttonGroup",
     ]
-    assert today["components"][0]["binding"]["objectType"] == "WorkOrder"
+    assert widgets[3]["config"]["objectApiName"] == "WorkOrder"
+    assert set(widgets[5]["config"]["humanApprovalActionApiNames"]) == {
+        "TriageWorkOrder",
+        "ScheduleRepair",
+    }
     assert definition["agentWork"]["actionTypes"][0]["execution"] == "proposal_then_human"
     assert require_business_system_definition(definition) == definition
 
     changed = deepcopy(definition)
-    changed["experience"]["screens"][0]["title"] = "변조된 화면"
+    changed["experience"]["workshopApp"]["pages"][0]["name"] = "변조된 화면"
     with pytest.raises(FdePlatformToolError, match="정의서가 변경"):
         require_business_system_definition(changed)
 

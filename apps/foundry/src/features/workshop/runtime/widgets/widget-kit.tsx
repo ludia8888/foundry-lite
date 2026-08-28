@@ -1,4 +1,4 @@
-import type { GenericObject } from "@foundry-lite/sdk";
+import type { GenericObject, ObjectQueryRequest, ObjectQueryResult } from "@foundry-lite/sdk";
 import {
   useFoundryLiteClient,
   useFoundryLiteQuery,
@@ -16,6 +16,7 @@ import {
   applyVariableFilters,
   useRuntimeState,
 } from "../../lib/runtime-state";
+import { useWorkshopRuntimeApplicationId } from "../runtime-application-context";
 
 /**
  * 모든 런타임 위젯 렌더러가 받는 공통 props.
@@ -55,21 +56,22 @@ export function useWidgetObjects(
   variableFilters?: readonly VariableFilter[],
 ): WidgetObjectsResult {
   const client = useFoundryLiteClient();
+  const applicationId = useWorkshopRuntimeApplicationId();
   const state = useRuntimeState();
   const load = useCallback(async () => {
     if (!objectApiName) return [] as GenericObject[];
     const collected: GenericObject[] = [];
     let cursor: string | null = null;
     do {
-      const page = await client.objects.generic.query(objectApiName, {
-        limit: WIDGET_PAGE_SIZE,
-        ...(cursor ? { cursor } : {}),
-      });
+      const options: ObjectQueryRequest = { limit: WIDGET_PAGE_SIZE, ...(cursor ? { cursor } : {}) };
+      const page: ObjectQueryResult<GenericObject> = applicationId
+        ? await client.aip.pilot.queryObjects(applicationId, objectApiName, options)
+        : await client.objects.generic.query(objectApiName, options);
       collected.push(...page.items);
       cursor = page.nextCursor;
     } while (cursor && collected.length < WIDGET_OBJECT_CAP);
     return collected;
-  }, [client, objectApiName]);
+  }, [applicationId, client, objectApiName]);
   const query = useFoundryLiteQuery<GenericObject[]>(
     ["workshop-widget", objectApiName ?? "none", state.dataVersion],
     load,

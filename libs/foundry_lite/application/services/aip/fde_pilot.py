@@ -27,9 +27,14 @@ from foundry_lite.application.services.aip.fde_pilot_operating import (
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import (
     ci_workflow,
     consumer_osdk_plan,
+    deployment_plan,
     react_files,
 )
-from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json, required_text
+from foundry_lite.application.services.aip.fde_tool_result import (
+    FdePlatformToolError,
+    required_integer,
+    required_text,
+)
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.dataset.registry import DatasetRegistryService
@@ -88,11 +93,11 @@ class FdePilotService(CoreService):
             "applicationResources": application_resources(blueprint),
             "consumerOsdk": consumer_osdk,
             "react": {
-                "routes": ["/", "/work", "/policies", "/evidence"],
+                "routes": ["/apps/:applicationId", "/workshop/:applicationId"],
                 "objectTypes": [row["apiName"] for row in records],
                 "actionTypes": [row["apiName"] for row in actions],
                 "functionTypes": [row["apiName"] for row in functions],
-                "framework": "react",
+                "framework": "foundry_workshop_runtime",
             },
             "ci": {"commands": ["pnpm consumer-osdk:check", "pnpm typecheck", "pnpm test", "pnpm build"]},
             "requiredApprovals": ["pilot.application.generate"],
@@ -106,8 +111,7 @@ class FdePilotService(CoreService):
     ) -> dict[str, object]:
         existing = self._existing_bundle(ctx, idempotency_key)
         if existing is not None:
-            role_mapping = self._ensure_creator_role_mapping(ctx, existing, idempotency_key)
-            return {**existing, "roleMapping": role_mapping, "isReplayed": True}
+            return self._replayed_application(ctx, existing, idempotency_key)
         normalized = _normalized_plan(plan)
         project = self._project(ctx, normalized, idempotency_key)
         seed = self._seed(ctx, normalized, idempotency_key)
@@ -128,11 +132,23 @@ class FdePilotService(CoreService):
             ctx=ctx,
         )
         role_mapping = self._ensure_creator_role_mapping(ctx, bundle, idempotency_key)
+        workshop_resource = self._ensure_workshop_resource(ctx, bundle, idempotency_key)
         return {
             **bundle,
             "resource": resource["resource"],
             "roleMapping": role_mapping,
+            "workshopResource": workshop_resource,
             "isReplayed": False,
+        }
+
+    def _replayed_application(self, ctx: RequestContext, bundle: JsonObject, idempotency_key: str) -> dict[str, object]:
+        role_mapping = self._ensure_creator_role_mapping(ctx, bundle, idempotency_key)
+        workshop_resource = self._ensure_workshop_resource(ctx, bundle, idempotency_key)
+        return {
+            **bundle,
+            "roleMapping": role_mapping,
+            "workshopResource": workshop_resource,
+            "isReplayed": True,
         }
 
     def get_bundle(self, ctx: RequestContext, rid: str) -> dict[str, object]:
@@ -232,6 +248,35 @@ class FdePilotService(CoreService):
         )
         return [item for item in _mapping_items(resources.get("items")) if is_role_mapping(item, application_id)]
 
+    def _ensure_workshop_resource(
+        self, ctx: RequestContext, bundle: JsonObject, idempotency_key: str
+    ) -> dict[str, object]:
+        application = _mapping(bundle.get("osdkApplication"), "osdkApplication")
+        app_record = _mapping(application.get("application"), "osdkApplication.application")
+        project = _mapping(bundle.get("project"), "project")
+        definition = _mapping(bundle.get("businessSystemDefinition"), "businessSystemDefinition")
+        experience = _mapping(definition.get("experience"), "businessSystemDefinition.experience")
+        workshop_app = _mapping(experience.get("workshopApp"), "businessSystemDefinition.experience.workshopApp")
+        app_id = str(app_record["id"])
+        result = self.resource_catalog_service.register_resource(
+            resource_type="workshop_app",
+            display_name=str(bundle["applicationName"]),
+            project_id=str(project["id"]),
+            folder_id=None,
+            source_surface="workshop",
+            source_ref=app_id,
+            operations_path=f"/workshop/{app_id}",
+            metadata={
+                "kind": "foundry-lite.workshop.app-definition",
+                "schemaVersion": 2,
+                "definition": workshop_app,
+                "businessSystemDefinitionFingerprint": definition["definitionFingerprint"],
+            },
+            idempotency_key=f"{idempotency_key}:workshop-resource",
+            ctx=ctx,
+        )
+        return _mapping(result.get("resource"), "workshop.resource")
+
     def _existing_bundle(self, ctx: RequestContext, key: str) -> dict[str, object] | None:
         resources = self.resource_catalog_service.list_resources(
             project_id=None, folder_id=None, include_trashed=False, ctx=ctx
@@ -257,7 +302,7 @@ class FdePilotService(CoreService):
         datasets = _mapping_items(seed.get("datasets"))
         results = [self._seed_dataset(ctx, item, key) for item in datasets]
         primary = results[0]
-        row_count = sum(_integer(item.get("rowCount"), "seed.rowCount") for item in results)
+        row_count = sum(required_integer(item.get("rowCount"), "seed.rowCount") for item in results)
         return {**primary, "datasets": results, "rowCount": row_count}
 
     def _seed_dataset(self, ctx: RequestContext, seed: JsonObject, key: str) -> dict[str, object]:
@@ -380,33 +425,11 @@ def _bundle(
         "consumerOsdk": dict(_mapping(plan.get("consumerOsdk"), "consumerOsdk")),
         "reactFiles": files,
         "ciWorkflow": ci_workflow(),
-        "deploymentPlan": _deployment_plan(application, files),
+        "deploymentPlan": deployment_plan(application, plan, files),
         "applicationPath": f"/projects/{project['id']}/pilot/{slug}",
         "operatingPath": f"/apps/{application_record['id']}",
         "status": "generated_on_branch",
         "nextStep": "예시 데이터로 확인한 뒤 Ontology를 검토·활성화하고 호스팅 배포를 승인하세요.",
-    }
-
-
-def _deployment_plan(application: JsonObject, files: Mapping[str, str]) -> dict[str, object]:
-    app = _mapping(application.get("application"), "application")
-    return {
-        "schemaVersion": "foundry-lite-domain-os-deployment/v1",
-        "artifactKind": "vite_static_web_app",
-        "applicationId": app.get("id"),
-        "sourceFingerprint": hash_json(files),
-        "buildCommand": "pnpm install --no-frozen-lockfile && pnpm consumer-osdk:check && pnpm typecheck && pnpm build",
-        "outputDirectory": "dist",
-        "status": "awaiting_ontology_review",
-        "requiredBeforeHosting": [
-            "consumer_osdk_strict_passed",
-            "ontology_proposal_activated",
-            "production_data_access_reviewed",
-            "actor_role_mapping_configured",
-            "authenticated_session_bootstrap_configured",
-            "host_target_configured",
-        ],
-        "releaseBoundary": "governed_release_required",
     }
 
 
@@ -431,12 +454,6 @@ def _text_list(value: object, field: str) -> list[str]:
     if len(result) != len(value) or not result:
         raise FdePlatformToolError("schema_invalid", f"{field} must be a non-empty string list")
     return result
-
-
-def _integer(value: object, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise FdePlatformToolError("schema_invalid", f"{field} must be an integer")
-    return value
 
 
 def _fieldnames(rows: list[dict[str, object]]) -> list[str]:

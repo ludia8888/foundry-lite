@@ -10,7 +10,7 @@ import {
 } from "@foundry-lite/sdk/react";
 import { Eye, Info, Pencil, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useParams } from "react-router";
 
 import { ErrorState } from "@/components/shared/ErrorState";
 import { LoadingState } from "@/components/shared/LoadingState";
@@ -47,6 +47,8 @@ type WorkshopMode = "builder" | "runtime";
  */
 export default function WorkshopPage() {
   const client = useFoundryLiteClient();
+  const { applicationId } = useParams();
+  const sourceRef = applicationId ?? WORKSHOP_APP_SOURCE_REF;
   const [mode, setMode] = useState<WorkshopMode>("builder");
   const [definition, setDefinition] = useState<AppDefinition>(() =>
     loadAppDefinition(),
@@ -95,7 +97,7 @@ export default function WorkshopPage() {
     void retryWithBackoff(() => client.resources.items.search())
       .then((result) => {
         if (!isActive) return;
-        const savedResource = findWorkshopAppResource(result.items);
+        const savedResource = findWorkshopAppResource(result.items, sourceRef);
         setResource(savedResource);
         const savedDefinition = savedResource
           ? appDefinitionFromResource(savedResource)
@@ -117,7 +119,7 @@ export default function WorkshopPage() {
     return () => {
       isActive = false;
     };
-  }, [client]);
+  }, [client, sourceRef]);
 
   const handleDefinitionChange = useCallback((next: AppDefinition) => {
     hasUserEditedRef.current = true;
@@ -138,8 +140,8 @@ export default function WorkshopPage() {
           resourceType: WORKSHOP_APP_RESOURCE_TYPE,
           displayName: saved.name,
           sourceSurface: WORKSHOP_APP_SOURCE_SURFACE,
-          sourceRef: WORKSHOP_APP_SOURCE_REF,
-          operationsPath: "/workshop",
+          sourceRef,
+          operationsPath: applicationId ? `/workshop/${applicationId}` : "/workshop",
           metadata: resourceMetadataForAppDefinition(saved),
         },
         { idempotencyKey: createRequestId("workshop-save") },
@@ -160,7 +162,7 @@ export default function WorkshopPage() {
     } finally {
       setIsSavingDefinition(false);
     }
-  }, [client, definition, isSavingDefinition]);
+  }, [applicationId, client, definition, isSavingDefinition, sourceRef]);
 
   const handleEnterRuntime = async () => {
     if (isDirty) await handleSave();

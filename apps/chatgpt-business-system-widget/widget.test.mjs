@@ -6,11 +6,13 @@ import vm from "node:vm";
 const template = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const runtime = readFileSync(new URL("./foundry-lite-mcp-osdk.js", import.meta.url), "utf8");
 
-test("GPT 업무 화면은 외부 앱과 같은 정의 지문과 업무 컴포넌트를 표시한다", () => {
-  assert.match(template, /외부 앱과 같은 화면 정의/);
-  assert.match(template, /AI 업무 제안/);
+test("GPT 업무 화면은 Workshop 정의와 위젯만 렌더링한다", () => {
+  assert.match(template, /Workshop definition · shared runtime/);
+  assert.match(template, /data-workshop-widget/);
+  assert.match(template, /experience\?\.workshopApp/);
   assert.match(template, /사람 확인 대기함/);
   assert.match(template, /business\.executeAction/);
+  assert.doesNotMatch(template, /LIVE WORK SYSTEM|work_queue|action_panel|ai_suggestion_panel/);
   assert.doesNotMatch(template, /tools\/call|action\.[A-Za-z].*\.apply|object\.[A-Za-z].*\.search/);
   assert.match(runtime, /createFoundryLiteBusinessSystemOsdk|BusinessSystem/);
 });

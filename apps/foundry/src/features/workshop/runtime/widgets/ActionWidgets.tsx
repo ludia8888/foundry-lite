@@ -75,6 +75,7 @@ export function ActionFormWidget(props: WidgetRuntimeProps) {
           targetObject={object}
           onApplied={() => dispatch({ type: "bumpData" })}
           onCancel={() => dispatch({ type: "selectObject", objectId: null })}
+          requiresHumanConfirmation={widget.config.humanApprovalActionApiNames?.includes(actionView.apiName) === true}
         />
       )}
     </WidgetFrame>
@@ -171,8 +172,12 @@ export function ButtonGroupWidget(props: WidgetRuntimeProps) {
             key={`${activeView.apiName}:${object.objectId}`}
             actionView={activeView}
             targetObject={object}
-            onApplied={() => dispatch({ type: "bumpData" })}
+            onApplied={() => {
+              dispatch({ type: "bumpData" });
+              setActiveAction(null);
+            }}
             onCancel={() => setActiveAction(null)}
+            requiresHumanConfirmation={widget.config.humanApprovalActionApiNames?.includes(activeView.apiName) === true}
           />
         </div>
       ) : null}

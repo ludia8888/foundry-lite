@@ -86,6 +86,14 @@ def required_text(value: JsonObject, key: str) -> str:
     return item.strip()
 
 
+def required_integer(value: object, field: str) -> int:
+    """Return one strict integer or raise the shared AI FDE schema error."""
+
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise FdePlatformToolError("schema_invalid", f"{field} must be an integer")
+    return value
+
+
 def scope_value(scope_ref: str, prefix: str) -> str:
     if not scope_ref.startswith(prefix):
         raise FdePlatformToolError("scope_mismatch", f"tool requires a {prefix} scope")
