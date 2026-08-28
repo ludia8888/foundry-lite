@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.ports import PipelineExecutionLeaseFence, TransactionContext, TransactionManager
+from foundry_lite.application.ports.pipeline_execution_repository import PipelineExecutionRepository
 from foundry_lite.application.ports.pipeline_repository import PipelineRepository, PipelineRunRow, PipelineVersionRow
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.pipeline_async_run_events import append_terminal_event
 from foundry_lite.application.services.pipeline_node_execution_evidence import PipelineNodeExecutionEvidence
 from foundry_lite.application.services.pipeline_run_execution import (
     PipelineRunExecution,
@@ -29,6 +31,7 @@ JsonObject = dict[str, object]
 def succeed_pipeline_run(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
@@ -42,6 +45,7 @@ def succeed_pipeline_run(
         _persist_successful_run(
             transaction_manager,
             repository,
+            execution_repository,
             runtime_service,
             ctx,
             row,
@@ -60,6 +64,7 @@ def succeed_pipeline_run(
 def _persist_successful_run(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
@@ -86,6 +91,7 @@ def _persist_successful_run(
         )
         if after is None:
             raise ConflictDetected("pipeline run success terminal state changed concurrently")
+        append_terminal_event(execution_repository, transaction, ctx, after)
         _audit_terminal(
             runtime_service,
             transaction,
@@ -99,6 +105,7 @@ def _persist_successful_run(
 def complete_unsuccessful_pipeline_run(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
@@ -113,6 +120,7 @@ def complete_unsuccessful_pipeline_run(
         _persist_unsuccessful_run(
             transaction_manager,
             repository,
+            execution_repository,
             runtime_service,
             ctx,
             row,
@@ -130,6 +138,7 @@ def complete_unsuccessful_pipeline_run(
 def fail_pipeline_run(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
@@ -154,12 +163,14 @@ def fail_pipeline_run(
             completed_at=_now(),
         )
         if after is not None:
+            append_terminal_event(execution_repository, transaction, ctx, after)
             _audit_terminal(runtime_service, transaction, ctx, "failed", run_id, {"error": dict(error)})
 
 
 def _persist_unsuccessful_run(
     transaction_manager: TransactionManager,
     repository: PipelineRepository,
+    execution_repository: PipelineExecutionRepository,
     runtime_service: RuntimeEvidenceBoundary,
     ctx: RequestContext,
     row: PipelineRunRow,
@@ -191,6 +202,7 @@ def _persist_unsuccessful_run(
         )
         if after is None:
             raise ConflictDetected("pipeline run terminal state changed concurrently")
+        append_terminal_event(execution_repository, transaction, ctx, after)
         _audit_terminal(runtime_service, transaction, ctx, state.status, str(row["id"]), {"outputs": state.outputs})
 
 

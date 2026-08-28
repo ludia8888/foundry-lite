@@ -6,6 +6,7 @@ from threading import Event
 from types import SimpleNamespace
 from typing import Any
 
+import foundry_lite.application.services.pipeline_async_run_service as pipeline_async_run_module
 import foundry_lite.application.services.pipeline_deployment_service as pipeline_deployment_module
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
@@ -136,6 +137,17 @@ def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
         )
     )
     deployments = _ok(client.get("/api/pipelines/api_orders_readiness/deployments?limit=10", headers=headers))
+    legacy_projection_started = Event()
+    legacy_projection_release = Event()
+    legacy_projection = pipeline_async_run_module.append_legacy_terminal_event
+
+    def hold_legacy_projection(*args: object, **kwargs: object) -> None:
+        legacy_projection_started.set()
+        if not legacy_projection_release.wait(timeout=10):
+            raise RuntimeError("legacy terminal projection release timed out")
+        legacy_projection(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline_async_run_module, "append_legacy_terminal_event", hold_legacy_projection)
     run = _ok(
         client.post(
             "/api/pipelines/api_orders_readiness/runs?waitSeconds=30",
@@ -143,8 +155,12 @@ def test_pipeline_api_routes_cover_builder_review_deploy_run_and_schedule(
             headers={**headers, "Idempotency-Key": "api-pipeline-run"},
         )
     )
-    run_detail = _ok(client.get(f"/api/pipelines/runs/{run['id']}", headers=headers))
-    timeline = _ok(client.get(f"/api/pipelines/runs/{run['id']}/timeline", headers=headers))
+    assert legacy_projection_started.wait(timeout=5)
+    try:
+        run_detail = _ok(client.get(f"/api/pipelines/runs/{run['id']}", headers=headers))
+        timeline = _ok(client.get(f"/api/pipelines/runs/{run['id']}/timeline", headers=headers))
+    finally:
+        legacy_projection_release.set()
     schedule = _ok(
         client.put(
             "/api/pipelines/api_orders_readiness/schedule",

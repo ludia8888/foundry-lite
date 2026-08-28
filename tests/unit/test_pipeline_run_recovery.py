@@ -7,6 +7,7 @@ import foundry_lite.application.services.pipeline_run_recovery as pipeline_run_r
 import pytest
 from foundry_lite.application.ports import PipelineExecutionLeaseFence
 from foundry_lite.application.ports.media_repository import PipelineMediaCommitVersionRow
+from foundry_lite.application.ports.pipeline_execution_repository import PipelineExecutionRepository
 from foundry_lite.application.ports.pipeline_repository import (
     PipelineRepository,
     PipelineRunRow,
@@ -61,6 +62,7 @@ def test_success_terminal_transaction_failure_requires_reconciliation() -> None:
         succeed_pipeline_run(
             cast(TransactionManager, _FailingTransactionManager()),
             cast(PipelineRepository, object()),
+            cast(PipelineExecutionRepository, object()),
             cast(RuntimeEvidenceBoundary, object()),
             RequestContext(tenant_id="tenant-a"),
             row,
