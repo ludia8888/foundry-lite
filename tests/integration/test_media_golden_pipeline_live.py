@@ -320,6 +320,7 @@ def _processing(
         media_repository=repo,
         media_derivative_repository=deriv,
         media_storage=storage,
+        media_source_workspace=LocalMediaSourceWorkspace(),
         media_processor=processor,
     )
     svc.bind_collaborators({"runtime_service": _FakeRuntime()})
