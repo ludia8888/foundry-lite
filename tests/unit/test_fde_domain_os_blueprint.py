@@ -134,6 +134,15 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
     assert definition["definitionFingerprint"].startswith("sha256:")
     experience = definition["experience"]
     workshop = experience["workshopApp"]
+    assert experience["componentCatalogVersion"] == "foundry-lite-workshop-components/v3"
+    assert workshop["theme"]["preset"] in {"ocean", "indigo", "emerald", "amber", "graphite"}
+    assert workshop["theme"]["brandName"] == "Property Care Desk"
+    assert workshop["shell"] == {
+        "navigation": "sidebar",
+        "density": "comfortable",
+        "pageWidth": "wide",
+        "showContextBar": True,
+    }
     page_ids = [page["pageId"] for page in workshop["pages"]]
     assert experience["surfaces"] == [
         {"id": "chatgpt", "pageIds": page_ids, "runtime": "workshop"},
@@ -144,14 +153,18 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
     widgets = [widget for section in today["sections"] for widget in section["widgets"]]
     assert [widget["kind"] for widget in widgets] == [
         "objectSetTitle",
-        "searchBar",
         "metricCard",
+        "searchBar",
+        "statusTracker",
+        "filterList",
         "objectTable",
+        "kanban",
         "objectDetail",
         "buttonGroup",
     ]
-    assert widgets[3]["config"]["objectApiName"] == "WorkOrder"
-    assert set(widgets[5]["config"]["humanApprovalActionApiNames"]) == {
+    assert [section["span"] for section in today["sections"]] == [12, 3, 6, 3]
+    assert widgets[5]["config"]["objectApiName"] == "WorkOrder"
+    assert set(widgets[8]["config"]["humanApprovalActionApiNames"]) == {
         "TriageWorkOrder",
         "ScheduleRepair",
     }

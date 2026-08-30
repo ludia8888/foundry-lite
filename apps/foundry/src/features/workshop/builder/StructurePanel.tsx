@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   PanelRight,
   PanelTop,
+  Palette,
   Plus,
   Sparkles,
 } from "lucide-react";
@@ -177,6 +178,19 @@ export function StructurePanel({
 
       <div className="min-h-0 flex-1 overflow-auto py-2">
         <GroupLabel icon={Layers} label="레이아웃" />
+
+        <TreeRow
+          depth={0}
+          icon={Palette}
+          label="앱 디자인과 탐색"
+          isActive={selection?.type === "app"}
+          onClick={() => onSelect({ type: "app" })}
+          trailing={
+            <span className="text-[10px] text-[#8f99a8]">
+              {definition.theme.preset}
+            </span>
+          }
+        />
 
         <TreeRow
           depth={0}

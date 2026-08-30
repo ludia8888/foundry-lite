@@ -5,6 +5,8 @@ import {
   createVariable,
   withAppPages,
   type AppDefinition,
+  type AppShell,
+  type AppTheme,
   type AppOverlay,
   type AppPage,
   type AppSection,
@@ -219,6 +221,31 @@ export function setSectionStyle(
     ...section,
     style: { ...section.style, ...patch },
   }));
+}
+
+export function setSectionSpan(
+  definition: AppDefinition,
+  sectionId: string,
+  span: AppSection["span"],
+): AppDefinition {
+  return updateSection(definition, sectionId, (section) => ({
+    ...section,
+    span,
+  }));
+}
+
+export function setAppTheme(
+  definition: AppDefinition,
+  patch: Partial<AppTheme>,
+): AppDefinition {
+  return { ...definition, theme: { ...definition.theme, ...patch } };
+}
+
+export function setAppShell(
+  definition: AppDefinition,
+  patch: Partial<AppShell>,
+): AppDefinition {
+  return { ...definition, shell: { ...definition.shell, ...patch } };
 }
 
 export function setSectionTitle(

@@ -14,6 +14,8 @@ import {
 import {
   createHeaderSlots,
   createId,
+  DEFAULT_APP_SHELL,
+  DEFAULT_APP_THEME,
   defaultSectionStyle,
   type AppDefinition,
   type AppPage,
@@ -62,12 +64,14 @@ function section(
   layout: SectionLayout,
   widgets: AppSection["widgets"],
   style?: Partial<SectionStyle>,
+  span: AppSection["span"] = 12,
 ): AppSection {
   return {
     id: createId("sec"),
     title,
     layout,
     style: { ...defaultSectionStyle(), ...style },
+    span,
     widgets,
   };
 }
@@ -84,6 +88,7 @@ function page(
     isDefault,
     backgroundColor: "transparent",
     layoutDirection: "columns",
+    intent: isDefault ? "workbench" : "records",
     sections,
   };
 }
@@ -97,6 +102,8 @@ function definition(
   return {
     name,
     purpose,
+    theme: { ...DEFAULT_APP_THEME, brandName: name, logoText: name.slice(0, 2) },
+    shell: { ...DEFAULT_APP_SHELL },
     header: { visible: true, title: name, slots: createHeaderSlots() },
     page: defaultPage,
     pages,
@@ -130,7 +137,7 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
             widget("filterList", ctx),
             widget("objectTable", ctx),
             widget("objectDetail", ctx),
-          ]),
+          ], undefined, 12),
         ]),
       ]);
     },
@@ -159,6 +166,7 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
           ),
           section("작업", "columns", [
             widget("objectTable", ctx),
+            widget("kanban", ctx),
             widget("objectDetail", ctx),
             widget("actionForm", ctx),
           ]),
@@ -198,6 +206,10 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
           section("분포", "columns", [
             widget("barChart", ctx),
             widget("pieChart", ctx),
+          ]),
+          section("운영 흐름", "columns", [
+            widget("statusTracker", ctx),
+            widget("pivotTable", ctx),
           ]),
           section("레코드", "flow", [widget("objectTable", ctx)]),
         ]),

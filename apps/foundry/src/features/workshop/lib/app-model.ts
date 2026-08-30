@@ -23,6 +23,10 @@ export type WidgetKind =
   | "barChart"
   | "pieChart"
   | "timeline"
+  | "kanban"
+  | "calendar"
+  | "statusTracker"
+  | "pivotTable"
   | "filterList"
   | "objectDropdown"
   | "searchBar"
@@ -127,6 +131,8 @@ export type AppSection = {
   title: string;
   layout: SectionLayout;
   style: SectionStyle;
+  /** 12-column SaaS canvas width. Mobile always collapses to one column. */
+  span: 3 | 4 | 6 | 8 | 9 | 12;
   widgets: AppWidget[];
 };
 
@@ -140,7 +146,27 @@ export type AppPage = {
   backgroundColor: string;
   /** Legacy single-page builder layout direction. */
   layoutDirection: AppLayoutDirection;
+  /** Business intent used for navigation iconography and responsive composition. */
+  intent: "workbench" | "overview" | "records" | "governance" | "evidence" | "relationships";
   sections: AppSection[];
+};
+
+export type AppThemePreset = "ocean" | "indigo" | "emerald" | "amber" | "graphite";
+export type AppNavigation = "sidebar" | "topbar";
+export type AppDensity = "comfortable" | "compact";
+export type AppPageWidth = "wide" | "contained";
+
+export type AppTheme = {
+  preset: AppThemePreset;
+  brandName: string;
+  logoText: string;
+};
+
+export type AppShell = {
+  navigation: AppNavigation;
+  density: AppDensity;
+  pageWidth: AppPageWidth;
+  showContextBar: boolean;
 };
 
 /** 헤더 위젯 슬롯 (Palantir: 좌/중/우 3개 슬롯, 각 위젯 배치 가능). */
@@ -187,6 +213,8 @@ export type AppVariable = {
 export type AppDefinition = {
   name: string;
   purpose: string;
+  theme: AppTheme;
+  shell: AppShell;
   header: AppHeader;
   /** Legacy representative page alias. Mirrors the default page in `pages`. */
   page: AppPage;
@@ -286,6 +314,10 @@ export const WIDGET_LABELS: Record<WidgetKind, string> = {
   barChart: "막대 차트",
   pieChart: "파이 차트",
   timeline: "타임라인",
+  kanban: "칸반 보드",
+  calendar: "업무 캘린더",
+  statusTracker: "상태 추적기",
+  pivotTable: "피벗 테이블",
   filterList: "필터 목록",
   objectDropdown: "객체 드롭다운",
   searchBar: "검색",
@@ -364,8 +396,21 @@ export const WORKSHOP_APP_SOURCE_SURFACE = "workshop";
 export const WORKSHOP_APP_SOURCE_REF = "default-workshop-app";
 export const WORKSHOP_APP_METADATA_KIND =
   "foundry-lite.workshop.app-definition";
-/** v1 = 단일 페이지·위젯 3종, v2 = 멀티페이지·위젯 config·섹션 레이아웃. */
-export const WORKSHOP_APP_METADATA_SCHEMA_VERSION = 2;
+/** v3 = reusable SaaS shell/theme + responsive spans + operational visualizations. */
+export const WORKSHOP_APP_METADATA_SCHEMA_VERSION = 3;
+
+export const DEFAULT_APP_THEME: AppTheme = {
+  preset: "ocean",
+  brandName: "Foundry-lite",
+  logoText: "FL",
+};
+
+export const DEFAULT_APP_SHELL: AppShell = {
+  navigation: "sidebar",
+  density: "comfortable",
+  pageWidth: "wide",
+  showContextBar: true,
+};
 
 let idCounter = 0;
 export function createId(prefix: string): string {
@@ -380,12 +425,14 @@ export function defaultSectionStyle(): SectionStyle {
 export function createSection(
   title: string,
   layout: SectionLayout = "flow",
+  span: AppSection["span"] = 12,
 ): AppSection {
   return {
     id: createId("sec"),
     title,
     layout,
     style: defaultSectionStyle(),
+    span,
     widgets: [],
   };
 }
@@ -410,6 +457,7 @@ export function createPage(name: string, isDefault: boolean): AppPage {
     isDefault,
     backgroundColor: "transparent",
     layoutDirection: "columns",
+    intent: "workbench",
     sections: [createSection("Section")],
   };
 }
@@ -460,6 +508,8 @@ export function createEmptyAppDefinition(): AppDefinition {
   return {
     name: "새 Workshop 앱",
     purpose: "온톨로지 객체·액션을 조합한 운영 앱",
+    theme: { ...DEFAULT_APP_THEME },
+    shell: { ...DEFAULT_APP_SHELL },
     header: {
       visible: true,
       title: "새 Workshop 앱",
@@ -533,8 +583,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 저장된 정의를 현재 스키마(v2)로 정규화한다.
- * v1(단일 page + objectApiName/actionApiName 위젯) → v2(멀티페이지 + config)로 마이그레이션.
+ * 저장된 정의를 현재 스키마(v3)로 정규화한다.
+ * v1/v2 contracts gain safe shell, theme, intent, and responsive-span defaults.
  */
 export function migrateAppDefinition(value: unknown): AppDefinition | null {
   if (!isRecord(value)) return null;
@@ -562,6 +612,8 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
     : [];
 
   const variables = migrateVariables(value.variables);
+  const theme = migrateTheme(value.theme, value.name);
+  const shell = migrateShell(value.shell);
 
   // v2: pages[] 존재
   if (Array.isArray(value.pages)) {
@@ -573,6 +625,8 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
     return {
       name: value.name,
       purpose: typeof value.purpose === "string" ? value.purpose : "",
+      theme,
+      shell,
       header,
       page,
       pages,
@@ -591,6 +645,8 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
     return {
       name: value.name,
       purpose: typeof value.purpose === "string" ? value.purpose : "",
+      theme,
+      shell,
       header,
       page,
       pages: [page],
@@ -675,6 +731,7 @@ function migratePage(value: unknown): AppPage | null {
         ? value.backgroundColor
         : "transparent",
     layoutDirection: value.layoutDirection === "rows" ? "rows" : "columns",
+    intent: isPageIntent(value.intent) ? value.intent : "workbench",
     sections: sections.length > 0 ? sections : [createSection("Section")],
   };
 }
@@ -705,8 +762,40 @@ function migrateSection(value: unknown): AppSection | null {
     title: typeof value.title === "string" ? value.title : "Section",
     layout,
     style,
+    span: isSectionSpan(value.span) ? value.span : 12,
     widgets,
   };
+}
+
+function migrateTheme(value: unknown, appName: string): AppTheme {
+  const record = isRecord(value) ? value : {};
+  return {
+    preset: isThemePreset(record.preset) ? record.preset : DEFAULT_APP_THEME.preset,
+    brandName: typeof record.brandName === "string" ? record.brandName : appName,
+    logoText: typeof record.logoText === "string" ? record.logoText.slice(0, 3) : appName.slice(0, 2),
+  };
+}
+
+function migrateShell(value: unknown): AppShell {
+  const record = isRecord(value) ? value : {};
+  return {
+    navigation: record.navigation === "topbar" ? "topbar" : "sidebar",
+    density: record.density === "compact" ? "compact" : "comfortable",
+    pageWidth: record.pageWidth === "contained" ? "contained" : "wide",
+    showContextBar: record.showContextBar !== false,
+  };
+}
+
+function isThemePreset(value: unknown): value is AppThemePreset {
+  return ["ocean", "indigo", "emerald", "amber", "graphite"].includes(String(value));
+}
+
+function isPageIntent(value: unknown): value is AppPage["intent"] {
+  return ["workbench", "overview", "records", "governance", "evidence", "relationships"].includes(String(value));
+}
+
+function isSectionSpan(value: unknown): value is AppSection["span"] {
+  return [3, 4, 6, 8, 9, 12].includes(Number(value));
 }
 
 function migrateWidget(value: unknown): AppWidget | null {

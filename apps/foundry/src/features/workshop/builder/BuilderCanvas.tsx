@@ -221,12 +221,13 @@ function SectionColumn({
     <div
       onClick={onSelect}
       className={cn(
-        "flex min-h-[360px] flex-1 cursor-pointer flex-col rounded bg-white p-3",
+        "flex min-h-[300px] cursor-pointer flex-col rounded-xl bg-white p-3 shadow-[0_12px_32px_-28px_rgba(15,23,42,.6)]",
+        sectionSpanClass(section.span),
         isSelected ? "border-2 border-[#2d72d2]" : "border border-[#dde3e9]",
       )}
     >
       <div className="mb-2 text-[12px] font-medium text-[#5f6b7c]">
-        Section {index + 1}
+        {section.title || `Section ${index + 1}`} · {section.span}/12
       </div>
 
       <div className="flex-1 space-y-2">
@@ -296,12 +297,7 @@ export function BuilderCanvas({
             : page.backgroundColor,
       }}
     >
-      <div
-        className={cn(
-          "flex gap-3",
-          page.layoutDirection === "rows" ? "flex-col" : "flex-row",
-        )}
-      >
+      <div className="grid gap-3 lg:grid-cols-12">
         {page.sections.map((section, index) => (
           <SectionColumn
             key={section.id}
@@ -329,4 +325,15 @@ export function BuilderCanvas({
       </div>
     </div>
   );
+}
+
+function sectionSpanClass(span: AppSection["span"]): string {
+  return {
+    3: "lg:col-span-3",
+    4: "lg:col-span-4",
+    6: "lg:col-span-6",
+    8: "lg:col-span-8",
+    9: "lg:col-span-9",
+    12: "lg:col-span-12",
+  }[span];
 }

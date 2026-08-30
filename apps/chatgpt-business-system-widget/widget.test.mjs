@@ -12,6 +12,13 @@ test("GPT 업무 화면은 Workshop 정의와 위젯만 렌더링한다", () => 
   assert.match(template, /experience\?\.workshopApp/);
   assert.match(template, /사람 확인 대기함/);
   assert.match(template, /business\.executeAction/);
+  assert.match(template, /kind === "statusTracker"/);
+  assert.match(template, /kind === "kanban"/);
+  assert.match(template, /kind === "calendar"/);
+  assert.match(template, /kind === "pivotTable"/);
+  assert.match(template, /section\.span/);
+  assert.match(template, /theme\.preset/);
+  assert.match(template, /Live work pulse/);
   assert.doesNotMatch(template, /LIVE WORK SYSTEM|work_queue|action_panel|ai_suggestion_panel/);
   assert.doesNotMatch(template, /tools\/call|action\.[A-Za-z].*\.apply|object\.[A-Za-z].*\.search/);
   assert.match(runtime, /createFoundryLiteBusinessSystemOsdk|BusinessSystem/);

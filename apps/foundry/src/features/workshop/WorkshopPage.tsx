@@ -280,8 +280,8 @@ export default function WorkshopPage() {
         <Info className="size-3.5 text-[#8f99a8]" />
         <span className="text-[11px] text-muted-foreground">
           앱 정의는 서버 Resources 카탈로그에 저장됩니다
-          {resource ? ` · ${resource.rid}` : ""}. 미구현 위젯은 팔레트에서
-          future 배지로 표시됩니다.
+          {resource ? ` · ${resource.rid}` : ""}. GPT 미리보기와 외부 앱이
+          같은 테마·페이지·컴포넌트·Action 정의를 사용합니다.
         </span>
         {isOntologyMissing ? (
           <Link

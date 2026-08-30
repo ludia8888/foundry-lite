@@ -126,6 +126,38 @@ test("Workshop exposes the rich template and full widget catalogs", async ({
   await expect(page.getByRole("dialog")).toContainText("버튼 그룹");
 });
 
+test("Workshop v3 composes one responsive SaaS shell from governed components", async ({
+  page,
+}) => {
+  await page.goto("/workshop");
+  await waitForWorkshopReady(page);
+
+  await page.getByRole("button", { name: "템플릿으로 시작" }).click();
+  await page.getByRole("button", { name: /운영 대시보드/ }).click();
+  await expect(page.getByText("상태 추적기", { exact: true })).toBeVisible();
+  await expect(page.getByText("피벗 테이블", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "앱 디자인과 탐색" }).click();
+  await page.getByRole("textbox", { name: "서비스 이름" }).fill("Northstar Operations");
+  await page.getByRole("textbox", { name: "로고 문자" }).fill("NO");
+  await page.getByRole("button", { name: "에메랄드" }).click();
+  await page.getByRole("button", { name: "촘촘하게" }).click();
+  await page.getByRole("button", { name: "집중형" }).click();
+  await page.getByRole("button", { name: "런타임" }).click();
+
+  const runtime = page.getByRole("main", { name: "Workshop runtime canvas" });
+  await expect(runtime.getByText("Northstar Operations").first()).toBeVisible();
+  await expect(runtime.getByText("Live work pulse")).toBeVisible();
+  await expect(runtime.locator('[data-workshop-widget="statusTracker"]')).toBeVisible();
+  await expect(runtime.locator('[data-workshop-widget="pivotTable"]')).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "탐색 열기" })).toBeVisible();
+  await expect(runtime.getByRole("heading", { name: "대시보드" })).toBeVisible();
+  await page.getByRole("button", { name: "탐색 열기" }).click();
+  await expect(page.getByRole("navigation", { name: "모바일 업무 앱 페이지" })).toBeVisible();
+});
+
 test("Workshop saves its app definition to the backend resource catalog and reloads it without localStorage", async ({
   page,
 }) => {

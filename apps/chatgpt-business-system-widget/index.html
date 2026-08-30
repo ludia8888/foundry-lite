@@ -4,36 +4,43 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      :root { color-scheme:light dark; font-family:"Inter","Pretendard",system-ui,sans-serif; --ink:#1c2127; --muted:#5f6b7c; --canvas:#f6f8fa; --paper:#fff; --line:#d5dce1; --soft-line:#e4e9ed; --blue:#2d72d2; --blue-dark:#215db0; --green:#238551; --purple:#7548c9; --amber:#c87619; }
+      :root { color-scheme:light; font-family:"Avenir Next","Pretendard",system-ui,sans-serif; --ink:#172033; --muted:#657386; --canvas:#f4f6f8; --paper:#fff; --line:#dde3e9; --soft-line:#edf0f3; --accent:#0b7285; --accent-soft:#e6f6f8; --nav:#0d2b36; --green:#238551; --amber:#c87619; }
       * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:transparent; } button,input { font:inherit; }
-      .shell { overflow:hidden; min-height:220px; border:1px solid var(--line); border-radius:8px; background:var(--canvas); box-shadow:0 8px 24px -20px #18202b; }
-      .workshop-bar { display:flex; align-items:center; gap:9px; min-height:44px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--paper); }
-      .workshop-mark { display:grid; place-items:center; width:25px; height:25px; border-radius:5px; color:#fff; background:var(--purple); font-size:12px; font-weight:800; }
-      .workshop-title { min-width:0; flex:1; } .workshop-title strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
-      .workshop-title small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:10px; }
-      .pages { display:flex; gap:2px; overflow:auto; padding:0 12px; border-bottom:1px solid var(--line); background:var(--paper); }
-      .page-tab { white-space:nowrap; border:0; border-bottom:2px solid transparent; padding:9px 10px 8px; color:var(--muted); background:transparent; cursor:pointer; font-size:11px; font-weight:650; }
-      .page-tab.active { border-color:var(--blue); color:var(--blue-dark); }
-      .canvas { display:grid; gap:12px; padding:12px; } .section { display:grid; gap:10px; border-radius:5px; }
-      .section>h2 { margin:0; color:#404854; font-size:11px; } .section.columns .widgets { display:grid; gap:10px; } .section.toolbar .widgets { display:flex; flex-wrap:wrap; gap:8px; }
-      .widget { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:5px; background:var(--paper); }
+      .shell { overflow:hidden; min-height:320px; border:1px solid var(--line); border-radius:18px; background:var(--canvas); box-shadow:0 22px 50px -42px #0f172a; }
+      .runtime { display:grid; min-height:320px; grid-template-columns:184px minmax(0,1fr); }
+      .side { display:flex; flex-direction:column; padding:14px 10px; color:#fff; background:var(--nav); }
+      .brand { display:flex; align-items:center; gap:9px; padding:2px 4px 14px; } .workshop-mark { display:grid; place-items:center; width:30px; height:30px; border-radius:10px; color:#fff; background:var(--accent); font-size:10px; font-weight:900; }
+      .workshop-title { min-width:0; flex:1; } .workshop-title strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; } .workshop-title small { display:block; margin-top:2px; color:#ffffff70; font-size:7px; letter-spacing:.12em; text-transform:uppercase; }
+      .pages { display:grid; gap:3px; } .page-tab { width:100%; border:0; border-radius:8px; padding:8px 9px; text-align:left; color:#ffffffa8; background:transparent; cursor:pointer; font-size:9px; font-weight:650; }
+      .page-tab.active { color:var(--nav); background:#fff; } .side-foot { margin-top:auto; border-top:1px solid #ffffff18; padding:10px 4px 0; color:#ffffff75; font-size:8px; }
+      .content { min-width:0; } .context { display:flex; align-items:center; gap:12px; padding:12px 14px; border-bottom:1px solid var(--line); background:#fff; }
+      .context-copy { min-width:0; flex:1; } .eyebrow { color:var(--accent); font-size:7px; font-weight:850; letter-spacing:.14em; text-transform:uppercase; } .context h1 { overflow:hidden; margin:2px 0 0; text-overflow:ellipsis; white-space:nowrap; font-size:17px; letter-spacing:-.025em; }
+      .pulse { display:flex; gap:5px; } .pulse span { border:1px solid var(--line); border-radius:7px; padding:6px 7px; color:var(--muted); background:#f7f9fb; font-size:8px; font-weight:700; } .live::before { content:""; display:inline-block; width:5px; height:5px; margin-right:4px; border-radius:50%; background:#22a06b; }
+      .canvas { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:11px; padding:12px; } .section { display:grid; min-width:0; align-content:start; gap:8px; border-radius:10px; }
+      .section>h2 { margin:0; color:var(--muted); font-size:8px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; } .section.columns .widgets { display:grid; gap:8px; } .section.toolbar .widgets { display:flex; flex-wrap:wrap; align-items:stretch; gap:7px; } .section.tabs .widget:not(:first-child) { display:none; }
+      .widget { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--paper); box-shadow:0 9px 26px -24px #0f172a; }
       .widget-head { display:flex; align-items:center; min-height:34px; padding:7px 10px; border-bottom:1px solid var(--soft-line); }
       .widget-head strong { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-      .widget-head code { color:var(--muted); font-size:8px; } .widget-body { padding:10px; }
+      .widget-head code { display:none; } .widget-body { padding:10px; }
       .toolbar { display:flex; gap:7px; } input { min-width:0; flex:1; border:1px solid var(--line); border-radius:4px; padding:7px 8px; color:var(--ink); background:var(--paper); font-size:11px; }
-      .button { border:0; border-radius:4px; padding:7px 10px; color:#fff; background:var(--blue); cursor:pointer; font-size:11px; font-weight:700; }
+      .button { border:0; border-radius:7px; padding:7px 10px; color:#fff; background:var(--accent); cursor:pointer; font-size:10px; font-weight:750; }
       .button.secondary { border:1px solid var(--line); color:var(--ink); background:var(--paper); } .button.approval { background:var(--green); } .button:disabled { opacity:.45; cursor:not-allowed; }
-      .objects { display:grid; gap:6px; } .object-row { width:100%; border:1px solid var(--soft-line); border-radius:4px; padding:9px; text-align:left; color:var(--ink); background:var(--paper); cursor:pointer; }
-      .object-row.selected { border-color:var(--blue); box-shadow:0 0 0 1px var(--blue); } .object-row strong { font-size:11px; } .object-row small { float:right; color:var(--muted); font-size:9px; }
+      .objects { display:grid; gap:6px; } .object-row { width:100%; border:1px solid var(--soft-line); border-radius:7px; padding:9px; text-align:left; color:var(--ink); background:var(--paper); cursor:pointer; }
+      .object-row.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); } .object-row strong { font-size:10px; } .object-row small { float:right; color:var(--muted); font-size:8px; }
       dl { display:grid; gap:6px; margin:0; } dl div { display:grid; grid-template-columns:minmax(90px,1fr) 2fr; gap:8px; font-size:10px; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
-      .metric { font-size:28px; font-weight:700; letter-spacing:-.04em; } .metric small { margin-left:5px; color:var(--muted); font-size:10px; font-weight:500; }
+      .metric { font-size:25px; font-weight:750; letter-spacing:-.04em; } .metric small { margin-left:5px; color:var(--muted); font-size:9px; font-weight:500; }
       .actions { display:grid; gap:8px; } form { display:grid; gap:7px; border:1px solid var(--soft-line); border-radius:4px; padding:9px; } form strong { font-size:11px; }
       label { display:grid; gap:4px; color:var(--muted); font-size:10px; } .approval-note { border-left:3px solid var(--amber); padding-left:8px; color:#7a4b08; font-size:10px; line-height:1.5; }
-      .markdown,.muted { color:var(--muted); font-size:10px; line-height:1.55; } .status { margin:0 12px 12px; border:1px solid var(--soft-line); border-radius:4px; padding:8px 10px; color:var(--muted); background:var(--paper); font-size:10px; }
+      .markdown,.muted { color:var(--muted); font-size:9px; line-height:1.55; } .status { margin:0 12px 12px; border:1px solid var(--soft-line); border-radius:8px; padding:8px 10px; color:var(--muted); background:var(--paper); font-size:9px; }
       .status.good { color:#17643e; } .status.warn { color:#8a570b; } .empty { padding:30px 18px; text-align:center; }
-      .receipt { display:flex; flex-wrap:wrap; gap:6px 16px; padding:8px 12px; border-top:1px solid var(--line); color:var(--muted); font:8px/1.4 ui-monospace,monospace; }
+      .receipt { display:flex; flex-wrap:wrap; gap:6px 16px; padding:8px 12px; border-top:1px solid var(--line); color:var(--muted); font:7px/1.4 ui-monospace,monospace; }
+      .tracker,.kanban { display:flex; gap:6px; overflow:auto; } .track,.lane { min-width:90px; flex:1; border-radius:8px; padding:8px; background:#f7f9fb; } .track b { display:block; margin-top:5px; font-size:17px; } .lane strong { display:block; margin-bottom:6px; font-size:8px; } .lane .object-row { margin-top:4px; padding:6px; }
+      .filters { display:flex; flex-wrap:wrap; gap:5px; } .filter { border:1px solid var(--line); border-radius:999px; padding:5px 7px; color:var(--muted); background:#fff; cursor:pointer; font-size:8px; } .filter.active { border-color:var(--accent); color:var(--accent); background:var(--accent-soft); }
+      .bars { display:grid; gap:6px; } .bar { display:grid; grid-template-columns:70px minmax(0,1fr) 25px; align-items:center; gap:6px; font-size:8px; } .bar i { display:block; height:6px; border-radius:99px; background:var(--accent); }
+      .pivot { width:100%; border-collapse:collapse; font-size:8px; } .pivot th,.pivot td { border-bottom:1px solid var(--soft-line); padding:5px; text-align:right; } .pivot th:first-child,.pivot td:first-child { text-align:left; }
       @media (min-width:720px) { .section.columns .widgets { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-      @media (prefers-color-scheme:dark) { :root { --ink:#edf1f5; --muted:#aab4c0; --canvas:#111820; --paper:#18222d; --line:#354352; --soft-line:#2a3744; --blue:#4c90e8; --blue-dark:#8ab8f2; } .approval-note { color:#f2bd70; } }
+      @media (max-width:719px) { .runtime { grid-template-columns:1fr; } .side { padding:9px; } .brand { padding-bottom:7px; } .pages { display:flex; overflow:auto; } .page-tab { width:auto; white-space:nowrap; } .side-foot { display:none; } .context { align-items:flex-start; } .pulse { display:none; } .canvas { grid-template-columns:1fr; } .section { grid-column:1!important; } }
+      @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
     </style>
   </head>
   <body>
@@ -44,7 +51,7 @@
         "use strict";
         const osdk = globalThis.createFoundryLiteBusinessSystemOsdk();
         const business = osdk(globalThis.FoundryLiteBusinessSystemResources.BusinessSystem);
-        const state = { definition:null, items:[], selectedPageId:"", selectedObjectId:"", busy:false, message:"", tone:"", lastResult:null };
+        const state = { definition:null, items:[], selectedPageId:"", selectedObjectId:"", statusFilter:"", busy:false, message:"", tone:"", lastResult:null };
         const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
         const list = (value) => Array.isArray(value) ? value : [];
         const text = (value) => String(value ?? "");
@@ -64,10 +71,15 @@
         function model() { return isObject(state.definition?.businessModel) ? state.definition.businessModel : {}; }
         function primaryRecord() { return list(model().records)[0] || {}; }
         function actions() { return list(model().actions); }
+        function currentItems() { return state.statusFilter ? state.items.filter((item) => itemStatus(item) === state.statusFilter) : state.items; }
         function selectedItem() { return state.items.find((item) => text(item.objectId) === state.selectedObjectId) || state.items[0] || null; }
         function itemTitle(item) { return text(item?.properties?.name || item?.objectId || "이름 없는 업무"); }
         function itemStatus(item) { return text(item?.properties?.status || "확인 필요"); }
+        function propertyLabel(key) { return text(list(primaryRecord().fields).find((field) => field.apiName === key)?.displayName || key); }
         function allowedActions(item) { return actions().filter((action) => !list(action.fromStates).length || list(action.fromStates).includes(itemStatus(item))); }
+        function grouped(property = "status") {
+          return currentItems().reduce((all,item) => { const key = text(item.properties?.[property] ?? "미지정"); (all[key] ||= []).push(item); return all; },{});
+        }
 
         function receive(value) {
           const output = structured(value);
@@ -125,14 +137,15 @@
         }
 
         function objectRows(widget) {
-          if (!state.items.length) return '<p class="muted">현재 조건에 맞는 업무가 없습니다.</p>';
-          return `<div class="objects">${state.items.map((item) => `<button type="button" class="object-row ${text(item.objectId) === state.selectedObjectId ? "selected" : ""}" data-select-object="${escapeHtml(item.objectId)}"><strong>${escapeHtml(itemTitle(item))}</strong><small>${escapeHtml(itemStatus(item))}</small></button>`).join("")}</div>`;
+          const items = currentItems();
+          if (!items.length) return '<p class="muted">현재 조건에 맞는 업무가 없습니다.</p>';
+          return `<div class="objects">${items.map((item) => `<button type="button" class="object-row ${text(item.objectId) === state.selectedObjectId ? "selected" : ""}" data-select-object="${escapeHtml(item.objectId)}"><strong>${escapeHtml(itemTitle(item))}</strong><small>${escapeHtml(itemStatus(item))}</small></button>`).join("")}</div>`;
         }
 
         function objectDetail() {
           const item = selectedItem();
           if (!item) return '<p class="muted">목록에서 업무를 선택하세요.</p>';
-          return `<dl>${Object.entries(item.properties || {}).map(([key,value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
+          return `<dl>${Object.entries(item.properties || {}).map(([key,value]) => `<div><dt>${escapeHtml(propertyLabel(key))}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
         }
 
         function actionMarkup(widget) {
@@ -144,6 +157,40 @@
           return `<div class="actions">${available.map((action) => actionForm(item, action, approvalNames.includes(action.apiName))).join("") || '<p class="muted">현재 상태에서 실행할 업무가 없습니다.</p>'}</div>`;
         }
 
+        function statusTracker(widget) {
+          const groups = grouped(text(config(widget).groupByProperty || "status"));
+          return `<div class="tracker">${Object.entries(groups).map(([key,items]) => `<div class="track"><span class="muted">${escapeHtml(key)}</span><b>${items.length}<small>건</small></b></div>`).join("")}</div>`;
+        }
+
+        function filterList() {
+          const groups = grouped("status");
+          return `<div class="filters"><button class="filter ${state.statusFilter ? "" : "active"}" data-filter-status="">전체 ${state.items.length}</button>${Object.entries(groups).map(([key,items]) => `<button class="filter ${state.statusFilter === key ? "active" : ""}" data-filter-status="${escapeHtml(key)}">${escapeHtml(key)} ${items.length}</button>`).join("")}</div>`;
+        }
+
+        function kanban(widget) {
+          const groups = grouped(text(config(widget).groupByProperty || "status"));
+          return `<div class="kanban">${Object.entries(groups).map(([key,items]) => `<div class="lane"><strong>${escapeHtml(key)} · ${items.length}</strong>${items.slice(0,12).map((item) => `<button type="button" class="object-row" data-select-object="${escapeHtml(item.objectId)}">${escapeHtml(itemTitle(item))}</button>`).join("")}</div>`).join("")}</div>`;
+        }
+
+        function chartMarkup(widget) {
+          const groups = grouped(text(config(widget).groupByProperty || "status"));
+          const maximum = Math.max(1,...Object.values(groups).map((items) => items.length));
+          return `<div class="bars">${Object.entries(groups).map(([key,items]) => `<div class="bar"><span>${escapeHtml(key)}</span><i style="width:${Math.round(items.length / maximum * 100)}%"></i><b>${items.length}</b></div>`).join("")}</div>`;
+        }
+
+        function pivotMarkup(widget) {
+          const rowProperty = text(config(widget).groupByProperty || "status");
+          const columnProperty = text(config(widget).seriesProperty || "");
+          const rows = grouped(rowProperty); const columns = columnProperty ? [...new Set(currentItems().map((item) => text(item.properties?.[columnProperty] ?? "미지정")))] : ["전체"];
+          return `<table class="pivot"><thead><tr><th>${escapeHtml(propertyLabel(rowProperty))}</th>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}<th>합계</th></tr></thead><tbody>${Object.entries(rows).map(([key,items]) => `<tr><td>${escapeHtml(key)}</td>${columns.map((column) => `<td>${columnProperty ? items.filter((item) => text(item.properties?.[columnProperty] ?? "미지정") === column).length : items.length}</td>`).join("")}<td><b>${items.length}</b></td></tr>`).join("")}</tbody></table>`;
+        }
+
+        function calendarMarkup(widget) {
+          const property = text(config(widget).dateProperty || "");
+          const dated = currentItems().filter((item) => property && item.properties?.[property]).sort((a,b) => text(a.properties[property]).localeCompare(text(b.properties[property])));
+          return dated.length ? `<div class="objects">${dated.slice(0,30).map((item) => `<button class="object-row" data-select-object="${escapeHtml(item.objectId)}"><strong>${escapeHtml(itemTitle(item))}</strong><small>${escapeHtml(item.properties[property])}</small></button>`).join("")}</div>` : '<p class="muted">일정 날짜가 있는 업무가 없습니다.</p>';
+        }
+
         function widgetBody(widget) {
           const kind = text(widget.kind);
           if (kind === "objectTable" || kind === "objectList") return objectRows(widget);
@@ -151,13 +198,15 @@
           if (kind === "objectSetTitle") return `<div class="metric">${state.items.length}<small>현재 업무</small></div>`;
           if (kind === "metricCard") return `<div class="metric">${state.items.length}<small>${escapeHtml(config(widget).unit || "건")}</small></div>`;
           if (kind === "searchBar") return '<div class="toolbar"><input id="workshop-search" placeholder="업무 검색"/><button id="workshop-search-button" class="button secondary">검색</button></div>';
+          if (kind === "filterList" || kind === "objectDropdown" || kind === "stringSelector") return filterList();
+          if (kind === "statusTracker") return statusTracker(widget);
+          if (kind === "kanban") return kanban(widget);
+          if (kind === "calendar") return calendarMarkup(widget);
+          if (kind === "pivotTable") return pivotMarkup(widget);
           if (kind === "buttonGroup" || kind === "actionForm") return actionMarkup(widget);
           if (kind === "markdown" || kind === "sectionHeader") return `<div class="markdown">${escapeHtml(config(widget).text || "").replaceAll("\n","<br>")}</div>`;
-          if (kind === "timeline") return `<p class="muted">${state.lastResult ? escapeHtml(JSON.stringify(state.lastResult)) : escapeHtml(itemStatus(selectedItem()))}</p>`;
-          if (kind === "barChart" || kind === "pieChart") {
-            const counts = state.items.reduce((all,item) => ({...all,[itemStatus(item)]:(all[itemStatus(item)] || 0)+1}),{});
-            return `<dl>${Object.entries(counts).map(([key,value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}건</dd></div>`).join("")}</dl>`;
-          }
+          if (kind === "timeline") return `<p class="muted">${state.lastResult ? "가장 최근 업무 처리가 운영 기록에 남았습니다." : escapeHtml(itemStatus(selectedItem()))}</p>`;
+          if (kind === "barChart" || kind === "pieChart") return chartMarkup(widget);
           return '<p class="muted">Workshop에서 이 컴포넌트의 바인딩을 확인하세요.</p>';
         }
 
@@ -166,12 +215,14 @@
         }
 
         function sectionMarkup(section) {
-          return `<section class="section ${escapeHtml(section.layout)}"><h2>${escapeHtml(section.title)}</h2><div class="widgets">${list(section.widgets).map(widgetMarkup).join("")}</div></section>`;
+          const span = [3,4,6,8,9,12].includes(Number(section.span)) ? Number(section.span) : 12;
+          return `<section class="section ${escapeHtml(section.layout)}" style="grid-column:span ${span}"><h2>${escapeHtml(section.title)}</h2><div class="widgets">${list(section.widgets).map(widgetMarkup).join("")}</div></section>`;
         }
 
         function bindInteractions(root) {
           root.querySelectorAll("[data-page-id]").forEach((button) => button.addEventListener("click", () => { state.selectedPageId = button.dataset.pageId; render(); }));
           root.querySelectorAll("[data-select-object]").forEach((button) => button.addEventListener("click", () => { state.selectedObjectId = button.dataset.selectObject; render(); }));
+          root.querySelectorAll("[data-filter-status]").forEach((button) => button.addEventListener("click", () => { state.statusFilter = button.dataset.filterStatus; render(); }));
           root.querySelectorAll("form[data-action]").forEach((form) => form.addEventListener("submit", (event) => { event.preventDefault(); void runAction(form); }));
           root.querySelectorAll("#workshop-search-button").forEach((button) => button.addEventListener("click", () => void loadWork(text(root.querySelector("#workshop-search")?.value))));
         }
@@ -179,8 +230,12 @@
         function render() {
           const root = document.getElementById("app");
           if (!state.definition) { root.innerHTML = '<div class="empty"><strong>Workshop 화면을 불러오는 중입니다.</strong><p class="muted">이 앱에 허용된 기록과 업무만 확인합니다.</p></div>'; return; }
-          const app = workshop(); const page = currentPage();
-          root.innerHTML = `<header class="workshop-bar"><span class="workshop-mark">W</span><div class="workshop-title"><strong>Workshop › ${escapeHtml(app.name)}</strong><small>${escapeHtml(app.purpose)}</small></div></header><nav class="pages" aria-label="Workshop 앱 페이지">${pages().map((item) => `<button class="page-tab ${item.id === state.selectedPageId ? "active" : ""}" data-page-id="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("")}</nav><section class="canvas">${list(page.sections).map(sectionMarkup).join("")}</section><p class="status ${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p><footer class="receipt"><span>${escapeHtml(state.definition.schemaVersion)}</span><span>${escapeHtml(state.definition.definitionFingerprint)}</span><span>Workshop definition · shared runtime</span></footer>`;
+          const app = workshop(); const page = currentPage(); const theme = isObject(app.theme) ? app.theme : {};
+          const palettes = { ocean:["#0b7285","#e6f6f8","#0d2b36"], indigo:["#4f46e5","#eeedff","#1e1b4b"], emerald:["#087f5b","#e7f7f0","#12372a"], amber:["#b45309","#fff4df","#422006"], graphite:["#475569","#eef2f6","#111827"] };
+          const colors = palettes[theme.preset] || palettes.ocean;
+          root.style.cssText = `--accent:${colors[0]};--accent-soft:${colors[1]};--nav:${colors[2]}`;
+          const navigation = `<nav class="pages" aria-label="Workshop 앱 페이지">${pages().map((item) => `<button class="page-tab ${item.id === state.selectedPageId ? "active" : ""}" data-page-id="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("")}</nav>`;
+          root.innerHTML = `<div class="runtime"><aside class="side"><div class="brand"><span class="workshop-mark">${escapeHtml(theme.logoText || "FL")}</span><div class="workshop-title"><strong>${escapeHtml(theme.brandName || app.name)}</strong><small>Operational workspace</small></div></div>${navigation}<div class="side-foot">권한과 Action이 보호됨</div></aside><div class="content"><header class="context"><div class="context-copy"><div class="eyebrow">Live work pulse</div><h1>${escapeHtml(page.name)}</h1></div><div class="pulse"><span>필터 ${state.statusFilter ? "1개" : "전체"}</span><span>${state.selectedObjectId ? "업무 선택됨" : "선택 전"}</span><span class="live">동기화 v${escapeHtml(app.version)}</span></div></header><section class="canvas">${list(page.sections).map(sectionMarkup).join("")}</section><p class="status ${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p><footer class="receipt"><span>${escapeHtml(state.definition.schemaVersion)}</span><span>${escapeHtml(state.definition.definitionFingerprint)}</span><span>Workshop definition · shared runtime</span></footer></div></div>`;
           bindInteractions(root);
         }
 

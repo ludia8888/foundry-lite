@@ -6,6 +6,9 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.services.aip.fde_pilot_workshop_react_source import (
+    portable_workshop_application_source,
+)
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
 
 JsonObject = Mapping[str, object]
@@ -126,40 +129,18 @@ def _react_hook_state_lines(object_name: str) -> list[str]:
 
 
 def application_source(plan: JsonObject, package_name: str) -> str:
-    """Render a calm, task-first customer app shell using only the app hook."""
+    """Render the canonical Workshop graph using only the application hook."""
 
-    blueprint, title, summary, policies, screens, record_fields = _application_literals(plan)
+    blueprint, _, _, policies, _, record_fields = _application_literals(plan)
     action_forms = "\n".join(_action_form_source(row) for row in _actions(blueprint))
-    prelude = _application_prelude(package_name, title, summary, policies, screens, record_fields)
-    return prelude + (
-        "export default function App() { const screen = usePilotApplicationScreen(); "
-        'const [message, setMessage] = useState(""); const [isRunning, setIsRunning] = useState(false); '
-        "async function run(action: () => Promise<{ status: string }>) { if (isRunning) return; "
-        'setIsRunning(true); setMessage("처리 중입니다…"); '
-        'try { const result = await action(); if (result.status !== "succeeded") '
-        'throw new Error("업무가 완료되지 않았습니다."); '
-        'setMessage("업무를 완료했습니다."); await screen.refresh(); } catch (reason) { '
-        'setMessage(reason instanceof Error ? reason.message : "업무를 처리하지 못했습니다."); '
-        "} finally { setIsRunning(false); } } "
-        "if (screen.isLoading) return <main><h1>{title}</h1><p>업무 기록을 불러오는 중입니다.</p></main>; "
-        "if (screen.error) return <main><h1>{title}</h1>"
-        "<p>기록을 불러오지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.</p></main>; "
-        "return <main><header><p>업무 홈</p><h1>{title}</h1><p>{summary}</p></header>"
-        '<nav aria-label="업무 화면">{screens.map((screen) => <span key={screen.id}>{screen.title}</span>)}</nav>'
-        "<section><h2>지금 처리할 일</h2><p>{screen.items.length}건</p>"
-        "{screen.items.length ? screen.items.map((item) => <article "
-        "key={`${item.objectType}:${item.objectId}`}><h3>{String(item.properties.name ?? item.objectId)}</h3>"
-        '<p>현재 상태: {String(item.properties.status ?? "확인 필요")}</p>'
-        f'<div aria-label="업무 버튼">{action_forms}</div>'
-        "<details><summary>업무 정보 자세히 보기</summary><dl>{recordFields.map((field) => "
-        "<div key={field.apiName}><dt>{field.displayName}</dt>"
-        '<dd>{String(item.properties[field.apiName] ?? "입력되지 않음")}</dd></div>)}</dl></details>'
-        "</article>) : <p>처리할 업무가 없습니다.</p>}</section>"
-        "<aside><h2>업무 규칙</h2><ul>{policies.map((policy) => <li key={policy.name}>"
-        "<strong>{policy.name}</strong><p>{policy.statement}</p>"
-        "<small>{policyLabels[policy.automationStatus]}</small></li>)}</ul></aside>"
-        '{message ? <p role="status">{message}</p> : null}'
-        "</main>; }\n"
+    experience = _mapping(_business_system_definition(plan).get("experience"), "businessSystemDefinition.experience")
+    workshop = _mapping(experience.get("workshopApp"), "businessSystemDefinition.experience.workshopApp")
+    return portable_workshop_application_source(
+        package_name,
+        workshop,
+        record_fields,
+        policies,
+        action_forms,
     )
 
 

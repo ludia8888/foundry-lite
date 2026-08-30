@@ -2,31 +2,50 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+
+from foundry_lite.application.services.aip.fde_workshop_contract import (
+    action_widget,
+    app_shell,
+    app_theme,
+    date_property,
+    header,
+    items,
+    numeric_property,
+    page,
+    policy_markdown,
+    secondary_category_property,
+    section,
+    status_property,
+    visible_properties,
+    widget,
+)
 
 JsonObject = Mapping[str, object]
 
-WORKSHOP_COMPONENT_CATALOG_VERSION = "foundry-lite-workshop-components/v2"
+WORKSHOP_COMPONENT_CATALOG_VERSION = "foundry-lite-workshop-components/v3"
 WORKSHOP_METADATA_KIND = "foundry-lite.workshop.app-definition"
-WORKSHOP_METADATA_SCHEMA_VERSION = 2
+WORKSHOP_METADATA_SCHEMA_VERSION = 3
 
 
 def build_workshop_app_definition(
     application_name: str,
     blueprint: JsonObject,
 ) -> dict[str, object]:
-    """Return the one Workshop definition rendered by every human-facing surface."""
+    """Return the one responsive Workshop definition rendered by every surface."""
 
-    records = _items(blueprint.get("records"))
+    records = items(blueprint.get("records"))
     workflow = _mapping(blueprint.get("workflow"))
-    actions = _items(workflow.get("actions"))
-    policies = _items(blueprint.get("policies"))
+    actions = items(workflow.get("actions"))
+    policies = items(blueprint.get("policies"))
     primary = records[0]
     pages = _pages(primary, records, actions, policies, blueprint)
     return {
         "name": application_name,
         "purpose": str(blueprint.get("summary") or "업무를 한곳에서 처리합니다."),
-        "header": _header(application_name),
+        "theme": app_theme(application_name),
+        "shell": app_shell(),
+        "header": header(application_name),
         "page": pages[0],
         "pages": pages,
         "overlays": [],
@@ -44,66 +63,90 @@ def _pages(
     blueprint: JsonObject,
 ) -> list[dict[str, object]]:
     pages = [_work_page(primary, actions), _detail_page(primary, actions)]
+    if items(blueprint.get("functions") or []):
+        pages.insert(1, _kpi_page(primary))
+    if date_property(primary):
+        pages.append(_calendar_page(primary))
     if policies or any(action.get("requiresApproval") is True for action in actions):
         pages.append(_policy_page(primary, actions, policies))
     pages.append(_evidence_page(primary))
     if len(records) > 1:
         pages.append(_relationship_page(records))
-    if _items(blueprint.get("functions") or []):
-        pages.insert(1, _kpi_page(primary))
     return pages
 
 
 def _work_page(primary: JsonObject, actions: list[dict[str, object]]) -> dict[str, object]:
     object_type = str(primary["apiName"])
-    properties = _visible_properties(primary)
-    return _page(
-        "today",
-        "오늘 할 일",
-        True,
-        [
-            _section(
-                "업무 찾기",
-                "toolbar",
-                [
-                    _widget("objectSetTitle", "업무 현황", object_type),
-                    _widget("searchBar", "업무 검색", object_type),
-                    _widget("metricCard", "현재 업무", object_type, {"metric": "count", "unit": "건"}),
-                ],
-            ),
-            _section(
-                "업무 처리",
-                "columns",
-                [
-                    _widget("objectTable", "업무 대기열", object_type, {"propertyApiNames": properties}),
-                    _widget("objectDetail", "업무 정보", object_type, {"propertyApiNames": properties}),
-                    _action_widget("다음 업무", object_type, actions),
-                ],
-            ),
-        ],
-    )
+    properties = visible_properties(primary)
+    status = status_property(primary)
+    queue_widgets = [widget("objectTable", "업무 목록", object_type, {"propertyApiNames": properties})]
+    if status:
+        queue_widgets.append(widget("kanban", "상태별 보드", object_type, {"groupByProperty": status}))
+    sections = [
+        section("업무 요약", "toolbar", _summary_widgets(object_type, status), 12),
+        section("업무 찾기", "flow", [_filter_widget(object_type, status)], 3, "bordered"),
+        section("처리 대기열", "tabs", queue_widgets, 6, "shadow"),
+        section(
+            "선택한 업무",
+            "flow",
+            [
+                widget("objectDetail", "업무 정보", object_type, {"propertyApiNames": properties}),
+                action_widget("다음 업무", object_type, actions),
+            ],
+            3,
+            "bordered",
+        ),
+    ]
+    return page("today", "오늘 할 일", True, "workbench", sections)
+
+
+def _summary_widgets(object_type: str, status: str | None) -> list[dict[str, object]]:
+    widgets = [
+        widget("objectSetTitle", "업무 현황", object_type),
+        widget("metricCard", "현재 업무", object_type, {"metric": "count", "unit": "건"}),
+        widget("searchBar", "업무 검색", object_type),
+    ]
+    if status:
+        widgets.append(widget("statusTracker", "상태 흐름", object_type, {"groupByProperty": status}))
+    return widgets
+
+
+def _filter_widget(object_type: str, status: str | None) -> dict[str, object]:
+    properties = [status] if status else []
+    return widget("filterList", "빠른 필터", object_type, {"propertyApiNames": properties})
 
 
 def _detail_page(primary: JsonObject, actions: list[dict[str, object]]) -> dict[str, object]:
     object_type = str(primary["apiName"])
-    return _page(
-        "record",
-        f"{primary['displayName']} 상세",
-        False,
-        [
-            _section(
-                "선택한 업무",
-                "columns",
-                [
-                    _widget("objectList", "업무 목록", object_type),
-                    _widget(
-                        "objectDetail", "상세 정보", object_type, {"propertyApiNames": _visible_properties(primary)}
-                    ),
-                    _action_widget("업무 처리", object_type, actions),
-                ],
-            )
-        ],
-    )
+    properties = visible_properties(primary)
+    sections = [
+        section("업무 목록", "flow", [widget("objectList", "최근 업무", object_type)], 3, "bordered"),
+        section(
+            "전체 정보",
+            "flow",
+            [widget("objectDetail", "상세 정보", object_type, {"propertyApiNames": properties})],
+            6,
+            "shadow",
+        ),
+        section("업무 처리", "flow", [action_widget("가능한 업무", object_type, actions)], 3, "bordered"),
+    ]
+    return page("record", f"{primary['displayName']} 상세", False, "records", sections)
+
+
+def _calendar_page(primary: JsonObject) -> dict[str, object]:
+    object_type = str(primary["apiName"])
+    date = date_property(primary)
+    sections = [
+        section("일정", "flow", [widget("calendar", "업무 캘린더", object_type, {"dateProperty": date})], 8, "shadow"),
+        section(
+            "일정 상세",
+            "flow",
+            [widget("timeline", "다가오는 업무", object_type, {"dateProperty": date})],
+            4,
+            "bordered",
+        ),
+    ]
+    return page("calendar", "일정", False, "overview", sections)
 
 
 def _policy_page(
@@ -113,184 +156,105 @@ def _policy_page(
 ) -> dict[str, object]:
     object_type = str(primary["apiName"])
     approvals = [action for action in actions if action.get("requiresApproval") is True]
-    return _page(
-        "policy",
-        "규칙과 승인",
-        False,
-        [
-            _section(
-                "업무 규칙",
-                "columns",
-                [
-                    _widget("markdown", "적용 중인 규칙", None, {"text": _policy_markdown(policies)}),
-                    _widget("objectTable", "사람 확인 대상", object_type),
-                    _action_widget("사람 확인 후 실행", object_type, approvals or actions),
-                ],
-            ),
-        ],
-    )
+    sections = [
+        section(
+            "업무 규칙",
+            "flow",
+            [widget("markdown", "적용 중인 규칙", None, {"text": policy_markdown(policies)})],
+            4,
+            "bordered",
+        ),
+        section("확인 대기", "flow", [widget("objectTable", "사람 확인 대상", object_type)], 4, "shadow"),
+        section("검토 후 실행", "flow", [action_widget("승인 업무", object_type, approvals or actions)], 4, "bordered"),
+    ]
+    return page("policy", "규칙과 승인", False, "governance", sections)
 
 
 def _evidence_page(primary: JsonObject) -> dict[str, object]:
     object_type = str(primary["apiName"])
-    return _page(
-        "evidence",
-        "변경 기록과 증거",
-        False,
-        [
-            _section(
-                "업무 증거",
-                "columns",
-                [
-                    _widget("objectTable", "업무 기록", object_type),
-                    _widget("objectDetail", "선택한 기록", object_type),
-                    _widget("timeline", "상태 타임라인", object_type),
-                ],
+    date = date_property(primary)
+    status = status_property(primary)
+    sections = [
+        section("업무 기록", "flow", [widget("objectTable", "변경된 업무", object_type)], 8, "shadow"),
+        section("선택한 기록", "flow", [widget("objectDetail", "근거와 정보", object_type)], 4, "bordered"),
+    ]
+    if date:
+        sections.append(
+            section("시간 순서", "flow", [widget("timeline", "상태 타임라인", object_type, {"dateProperty": date})], 12)
+        )
+    elif status:
+        sections.append(
+            section(
+                "상태 분포",
+                "flow",
+                [widget("statusTracker", "현재 상태", object_type, {"groupByProperty": status})],
+                12,
             )
-        ],
-    )
+        )
+    return page("evidence", "변경 기록과 증거", False, "evidence", sections)
 
 
 def _relationship_page(records: list[dict[str, object]]) -> dict[str, object]:
-    names = "\n".join(f"- {record['displayName']} (`{record['apiName']}`)" for record in records)
-    return _page(
-        "relationships",
-        "업무 관계 탐색",
-        False,
-        [
-            _section(
-                "업무 개념",
-                "flow",
-                [
-                    _widget("markdown", "연결된 업무", None, {"text": f"### 관리하는 업무\n{names}"}),
-                ],
-            )
-        ],
-    )
+    sections = [
+        section(
+            str(record["displayName"]),
+            "flow",
+            [widget("objectTable", f"{record['displayName']} 목록", str(record["apiName"]))],
+            4 if len(records) <= 3 else 6,
+            "bordered",
+        )
+        for record in records
+    ]
+    return page("relationships", "업무 개념 탐색", False, "relationships", sections)
 
 
 def _kpi_page(primary: JsonObject) -> dict[str, object]:
     object_type = str(primary["apiName"])
-    return _page(
-        "kpi",
-        "업무 현황",
-        False,
-        [
-            _section(
-                "핵심 지표",
-                "toolbar",
-                [
-                    _widget("metricCard", "전체 업무", object_type, {"metric": "count", "unit": "건"}),
-                    _widget("barChart", "상태별 업무", object_type, {"groupByProperty": "status"}),
-                ],
-            )
-        ],
-    )
+    status = status_property(primary)
+    numeric = numeric_property(primary)
+    series = secondary_category_property(primary, status)
+    metrics = [{"label": "전체 업무", "metric": "count", "unit": "건"}]
+    if numeric:
+        metrics.append({"label": "합계", "metric": "sum", "property": numeric})
+    sections = [
+        section("핵심 지표", "flow", [widget("metricCard", "운영 지표", object_type, {"metrics": metrics})], 12)
+    ]
+    if status:
+        sections.extend(_analytic_sections(object_type, status, series, numeric))
+    return page("kpi", "업무 현황", False, "overview", sections)
 
 
-def _page(
-    page_id: str,
-    name: str,
-    is_default: bool,
-    sections: list[dict[str, object]],
-) -> dict[str, object]:
-    return {
-        "id": f"page-{page_id}",
-        "name": name,
-        "pageId": page_id,
-        "isDefault": is_default,
-        "backgroundColor": "transparent",
-        "layoutDirection": "columns",
-        "sections": sections,
-    }
-
-
-def _section(
-    title: str,
-    layout: str,
-    widgets: list[dict[str, object]],
-) -> dict[str, object]:
-    section_id = _identifier(title)
-    return {
-        "id": f"section-{section_id}",
-        "title": title,
-        "layout": layout,
-        "style": {"background": "transparent", "padding": "regular", "border": "none"},
-        "widgets": widgets,
-    }
-
-
-def _widget(
-    kind: str,
-    title: str,
-    object_type: str | None,
-    overrides: JsonObject | None = None,
-) -> dict[str, object]:
-    config: dict[str, object] = {
-        "title": title,
-        **({"objectApiName": object_type} if object_type else {}),
-    }
-    config.update(dict(overrides or {}))
-    return {
-        "id": f"widget-{_identifier(title)}",
-        "kind": kind,
-        "config": config,
-        "objectApiName": object_type,
-        "actionApiName": config.get("actionApiName"),
-    }
-
-
-def _action_widget(
-    title: str,
+def _analytic_sections(
     object_type: str,
-    actions: list[dict[str, object]],
-) -> dict[str, object]:
-    action_names = [str(action["apiName"]) for action in actions]
-    approvals = [str(action["apiName"]) for action in actions if action.get("requiresApproval") is True]
-    return _widget(
-        "buttonGroup",
-        title,
-        object_type,
-        {"actionApiNames": action_names, "humanApprovalActionApiNames": approvals},
-    )
-
-
-def _header(application_name: str) -> dict[str, object]:
-    return {
-        "visible": True,
-        "title": application_name,
-        "slots": {
-            name: _section(f"헤더 {label}", "toolbar", [])
-            for name, label in (("left", "좌측"), ("center", "중앙"), ("right", "우측"))
-        },
-    }
-
-
-def _visible_properties(primary: JsonObject) -> list[str]:
-    fields = _items(primary.get("fields"))
-    return [str(field["apiName"]) for field in fields if field.get("apiName") != primary.get("primaryKey")]
-
-
-def _policy_markdown(policies: list[dict[str, object]]) -> str:
-    if not policies:
-        return "### 사람 확인\n중요한 업무는 실행 전에 담당자가 내용을 확인합니다."
-    return "\n\n".join(f"### {row['name']}\n{row['statement']}" for row in policies)
-
-
-def _identifier(value: str) -> str:
-    return "-".join(part for part in value.lower().replace("_", "-").split() if part) or "item"
+    status: str,
+    series: str | None,
+    numeric: str | None,
+) -> list[dict[str, object]]:
+    metric = "sum" if numeric else "count"
+    config = {"groupByProperty": status, "metric": metric, "metricProperty": numeric}
+    return [
+        section("상태 차트", "flow", [widget("barChart", "상태별 업무", object_type, config)], 6, "shadow"),
+        section(
+            "업무 비중",
+            "flow",
+            [widget("pieChart", "상태 비중", object_type, {"groupByProperty": status})],
+            6,
+            "bordered",
+        ),
+        section(
+            "교차 분석",
+            "flow",
+            [widget("pivotTable", "운영 피벗", object_type, {**config, "seriesProperty": series})],
+            12,
+            "bordered",
+        ),
+    ]
 
 
 def _mapping(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     return {str(name): item for name, item in value.items()}
-
-
-def _items(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        return []
-    return [_mapping(item) for item in value if isinstance(item, Mapping)]
 
 
 __all__ = [
