@@ -6,28 +6,29 @@
     <style>
       :root { color-scheme:light; font-family:"Avenir Next","Pretendard",system-ui,sans-serif; --ink:#172033; --muted:#657386; --canvas:#f4f6f8; --paper:#fff; --line:#dde3e9; --soft-line:#edf0f3; --accent:#0b7285; --accent-soft:#e6f6f8; --nav:#0d2b36; --green:#238551; --amber:#c87619; }
       * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:transparent; } button,input { font:inherit; }
-      .shell { overflow:hidden; min-height:320px; border:1px solid var(--line); border-radius:18px; background:var(--canvas); box-shadow:0 22px 50px -42px #0f172a; }
-      .runtime { display:grid; min-height:320px; grid-template-columns:184px minmax(0,1fr); }
+      .shell { overflow:hidden; min-height:360px; border:1px solid var(--line); border-radius:20px; background:var(--canvas); box-shadow:0 24px 60px -46px #0f172a; }
+      .runtime { display:grid; min-height:360px; grid-template-columns:204px minmax(0,1fr); }
       .side { display:flex; flex-direction:column; padding:14px 10px; color:#fff; background:var(--nav); }
       .brand { display:flex; align-items:center; gap:9px; padding:2px 4px 14px; } .workshop-mark { display:grid; place-items:center; width:30px; height:30px; border-radius:10px; color:#fff; background:var(--accent); font-size:10px; font-weight:900; }
       .workshop-title { min-width:0; flex:1; } .workshop-title strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; } .workshop-title small { display:block; margin-top:2px; color:#ffffff70; font-size:7px; letter-spacing:.12em; text-transform:uppercase; }
       .pages { display:grid; gap:3px; } .page-tab { width:100%; border:0; border-radius:8px; padding:8px 9px; text-align:left; color:#ffffffa8; background:transparent; cursor:pointer; font-size:9px; font-weight:650; }
-      .page-tab.active { color:var(--nav); background:#fff; } .side-foot { margin-top:auto; border-top:1px solid #ffffff18; padding:10px 4px 0; color:#ffffff75; font-size:8px; }
+      .page-tab.active { color:var(--nav); background:#fff; } .side-foot { margin-top:auto; border-top:1px solid #ffffff18; padding:10px 4px 0; color:#ffffff75; font-size:9px; }
       .content { min-width:0; } .context { display:flex; align-items:center; gap:12px; padding:12px 14px; border-bottom:1px solid var(--line); background:#fff; }
-      .context-copy { min-width:0; flex:1; } .eyebrow { color:var(--accent); font-size:7px; font-weight:850; letter-spacing:.14em; text-transform:uppercase; } .context h1 { overflow:hidden; margin:2px 0 0; text-overflow:ellipsis; white-space:nowrap; font-size:17px; letter-spacing:-.025em; }
+      .context-copy { min-width:0; flex:1; } .eyebrow { color:var(--accent); font-size:9px; font-weight:850; } .context h1 { overflow:hidden; margin:3px 0 0; text-overflow:ellipsis; white-space:nowrap; font-size:20px; letter-spacing:-.03em; }
+      .decision { display:grid; grid-template-columns:repeat(3,1fr); margin:10px 14px 0; overflow:hidden; border:1px solid var(--line); border-radius:11px; background:#f7f9fb; } .decision span { border-right:1px solid var(--line); padding:8px 10px; color:var(--muted); font-size:9px; font-weight:700; } .decision span:last-child { border-right:0; }
       .pulse { display:flex; gap:5px; } .pulse span { border:1px solid var(--line); border-radius:7px; padding:6px 7px; color:var(--muted); background:#f7f9fb; font-size:8px; font-weight:700; } .live::before { content:""; display:inline-block; width:5px; height:5px; margin-right:4px; border-radius:50%; background:#22a06b; }
       .canvas { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:11px; padding:12px; } .section { display:grid; min-width:0; align-content:start; gap:8px; border-radius:10px; }
       .section>h2 { margin:0; color:var(--muted); font-size:8px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; } .section.columns .widgets { display:grid; gap:8px; } .section.toolbar .widgets { display:flex; flex-wrap:wrap; align-items:stretch; gap:7px; } .section.tabs .widget:not(:first-child) { display:none; }
       .widget { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--paper); box-shadow:0 9px 26px -24px #0f172a; }
       .widget-head { display:flex; align-items:center; min-height:34px; padding:7px 10px; border-bottom:1px solid var(--soft-line); }
-      .widget-head strong { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+      .widget-head strong { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
       .widget-head code { display:none; } .widget-body { padding:10px; }
       .toolbar { display:flex; gap:7px; } input { min-width:0; flex:1; border:1px solid var(--line); border-radius:4px; padding:7px 8px; color:var(--ink); background:var(--paper); font-size:11px; }
       .button { border:0; border-radius:7px; padding:7px 10px; color:#fff; background:var(--accent); cursor:pointer; font-size:10px; font-weight:750; }
       .button.secondary { border:1px solid var(--line); color:var(--ink); background:var(--paper); } .button.approval { background:var(--green); } .button:disabled { opacity:.45; cursor:not-allowed; }
       .objects { display:grid; gap:6px; } .object-row { width:100%; border:1px solid var(--soft-line); border-radius:7px; padding:9px; text-align:left; color:var(--ink); background:var(--paper); cursor:pointer; }
-      .object-row.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); } .object-row strong { font-size:10px; } .object-row small { float:right; color:var(--muted); font-size:8px; }
-      dl { display:grid; gap:6px; margin:0; } dl div { display:grid; grid-template-columns:minmax(90px,1fr) 2fr; gap:8px; font-size:10px; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+      .object-row.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); } .object-row strong { font-size:12px; } .object-row small { float:right; color:var(--muted); font-size:9px; }
+      dl { display:grid; gap:8px; margin:0; } dl div { display:grid; grid-template-columns:minmax(100px,1fr) 2fr; gap:10px; font-size:11px; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; font-weight:600; }
       .metric { font-size:25px; font-weight:750; letter-spacing:-.04em; } .metric small { margin-left:5px; color:var(--muted); font-size:9px; font-weight:500; }
       .actions { display:grid; gap:8px; } form { display:grid; gap:7px; border:1px solid var(--soft-line); border-radius:4px; padding:9px; } form strong { font-size:11px; }
       label { display:grid; gap:4px; color:var(--muted); font-size:10px; } .approval-note { border-left:3px solid var(--amber); padding-left:8px; color:#7a4b08; font-size:10px; line-height:1.5; }
@@ -39,7 +40,7 @@
       .bars { display:grid; gap:6px; } .bar { display:grid; grid-template-columns:70px minmax(0,1fr) 25px; align-items:center; gap:6px; font-size:8px; } .bar i { display:block; height:6px; border-radius:99px; background:var(--accent); }
       .pivot { width:100%; border-collapse:collapse; font-size:8px; } .pivot th,.pivot td { border-bottom:1px solid var(--soft-line); padding:5px; text-align:right; } .pivot th:first-child,.pivot td:first-child { text-align:left; }
       @media (min-width:720px) { .section.columns .widgets { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-      @media (max-width:719px) { .runtime { grid-template-columns:1fr; } .side { padding:9px; } .brand { padding-bottom:7px; } .pages { display:flex; overflow:auto; } .page-tab { width:auto; white-space:nowrap; } .side-foot { display:none; } .context { align-items:flex-start; } .pulse { display:none; } .canvas { grid-template-columns:1fr; } .section { grid-column:1!important; } }
+      @media (max-width:719px) { .runtime { grid-template-columns:1fr; } .side { padding:9px; } .brand { padding-bottom:7px; } .pages { display:flex; overflow:auto; } .page-tab { width:auto; white-space:nowrap; font-size:10px; } .side-foot { display:none; } .context { align-items:flex-start; } .pulse { display:none; } .decision { grid-template-columns:1fr; } .decision span { border-right:0; border-bottom:1px solid var(--line); } .decision span:last-child { border-bottom:0; } .canvas { grid-template-columns:1fr; } .section { grid-column:1!important; } }
       @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; transition:none!important; } }
     </style>
   </head>
@@ -57,6 +58,19 @@
         const text = (value) => String(value ?? "");
         const escapeHtml = (value) => text(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
         const config = (widget) => isObject(widget?.config) ? widget.config : {};
+        const presentation = () => isObject(workshop().presentation) ? workshop().presentation : {};
+        const statusDisplay = (value) => {
+          const configured = presentation().statusLabels?.[text(value)];
+          if (isObject(configured) && configured.label) return text(configured.label);
+          return text(value).replaceAll("_", " ").toLowerCase().replace(/^./, (letter) => letter.toUpperCase()) || "상태 미지정";
+        };
+        const displayValue = (value) => {
+          if (value === null || value === undefined || value === "") return text(presentation().booleanLabels?.emptyLabel || "정보 없음");
+          if (typeof value === "boolean") return text(value ? presentation().booleanLabels?.trueLabel || "예" : presentation().booleanLabels?.falseLabel || "아니요");
+          if (Array.isArray(value)) return `${value.length}개 항목`;
+          if (isObject(value)) return "상세 정보 있음";
+          return text(value);
+        };
 
         function structured(value) {
           if (!isObject(value)) return null;
@@ -73,9 +87,10 @@
         function actions() { return list(model().actions); }
         function currentItems() { return state.statusFilter ? state.items.filter((item) => itemStatus(item) === state.statusFilter) : state.items; }
         function selectedItem() { return state.items.find((item) => text(item.objectId) === state.selectedObjectId) || state.items[0] || null; }
-        function itemTitle(item) { return text(item?.properties?.name || item?.objectId || "이름 없는 업무"); }
+        function itemTitle(item) { const typeName = text(presentation().objectTypeNames?.[item?.objectType] || primaryRecord().displayName || "업무"); const id = text(item?.objectId); return text(item?.properties?.name || item?.properties?.title || `${typeName}${id ? ` #${id.slice(-4)}` : ""}`); }
         function itemStatus(item) { return text(item?.properties?.status || "확인 필요"); }
-        function propertyLabel(key) { return text(list(primaryRecord().fields).find((field) => field.apiName === key)?.displayName || key); }
+        function propertyLabel(key) { return text(presentation().propertyNames?.[`${primaryRecord().apiName}.${key}`] || list(primaryRecord().fields).find((field) => field.apiName === key)?.displayName || key.replaceAll("_", " ")); }
+        function actionLabel(action) { return text(presentation().actionNames?.[action?.apiName] || action?.displayName || "업무 실행"); }
         function allowedActions(item) { return actions().filter((action) => !list(action.fromStates).length || list(action.fromStates).includes(itemStatus(item))); }
         function grouped(property = "status") {
           return currentItems().reduce((all,item) => { const key = text(item.properties?.[property] ?? "미지정"); (all[key] ||= []).push(item); return all; },{});
@@ -116,7 +131,7 @@
           if (!item || !action) return;
           const values = new FormData(form); const params = {};
           list(action.parameters).forEach((parameter) => { params[parameter.apiName] = text(values.get(parameter.apiName)); });
-          state.busy = true; state.message = `${action.displayName} 업무를 확인하고 있습니다.`; state.tone = ""; render();
+          state.busy = true; state.message = `${actionLabel(action)} 업무를 확인하고 있습니다.`; state.tone = ""; render();
           try {
             const result = await business.executeAction(action.apiName, {
               objectType: primaryRecord().apiName, objectId:item.objectId,
@@ -133,19 +148,20 @@
         function actionForm(item, action, needsApproval) {
           const inputs = list(action.parameters).map((parameter) => `<label>${escapeHtml(parameter.displayName)}<input name="${escapeHtml(parameter.apiName)}" required /></label>`).join("");
           const approval = needsApproval ? '<p class="approval-note">사람 확인이 필요한 업무입니다. 내용을 검토한 뒤 실행 요청을 올립니다.</p><label><input name="humanConfirmation" type="checkbox" required />대상과 입력값을 확인했습니다.</label>' : "";
-          return `<form data-object-id="${escapeHtml(item.objectId)}" data-action="${escapeHtml(action.apiName)}"><strong>${escapeHtml(action.displayName)}</strong>${approval}${inputs}<button class="button ${needsApproval ? "approval" : ""}" type="submit" ${state.busy ? "disabled" : ""}>${needsApproval ? "확인 요청" : escapeHtml(action.displayName)}</button></form>`;
+          const label = actionLabel(action);
+          return `<form data-object-id="${escapeHtml(item.objectId)}" data-action="${escapeHtml(action.apiName)}"><strong>${escapeHtml(label)}</strong>${approval}${inputs}<button class="button ${needsApproval ? "approval" : ""}" type="submit" ${state.busy ? "disabled" : ""}>${needsApproval ? "확인 요청" : escapeHtml(label)}</button></form>`;
         }
 
         function objectRows(widget) {
           const items = currentItems();
-          if (!items.length) return '<p class="muted">현재 조건에 맞는 업무가 없습니다.</p>';
-          return `<div class="objects">${items.map((item) => `<button type="button" class="object-row ${text(item.objectId) === state.selectedObjectId ? "selected" : ""}" data-select-object="${escapeHtml(item.objectId)}"><strong>${escapeHtml(itemTitle(item))}</strong><small>${escapeHtml(itemStatus(item))}</small></button>`).join("")}</div>`;
+          if (!items.length) return `<div class="empty"><strong>${escapeHtml(presentation().feedback?.emptyTitle || "표시할 업무가 없습니다")}</strong><p class="muted">${escapeHtml(presentation().feedback?.emptyDescription || "검색 조건을 바꿔 보세요.")}</p></div>`;
+          return `<div class="objects">${items.map((item) => `<button type="button" class="object-row ${text(item.objectId) === state.selectedObjectId ? "selected" : ""}" data-select-object="${escapeHtml(item.objectId)}"><strong>${escapeHtml(itemTitle(item))}</strong><small>${escapeHtml(statusDisplay(itemStatus(item)))}</small></button>`).join("")}</div>`;
         }
 
         function objectDetail() {
           const item = selectedItem();
           if (!item) return '<p class="muted">목록에서 업무를 선택하세요.</p>';
-          return `<dl>${Object.entries(item.properties || {}).map(([key,value]) => `<div><dt>${escapeHtml(propertyLabel(key))}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
+          return `<dl>${Object.entries(item.properties || {}).map(([key,value]) => `<div><dt>${escapeHtml(propertyLabel(key))}</dt><dd>${escapeHtml(key === "status" ? statusDisplay(value) : displayValue(value))}</dd></div>`).join("")}</dl>`;
         }
 
         function actionMarkup(widget) {
@@ -159,23 +175,23 @@
 
         function statusTracker(widget) {
           const groups = grouped(text(config(widget).groupByProperty || "status"));
-          return `<div class="tracker">${Object.entries(groups).map(([key,items]) => `<div class="track"><span class="muted">${escapeHtml(key)}</span><b>${items.length}<small>건</small></b></div>`).join("")}</div>`;
+          return `<div class="tracker">${Object.entries(groups).map(([key,items]) => `<div class="track"><span class="muted">${escapeHtml(statusDisplay(key))}</span><b>${items.length}<small>건</small></b></div>`).join("")}</div>`;
         }
 
         function filterList() {
           const groups = grouped("status");
-          return `<div class="filters"><button class="filter ${state.statusFilter ? "" : "active"}" data-filter-status="">전체 ${state.items.length}</button>${Object.entries(groups).map(([key,items]) => `<button class="filter ${state.statusFilter === key ? "active" : ""}" data-filter-status="${escapeHtml(key)}">${escapeHtml(key)} ${items.length}</button>`).join("")}</div>`;
+          return `<div class="filters"><button class="filter ${state.statusFilter ? "" : "active"}" data-filter-status="">전체 ${state.items.length}</button>${Object.entries(groups).map(([key,items]) => `<button class="filter ${state.statusFilter === key ? "active" : ""}" data-filter-status="${escapeHtml(key)}">${escapeHtml(statusDisplay(key))} ${items.length}</button>`).join("")}</div>`;
         }
 
         function kanban(widget) {
           const groups = grouped(text(config(widget).groupByProperty || "status"));
-          return `<div class="kanban">${Object.entries(groups).map(([key,items]) => `<div class="lane"><strong>${escapeHtml(key)} · ${items.length}</strong>${items.slice(0,12).map((item) => `<button type="button" class="object-row" data-select-object="${escapeHtml(item.objectId)}">${escapeHtml(itemTitle(item))}</button>`).join("")}</div>`).join("")}</div>`;
+          return `<div class="kanban">${Object.entries(groups).map(([key,items]) => `<div class="lane"><strong>${escapeHtml(statusDisplay(key))} · ${items.length}</strong>${items.slice(0,12).map((item) => `<button type="button" class="object-row" data-select-object="${escapeHtml(item.objectId)}">${escapeHtml(itemTitle(item))}</button>`).join("")}</div>`).join("")}</div>`;
         }
 
         function chartMarkup(widget) {
           const groups = grouped(text(config(widget).groupByProperty || "status"));
           const maximum = Math.max(1,...Object.values(groups).map((items) => items.length));
-          return `<div class="bars">${Object.entries(groups).map(([key,items]) => `<div class="bar"><span>${escapeHtml(key)}</span><i style="width:${Math.round(items.length / maximum * 100)}%"></i><b>${items.length}</b></div>`).join("")}</div>`;
+          return `<div class="bars">${Object.entries(groups).map(([key,items]) => `<div class="bar"><span>${escapeHtml(statusDisplay(key))}</span><i style="width:${Math.round(items.length / maximum * 100)}%"></i><b>${items.length}</b></div>`).join("")}</div>`;
         }
 
         function pivotMarkup(widget) {
@@ -235,7 +251,7 @@
           const colors = palettes[theme.preset] || palettes.ocean;
           root.style.cssText = `--accent:${colors[0]};--accent-soft:${colors[1]};--nav:${colors[2]}`;
           const navigation = `<nav class="pages" aria-label="Workshop 앱 페이지">${pages().map((item) => `<button class="page-tab ${item.id === state.selectedPageId ? "active" : ""}" data-page-id="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join("")}</nav>`;
-          root.innerHTML = `<div class="runtime"><aside class="side"><div class="brand"><span class="workshop-mark">${escapeHtml(theme.logoText || "FL")}</span><div class="workshop-title"><strong>${escapeHtml(theme.brandName || app.name)}</strong><small>Operational workspace</small></div></div>${navigation}<div class="side-foot">권한과 Action이 보호됨</div></aside><div class="content"><header class="context"><div class="context-copy"><div class="eyebrow">Live work pulse</div><h1>${escapeHtml(page.name)}</h1></div><div class="pulse"><span>필터 ${state.statusFilter ? "1개" : "전체"}</span><span>${state.selectedObjectId ? "업무 선택됨" : "선택 전"}</span><span class="live">동기화 v${escapeHtml(app.version)}</span></div></header><section class="canvas">${list(page.sections).map(sectionMarkup).join("")}</section><p class="status ${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p><footer class="receipt"><span>${escapeHtml(state.definition.schemaVersion)}</span><span>${escapeHtml(state.definition.definitionFingerprint)}</span><span>Workshop definition · shared runtime</span></footer></div></div>`;
+          root.innerHTML = `<div class="runtime"><aside class="side"><div class="brand"><span class="workshop-mark">${escapeHtml(theme.logoText || "FL")}</span><div class="workshop-title"><strong>${escapeHtml(theme.brandName || app.name)}</strong><small>${escapeHtml(presentation().chrome?.workspaceLabel || "업무 운영 공간")}</small></div></div>${navigation}<div class="side-foot">권한과 승인 규칙이 적용됩니다</div></aside><div class="content"><header class="context"><div class="context-copy"><div class="eyebrow">오늘의 업무 흐름</div><h1>${escapeHtml(page.name)}</h1></div><div class="pulse"><span>필터 ${state.statusFilter ? "1개" : "전체"}</span><span>${state.selectedObjectId ? "업무 선택됨" : "선택 전"}</span><span class="live">최신 상태</span></div></header><section class="decision"><span>1. 업무 선택</span><span>2. 다음 업무 실행</span><span>3. 변경 근거 보존</span></section><section class="canvas">${list(page.sections).map(sectionMarkup).join("")}</section>${state.message ? `<p class="status ${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p>` : ""}<footer class="receipt"><span>GPT와 외부 앱이 같은 업무 정의를 사용합니다</span></footer></div></div>`;
           bindInteractions(root);
         }
 

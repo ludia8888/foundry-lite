@@ -136,7 +136,7 @@ export function PieChartMini({ buckets }: PieChartMiniProps) {
           textAnchor="middle"
           className="fill-[#8f99a8] text-[8px]"
         >
-          TOTAL
+          전체
         </text>
       </svg>
       <ul className="min-w-0 flex-1 space-y-1">

@@ -24,8 +24,8 @@ export function TemplateGallery({
         <DialogHeader>
           <DialogTitle>템플릿으로 시작</DialogTitle>
           <DialogDescription>
-            미리 구성된 앱을 선택하면 현재 온톨로지에 자동 바인딩되어 즉시
-            생성됩니다.
+            원하는 업무 구성을 선택하면 현재 회사 데이터에 맞춰 화면이 바로
+            준비됩니다.
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3">

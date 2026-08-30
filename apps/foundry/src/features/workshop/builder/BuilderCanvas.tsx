@@ -15,14 +15,17 @@ import {
   LAYOUT_TEMPLATES,
   WIDGET_LABELS,
   type AppPage,
+  type AppPresentation,
   type AppSection,
   type AppWidget,
   type WidgetKind,
 } from "../lib/app-model";
+import { businessActionName, businessObjectTypeName } from "../lib/business-display";
 import { WidgetPalette } from "./WidgetPalette";
 
 interface BuilderCanvasProps {
   page: AppPage;
+  presentation: AppPresentation;
   objectViews: FoundryLiteOntologyObjectView[];
   actionViews: FoundryLiteOntologyActionView[];
   selectedSectionId: string | null;
@@ -44,11 +47,12 @@ interface BuilderCanvasProps {
   onApplyLayout: (columns: number) => void;
 }
 
-/** 위젯 카드: 종류 배지 + 바인딩 셀렉트(객체 타입 / 액션) + 제거. */
+/** 사용자 화면 카드: 보이는 정보와 실행 업무를 비개발자 언어로 검토한다. */
 function WidgetCard({
   widget,
   objectViews,
   actionViews,
+  presentation,
   isSelected,
   onRemove,
   onSelect,
@@ -58,6 +62,7 @@ function WidgetCard({
   widget: AppWidget;
   objectViews: FoundryLiteOntologyObjectView[];
   actionViews: FoundryLiteOntologyActionView[];
+  presentation: AppPresentation;
   isSelected: boolean;
   onRemove: () => void;
   onSelect: () => void;
@@ -70,27 +75,27 @@ function WidgetCard({
   return (
     <div
       className={cn(
-        "rounded border bg-[#f7f9fc] p-2 text-left shadow-[0_1px_1px_rgba(17,20,24,0.04)]",
+        "rounded-xl bg-[#f7f9fb] p-3 text-left",
         isSelected
-          ? "border-[#2d72d2] ring-1 ring-[#2d72d2]"
-          : "border-[#c9d3ea]",
+          ? "border-2 border-[#6651c7] ring-2 ring-[#6651c7]/10"
+          : "border border-[#e1e6eb]",
       )}
     >
       <div className="flex items-center gap-1.5">
         <button
           type="button"
-          aria-label={`${WIDGET_LABELS[widget.kind]} 위젯 선택`}
+          aria-label={`${WIDGET_LABELS[widget.kind]} 설정 열기`}
           onClick={(event) => {
             event.stopPropagation();
             onSelect();
           }}
-          className="rounded bg-[#2d72d2] px-1.5 py-px text-[10px] font-semibold text-white outline-none focus-visible:ring-2 focus-visible:ring-[#2d72d2]/40"
+          className="rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-[#475569] shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-[#6651c7]/30"
         >
           {WIDGET_LABELS[widget.kind]}
         </button>
         <button
           type="button"
-          aria-label="위젯 제거"
+          aria-label="화면 요소 제거"
           className="ml-auto rounded p-0.5 text-[#8f99a8] hover:bg-muted/60 hover:text-foreground"
           onClick={(event) => {
             event.stopPropagation();
@@ -104,14 +109,14 @@ function WidgetCard({
         <select
           value={widget.config.objectApiName ?? ""}
           onChange={(event) => onBindObject(event.target.value)}
-          className="mt-1.5 h-7 w-full rounded border border-[#d5dce1] bg-white px-1.5 text-[11px] text-[#1c2127] focus:border-[#2d72d2] focus:outline-none"
+          className="mt-2 h-9 w-full rounded-lg border border-[#d5dce1] bg-white px-2 text-[12px] text-[#1c2127] focus:border-[#6651c7] focus:outline-none"
         >
           <option value="" disabled>
-            객체 타입 선택
+            보여줄 업무 선택
           </option>
-          {objectViews.map((view) => (
+          {objectViews.filter((view) => !view.displayName.startsWith("[LOG]")).map((view) => (
             <option key={view.apiName} value={view.apiName}>
-              {view.displayName} ({view.apiName})
+              {businessObjectTypeName(view.apiName, view, presentation)}
             </option>
           ))}
         </select>
@@ -120,14 +125,14 @@ function WidgetCard({
         <select
           value={widget.config.actionApiName ?? ""}
           onChange={(event) => onBindAction(event.target.value)}
-          className="mt-1.5 h-7 w-full rounded border border-[#d5dce1] bg-white px-1.5 text-[11px] text-[#1c2127] focus:border-[#2d72d2] focus:outline-none"
+          className="mt-2 h-9 w-full rounded-lg border border-[#d5dce1] bg-white px-2 text-[12px] text-[#1c2127] focus:border-[#6651c7] focus:outline-none"
         >
           <option value="" disabled>
-            액션 선택
+            실행할 업무 선택
           </option>
           {actionViews.map((view) => (
             <option key={view.apiName} value={view.apiName}>
-              {view.displayName} ({view.apiName})
+              {businessActionName(view.apiName, view, presentation)}
             </option>
           ))}
         </select>
@@ -149,16 +154,16 @@ function LayoutTemplatePopover({
           className="flex h-8 w-full items-center justify-center gap-1.5 rounded border border-[#d5dce1] bg-white text-[12px] font-medium text-[#404854] hover:bg-muted/40"
         >
           <LayoutTemplate className="size-3.5" />
-          레이아웃 설정
+          화면 배치 바꾸기
         </button>
       </PopoverTrigger>
       <PopoverContent align="center" className="w-64 p-2">
         <div className="px-1 pb-1.5">
           <div className="text-[12px] font-semibold text-[#1c2127]">
-            레이아웃 템플릿을 사용하세요
+            정보 배치를 선택하세요
           </div>
           <div className="text-[11px] text-muted-foreground">
-            호버로 레이아웃을 미리 봅니다
+            업무량과 화면 크기에 맞는 구성을 선택합니다.
           </div>
         </div>
         <div className="grid grid-cols-5 gap-1">
@@ -194,6 +199,7 @@ function SectionColumn({
   isSelected,
   objectViews,
   actionViews,
+  presentation,
   selectedWidgetId,
   onSelect,
   onSelectWidget,
@@ -208,6 +214,7 @@ function SectionColumn({
   isSelected: boolean;
   objectViews: FoundryLiteOntologyObjectView[];
   actionViews: FoundryLiteOntologyActionView[];
+  presentation: AppPresentation;
   selectedWidgetId: string | null;
   onSelect: () => void;
   onSelectWidget: (widgetId: string) => void;
@@ -221,13 +228,14 @@ function SectionColumn({
     <div
       onClick={onSelect}
       className={cn(
-        "flex min-h-[300px] cursor-pointer flex-col rounded-xl bg-white p-3 shadow-[0_12px_32px_-28px_rgba(15,23,42,.6)]",
+        "flex min-h-[260px] cursor-pointer flex-col rounded-2xl bg-white p-4 shadow-[0_18px_44px_-36px_rgba(15,23,42,.7)]",
         sectionSpanClass(section.span),
-        isSelected ? "border-2 border-[#2d72d2]" : "border border-[#dde3e9]",
+        isSelected ? "border-2 border-[#6651c7]" : "border border-[#e1e6eb]",
       )}
     >
-      <div className="mb-2 text-[12px] font-medium text-[#5f6b7c]">
-        {section.title || `Section ${index + 1}`} · {section.span}/12
+      <div className="mb-3 flex items-center gap-2 text-[12px] font-bold text-[#475569]">
+        <span className="flex size-6 items-center justify-center rounded-lg bg-[#eeeafd] text-[10px] text-[#6651c7]">{index + 1}</span>
+        {section.title || `화면 영역 ${index + 1}`}
       </div>
 
       <div className="flex-1 space-y-2">
@@ -237,6 +245,7 @@ function SectionColumn({
             widget={widget}
             objectViews={objectViews}
             actionViews={actionViews}
+            presentation={presentation}
             isSelected={selectedWidgetId === widget.id}
             onRemove={() => onRemoveWidget(widget.id)}
             onSelect={() => onSelectWidget(widget.id)}
@@ -259,10 +268,10 @@ function SectionColumn({
           trigger={
             <button
               type="button"
-              className="flex h-8 w-full items-center justify-center gap-1.5 rounded border-2 border-dashed border-[#2d72d2] bg-[#f2f7fd] text-[12px] font-medium text-[#215db0] hover:bg-[#e8f0fb]"
+              className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-[#9b8be1] bg-[#f7f5ff] text-[12px] font-bold text-[#6651c7] hover:bg-[#eeeafd]"
             >
               <Plus className="size-3.5" />
-              위젯 추가
+              보여줄 정보 추가
             </button>
           }
         />
@@ -277,6 +286,7 @@ export function BuilderCanvas({
   page,
   objectViews,
   actionViews,
+  presentation,
   selectedSectionId,
   selectedWidgetId,
   onSelectSection,
@@ -305,7 +315,8 @@ export function BuilderCanvas({
             index={index}
             isSelected={selectedSectionId === section.id}
             objectViews={objectViews}
-            actionViews={actionViews}
+        actionViews={actionViews}
+        presentation={presentation}
             selectedWidgetId={selectedWidgetId}
             onSelect={() => onSelectSection(section.id)}
             onSelectWidget={(widgetId) =>

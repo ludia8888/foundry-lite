@@ -14,7 +14,10 @@ import {
 import { StatusPill } from "@/components/shared/StatusPill";
 import { cn } from "@/lib/utils";
 
-import { statusIntentOf } from "../../lib/app-model";
+import {
+  businessPropertyName,
+  businessStatus,
+} from "../../lib/business-display";
 import { isNumericType } from "../../lib/ontology-context";
 import {
   facetCounts,
@@ -34,11 +37,12 @@ import {
   WidgetPlaceholder,
   type WidgetRuntimeProps,
 } from "./widget-kit";
+import { useWorkshopRuntimeDefinition } from "../runtime-application-context";
 
 const MISSING_OBJECT = (
   <WidgetPlaceholder
-    label="객체 타입 미지정"
-    hint="인스펙터에서 객체 타입을 선택하세요."
+    label="연결할 업무가 필요합니다"
+    hint="AI FDE에게 이 화면에서 찾고 싶은 업무를 설명해 주세요."
   />
 );
 
@@ -92,6 +96,7 @@ export function FilterListWidget(props: WidgetRuntimeProps) {
   const objectView = objectViewFor(props, objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
   if (!objectApiName) return MISSING_OBJECT;
@@ -157,7 +162,7 @@ export function FilterListWidget(props: WidgetRuntimeProps) {
 
       {properties.length === 0 ? (
         <p className="px-3 py-3 text-[11px] text-[#8f99a8]">
-          필터할 속성이 없습니다.
+          지금 사용할 수 있는 검색 기준이 없습니다.
         </p>
       ) : (
         <div className="divide-y divide-[#eef1f4]">
@@ -171,6 +176,12 @@ export function FilterListWidget(props: WidgetRuntimeProps) {
               dispatch={dispatch}
               isCollapsed={collapsed.has(property)}
               onToggleCollapse={() => toggleCollapse(property)}
+              label={businessPropertyName(
+                objectApiName,
+                property,
+                objectView,
+                definition.presentation,
+              )}
             />
           ))}
         </div>
@@ -187,6 +198,7 @@ function FilterSection({
   dispatch,
   isCollapsed,
   onToggleCollapse,
+  label,
 }: {
   property: string;
   kind: FilterKind;
@@ -195,6 +207,7 @@ function FilterSection({
   dispatch: RuntimeDispatch;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  label: string;
 }) {
   const active = isFilterActive(state, property);
   const selectedCount = selectedValues(state, property).length;
@@ -213,7 +226,7 @@ function FilterSection({
             <ChevronDown className="size-3 shrink-0 text-[#8f99a8]" />
           )}
           <span className="text-[10px] font-semibold tracking-wide text-[#5f6b7c] uppercase">
-            {property}
+            {label}
           </span>
           {selectedCount > 0 ? (
             <span className="rounded-full bg-[#2d72d2] px-1.5 text-[9px] font-bold text-white">
@@ -224,7 +237,7 @@ function FilterSection({
         {active ? (
           <button
             type="button"
-            aria-label={`${property} 필터 해제`}
+            aria-label={`${label} 조건 해제`}
             className="flex size-4 items-center justify-center rounded text-[#8f99a8] hover:bg-[#e4e9ed] hover:text-[#cd4246]"
             onClick={() => dispatch({ type: "clearFilter", property })}
           >
@@ -244,6 +257,7 @@ function FilterSection({
           ) : kind === "typeahead" ? (
             <TypeaheadFilter
               property={property}
+              label={label}
               allObjects={allObjects}
               state={state}
               dispatch={dispatch}
@@ -274,6 +288,7 @@ function HistogramFilter({
   state: RuntimeState;
   dispatch: RuntimeDispatch;
 }) {
+  const definition = useWorkshopRuntimeDefinition();
   const rows = facetCounts(allObjects, property);
   const maxCount = rows.reduce((max, row) => Math.max(max, row.count), 0);
   const selected = selectedValues(state, property);
@@ -299,8 +314,8 @@ function HistogramFilter({
             <span className="flex min-w-0 flex-1 flex-col gap-1">
               {property === "status" ? (
                 <span className="min-w-0 truncate">
-                  <StatusPill intent={statusIntentOf(row.value)}>
-                    {row.value}
+                  <StatusPill intent={businessStatus(row.value, definition.presentation).intent}>
+                    {businessStatus(row.value, definition.presentation).label}
                   </StatusPill>
                 </span>
               ) : (
@@ -326,15 +341,18 @@ function HistogramFilter({
 /** 타입어헤드 필터: 검색 입력으로 값 목록을 좁혀 다중선택. */
 function TypeaheadFilter({
   property,
+  label,
   allObjects,
   state,
   dispatch,
 }: {
   property: string;
+  label: string;
   allObjects: readonly GenericObject[];
   state: RuntimeState;
   dispatch: RuntimeDispatch;
 }) {
+  const definition = useWorkshopRuntimeDefinition();
   const [query, setQuery] = useState("");
   const rows = facetCounts(allObjects, property);
   const selected = selectedValues(state, property);
@@ -347,7 +365,7 @@ function TypeaheadFilter({
         className="h-7 text-[12px]"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder={`${property} 검색...`}
+        placeholder={`${label} 검색...`}
       />
       <div className="max-h-40 space-y-0.5 overflow-auto">
         {filtered.slice(0, 50).map((row) => {
@@ -366,7 +384,7 @@ function TypeaheadFilter({
             >
               <CheckSquare checked={isSelected} />
               <span className="min-w-0 flex-1 truncate text-[12px] text-[#1c2127]">
-                {row.value}
+                {property === "status" ? businessStatus(row.value, definition.presentation).label : row.value}
               </span>
               <span className="shrink-0 text-[11px] text-[#5f6b7c] tabular-nums">
                 {row.count}
@@ -493,6 +511,7 @@ export function ObjectDropdownWidget(props: WidgetRuntimeProps) {
   const { allObjects } = useWidgetObjects(objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
 
   if (!objectApiName) return MISSING_OBJECT;
 
@@ -500,8 +519,8 @@ export function ObjectDropdownWidget(props: WidgetRuntimeProps) {
   if (!property) {
     return (
       <WidgetPlaceholder
-        label="필터 속성 미지정"
-        hint="인스펙터에서 필터 속성을 선택하세요."
+        label="검색 기준이 필요합니다"
+        hint="AI FDE에게 사용자가 어떤 기준으로 업무를 찾을지 설명해 주세요."
       />
     );
   }
@@ -533,7 +552,13 @@ export function ObjectDropdownWidget(props: WidgetRuntimeProps) {
   return (
     <WidgetFrame borderless bodyClassName="p-2 space-y-1">
       <p className="px-0.5 text-[10px] text-[#8f99a8]">
-        {config.title || property}
+        {config.title ||
+          businessPropertyName(
+            objectApiName,
+            property,
+            objectViewFor(props, objectApiName),
+            definition.presentation,
+          )}
       </p>
       <Select value={current} onValueChange={handleChange}>
         <SelectTrigger className="h-8 text-[12px]">
@@ -543,7 +568,7 @@ export function ObjectDropdownWidget(props: WidgetRuntimeProps) {
           <SelectItem value="__all__">전체</SelectItem>
           {distinctValues.map((row) => (
             <SelectItem key={row.value} value={row.value}>
-              {row.value} ({row.count})
+              {property === "status" ? businessStatus(row.value, definition.presentation).label : row.value} ({row.count})
             </SelectItem>
           ))}
         </SelectContent>
@@ -595,6 +620,7 @@ export function StringSelectorWidget(props: WidgetRuntimeProps) {
   const { allObjects } = useWidgetObjects(objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
 
   if (!objectApiName) return MISSING_OBJECT;
 
@@ -602,8 +628,8 @@ export function StringSelectorWidget(props: WidgetRuntimeProps) {
   if (!property) {
     return (
       <WidgetPlaceholder
-        label="필터 속성 미지정"
-        hint="인스펙터에서 필터 속성을 선택하세요."
+        label="검색 기준이 필요합니다"
+        hint="AI FDE에게 사용자가 어떤 기준으로 업무를 찾을지 설명해 주세요."
       />
     );
   }
@@ -612,7 +638,18 @@ export function StringSelectorWidget(props: WidgetRuntimeProps) {
   const selected = selectedValues(state, property);
 
   return (
-    <WidgetFrame title={config.title || property} bodyClassName="p-2">
+    <WidgetFrame
+      title={
+        config.title ||
+        businessPropertyName(
+          objectApiName,
+          property,
+          objectViewFor(props, objectApiName),
+          definition.presentation,
+        )
+      }
+      bodyClassName="p-2"
+    >
       <div className="flex flex-wrap gap-1.5">
         {values.map((row) => {
           const isSelected = selected.includes(row.value);
@@ -630,7 +667,7 @@ export function StringSelectorWidget(props: WidgetRuntimeProps) {
                 dispatch({ type: "toggleFilter", property, value: row.value })
               }
             >
-              <span className="truncate">{row.value}</span>
+              <span className="truncate">{property === "status" ? businessStatus(row.value, definition.presentation).label : row.value}</span>
               <span className="text-[#8f99a8] tabular-nums">{row.count}</span>
             </button>
           );

@@ -6,6 +6,7 @@ import {
   ArrowRight,
   ArrowUp,
   Check,
+  ChevronRight,
   ChevronsUpDown,
   Copy,
   Download,
@@ -22,26 +23,35 @@ import { cn } from "@/lib/utils";
 
 import {
   formatCellValue,
-  objectTitleOf,
-  statusIntentOf,
   tableColumnNames,
 } from "../../lib/app-model";
+import {
+  businessObjectTitle,
+  businessObjectTypeName,
+  businessPropertyName,
+  businessStatus,
+  businessValue,
+  humanizeIdentifier,
+  isTechnicalIdentifierProperty,
+} from "../../lib/business-display";
 import { actionsForObject } from "../../lib/ontology-context";
 import { useRuntimeDispatch, useRuntimeState } from "../../lib/runtime-state";
 import { RuntimeActionForm } from "../RuntimeActionForm";
+import { useWorkshopRuntimeDefinition } from "../runtime-application-context";
 import {
   actionViewFor,
   objectViewFor,
   useWidgetObjects,
   WidgetFrame,
+  WidgetDataState,
   WidgetPlaceholder,
   type WidgetRuntimeProps,
 } from "./widget-kit";
 
 const MISSING_OBJECT = (
   <WidgetPlaceholder
-    label="객체 타입 미지정"
-    hint="인스펙터에서 객체 타입을 선택하세요."
+    label="연결할 업무가 필요합니다"
+    hint="AI FDE에게 이 화면에서 다룰 업무를 설명해 주세요."
   />
 );
 
@@ -67,12 +77,25 @@ function columnDisplayName(
   apiName: string,
 ): string {
   const property = objectView?.properties.find((p) => p.apiName === apiName);
-  return property?.displayName ?? apiName;
+  const displayName = property?.displayName;
+  return displayName && !/^[A-Za-z][A-Za-z0-9 _-]*$/.test(displayName)
+    ? displayName
+    : humanizeIdentifier(displayName ?? apiName);
 }
 
 /** 범주형(태그로 렌더) 컬럼 판정. */
 function isCategoricalColumn(name: string): boolean {
   return /status|state|urgency|priority|severity/i.test(name);
+}
+
+function isTechnicalIdentifierColumn(
+  name: string,
+  objectView: ReturnType<typeof objectViewFor>,
+): boolean {
+  const property = objectView?.properties.find(
+    (candidate) => candidate.apiName === name,
+  );
+  return isTechnicalIdentifierProperty(name, property?.isPrimaryKey === true);
 }
 
 type SortState = { column: string; direction: "asc" | "desc" } | null;
@@ -91,27 +114,39 @@ function compareValues(a: unknown, b: unknown): number {
 export function ObjectTableWidget(props: WidgetRuntimeProps) {
   const { widget } = props;
   const objectApiName = widget.config.objectApiName ?? null;
-  const { objects, isLoading } = useWidgetObjects(
+  const { objects, isLoading, error, reload } = useWidgetObjects(
     objectApiName,
     widget.config.variableFilters,
   );
   const objectView = objectViewFor(props, objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
   const [sort, setSort] = useState<SortState>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState<CellMenu>(null);
   const [actionTarget, setActionTarget] = useState<ActionTarget>(null);
 
-  const columns = useMemo(
-    () =>
-      tableColumnNames(
+  const columns = useMemo(() => {
+    const configured = widget.config.propertyApiNames ?? [];
+    const names = tableColumnNames(
         objectView,
         objects,
-        widget.config.propertyApiNames,
-      ).slice(0, 8),
-    [objectView, objects, widget.config.propertyApiNames],
-  );
+        configured,
+      );
+    const visible =
+      configured.length > 0 || definition.presentation.showTechnicalDetails
+        ? names
+        : names.filter(
+            (name) => !isTechnicalIdentifierColumn(name, objectView),
+          );
+    return visible.slice(0, 8);
+  }, [
+    definition.presentation.showTechnicalDetails,
+    objectView,
+    objects,
+    widget.config.propertyApiNames,
+  ]);
 
   const sortedObjects = useMemo(() => {
     if (!sort) return objects;
@@ -159,7 +194,7 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
   return (
     <>
       <WidgetFrame
-        title={widget.config.title || objectView?.displayName || objectApiName}
+        title={widget.config.title || businessObjectTypeName(objectApiName, objectView, definition.presentation)}
         subtitle={
           checkedIds.size > 0
             ? `${checkedIds.size}개 선택 · ${sortedObjects.length}`
@@ -168,7 +203,35 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
         className="min-h-[220px]"
         bodyClassName="overflow-auto"
       >
-        <table className="w-full border-collapse text-[12px]">
+        {isLoading || error || sortedObjects.length === 0 ? (
+          <WidgetDataState isLoading={isLoading} error={error} isEmpty={!isLoading && !error && sortedObjects.length === 0} onRetry={reload} />
+        ) : null}
+        {!isLoading && !error && sortedObjects.length > 0 ? <div className="divide-y divide-[var(--workshop-line)] md:hidden">
+          {sortedObjects.map((object) => {
+            const isSelected = object.objectId === state.selectedObjectId;
+            const statusColumn = columns.find(isCategoricalColumn);
+            return (
+              <button
+                key={object.objectId}
+                type="button"
+                onClick={() => dispatch({ type: "selectObject", objectId: object.objectId })}
+                className={cn("block w-full p-4 text-left transition", isSelected ? "bg-[var(--workshop-accent-soft)]" : "bg-white active:bg-[var(--workshop-subtle)]")}
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-xl text-[12px] font-black text-white" style={{ background: tint }}>{businessObjectTypeName(objectApiName, objectView, definition.presentation).slice(0, 1)}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start gap-2"><strong className="min-w-0 flex-1 text-[14px] font-bold leading-5 text-[var(--workshop-ink)]">{businessObjectTitle(object, objectView, definition.presentation)}</strong>{statusColumn && typeof object.properties[statusColumn] === "string" ? <StatusPill intent={businessStatus(object.properties[statusColumn], definition.presentation).intent}>{businessStatus(object.properties[statusColumn], definition.presentation).label}</StatusPill> : null}</div>
+                    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+                      {columns.filter((name) => name !== statusColumn).slice(0, 4).map((name) => <div key={name} className="min-w-0"><dt className="truncate text-[10px] font-semibold text-[#8a96a6]">{businessPropertyName(objectApiName, name, objectView, definition.presentation)}</dt><dd className="mt-0.5 truncate text-[12px] font-medium text-[#3f4d61]">{businessValue(object.properties[name], name, objectView?.properties.find((property) => property.apiName === name)?.dataType, definition.presentation)}</dd></div>)}
+                    </dl>
+                  </div>
+                  <ChevronRight className="mt-1 size-4 shrink-0 text-[#9aa5b4]" />
+                </div>
+              </button>
+            );
+          })}
+        </div> : null}
+        {!isLoading && !error && sortedObjects.length > 0 ? <table className="hidden w-full border-collapse text-[13px] md:table">
           <thead className="sticky top-0 z-10 bg-[#f6f8fa]">
             <tr className="border-b border-[#d5dce1]">
               <th className="w-9 px-2 py-2 align-top">
@@ -196,7 +259,7 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
                       className="flex items-start gap-1 text-left text-[12px] font-semibold text-[#5f6b7c] hover:text-[#1c2127]"
                     >
                       <span className="leading-tight">
-                        {columnDisplayName(objectView, name)}
+                        {businessPropertyName(objectApiName, name, objectView, definition.presentation)}
                       </span>
                       {isSorted ? (
                         sort?.direction === "asc" ? (
@@ -279,12 +342,12 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
                       >
                         {isCategoricalColumn(name) &&
                         typeof value === "string" ? (
-                          <StatusPill intent={statusIntentOf(value)}>
-                            {value}
+                          <StatusPill intent={businessStatus(value, definition.presentation).intent}>
+                            {businessStatus(value, definition.presentation).label}
                           </StatusPill>
                         ) : (
                           <span className="block truncate text-[#1c2127]">
-                            {formatCellValue(value)}
+                            {businessValue(value, name, objectView?.properties.find((property) => property.apiName === name)?.dataType, definition.presentation)}
                           </span>
                         )}
                       </td>
@@ -293,18 +356,8 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
                 </tr>
               );
             })}
-            {sortedObjects.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={columns.length + 1}
-                  className="h-16 px-3 text-center text-[11px] text-muted-foreground"
-                >
-                  {isLoading ? "불러오는 중…" : "조건에 맞는 객체가 없습니다."}
-                </td>
-              </tr>
-            ) : null}
           </tbody>
-        </table>
+        </table> : null}
       </WidgetFrame>
       {menu ? (
         <TableContextMenu
@@ -321,7 +374,16 @@ export function ObjectTableWidget(props: WidgetRuntimeProps) {
             setMenu(null);
           }}
           onExportCsv={() => {
-            exportCsv(objectApiName, columns, sortedObjects, objectView);
+            exportCsv(
+              businessObjectTypeName(
+                objectApiName,
+                objectView,
+                definition.presentation,
+              ),
+              columns,
+              sortedObjects,
+              objectView,
+            );
             setMenu(null);
           }}
           onClose={() => setMenu(null)}
@@ -366,7 +428,7 @@ function rowActionStyle(apiName: string): { color: string; icon: LucideIcon } {
 
 /** 표시 객체를 CSV로 내보내 다운로드. */
 function exportCsv(
-  objectApiName: string,
+  fileName: string,
   columns: string[],
   objects: readonly GenericObject[],
   objectView: ReturnType<typeof objectViewFor>,
@@ -390,12 +452,13 @@ function exportCsv(
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${objectApiName}.csv`;
+  const safeFileName = fileName.replace(/[\\/:*?"<>|]/g, "-").trim();
+  anchor.download = `${safeFileName || "업무 목록"}.csv`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
 
-/** 객체 테이블 우클릭 컨텍스트 메뉴 (Palantir: CELL·ROW ACTIONS·TABLE EXPORT). */
+/** 객체 테이블 우클릭 메뉴: 선택한 값, 행 업무, 목록 내보내기. */
 function TableContextMenu({
   menu,
   objectView,
@@ -440,7 +503,7 @@ function TableContextMenu({
         style={{ left, top }}
         onClick={(event) => event.stopPropagation()}
       >
-        <MenuSectionLabel label="CELL" />
+        <MenuSectionLabel label="선택한 값" />
         <MenuItem
           icon={Copy}
           onClick={() => onCopy(menu.value)}
@@ -457,7 +520,7 @@ function TableContextMenu({
         {rowActionApiNames.length > 0 ? (
           <>
             <MenuDivider />
-            <MenuSectionLabel label="ROW ACTIONS" />
+            <MenuSectionLabel label="이 업무에서 할 일" />
             {rowActionApiNames.map((apiName) => {
               const view = actionViews.find((item) => item.apiName === apiName);
               const style = rowActionStyle(apiName);
@@ -475,7 +538,7 @@ function TableContextMenu({
         ) : null}
 
         <MenuDivider />
-        <MenuSectionLabel label="TABLE EXPORT" />
+        <MenuSectionLabel label="목록 내보내기" />
         <MenuItem
           icon={Download}
           onClick={onExportCsv}
@@ -568,7 +631,7 @@ function RowActionModal({
               onCancel={onClose}
             />
           ) : (
-            <WidgetPlaceholder label="액션을 찾을 수 없습니다" />
+            <WidgetPlaceholder label="실행할 업무를 찾을 수 없습니다" />
           )}
         </div>
       </div>
@@ -614,22 +677,31 @@ function TableCheckbox({
 export function ObjectListWidget(props: WidgetRuntimeProps) {
   const { widget } = props;
   const objectApiName = widget.config.objectApiName ?? null;
-  const { objects, isLoading } = useWidgetObjects(
+  const { objects, isLoading, error, reload } = useWidgetObjects(
     objectApiName,
     widget.config.variableFilters,
   );
   const objectView = objectViewFor(props, objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
 
   const displayProps = useMemo(() => {
     if (widget.config.propertyApiNames && widget.config.propertyApiNames.length)
       return widget.config.propertyApiNames;
     return (objectView?.properties ?? [])
-      .filter((property) => !property.isPrimaryKey)
+      .filter(
+        (property) =>
+          definition.presentation.showTechnicalDetails ||
+          !isTechnicalIdentifierColumn(property.apiName, objectView),
+      )
       .map((property) => property.apiName)
       .slice(0, 5);
-  }, [objectView, widget.config.propertyApiNames]);
+  }, [
+    definition.presentation.showTechnicalDetails,
+    objectView,
+    widget.config.propertyApiNames,
+  ]);
 
   if (!objectApiName) return MISSING_OBJECT;
 
@@ -637,12 +709,15 @@ export function ObjectListWidget(props: WidgetRuntimeProps) {
 
   return (
     <WidgetFrame
-      title={widget.config.title || objectView?.displayName || objectApiName}
+      title={widget.config.title || businessObjectTypeName(objectApiName, objectView, definition.presentation)}
       subtitle={`${objects.length.toLocaleString("en-US")}건`}
       className="min-h-[220px]"
       bodyClassName="overflow-auto divide-y divide-[#eef1f4]"
     >
-      {objects.map((object) => {
+      {isLoading || error || objects.length === 0 ? (
+        <WidgetDataState isLoading={isLoading} error={error} isEmpty={!isLoading && !error && objects.length === 0} onRetry={reload} />
+      ) : null}
+      {!isLoading && !error ? objects.map((object) => {
         const isSelected = object.objectId === state.selectedObjectId;
         return (
           <button
@@ -661,10 +736,10 @@ export function ObjectListWidget(props: WidgetRuntimeProps) {
                 className="flex size-5 shrink-0 items-center justify-center rounded-[3px] text-[10px] font-bold text-white"
                 style={{ background: tint }}
               >
-                {object.objectType.slice(0, 1).toUpperCase()}
+                {businessObjectTypeName(objectApiName, objectView, definition.presentation).slice(0, 1)}
               </span>
               <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[#1c2127]">
-                {objectTitleOf(object, objectView)}
+                {businessObjectTitle(object, objectView, definition.presentation)}
               </span>
             </div>
             <dl className="mt-1.5 space-y-0.5 pl-7">
@@ -678,7 +753,7 @@ export function ObjectListWidget(props: WidgetRuntimeProps) {
                     className="flex items-center gap-1.5 text-[11px]"
                   >
                     <dt className="shrink-0 text-[#5f6b7c]">
-                      {columnDisplayName(objectView, name)}
+                      {businessPropertyName(objectApiName, name, objectView, definition.presentation)}
                     </dt>
                     <span className="text-[#a7b1bd]">•</span>
                     <dd className="min-w-0 flex-1 truncate">
@@ -686,12 +761,12 @@ export function ObjectListWidget(props: WidgetRuntimeProps) {
                         <span className="text-[#a7b1bd] italic">값 없음</span>
                       ) : isCategoricalColumn(name) &&
                         typeof value === "string" ? (
-                        <StatusPill intent={statusIntentOf(value)}>
-                          {value}
+                        <StatusPill intent={businessStatus(value, definition.presentation).intent}>
+                          {businessStatus(value, definition.presentation).label}
                         </StatusPill>
                       ) : (
                         <span className="text-[#1c2127]">
-                          {formatCellValue(value)}
+                          {businessValue(value, name, objectView?.properties.find((property) => property.apiName === name)?.dataType, definition.presentation)}
                         </span>
                       )}
                     </dd>
@@ -701,12 +776,7 @@ export function ObjectListWidget(props: WidgetRuntimeProps) {
             </dl>
           </button>
         );
-      })}
-      {objects.length === 0 ? (
-        <p className="p-4 text-center text-[11px] text-muted-foreground">
-          {isLoading ? "불러오는 중…" : "조건에 맞는 객체가 없습니다."}
-        </p>
-      ) : null}
+      }) : null}
     </WidgetFrame>
   );
 }
@@ -726,6 +796,7 @@ export function ObjectDetailWidget(props: WidgetRuntimeProps) {
   const { allObjects } = useWidgetObjects(objectApiName);
   const objectView = objectViewFor(props, objectApiName);
   const state = useRuntimeState();
+  const definition = useWorkshopRuntimeDefinition();
 
   if (!objectApiName) return MISSING_OBJECT;
 
@@ -733,20 +804,25 @@ export function ObjectDetailWidget(props: WidgetRuntimeProps) {
   const propertyNames =
     widget.config.propertyApiNames && widget.config.propertyApiNames.length > 0
       ? widget.config.propertyApiNames
-      : (objectView?.properties.map((property) => property.apiName) ??
+      : (objectView?.properties
+          .filter(
+            (property) =>
+              definition.presentation.showTechnicalDetails ||
+              !isTechnicalIdentifierColumn(property.apiName, objectView),
+          )
+          .map((property) => property.apiName) ??
         (object ? Object.keys(object.properties) : []));
 
   return (
     <WidgetFrame
-      title={widget.config.title || "객체 상세"}
-      subtitle={object ? object.objectId : undefined}
+      title={widget.config.title || "업무 상세"}
       className="min-h-[220px]"
       bodyClassName="overflow-auto"
     >
       {!object ? (
         <WidgetPlaceholder
-          label="객체를 선택하세요"
-          hint="테이블·리스트에서 행을 클릭하면 속성이 표시됩니다."
+          label="확인할 업무를 선택해 주세요"
+          hint="목록에서 업무를 선택하면 필요한 정보와 다음 행동이 여기에 표시됩니다."
         />
       ) : (
         <div>
@@ -756,14 +832,14 @@ export function ObjectDetailWidget(props: WidgetRuntimeProps) {
               className="flex size-9 shrink-0 items-center justify-center rounded-md text-[15px] font-bold text-white"
               style={{ background: objectTypeColor(objectApiName) }}
             >
-              {object.objectType.slice(0, 1).toUpperCase()}
+              {businessObjectTypeName(objectApiName, objectView, definition.presentation).slice(0, 1)}
             </span>
             <div className="min-w-0">
               <div className="truncate text-[14px] font-semibold text-[#1c2127]">
-                {objectTitleOf(object, objectView)}
+                {businessObjectTitle(object, objectView, definition.presentation)}
               </div>
               <div className="truncate text-[11px] text-[#8f99a8]">
-                {objectView?.displayName ?? objectApiName}
+                {businessObjectTypeName(objectApiName, objectView, definition.presentation)}
               </div>
             </div>
           </div>
@@ -779,10 +855,10 @@ export function ObjectDetailWidget(props: WidgetRuntimeProps) {
                 {numericProps.slice(0, 3).map((name) => (
                   <div key={name} className="min-w-0 flex-1 px-3 py-2">
                     <div className="truncate text-[10px] text-[#8f99a8]">
-                      {columnDisplayName(objectView, name)}
+                      {businessPropertyName(objectApiName, name, objectView, definition.presentation)}
                     </div>
                     <div className="text-[18px] font-bold text-[#1c2127] tabular-nums">
-                      {formatCellValue(object.properties[name])}
+                      {businessValue(object.properties[name], name, objectView?.properties.find((property) => property.apiName === name)?.dataType, definition.presentation)}
                     </div>
                   </div>
                 ))}
@@ -796,13 +872,13 @@ export function ObjectDetailWidget(props: WidgetRuntimeProps) {
               const value = object.properties[name];
               return (
                 <div key={name} className="flex gap-3 px-3 py-1.5">
-                  <dt className="w-32 shrink-0 text-[11px] text-muted-foreground">
-                    {columnDisplayName(objectView, name)}
+                  <dt className="w-32 shrink-0 text-[12px] font-medium text-muted-foreground">
+                    {businessPropertyName(objectApiName, name, objectView, definition.presentation)}
                   </dt>
-                  <dd className="min-w-0 flex-1 text-[12px] text-[#1c2127]">
+                  <dd className="min-w-0 flex-1 text-[13px] font-medium text-[#1c2127]">
                     {isCategoricalColumn(name) && typeof value === "string" ? (
-                      <StatusPill intent={statusIntentOf(value)}>
-                        {value}
+                      <StatusPill intent={businessStatus(value, definition.presentation).intent}>
+                        {businessStatus(value, definition.presentation).label}
                       </StatusPill>
                     ) : (
                       <span
@@ -810,7 +886,7 @@ export function ObjectDetailWidget(props: WidgetRuntimeProps) {
                           typeof value === "number" && "font-mono tabular-nums",
                         )}
                       >
-                        {formatCellValue(value)}
+                        {businessValue(value, name, objectView?.properties.find((property) => property.apiName === name)?.dataType, definition.presentation)}
                       </span>
                     )}
                   </dd>
@@ -830,10 +906,11 @@ export function ObjectSetTitleWidget(props: WidgetRuntimeProps) {
   const objectApiName = widget.config.objectApiName ?? null;
   const { objects, allObjects } = useWidgetObjects(objectApiName);
   const objectView = objectViewFor(props, objectApiName);
+  const definition = useWorkshopRuntimeDefinition();
 
   if (!objectApiName) return MISSING_OBJECT;
 
-  const title = widget.config.title || objectView?.displayName || objectApiName;
+  const title = widget.config.title || businessObjectTypeName(objectApiName, objectView, definition.presentation);
   return (
     <div className="flex items-center gap-3 px-1">
       <span className="flex size-9 items-center justify-center rounded-md bg-[#2d72d2]/10 text-[15px] font-bold text-[#2d72d2]">
@@ -868,6 +945,7 @@ export function LinksWidget(props: WidgetRuntimeProps) {
   const objectView = objectViewFor(props, objectApiName);
   const { allObjects } = useWidgetObjects(objectApiName);
   const state = useRuntimeState();
+  const definition = useWorkshopRuntimeDefinition();
 
   if (!objectApiName) return MISSING_OBJECT;
 
@@ -879,31 +957,43 @@ export function LinksWidget(props: WidgetRuntimeProps) {
 
   return (
     <WidgetFrame
-      title={widget.config.title || "링크"}
-      subtitle={object ? object.objectId : `${links.length}개 관계`}
+      title={widget.config.title || "연결된 업무"}
+      subtitle={object ? businessObjectTitle(object, objectView, definition.presentation) : `${links.length}개 관계`}
       className="min-h-[160px]"
       bodyClassName="overflow-auto p-2 space-y-1"
     >
       {links.length === 0 ? (
-        <WidgetPlaceholder label="정의된 링크가 없습니다" />
+        <WidgetPlaceholder label="연결된 업무 관계가 없습니다" />
       ) : (
         links.map((link) => (
           <div
             key={`${link.apiName}-${link.toObjectType}`}
-            className="flex items-center gap-2 rounded border border-[#e4e9ed] px-2.5 py-2"
+            className="flex items-center gap-3 rounded-xl bg-[#f7f9fb] px-3 py-2.5"
           >
             <Link2 className="size-3.5 shrink-0 text-[#00847a]" />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[12px] font-medium text-[#1c2127]">
-                {link.displayName || link.apiName}
+                {link.displayName || "업무 관계"}
               </span>
-              <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
-                {link.fromObjectType}
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                {businessObjectTypeName(
+                  link.fromObjectType,
+                  objectViewFor(props, link.fromObjectType),
+                  definition.presentation,
+                )}
                 <ArrowRight className="size-2.5" />
-                {link.toObjectType}
+                {businessObjectTypeName(
+                  link.toObjectType,
+                  objectViewFor(props, link.toObjectType),
+                  definition.presentation,
+                )}
               </span>
             </span>
-            <StatusPill intent="neutral">{link.cardinality}</StatusPill>
+            <StatusPill intent="neutral">
+              {link.cardinality.toLowerCase().includes("many")
+                ? "여러 건"
+                : "한 건"}
+            </StatusPill>
           </div>
         ))
       )}
@@ -927,6 +1017,7 @@ export function ObjectLinksWidget(props: WidgetRuntimeProps) {
   const dispatch = useRuntimeDispatch();
   const client = useFoundryLiteClient();
   const object = selectedObjectFrom(allObjects, state.selectedObjectId);
+  const definition = useWorkshopRuntimeDefinition();
   const objectId = object?.objectId ?? null;
 
   const load = useCallback(async () => {
@@ -942,25 +1033,28 @@ export function ObjectLinksWidget(props: WidgetRuntimeProps) {
 
   if (!objectApiName) return MISSING_OBJECT;
 
-  const title = widget.config.title || linkTypeApiName || "관계";
+  const title = widget.config.title || "연결된 업무";
   if (!linkTypeApiName) {
     return (
       <WidgetFrame title={title}>
-        <WidgetPlaceholder label="링크 타입을 선택하세요" />
+        <WidgetPlaceholder
+          label="연결할 업무 관계가 필요합니다"
+          hint="AI FDE에게 함께 확인할 업무 관계를 설명해 주세요."
+        />
       </WidgetFrame>
     );
   }
   if (!objectId) {
     return (
-      <WidgetFrame title={title} subtitle={linkTypeApiName}>
-        <WidgetPlaceholder label="객체를 선택하면 연결된 대상을 표시합니다" />
+      <WidgetFrame title={title}>
+        <WidgetPlaceholder label="업무를 선택하면 연결된 내용을 보여드립니다" />
       </WidgetFrame>
     );
   }
   return (
     <WidgetFrame
       title={title}
-      subtitle={`${object ? objectTitleOf(object, objectViewFor(props, objectApiName)) : objectId} · ${links.length}개`}
+      subtitle={`${object ? businessObjectTitle(object, objectViewFor(props, objectApiName), definition.presentation) : "선택한 업무"} · ${links.length}개`}
       className="min-h-[140px]"
       bodyClassName="overflow-auto p-2 space-y-1"
     >
@@ -974,7 +1068,7 @@ export function ObjectLinksWidget(props: WidgetRuntimeProps) {
           const label =
             (target.properties?.name as string | undefined) ??
             (target.properties?.title as string | undefined) ??
-            target.objectId;
+            businessObjectTypeName(target.objectType, objectViewFor(props, target.objectType), definition.presentation);
           return (
             <button
               key={`${link.linkType}-${target.objectId}`}
@@ -986,7 +1080,7 @@ export function ObjectLinksWidget(props: WidgetRuntimeProps) {
               <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#1c2127]">
                 {label}
               </span>
-              <StatusPill intent="neutral">{target.objectType}</StatusPill>
+              <StatusPill intent="neutral">{businessObjectTypeName(target.objectType, objectViewFor(props, target.objectType), definition.presentation)}</StatusPill>
             </button>
           );
         })

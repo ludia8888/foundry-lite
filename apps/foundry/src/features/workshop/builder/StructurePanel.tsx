@@ -117,7 +117,7 @@ export function StructurePanel({
             onClick={() => onSelect({ type: "section", sectionId: section.id })}
             trailing={
               <span className="text-[10px] text-[#8f99a8]">
-                {section.layout}
+                {layoutLabel(section.layout)}
               </span>
             }
           />
@@ -158,36 +158,37 @@ export function StructurePanel({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-r border-[#e4e9ed] bg-[#fbfcfd]">
-      <div className="space-y-2 border-b border-[#e4e9ed] p-3">
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <div className="space-y-3 border-b border-[#e4e9ed] p-4">
+        <div><div className="text-[10px] font-bold text-[#8a96a6]">사용자 경험</div><div className="mt-0.5 text-[13px] font-bold text-[#172033]">화면과 메뉴</div></div>
         <input
           value={definition.name}
           onChange={(event) =>
             onChange(setAppName(definition, event.target.value))
           }
-          className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-[13px] font-semibold text-[#1c2127] hover:border-[#d5dce1] focus:border-[#2d72d2] focus:outline-none"
+          className="w-full rounded-xl border border-[#e1e6eb] bg-[#f7f9fb] px-3 py-2 text-[13px] font-semibold text-[#1c2127] focus:border-[#6651c7] focus:outline-none"
         />
         <button
           type="button"
           onClick={onOpenTemplates}
-          className="flex w-full items-center justify-center gap-1.5 rounded border border-[#7961db]/40 bg-[#f1ecfb] py-1.5 text-[12px] font-medium text-[#634bb5] hover:bg-[#e9e1f9]"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#eeeafd] py-2.5 text-[12px] font-bold text-[#634bb5] hover:bg-[#e9e1f9]"
         >
-          <Sparkles className="size-3.5" /> 템플릿으로 시작
+          <Sparkles className="size-3.5" /> AI FDE 추천 구성 적용
         </button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto py-2">
-        <GroupLabel icon={Layers} label="레이아웃" />
+        <GroupLabel icon={Layers} label="사용자 화면" />
 
         <TreeRow
           depth={0}
           icon={Palette}
-          label="앱 디자인과 탐색"
+          label="브랜드와 메뉴"
           isActive={selection?.type === "app"}
           onClick={() => onSelect({ type: "app" })}
           trailing={
             <span className="text-[10px] text-[#8f99a8]">
-              {definition.theme.preset}
+              {themeLabel(definition.theme.preset)}
             </span>
           }
         />
@@ -239,12 +240,12 @@ export function StructurePanel({
 
         {/* 오버레이 트리 */}
         <SubLabel
-          label="오버레이"
+          label="보조 화면"
           action={<AddButton onClick={handleAddOverlay} />}
         />
         {definition.overlays.length === 0 ? (
           <p className="px-3 py-1 text-[11px] text-[#8f99a8]">
-            드로어·모달을 추가하세요.
+            필요할 때 열리는 상세·확인 화면을 추가할 수 있습니다.
           </p>
         ) : (
           definition.overlays.map((overlay) => (
@@ -265,7 +266,7 @@ export function StructurePanel({
                 }}
                 trailing={
                   <span className="text-[10px] text-[#8f99a8]">
-                    {overlay.kind === "modal" ? "모달" : "드로어"}
+                    {overlay.kind === "modal" ? "가운데 확인창" : "옆 상세창"}
                   </span>
                 }
               />
@@ -277,16 +278,16 @@ export function StructurePanel({
         )}
 
         {/* 변수 */}
-        <GroupLabel icon={Database} label="변수" className="mt-3" />
+        <GroupLabel icon={Database} label="화면 간 연결" className="mt-3" />
 
         {/* 선언된 파라미터 */}
         <SubLabel
-          label="파라미터"
+          label="공유 조건"
           action={<AddButton onClick={handleAddVariable} />}
         />
         {definition.variables.length === 0 ? (
           <p className="px-3 py-1 text-[11px] text-[#8f99a8]">
-            컨트롤·데이터 위젯을 배선할 변수를 추가하세요.
+            여러 화면에서 함께 사용할 검색 조건을 추가할 수 있습니다.
           </p>
         ) : (
           definition.variables.map((variable) => (
@@ -304,7 +305,7 @@ export function StructurePanel({
               }
               trailing={
                 <span className="text-[10px] text-[#8f99a8]">
-                  {variable.type}
+                  {variableTypeLabel(variable.type)}
                 </span>
               }
             />
@@ -312,10 +313,10 @@ export function StructurePanel({
         )}
 
         {/* 객체 세트 (위젯 바인딩에서 도출) */}
-        <SubLabel label="객체 세트" />
+        <SubLabel label="연결된 업무 데이터" />
         {variableNames.length === 0 ? (
           <p className="px-3 py-1 text-[11px] text-[#8f99a8]">
-            위젯에 객체 타입을 바인딩하면 객체 세트 변수가 생성됩니다.
+            화면에 보여줄 업무 데이터가 아직 연결되지 않았습니다.
           </p>
         ) : (
           variableNames.map((name) => (
@@ -326,16 +327,42 @@ export function StructurePanel({
               <span className="flex size-4 items-center justify-center rounded bg-[#2d72d2]/10 text-[9px] font-bold text-[#2d72d2]">
                 {name.slice(0, 1).toUpperCase()}
               </span>
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[#404854]">
-                {name}
+              <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[#404854]">
+                {definition.presentation.objectTypeNames[name] ?? "업무 데이터"}
               </span>
-              <span className="text-[10px] text-[#8f99a8]">ObjectSet</span>
+              <span className="text-[10px] text-emerald-600">연결됨</span>
             </div>
           ))
         )}
       </div>
     </div>
   );
+}
+
+function layoutLabel(layout: AppSection["layout"]): string {
+  return {
+    flow: "세로 배치",
+    columns: "나란히",
+    rows: "가로 흐름",
+    toolbar: "요약 영역",
+    tabs: "탭 구성",
+  }[layout];
+}
+
+function variableTypeLabel(
+  type: AppDefinition["variables"][number]["type"],
+): string {
+  return { string: "문자", number: "숫자", boolean: "예·아니요" }[type];
+}
+
+function themeLabel(preset: AppDefinition["theme"]["preset"]): string {
+  return {
+    ocean: "오션",
+    indigo: "인디고",
+    emerald: "에메랄드",
+    amber: "앰버",
+    graphite: "그래파이트",
+  }[preset];
 }
 
 function GroupLabel({

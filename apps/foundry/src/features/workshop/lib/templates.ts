@@ -15,6 +15,7 @@ import {
   createHeaderSlots,
   createId,
   DEFAULT_APP_SHELL,
+  DEFAULT_APP_PRESENTATION,
   DEFAULT_APP_THEME,
   defaultSectionStyle,
   type AppDefinition,
@@ -104,6 +105,7 @@ function definition(
     purpose,
     theme: { ...DEFAULT_APP_THEME, brandName: name, logoText: name.slice(0, 2) },
     shell: { ...DEFAULT_APP_SHELL },
+    presentation: structuredClone(DEFAULT_APP_PRESENTATION),
     header: { visible: true, title: name, slots: createHeaderSlots() },
     page: defaultPage,
     pages,
@@ -117,15 +119,15 @@ function definition(
 export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
   {
     id: "object-explorer",
-    name: "객체 탐색기",
-    description: "필터·검색·테이블·상세로 객체를 탐색하는 기본 앱.",
+    name: "업무 탐색",
+    description: "검색, 목록, 상세 화면으로 고객과 업무를 찾습니다.",
     icon: Search,
-    tags: ["표시", "필터"],
+    tags: ["업무 보기", "검색"],
     build: (objectViews, actionViews) => {
       const ctx = {
         suggestion: buildWidgetSuggestion(objectViews, actionViews),
       };
-      return definition("객체 탐색기", "객체를 필터·검색으로 탐색합니다", [
+      return definition("업무 탐색", "고객과 업무를 빠르게 찾아 확인합니다", [
         page("탐색", true, [
           section(
             "헤더",
@@ -144,15 +146,15 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
   },
   {
     id: "approval-queue",
-    name: "승인 큐",
-    description: "메트릭·필터·테이블·상세·액션 폼으로 승인 업무를 처리.",
+    name: "승인함",
+    description: "승인 대기 업무를 검토하고 안전하게 처리합니다.",
     icon: CheckCircle2,
-    tags: ["액션", "운영"],
+    tags: ["업무 처리", "운영"],
     build: (objectViews, actionViews) => {
       const ctx = {
         suggestion: buildWidgetSuggestion(objectViews, actionViews),
       };
-      return definition("승인 큐", "객체를 검토하고 액션으로 승인합니다", [
+      return definition("승인함", "대기 중인 업무를 검토하고 승인합니다", [
         page("승인", true, [
           section(
             "요약",
@@ -177,9 +179,9 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
   {
     id: "ops-dashboard",
     name: "운영 대시보드",
-    description: "KPI 카드 + 막대·파이 차트 + 테이블의 운영 현황판.",
+    description: "핵심 숫자와 차트, 업무 목록을 한눈에 봅니다.",
     icon: LayoutDashboard,
-    tags: ["시각화", "KPI"],
+    tags: ["현황 분석", "핵심 숫자"],
     build: (objectViews, actionViews) => {
       const ctx = {
         suggestion: buildWidgetSuggestion(objectViews, actionViews),
@@ -188,7 +190,7 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
       return definition("운영 대시보드", "핵심 지표와 분포를 한눈에", [
         page("대시보드", true, [
           section(
-            "KPI",
+            "핵심 현황",
             "flow",
             [
               widget("metricCard", ctx, {
@@ -211,23 +213,23 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
             widget("statusTracker", ctx),
             widget("pivotTable", ctx),
           ]),
-          section("레코드", "flow", [widget("objectTable", ctx)]),
+          section("업무 목록", "flow", [widget("objectTable", ctx)]),
         ]),
       ]);
     },
   },
   {
     id: "object-360",
-    name: "객체 360",
-    description: "리스트·상세·링크·타임라인으로 단일 객체를 360도 조망.",
+    name: "업무 전체 보기",
+    description: "한 업무의 상세, 관계, 진행 기록을 함께 확인합니다.",
     icon: Radar,
-    tags: ["표시", "관계"],
+    tags: ["업무 보기", "관계"],
     build: (objectViews, actionViews) => {
       const ctx = {
         suggestion: buildWidgetSuggestion(objectViews, actionViews),
       };
-      return definition("객체 360", "객체와 연결·이력을 종합 조망합니다", [
-        page("360", true, [
+      return definition("업무 전체 보기", "업무와 연결 관계, 진행 기록을 함께 봅니다", [
+        page("상세 보기", true, [
           section(
             "헤더",
             "toolbar",
@@ -247,9 +249,9 @@ export const WORKSHOP_TEMPLATES: readonly WorkshopTemplate[] = [
   {
     id: "analytics-overview",
     name: "분석 개요",
-    description: "차트 중심 개요 페이지 + 레코드 상세 페이지의 멀티페이지 앱.",
+    description: "현황 차트와 상세 업무 화면을 나누어 제공합니다.",
     icon: BarChart3,
-    tags: ["시각화", "멀티페이지"],
+    tags: ["현황 분석", "여러 화면"],
     build: (objectViews, actionViews) => {
       const ctx = {
         suggestion: buildWidgetSuggestion(objectViews, actionViews),

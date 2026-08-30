@@ -264,7 +264,7 @@ export function addSection(
   containerId: string,
   layout: SectionLayout = "flow",
 ): { definition: AppDefinition; section: AppSection } {
-  const section = createSection("Section", layout);
+  const section = createSection("업무 영역", layout);
   const next: AppDefinition = {
     ...definition,
     overlays: definition.overlays.map((overlay) =>
@@ -311,7 +311,7 @@ export function addPage(definition: AppDefinition): {
   definition: AppDefinition;
   page: AppPage;
 } {
-  const page = createPage(`Page ${definition.pages.length + 1}`, false);
+  const page = createPage(`업무 화면 ${definition.pages.length + 1}`, false);
   return {
     definition: withAppPages(definition, [...definition.pages, page]),
     page,
@@ -388,7 +388,7 @@ export function addOverlay(definition: AppDefinition): {
   definition: AppDefinition;
   overlay: AppOverlay;
 } {
-  const overlay = createOverlay(`Overlay ${definition.overlays.length + 1}`);
+  const overlay = createOverlay(`보조 화면 ${definition.overlays.length + 1}`);
   return {
     definition: { ...definition, overlays: [...definition.overlays, overlay] },
     overlay,
@@ -455,7 +455,9 @@ export function addVariable(definition: AppDefinition): {
   definition: AppDefinition;
   variable: AppVariable;
 } {
-  const variable = createVariable(`변수 ${definition.variables.length + 1}`);
+  const variable = createVariable(
+    `공유 조건 ${definition.variables.length + 1}`,
+  );
   return {
     definition: {
       ...definition,

@@ -231,7 +231,7 @@
         "tests/integration/test_domain_os_deploy_bundle.py",
         "tests/unit/test_fde_domain_os_blueprint.py"
       ],
-      "boundary": "One versioned Workshop v3 business-system definition selects 24 governed components, responsive 12-column layouts, theme, navigation shell, shared selection and filter variables, Object queries, and Actions. The Foundry-hosted route, embedded GPT MCP App, and portable external SaaS renderer consume that same contract and real data rather than separate generated screens. Semantic and build parity are tested; pixel-identical rendering, arbitrary custom-code widgets, public custom-domain hosting, external OIDC, and hosted ChatGPT SaaS verification remain outside current evidence."
+      "boundary": "One versioned Workshop v4 business-system definition selects 24 governed components, customer-facing business vocabulary and product-state copy, responsive 12-column and mobile work-card layouts, product chrome, next-decision evidence rail, shared selection and filter variables, Object queries, and Actions. The Foundry-hosted route, embedded GPT MCP App, and portable external SaaS renderer consume that same contract and real data rather than separate generated screens. Semantic and build parity are tested; pixel-identical rendering, arbitrary custom-code widgets, public custom-domain hosting, external OIDC, and hosted ChatGPT SaaS verification remain outside current evidence."
     }
   ]
 }

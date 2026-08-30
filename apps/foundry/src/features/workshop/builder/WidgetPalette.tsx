@@ -61,14 +61,14 @@ export function WidgetPalette({
         showCloseButton={false}
         className="max-h-[80vh] max-w-3xl gap-0 overflow-hidden p-0"
       >
-        <DialogTitle className="sr-only">위젯 추가</DialogTitle>
+        <DialogTitle className="sr-only">화면 요소 추가</DialogTitle>
         <div className="flex items-center gap-2 border-b border-[#e4e9ed] px-3 py-2.5">
           <Search className="size-4 shrink-0 text-[#8f99a8]" />
           <input
             autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="위젯 검색..."
+            placeholder="목록, 차트, 승인 화면 검색..."
             className="min-w-0 flex-1 bg-transparent text-[14px] text-[#1c2127] outline-none placeholder:text-[#a7b1bd]"
           />
           <button
@@ -102,7 +102,7 @@ export function WidgetPalette({
           )}
           {results.length === 0 ? (
             <p className="px-1 py-6 text-center text-[12px] text-[#8f99a8]">
-              일치하는 위젯이 없습니다.
+              일치하는 화면 요소가 없습니다.
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-3">

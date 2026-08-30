@@ -5,7 +5,7 @@ import {
   type FoundryLiteOntologyActionView,
   type FoundryLiteOntologyObjectView,
 } from "@foundry-lite/sdk/react";
-import { LayoutGrid, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Inbox, LayoutGrid, LoaderCircle, LockKeyhole, type LucideIcon } from "lucide-react";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
@@ -16,7 +16,7 @@ import {
   applyVariableFilters,
   useRuntimeState,
 } from "../../lib/runtime-state";
-import { useWorkshopRuntimeApplicationId } from "../runtime-application-context";
+import { useWorkshopRuntimeApplicationId, useWorkshopRuntimeDefinition } from "../runtime-application-context";
 
 /**
  * 모든 런타임 위젯 렌더러가 받는 공통 props.
@@ -133,19 +133,19 @@ export function WidgetFrame({
   return (
     <div
       className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-xl bg-white",
+        "flex min-h-0 flex-col overflow-hidden rounded-2xl bg-white",
         !borderless &&
-          "border border-[var(--workshop-line,#d5dce1)] shadow-[0_8px_28px_-24px_rgba(15,23,42,.55)]",
+          "border border-[var(--workshop-line,#d5dce1)] shadow-[0_16px_42px_-36px_rgba(15,23,42,.65)]",
         className,
       )}
     >
       {title || actions ? (
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--workshop-line,#e4e9ed)] px-3.5">
-          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--workshop-ink,#1c2127)]">
+        <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--workshop-line,#e4e9ed)] px-4 py-3">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-bold tracking-[-.01em] text-[var(--workshop-ink,#1c2127)]">
             {title}
           </span>
           {subtitle ? (
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            <span className="shrink-0 text-[10px] font-medium text-muted-foreground">
               {subtitle}
             </span>
           ) : null}
@@ -168,16 +168,43 @@ export function WidgetPlaceholder({
   icon?: LucideIcon;
 }) {
   return (
-    <div className="flex h-full min-h-[96px] flex-col items-center justify-center gap-2 p-4 text-center">
-      <span className="flex size-9 items-center justify-center rounded-lg bg-[#eef1f4] text-[#a7b1bd]">
-        <Icon className="size-4" />
+    <div className="flex h-full min-h-[140px] flex-col items-center justify-center gap-2.5 p-6 text-center">
+      <span className="flex size-11 items-center justify-center rounded-2xl bg-[var(--workshop-subtle,#eef1f4)] text-[#8b97a8]">
+        <Icon className="size-5" />
       </span>
-      <p className="text-[12px] font-medium text-[#5f6b7c]">{label}</p>
+      <p className="text-[13px] font-bold text-[#475569]">{label}</p>
       {hint ? (
-        <p className="max-w-[220px] text-[11px] text-muted-foreground">
+        <p className="max-w-[300px] text-[12px] leading-5 text-muted-foreground">
           {hint}
         </p>
       ) : null}
     </div>
   );
+}
+
+export function WidgetDataState({
+  isLoading,
+  error,
+  isEmpty,
+  onRetry,
+}: {
+  isLoading: boolean;
+  error: unknown;
+  isEmpty: boolean;
+  onRetry?: () => void;
+}) {
+  const definition = useWorkshopRuntimeDefinition();
+  const copy = definition.presentation.feedback;
+  if (isLoading) return <WidgetPlaceholder icon={LoaderCircle} label={copy.loadingTitle} hint={copy.loadingDescription} />;
+  if (error) {
+    const isForbidden = typeof error === "object" && error !== null && "status" in error && (error as { status?: number }).status === 403;
+    return (
+      <div className="relative">
+        <WidgetPlaceholder icon={isForbidden ? LockKeyhole : AlertTriangle} label={isForbidden ? copy.forbiddenTitle : copy.errorTitle} hint={isForbidden ? copy.forbiddenDescription : copy.errorDescription} />
+        {onRetry ? <button type="button" onClick={onRetry} className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-xl bg-[var(--workshop-accent)] px-4 py-2 text-[12px] font-bold text-white">다시 시도</button> : null}
+      </div>
+    );
+  }
+  if (isEmpty) return <WidgetPlaceholder icon={Inbox} label={copy.emptyTitle} hint={copy.emptyDescription} />;
+  return null;
 }

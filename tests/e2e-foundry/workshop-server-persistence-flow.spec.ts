@@ -87,13 +87,13 @@ test("Workshop builder stays editable while the active Ontology is missing", asy
 
   await page.goto("/workshop");
 
-  await expect(page.getByText("온톨로지 미연결")).toBeVisible();
-  await expect(page.getByText("빌더 편집 가능 · 런타임은 Ontology 필요")).toBeVisible();
+  await expect(page.getByText("업무 데이터 미연결")).toBeVisible();
+  await expect(page.getByText("화면 검토 가능 · 실제 업무 사용 전 데이터 연결 필요")).toBeVisible();
   await expect(await pageNameInput(page)).toBeEditable();
 
-  await page.getByRole("button", { name: "런타임" }).click();
+  await page.getByRole("button", { name: "사용자 미리보기" }).click();
   await expect(page.getByText("활성 온톨로지가 없습니다")).toBeVisible();
-  await page.getByRole("button", { name: "빌더" }).click();
+  await page.getByRole("button", { name: "AI FDE 검토" }).click();
   await expect(await pageNameInput(page)).toBeEditable();
 });
 
@@ -103,59 +103,75 @@ test("Workshop exposes the rich template and full widget catalogs", async ({
   await page.goto("/workshop");
   await waitForWorkshopReady(page);
 
-  await page.getByRole("button", { name: "템플릿으로 시작" }).click();
+  await page.getByRole("button", { name: "AI FDE 추천 구성 적용" }).click();
   await expect(
     page.getByRole("heading", { name: "템플릿으로 시작" }),
   ).toBeVisible();
   await page.getByRole("button", { name: /운영 대시보드/ }).click();
 
   await expect(await pageNameInput(page)).toHaveValue("대시보드");
-  await expect(page.getByText("메트릭 카드", { exact: true })).toBeVisible();
-  await expect(page.getByText("막대 차트", { exact: true })).toBeVisible();
-  await expect(page.getByText("파이 차트", { exact: true })).toBeVisible();
+  await expect(page.getByText("핵심 숫자", { exact: true })).toBeVisible();
+  await expect(page.getByText("비교 차트", { exact: true })).toBeVisible();
+  await expect(page.getByText("비중 차트", { exact: true })).toBeVisible();
 
   await page
-    .getByRole("button", { name: "메트릭 카드 위젯 선택" })
+    .getByRole("button", { name: "핵심 숫자 설정 열기" })
     .first()
     .click();
-  await expect(page.getByText("metricCard", { exact: true })).toBeVisible();
+  await expect(page.getByText("핵심 숫자 설정", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "위젯 추가" }).first().click();
-  await expect(page.getByRole("dialog")).toContainText("AIP 챗봇");
-  await expect(page.getByRole("dialog")).toContainText("타임라인");
-  await expect(page.getByRole("dialog")).toContainText("버튼 그룹");
+  await page.getByRole("button", { name: "보여줄 정보 추가" }).first().click();
+  await expect(page.getByRole("dialog")).toContainText("AI 업무 도우미");
+  await expect(page.getByRole("dialog")).toContainText("진행 기록");
+  await expect(page.getByRole("dialog")).toContainText("다음 업무");
 });
 
-test("Workshop v3 composes one responsive SaaS shell from governed components", async ({
+test("Workshop v4 composes one responsive SaaS shell from governed components", async ({
   page,
 }) => {
   await page.goto("/workshop");
   await waitForWorkshopReady(page);
 
-  await page.getByRole("button", { name: "템플릿으로 시작" }).click();
+  await page.getByRole("button", { name: "AI FDE 추천 구성 적용" }).click();
   await page.getByRole("button", { name: /운영 대시보드/ }).click();
-  await expect(page.getByText("상태 추적기", { exact: true })).toBeVisible();
-  await expect(page.getByText("피벗 테이블", { exact: true })).toBeVisible();
+  await expect(page.getByText("업무 흐름", { exact: true })).toBeVisible();
+  await expect(page.getByText("교차 분석표", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "앱 디자인과 탐색" }).click();
+  await page.getByRole("button", { name: "브랜드와 메뉴" }).click();
   await page.getByRole("textbox", { name: "서비스 이름" }).fill("Northstar Operations");
   await page.getByRole("textbox", { name: "로고 문자" }).fill("NO");
   await page.getByRole("button", { name: "에메랄드" }).click();
   await page.getByRole("button", { name: "촘촘하게" }).click();
   await page.getByRole("button", { name: "집중형" }).click();
-  await page.getByRole("button", { name: "런타임" }).click();
+  await page.getByRole("button", { name: "사용자 미리보기" }).click();
 
-  const runtime = page.getByRole("main", { name: "Workshop runtime canvas" });
+  const runtime = page.locator('main[aria-label$="업무 앱"]');
   await expect(runtime.getByText("Northstar Operations").first()).toBeVisible();
-  await expect(runtime.getByText("Live work pulse")).toBeVisible();
+  await expect(runtime.getByText("오늘의 업무 흐름")).toBeVisible();
   await expect(runtime.locator('[data-workshop-widget="statusTracker"]')).toBeVisible();
   await expect(runtime.locator('[data-workshop-widget="pivotTable"]')).toBeVisible();
 
+  const runtimeSearch = runtime.getByPlaceholder("고객, 업무, 담당자 검색");
+  await page.keyboard.press("Meta+K");
+  await expect(runtimeSearch).toBeFocused();
+  await expect(page.getByRole("combobox", { name: "리소스 및 화면 검색" })).toBeHidden();
+
+  await page.getByRole("button", { name: "도움말" }).click();
+  await expect(page.getByRole("heading", { name: "업무 도움말" })).toBeVisible();
+  await page.getByRole("button", { name: "닫기" }).click();
+  await runtime.getByRole("button", { name: "알림", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "알림" })).toBeVisible();
+  await page.getByRole("button", { name: "닫기" }).click();
+
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("button", { name: "탐색 열기" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "메뉴 열기" })).toBeVisible();
   await expect(runtime.getByRole("heading", { name: "대시보드" })).toBeVisible();
-  await page.getByRole("button", { name: "탐색 열기" }).click();
-  await expect(page.getByRole("navigation", { name: "모바일 업무 앱 페이지" })).toBeVisible();
+  await page.getByRole("button", { name: "메뉴 열기" }).click();
+  await expect(page.getByRole("navigation", { name: "전체 업무 메뉴" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "빠른 업무 메뉴" })).toBeVisible();
+  expect(
+    await runtime.evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
 });
 
 test("Workshop saves its app definition to the backend resource catalog and reloads it without localStorage", async ({
@@ -168,7 +184,7 @@ test("Workshop saves its app definition to the backend resource catalog and relo
   await page.goto("/workshop");
   await waitForWorkshopReady(page);
   await expect(page.locator("body")).toContainText(
-    "앱 정의는 서버 Resources 카탈로그에 저장됩니다",
+    "GPT 안의 화면과 외부 앱에 동일하게 적용됩니다",
   );
 
   await (await pageNameInput(page)).fill(firstPageName);
@@ -177,7 +193,7 @@ test("Workshop saves its app definition to the backend resource catalog and relo
       response.url().endsWith("/api/resources/register") &&
       response.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "저장 후 게시" }).click();
+  await page.getByRole("button", { name: "변경사항 게시" }).click();
   const firstSave = (await (await firstSaveResponse).json()) as {
     resource: ResourceItem;
   };
@@ -201,7 +217,7 @@ test("Workshop saves its app definition to the backend resource catalog and relo
       response.url().endsWith("/api/resources/register") &&
       response.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "저장 후 게시" }).click();
+  await page.getByRole("button", { name: "변경사항 게시" }).click();
   const secondSave = (await (await secondSaveResponse).json()) as {
     resource: ResourceItem;
   };
