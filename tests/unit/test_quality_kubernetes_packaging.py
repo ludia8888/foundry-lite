@@ -172,6 +172,14 @@ def test_macmini_nodeports_expose_web_api_gateway_and_keycloak_separately() -> N
     assert 'proxy_pass http://{{ include "foundry-lite.fullname" . }}-api:10000;' in web_config
 
 
+def test_production_web_uses_the_deployment_origin_for_api_requests() -> None:
+    api_config = (ROOT / "apps/foundry/src/lib/api.ts").read_text(encoding="utf-8")
+
+    assert "import.meta.env.DEV" in api_config
+    assert "globalThis.location.origin" in api_config
+    assert ": defaultApiBaseUrl;" in api_config
+
+
 def test_oauth_bootstrap_deadline_includes_clean_host_image_pull() -> None:
     values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
     jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")
