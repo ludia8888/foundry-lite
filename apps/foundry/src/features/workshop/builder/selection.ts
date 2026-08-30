@@ -16,6 +16,7 @@ export type BuilderContainer = {
 
 /** 빌더에서 현재 편집 대상. */
 export type BuilderSelection =
+  | { type: "app" }
   | { type: "widget"; sectionId: string; widgetId: string }
   | { type: "section"; sectionId: string }
   | { type: "page"; pageId: string }

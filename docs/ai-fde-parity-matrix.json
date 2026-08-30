@@ -8,7 +8,7 @@
     "future_gap": "Not implemented as a user-reachable product capability."
   },
   "statusSummary": {
-    "current": 16,
+    "current": 17,
     "partial": 0,
     "future_gap": 0
   },
@@ -22,7 +22,13 @@
     "https://www.palantir.com/docs/foundry/palantir-mcp/available-tools",
     "https://www.palantir.com/docs/foundry/palantir-mcp/security",
     "https://www.palantir.com/docs/foundry/palantir-mcp/tool-search",
-    "https://www.palantir.com/docs/foundry/pilot/overview"
+    "https://www.palantir.com/docs/foundry/pilot/overview",
+    "https://www.palantir.com/docs/foundry/workshop/overview",
+    "https://www.palantir.com/docs/foundry/workshop/concepts-widgets",
+    "https://www.palantir.com/docs/foundry/workshop/concepts-layouts",
+    "https://www.palantir.com/docs/foundry/workshop/concepts-variables",
+    "https://www.palantir.com/docs/foundry/workshop/concepts-events",
+    "https://www.palantir.com/docs/foundry/workshop/embedded-modules"
   ],
   "axes": [
     {
@@ -211,6 +217,21 @@
         "test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle"
       ],
       "boundary": "Generation creates replay-safe seed data, an isolated Ontology branch, restricted OSDK app, application-specific consumer_osdk_strict package and domain hook, TypeScript-AST boundary checker, CI contract, durable resource, and a stable preview path. The customer App source cannot import the base SDK or construct inline generic resources, and server normalization overwrites model-supplied package, profile, and exception bypasses. Production use still requires human Ontology activation."
+    },
+    {
+      "id": "mcp-native-workshop-application",
+      "status": "current",
+      "palantirContract": "Workshop composes widgets, layouts, variables, events, and embedded modules into Ontology-backed operational applications.",
+      "foundryLiteEvidence": [
+        "libs/foundry_lite/application/services/aip/fde_workshop_definition.py",
+        "apps/foundry/src/features/workshop/lib/app-model.ts",
+        "apps/foundry/src/features/workshop/runtime/RuntimeMode.tsx",
+        "apps/chatgpt-business-system-widget/index.html",
+        "libs/foundry_lite/application/services/aip/fde_pilot_workshop_react_source.py",
+        "tests/integration/test_domain_os_deploy_bundle.py",
+        "tests/unit/test_fde_domain_os_blueprint.py"
+      ],
+      "boundary": "One versioned Workshop v3 business-system definition selects 24 governed components, responsive 12-column layouts, theme, navigation shell, shared selection and filter variables, Object queries, and Actions. The Foundry-hosted route, embedded GPT MCP App, and portable external SaaS renderer consume that same contract and real data rather than separate generated screens. Semantic and build parity are tested; pixel-identical rendering, arbitrary custom-code widgets, public custom-domain hosting, external OIDC, and hosted ChatGPT SaaS verification remain outside current evidence."
     }
   ]
 }

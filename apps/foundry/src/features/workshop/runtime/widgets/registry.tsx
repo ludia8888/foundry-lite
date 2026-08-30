@@ -26,6 +26,12 @@ import {
   PieChartWidget,
   TimelineWidget,
 } from "./VizWidgets";
+import {
+  CalendarWidget,
+  KanbanWidget,
+  PivotTableWidget,
+  StatusTrackerWidget,
+} from "./OperationalWidgets";
 import type { WidgetRuntimeProps } from "./widget-kit";
 
 type WidgetComponent = (props: WidgetRuntimeProps) => React.ReactNode;
@@ -41,6 +47,10 @@ export const WIDGET_RENDERERS: Record<WidgetKind, WidgetComponent> = {
   barChart: BarChartWidget,
   pieChart: PieChartWidget,
   timeline: TimelineWidget,
+  kanban: KanbanWidget,
+  calendar: CalendarWidget,
+  statusTracker: StatusTrackerWidget,
+  pivotTable: PivotTableWidget,
   filterList: FilterListWidget,
   objectDropdown: ObjectDropdownWidget,
   searchBar: SearchBarWidget,

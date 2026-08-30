@@ -53,6 +53,7 @@ import {
   setOverlayWidth,
   setPageBackground,
   setSectionLayout,
+  setSectionSpan,
   setSectionStyle,
   setSectionTitle,
   setVariableDefault,
@@ -68,6 +69,7 @@ import {
   type WidgetConfigField,
 } from "../lib/widget-catalog";
 import { WidgetPalette } from "./WidgetPalette";
+import { AppAppearancePanel } from "./AppAppearancePanel";
 import {
   findOverlay,
   findPage,
@@ -151,6 +153,15 @@ export function InspectorPanel({
     );
   }
 
+  if (selection.type === "app") {
+    return (
+      <AppAppearancePanel
+        definition={definition}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (selection.type === "section") {
     const section = findSection(definition, selection.sectionId);
     if (!section) return <InspectorShell title="섹션" />;
@@ -205,6 +216,27 @@ export function InspectorPanel({
                 </button>
               );
             })}
+          </div>
+        </Field>
+        <Field label="화면 너비">
+          <div className="grid grid-cols-3 gap-1">
+            {([3, 4, 6, 8, 9, 12] as const).map((span) => (
+              <button
+                key={span}
+                type="button"
+                onClick={() =>
+                  onChange(setSectionSpan(definition, section.id, span))
+                }
+                className={cn(
+                  "rounded border px-1.5 py-1 text-[11px]",
+                  section.span === span
+                    ? "border-[#2d72d2] bg-[#e8f0fb] text-[#215db0]"
+                    : "border-[#d5dce1] text-[#404854] hover:bg-[#f6f8fa]",
+                )}
+              >
+                {span === 12 ? "전체" : `${span}/12`}
+              </button>
+            ))}
           </div>
         </Field>
         <Field label="배경">

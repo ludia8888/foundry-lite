@@ -431,6 +431,23 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
             str(spec["applicationName"]), blueprint, consumer_osdk
         ),
     }
+    workshop = plan["businessSystemDefinition"]["experience"]["workshopApp"]
+    workshop_widgets = [
+        widget
+        for page_row in workshop["pages"]
+        for section_row in page_row["sections"]
+        for widget in section_row["widgets"]
+    ]
+    assert workshop["shell"]["navigation"] == "sidebar"
+    assert all(
+        section_row["span"] in {3, 4, 6, 8, 9, 12}
+        for page_row in workshop["pages"]
+        for section_row in page_row["sections"]
+    )
+    assert {"statusTracker", "kanban", "pivotTable"} & {widget["kind"] for widget in workshop_widgets} >= {
+        "statusTracker",
+        "kanban",
+    }
     files = react_files(plan)
     package_name = f"@foundry-lite/{slug}-osdk"
     assert f'from "{package_name}/react"' in files["src/App.tsx"]

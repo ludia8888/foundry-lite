@@ -133,14 +133,15 @@ export function WidgetFrame({
   return (
     <div
       className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-md bg-white",
-        !borderless && "border border-[#d5dce1]",
+        "flex min-h-0 flex-col overflow-hidden rounded-xl bg-white",
+        !borderless &&
+          "border border-[var(--workshop-line,#d5dce1)] shadow-[0_8px_28px_-24px_rgba(15,23,42,.55)]",
         className,
       )}
     >
       {title || actions ? (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#e4e9ed] px-3">
-          <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[#1c2127]">
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--workshop-line,#e4e9ed)] px-3.5">
+          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--workshop-ink,#1c2127)]">
             {title}
           </span>
           {subtitle ? (

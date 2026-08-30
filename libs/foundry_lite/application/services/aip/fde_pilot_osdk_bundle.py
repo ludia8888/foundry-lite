@@ -13,6 +13,7 @@ from foundry_lite.application.services.aip.fde_pilot_osdk_source import (
     ontology_reexport,
     react_hook_source,
 )
+from foundry_lite.application.services.aip.fde_pilot_workshop_react_source import portable_workshop_styles
 from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json, required_text
 
 JsonObject = Mapping[str, object]
@@ -280,26 +281,7 @@ def _main_source(package_name: str) -> str:
 
 
 def _styles_source() -> str:
-    return (
-        ":root{font-family:Inter,Pretendard,system-ui,sans-serif;color:#172033;background:#eef3f8;line-height:1.5}"
-        "*{box-sizing:border-box}body{margin:0}main{max-width:1120px;margin:auto;padding:32px 24px 64px}"
-        "header{border-radius:20px;background:#14243a;color:#f8fafc;padding:28px}header>p:first-child{color:#7dd3fc}"
-        "header h1{font-size:clamp(2rem,5vw,4rem);line-height:1;margin:10px 0 18px}"
-        "nav{display:flex;gap:8px;overflow:auto;padding:20px 0}nav span{white-space:nowrap;border-radius:999px;"
-        "background:#dbeafe;color:#1e3a5f;padding:7px 12px;font-size:.8rem;font-weight:700}"
-        "section,aside{margin-top:16px;border:1px solid #cbd5e1;border-radius:16px;background:white;padding:22px}"
-        "article{display:grid;gap:14px}form{border-top:1px solid #e2e8f0;padding-top:16px;display:grid;gap:10px}"
-        "dl{display:grid;gap:8px}dl div{display:grid;grid-template-columns:minmax(110px,1fr) 2fr;gap:12px}"
-        "dt{color:#64748b;font-size:.8rem}dd{margin:0;overflow-wrap:anywhere}"
-        ".permission{margin:0;color:#64748b;font-size:.78rem}"
-        "label{display:grid;gap:5px;font-size:.82rem;font-weight:650}input{border:1px solid #94a3b8;border-radius:8px;"
-        "padding:10px;font:inherit}button{justify-self:start;border:0;border-radius:9px;background:#0369a1;color:white;"
-        "padding:10px 15px;font:inherit;font-weight:750;cursor:pointer}button:focus-visible,input:focus-visible{"
-        "outline:3px solid #7dd3fc}[role=status]{position:sticky;bottom:16px;border-radius:10px;background:#0f172a;"
-        "color:white;padding:12px 16px}pre{overflow:auto;background:#f1f5f9;padding:14px;border-radius:10px}"
-        "@media(min-width:800px){main{display:grid;grid-template-columns:2fr 1fr;gap:18px}header,nav,[role=status]{"
-        "grid-column:1/-1}section,aside{margin-top:0}}"
-    )
+    return portable_workshop_styles()
 
 
 def _osdk_package_json(package_name: str) -> str:

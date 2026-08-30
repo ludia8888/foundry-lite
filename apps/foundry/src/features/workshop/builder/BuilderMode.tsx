@@ -54,6 +54,7 @@ function canvasPage(
     isDefault: false,
     backgroundColor: "transparent",
     layoutDirection: "columns",
+    intent: "workbench",
     sections: overlay.sections,
   };
 }

@@ -14,6 +14,7 @@ export function WidgetThumb({ kind }: { kind: WidgetKind }) {
     case "objectSetTitle":
       return <SetTitleThumb />;
     case "links":
+    case "objectLinks":
       return <LinksThumb />;
     case "metricCard":
       return <MetricThumb />;
@@ -23,6 +24,14 @@ export function WidgetThumb({ kind }: { kind: WidgetKind }) {
       return <PieThumb />;
     case "timeline":
       return <TimelineThumb />;
+    case "kanban":
+      return <KanbanThumb />;
+    case "calendar":
+      return <CalendarThumb />;
+    case "statusTracker":
+      return <StatusTrackerThumb />;
+    case "pivotTable":
+      return <PivotThumb />;
     case "filterList":
       return <FilterThumb />;
     case "objectDropdown":
@@ -201,6 +210,62 @@ function TimelineThumb() {
         <div key={row} className="relative">
           <span className="absolute top-0.5 -left-[15px] size-2 rounded-full bg-[#2d72d2]" />
           <Bar w="70%" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KanbanThumb() {
+  return (
+    <div className="grid w-full grid-cols-3 gap-1.5">
+      {[2, 3, 2].map((count, lane) => (
+        <div key={lane} className="rounded bg-[#e9edf2] p-1">
+          <span className="mb-1 block h-1 w-7 rounded bg-[#9aa6b5]" />
+          {Array.from({ length: count }).map((_, index) => (
+            <span key={index} className="mt-1 block h-4 rounded bg-white shadow-sm" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CalendarThumb() {
+  return (
+    <div className="grid w-full grid-cols-7 gap-px overflow-hidden rounded border border-[#d5dce1] bg-[#d5dce1]">
+      {Array.from({ length: 28 }).map((_, index) => (
+        <span key={index} className="h-3 bg-white p-px">
+          {[8, 15, 22].includes(index) ? (
+            <span className="block h-1.5 rounded bg-[#2d72d2]/50" />
+          ) : null}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StatusTrackerThumb() {
+  return (
+    <div className="flex w-full gap-1.5">
+      {[18, 12, 8, 4].map((value, index) => (
+        <div key={index} className="flex-1 rounded border border-[#d5dce1] bg-white p-1.5">
+          <span className="block h-1 w-6 rounded bg-[#c5ccd3]" />
+          <strong className="mt-1 block text-[10px] text-[#1c2127]">{value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PivotThumb() {
+  return (
+    <div className={CARD}>
+      {[0, 1, 2, 3].map((row) => (
+        <div key={row} className="grid grid-cols-4 gap-2 border-b border-[#eef1f4] py-1 last:border-0">
+          {Array.from({ length: 4 }).map((_, column) => (
+            <Bar key={column} w={column === 0 ? "85%" : "50%"} />
+          ))}
         </div>
       ))}
     </div>

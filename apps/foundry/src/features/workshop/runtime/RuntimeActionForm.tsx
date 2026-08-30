@@ -15,7 +15,6 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -49,7 +48,7 @@ interface RuntimeActionFormProps {
 
 /**
  * 런타임 액션 폼 위젯: 파라미터 입력 → 실행(apply).
- * idempotency key / expectedObjectVersion / request_id를 evidence로 노출한다.
+ * Technical concurrency/idempotency details stay behind the product surface.
  */
 export function RuntimeActionForm({
   actionView,
@@ -164,43 +163,14 @@ export function RuntimeActionForm({
     void applyMutation.execute(request);
   };
 
-  const handleReissue = () => {
-    setPinnedRequest(null);
-    form.setIdempotencyKey(issueIdempotencyKey());
-  };
-
-  const activeIdempotencyKey =
-    pinnedRequest?.idempotencyKey ?? form.idempotencyKey ?? "—";
-  const activeVersion =
-    pinnedRequest?.expectedObjectVersion ??
-    form.expectedObjectVersion ??
-    targetObject.objectVersion;
-
   return (
     <div className="space-y-3">
-      <div className="space-y-1 rounded border bg-muted/40 p-2 font-mono text-[11px]">
-        <div>
-          대상: {targetObject.objectType} / {targetObject.objectId}
+      <div className="rounded-lg border border-[var(--workshop-line,#d5dce1)] bg-[var(--workshop-subtle,#f6f8fa)] p-3">
+        <div className="text-[10px] font-semibold tracking-wide text-[#748195] uppercase">처리할 업무</div>
+        <div className="mt-1 truncate text-[12px] font-medium text-[var(--workshop-ink,#1c2127)]">
+          {targetObject.objectId}
         </div>
-        <div>
-          expectedObjectVersion=v{activeVersion}
-          <span className="ml-1 font-sans text-muted-foreground">
-            {pinnedRequest ? "(제출 payload 고정)" : "(낙관적 잠금)"}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="max-w-64 truncate">
-            Idempotency-Key={activeIdempotencyKey}
-          </span>
-          <button
-            type="button"
-            aria-label="Idempotency key 재발급"
-            className="rounded border p-0.5 text-muted-foreground hover:text-foreground"
-            onClick={handleReissue}
-          >
-            <RefreshCw className="size-3" />
-          </button>
-        </div>
+        <div className="mt-1 text-[10px] text-[#748195]">현재 화면에 선택된 항목만 변경됩니다.</div>
       </div>
 
       {form.parameterFields.length > 0 ? (
@@ -211,9 +181,6 @@ export function RuntimeActionForm({
               {field.isRequired ? (
                 <span className="text-destructive">*</span>
               ) : null}
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {field.dataType}
-              </span>
             </label>
             {field.inputKind === "checkbox" ? (
               <Checkbox
@@ -284,22 +251,17 @@ export function RuntimeActionForm({
             <StatusPill intent="success">
               {runEvidence.status ?? "적용됨"}
             </StatusPill>
-            {runEvidence.idempotentReplay ? (
-              <StatusPill intent="info">idempotent replay</StatusPill>
-            ) : null}
+            {runEvidence.idempotentReplay ? <StatusPill intent="info">안전하게 재확인됨</StatusPill> : null}
           </div>
-          <div className="space-y-0.5 font-mono text-[11px] text-muted-foreground">
-            {runEvidence.actionRunId ? (
-              <div>run_id={runEvidence.actionRunId}</div>
-            ) : null}
-            {runEvidence.objectEditId ? (
-              <div>edit_id={runEvidence.objectEditId}</div>
-            ) : null}
-            {runEvidence.newObjectVersion !== undefined ? (
-              <div>new_version=v{runEvidence.newObjectVersion}</div>
-            ) : null}
-            {successRequestId ? <div>request_id={successRequestId}</div> : null}
-          </div>
+          <p className="text-[11px] text-muted-foreground">변경 내용은 운영 기록에 안전하게 남았습니다.</p>
+          <details className="text-[10px] text-muted-foreground">
+            <summary className="cursor-pointer">운영 기록 번호 보기</summary>
+            <div className="mt-1 space-y-0.5 font-mono">
+              {runEvidence.actionRunId ? <div>{runEvidence.actionRunId}</div> : null}
+              {runEvidence.objectEditId ? <div>{runEvidence.objectEditId}</div> : null}
+              {successRequestId ? <div>{successRequestId}</div> : null}
+            </div>
+          </details>
         </div>
       ) : null}
 
@@ -326,7 +288,7 @@ export function RuntimeActionForm({
           {applyMutation.isRunning
             ? "실행 중..."
             : pinnedRequest
-              ? "동일 요청 재전송"
+              ? "같은 내용 다시 시도"
               : requiresHumanConfirmation && isConfirmationOpen
                 ? "확인하고 실행"
                 : requiresHumanConfirmation
