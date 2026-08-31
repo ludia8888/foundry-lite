@@ -7,7 +7,7 @@ from pathlib import Path
 
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
-BUSINESS_SYSTEM_RESOURCE_URI = "ui://foundry-lite/business-system-v3-231ce0f5d24c.html"
+BUSINESS_SYSTEM_RESOURCE_URI = "ui://foundry-lite/business-system-v4-8e30b3f1cb8f.html"
 BUSINESS_SYSTEM_MIME_TYPE = "text/html;profile=mcp-app"
 _ROOT = Path(__file__).resolve().parents[3] / "apps" / "chatgpt-business-system-widget"
 _HTML_PATH = _ROOT / "index.html"
