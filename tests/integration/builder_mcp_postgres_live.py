@@ -490,8 +490,13 @@ async def _call_confirmed_tool(
     completed = _structured(await session.call_tool(tool_name, approved_arguments))
     is_receipt_reuse_denied = False
     if should_verify_receipt_reuse:
+        exact_replay = _structured(await session.call_tool(tool_name, approved_arguments))
+        assert exact_replay == completed
+        different_inner = dict(cast(Mapping[str, object], arguments["arguments"]))
+        different_inner["expectedFingerprint"] = "different-receipt-use"
+        different_arguments = {**arguments, "arguments": different_inner, "confirmationReceipt": receipt}
         with pytest.raises(MCPError, match="confirmation challenge or receipt cannot be used"):
-            await session.call_tool(tool_name, approved_arguments)
+            await session.call_tool(tool_name, different_arguments)
         is_receipt_reuse_denied = True
     challenges.append(challenge_id)
     receipts.append(receipt)

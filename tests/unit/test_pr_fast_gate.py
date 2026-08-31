@@ -218,6 +218,24 @@ def test_pr_plan_prepares_the_pinned_image_for_selected_sandbox_tests(monkeypatc
     assert "pnpm --silent quality:code-execution-image" in pr_job
 
 
+def test_pr_plan_installs_node_for_a_selected_python_test_that_uses_node_dependencies(
+    monkeypatch, tmp_path: Path
+) -> None:
+    gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_node_dependencies")
+    test = tmp_path / "tests/integration/test_generated_app.py"
+    test.parent.mkdir(parents=True)
+    test.write_text(
+        "import pytest\n@pytest.mark.node_dependencies\ndef test_generated_app(): assert True\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+
+    plan = gate.build_plan(("tests/integration/test_generated_app.py",))
+
+    assert plan.should_install_node is True
+    assert plan.should_build_code_execution_image is False
+
+
 def test_closed_loop_selection_requires_the_pinned_code_execution_image() -> None:
     gate = _load_module(ROOT / "scripts/quality/pr_fast_gate.py", "pr_fast_gate_closed_loop_image")
 
