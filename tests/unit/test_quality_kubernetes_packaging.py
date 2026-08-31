@@ -286,6 +286,13 @@ def test_governed_release_kubernetes_delivery_is_opt_in_and_source_bound() -> No
         "serviceId": "",
         "releaseMode": "immutable_artifact",
         "workloadKind": "deployment",
+        "kubernetes": {
+            "namespace": "",
+            "deploymentName": "",
+            "containerName": "api",
+            "imageRepository": "",
+            "timeoutSeconds": 15,
+        },
     }
     for setting in (
         "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER",
@@ -294,9 +301,15 @@ def test_governed_release_kubernetes_delivery_is_opt_in_and_source_bound() -> No
         "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER",
         "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID",
         "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_DEPLOYMENT_NAME",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_CONTAINER_NAME",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_IMAGE_REPOSITORY",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_TIMEOUT_SECONDS",
     ):
         assert setting in configmap
     assert "if .Values.governedRelease.enabled" in configmap
+    assert 'if eq .Values.governedRelease.deployment.provider "kubernetes"' in configmap
 
 
 def test_runtime_and_migration_database_principals_are_separate() -> None:
