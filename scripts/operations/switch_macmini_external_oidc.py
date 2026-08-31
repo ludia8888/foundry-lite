@@ -180,7 +180,7 @@ def _helm_upgrade(args: argparse.Namespace, chart: Path, kubeconfig: Path, overr
             args.namespace,
             "--kubeconfig",
             str(kubeconfig),
-            "--reuse-values",
+            "--reset-then-reuse-values",
             "--values",
             str(override),
             "--atomic",

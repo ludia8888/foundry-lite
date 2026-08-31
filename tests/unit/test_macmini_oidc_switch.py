@@ -80,7 +80,8 @@ def test_switch_performs_one_atomic_upgrade_then_reconciles_exact_values(
     assert len(upgrades) == 1
     command = upgrades[0]
     assert "--atomic" in command
-    assert "--reuse-values" in command
+    assert "--reset-then-reuse-values" in command
+    assert "--reuse-values" not in command
     assert command[command.index("--namespace") + 1] == "foundry-qa"
     override = tmp_path / "state/run-1-external-oidc.json"
     assert override.stat().st_mode & 0o077 == 0
