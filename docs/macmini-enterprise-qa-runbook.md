@@ -131,7 +131,7 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python \
 
 ## 6. Keycloak과 hosted ChatGPT
 
-Governed Release의 실제 GitHub 후보 게시·병합과 Kubernetes 배포를 켤 때는 tracked values에 계정 좌표나 token을 쓰지 않는다. `governedRelease.enabled=true`와 repository/service 좌표만 QA root 아래 mode `0600` private override에 두고, `governedRelease.source.tokenSecretRef`가 가리키는 실제 token은 runtime application Secret에서만 해석한다. 이 opt-in이 없으면 일반 Mac mini 폐루프는 유지되지만 Release MCP의 외부 source/deployment adapter는 의도적으로 사용할 수 없다.
+Governed Release의 실제 GitHub 후보 게시·병합과 Kubernetes 배포를 켤 때는 tracked values에 계정 좌표나 token을 쓰지 않는다. `governedRelease.enabled=true`, repository/service 좌표, Kubernetes namespace/deployment/container/image repository target만 QA root 아래 mode `0600` private override에 두고, `governedRelease.source.tokenSecretRef`가 가리키는 실제 token은 runtime application Secret에서만 해석한다. Kubernetes target은 현재 release와 같은 namespace, API deployment, API container, digest-pinned API image repository로 좁혀야 한다. 이 opt-in이 없으면 일반 Mac mini 폐루프는 유지되지만 Release MCP의 외부 source/deployment adapter는 의도적으로 사용할 수 없다.
 
 활성화된 chart는 GitHub source 좌표와 Kubernetes의 exact service/deployment/image 좌표를 같은 API runtime에 주입한다. 따라서 실제 hosted run 전에는 source repository가 `ludia8888/foundry-lite`, base branch가 `main`, deployment service가 현재 `foundry-lite` API Deployment와 일치하는지 private override와 rendered ConfigMap에서 다시 확인한다. token 원문은 Helm values, ConfigMap, receipt에 넣지 않는다.
 

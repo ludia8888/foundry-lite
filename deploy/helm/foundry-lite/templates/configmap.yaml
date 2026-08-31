@@ -81,6 +81,13 @@ data:
   FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID: {{ default .Values.api.serviceId .Values.governedRelease.deployment.serviceId | quote }}
   FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE: {{ .Values.governedRelease.deployment.releaseMode | quote }}
   FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_WORKLOAD_KIND: {{ .Values.governedRelease.deployment.workloadKind | quote }}
+{{- if eq .Values.governedRelease.deployment.provider "kubernetes" }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE: {{ default .Release.Namespace .Values.governedRelease.deployment.kubernetes.namespace | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_DEPLOYMENT_NAME: {{ default (include "foundry-lite.fullname" .) .Values.governedRelease.deployment.kubernetes.deploymentName | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_CONTAINER_NAME: {{ .Values.governedRelease.deployment.kubernetes.containerName | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_IMAGE_REPOSITORY: {{ default .Values.images.api.repository .Values.governedRelease.deployment.kubernetes.imageRepository | quote }}
+  FOUNDRY_LITE_KUBERNETES_RELEASE_TIMEOUT_SECONDS: {{ .Values.governedRelease.deployment.kubernetes.timeoutSeconds | quote }}
+{{- end }}
 {{- end }}
 {{- if .Values.auth.localOAuthIssuer }}
   FOUNDRY_LITE_OAUTH_ISSUER: {{ .Values.auth.localOAuthIssuer | quote }}

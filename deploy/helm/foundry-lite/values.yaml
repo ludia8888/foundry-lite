@@ -156,6 +156,12 @@ governedRelease:
     serviceId: ""
     releaseMode: immutable_artifact
     workloadKind: deployment
+    kubernetes:
+      namespace: ""
+      deploymentName: ""
+      containerName: api
+      imageRepository: ""
+      timeoutSeconds: 15
 
 auth:
   profile: oidc
