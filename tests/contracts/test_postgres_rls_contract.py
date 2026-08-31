@@ -17,6 +17,9 @@ from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant
 from foundry_lite.infrastructure.repositories.metadata_repository import (
     SqlAlchemyMetadataRepository,
 )
+from foundry_lite.infrastructure.repositories.osdk_application_repository import (
+    SqlAlchemyOsdkApplicationRepository,
+)
 from foundry_lite.infrastructure.repositories.pipeline_execution_repository import (
     SqlAlchemyPipelineExecutionRepository,
 )
@@ -119,6 +122,71 @@ def test_installed_rls_hook_uses_current_request_tenant(postgres_fixture) -> Non
     assert demo_rows == ["dataset-demo"]
     assert no_tenant_rows == []
     assert other_rows == ["dataset-other"]
+
+
+def test_osdk_oauth_bootstrap_resolves_exact_opaque_ids_without_disabling_rls(postgres_fixture) -> None:
+    engine = postgres_fixture.engine
+    role_name = f"foundry_lite_osdk_oauth_rls_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(db.osdk_applications).values(
+                id="osdk-app-public",
+                tenant_id="tenant-demo",
+                app_api_name="PublicOAuthApp",
+                display_name="Public OAuth App",
+                status="active",
+                owner_user_id="user-demo",
+                created_idempotency_key="public-oauth-app",
+                created_at="2026-08-31T00:00:00Z",
+                updated_at="2026-08-31T00:00:00Z",
+            )
+        )
+        conn.execute(
+            insert(db.osdk_application_clients).values(
+                id="osdk-client-public",
+                tenant_id="tenant-demo",
+                app_id="osdk-app-public",
+                client_id="public-oauth-client",
+                status="active",
+                redirect_uris=[],
+                allowed_scopes=[],
+                access_token_ttl_seconds=300,
+                refresh_token_ttl_seconds=3600,
+                current_secret_id=None,
+                created_at="2026-08-31T00:00:00Z",
+                updated_at="2026-08-31T00:00:00Z",
+            )
+        )
+
+    worker_engine = create_engine(engine.url, future=True)
+    install_postgres_rls_tenant_context(worker_engine)
+    event.listen(worker_engine, "begin", _set_rls_test_role(role_name))
+    repository = SqlAlchemyOsdkApplicationRepository(worker_engine)
+    try:
+        with worker_engine.begin() as conn:
+            assert conn.execute(select(db.osdk_applications.c.id)).scalars().all() == []
+            assert (
+                repository.public_active_application_tenant(transaction=conn, app_id="osdk-app-public") == "tenant-demo"
+            )
+            assert (
+                repository.public_active_application_client_tenant(
+                    transaction=conn,
+                    app_id="osdk-app-public",
+                    client_id="public-oauth-client",
+                )
+                == "tenant-demo"
+            )
+            assert (
+                repository.public_active_application_client_tenant(
+                    transaction=conn,
+                    app_id="osdk-app-public",
+                    client_id="missing-client",
+                )
+                is None
+            )
+    finally:
+        worker_engine.dispose()
 
 
 def test_protected_bootstrap_is_idempotent_under_runtime_rls_role(postgres_fixture, tmp_path: Path) -> None:

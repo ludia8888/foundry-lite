@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, desc, insert, or_, select, update
+from sqlalchemy import and_, delete, desc, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -97,6 +97,14 @@ class SqlAlchemyOsdkApplicationRepository:
     def public_active_application_tenant(self, *, transaction: Any, app_id: str) -> str | None:
         """Return the opaque app's tenant only to the OAuth bootstrap boundary."""
 
+        if transaction.dialect.name == "postgresql":
+            return cast(
+                str | None,
+                transaction.execute(
+                    text("SELECT public.foundry_lite_active_osdk_application_tenant(:app_id)"),
+                    {"app_id": app_id},
+                ).scalar_one_or_none(),
+            )
         return cast(
             str | None,
             transaction.execute(
@@ -109,6 +117,14 @@ class SqlAlchemyOsdkApplicationRepository:
     def public_active_application_client_tenant(self, *, transaction: Any, app_id: str, client_id: str) -> str | None:
         """Resolve an exact active pair before its tenant-scoped secret is checked."""
 
+        if transaction.dialect.name == "postgresql":
+            return cast(
+                str | None,
+                transaction.execute(
+                    text("SELECT public.foundry_lite_active_osdk_application_client_tenant(:app_id, :client_id)"),
+                    {"app_id": app_id, "client_id": client_id},
+                ).scalar_one_or_none(),
+            )
         statement = (
             select(db.osdk_application_clients.c.tenant_id)
             .join(
