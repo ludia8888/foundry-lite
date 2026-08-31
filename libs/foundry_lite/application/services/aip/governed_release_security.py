@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 
 from foundry_lite.application.ports import (
     AiRunRepository,
@@ -51,6 +52,7 @@ from foundry_lite.application.services.aip.governed_release_terminal_evidence im
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.security.policy import PolicyService
+from foundry_lite.security.tenant_context import tenant_context
 
 JsonObject = Mapping[str, object]
 
@@ -85,7 +87,7 @@ class GovernedReleaseSecurityLedger:
         receipt_secret = _new_id("governed_release_widget_secret")
         receipt_id = widget_receipt_id(receipt_secret)
         record = preparation_record(ctx, binding, run_id, receipt_id, now, expires_at)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self._create_session(conn, ctx, binding, now)
             existing = self.repository.insert_execution_run_or_get_existing(transaction=conn, record=record)
             if existing is not None:
@@ -104,7 +106,7 @@ class GovernedReleaseSecurityLedger:
         binding: GovernedReleaseBinding,
     ) -> GovernedReleaseReplay | None:
         self.authorize(ctx, binding)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             ledger = self.repository.ledger_for_run(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -121,7 +123,7 @@ class GovernedReleaseSecurityLedger:
     ) -> bool:
         self.authorize(ctx, binding)
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self._create_session(conn, ctx, binding, now)
             existing = self.repository.insert_execution_run_or_get_existing(
                 transaction=conn,
@@ -153,7 +155,7 @@ class GovernedReleaseSecurityLedger:
         """Acquire one stale-run recovery lease without asking for a second receipt."""
         self.authorize(ctx, binding)
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             return self._claim_recovery(conn, ctx, run_id, binding, now)
 
     def is_fresh_failed_retry(
@@ -166,7 +168,7 @@ class GovernedReleaseSecurityLedger:
         """Preflight a fresh receipt so terminal replay never consumes action quota."""
         self.authorize(ctx, binding)
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             run = self.repository.execution_run_by_id(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
             if run is None or run.get("status") != "failed":
                 return False
@@ -193,7 +195,7 @@ class GovernedReleaseSecurityLedger:
         """Reopen only a proven no-commit failure with a fresh human receipt."""
         self.authorize(ctx, binding)
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             run = self.repository.execution_run_by_id(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
             if run is None or run.get("status") != "failed":
                 return None
@@ -293,7 +295,7 @@ class GovernedReleaseSecurityLedger:
     ) -> str:
         now = _now()
         tool_record = run_evidence.tool_record(ctx, run_id, binding, output, now)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self._complete_run(conn, ctx, run_id, binding, tool_record, execution_attempt, now)
         return tool_record.id
 
@@ -352,7 +354,7 @@ class GovernedReleaseSecurityLedger:
     ) -> None:
         now = _now()
         error = run_evidence.execution_error(ctx, exc, is_known_not_committed=is_known_not_committed)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             run = self.repository.execution_run_by_id(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
             if run is None or run.get("status") != "running" or recovery_attempt(run) != execution_attempt:
                 return
@@ -389,7 +391,7 @@ class GovernedReleaseSecurityLedger:
         execution_attempt: int = 0,
     ) -> None:
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             run = self.repository.execution_run_by_id(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -470,6 +472,14 @@ class GovernedReleaseSecurityLedger:
                 last_activity_at=now,
             ),
         )
+
+    @contextmanager
+    def _transaction(self, ctx: RequestContext) -> Iterator[TransactionContext]:
+        """Begin every release-ledger transaction for the authenticated tenant."""
+
+        with tenant_context(ctx.tenant_id):
+            with self.engine.begin() as conn:
+                yield conn
 
 
 __all__ = ["GovernedReleaseSecurityLedger"]

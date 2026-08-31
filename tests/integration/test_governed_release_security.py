@@ -22,7 +22,8 @@ from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.ai_run_repository import SqlAlchemyAiRunRepository
 from foundry_lite.security.policy import PolicyService
-from sqlalchemy import create_engine, select
+from foundry_lite.security.tenant_context import current_tenant_id
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.engine import Engine
 
 _APP_ID = "release-security-app"
@@ -54,6 +55,24 @@ def security_harness(tmp_path: Path) -> SecurityHarness:
     repository = SqlAlchemyAiRunRepository(engine)
     ledger = GovernedReleaseSecurityLedger(engine, repository, PolicyService(), _AuditSpy())
     return ledger, engine, repository
+
+
+def test_release_security_binds_authenticated_tenant_before_ledger_transactions(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'tenant-context.db'}", future=True)
+    db.create_database(engine)
+    observed_tenants: list[str | None] = []
+    event.listen(engine, "begin", lambda _conn: observed_tenants.append(current_tenant_id()))
+    repository = SqlAlchemyAiRunRepository(engine)
+    ledger = GovernedReleaseSecurityLedger(engine, repository, PolicyService(), _AuditSpy())
+    ctx = _context()
+    binding = _binding(ctx)
+
+    prepared = ledger.prepare(ctx, binding)
+    ledger.replay(ctx, action_run_id(binding), binding)
+
+    assert isinstance(prepared["widgetConfirmationToken"], str)
+    assert observed_tenants == [ctx.tenant_id, ctx.tenant_id]
+    assert current_tenant_id() is None
 
 
 def test_confirmation_expires_before_it_can_claim_an_action(
