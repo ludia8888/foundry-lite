@@ -995,7 +995,7 @@ def test_builder_mcp_confirmation_receipt_is_human_idempotent_and_one_time(found
         "governance",
         "tenant:tenant-demo",
         "create_foundry_project",
-        {"displayName": "Receipt Once", "idempotencyKey": "receipt-once-project"},
+        {"displayName": "Different Receipt Use", "idempotencyKey": "different-receipt-use"},
     )
     reuse_payload["params"]["arguments"]["confirmationReceipt"] = receipt
     receipt_reuse = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=reuse_payload).json()
@@ -1303,6 +1303,7 @@ def test_builder_widget_recovery_and_exact_mutation_replay_do_not_reconsume_tool
     payload["params"]["arguments"]["confirmationReceipt"] = receipt
     completed = client.post(path, headers=session_headers, json=payload).json()["result"]
     count_after_mutation = tool_count()
+    payload["id"] = "widget-quota-project-host-recovery"
     replayed = client.post(path, headers=session_headers, json=payload).json()["result"]
     count_after_mutation_replay = tool_count()
     denied = client.post(
@@ -2160,22 +2161,32 @@ def test_builder_mcp_requires_human_confirmation_receipt_and_rejects_untrusted_o
     call = _mcp_patch_call(str(branch["id"]), "write-denied")
 
     session_headers = _builder_session_headers(client, app_id, headers)
+    malformed = _mcp_patch_call(str(branch["id"]), "write-malformed")
+    malformed["params"]["arguments"]["arguments"]["upsertResources"] = ["PatientCareWorkItem"]
+    malformed_response = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=malformed)
     denied = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=call)
     challenge = denied.json()["result"]["structuredContent"]
     receipt = _approve_mcp_challenge(client, app_id, str(challenge["challengeId"]), headers)
-    approved_call = _mcp_patch_call(str(branch["id"]), "write-denied")
+    approved_call = _mcp_patch_call(str(branch["id"]), "write-approved-host-call")
     approved_call["params"]["arguments"]["confirmationReceipt"] = receipt
-    approved = client.post(f"/mcp/builder/{app_id}", headers=session_headers, json=approved_call)
+    widget_session_headers = _builder_session_headers(client, app_id, headers)
+    approved = client.post(f"/mcp/builder/{app_id}", headers=widget_session_headers, json=approved_call)
+    approved_call["id"] = "write-approved-host-recovery"
+    recovery_session_headers = _builder_session_headers(client, app_id, headers)
+    recovered = client.post(f"/mcp/builder/{app_id}", headers=recovery_session_headers, json=approved_call)
     rejected_origin = client.post(
         f"/mcp/builder/{app_id}",
         headers={**headers, "Origin": "https://attacker.invalid"},
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
     )
 
+    assert malformed_response.json()["error"]["data"]["type"] == "VALIDATION_FAILED"
     assert denied.status_code == 200
     assert challenge["status"] == "approval_required"
     assert approved.status_code == 200
     assert approved.json()["result"]["structuredContent"]["changeSummary"] == "Add Restaurant"
+    assert recovered.json()["result"]["isReplayed"] is True
+    assert recovered.json()["result"]["aiRunId"] == approved.json()["result"]["aiRunId"]
     assert rejected_origin.status_code == 400
     assert len(foundry.ontology.branch_diff(str(branch["id"]), ctx=FDE_USER)["resources"]) == 1
 

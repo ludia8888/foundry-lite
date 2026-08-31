@@ -181,6 +181,37 @@ def _schema(properties: dict[str, object], required: list[str]) -> dict[str, obj
     return {"type": "object", "properties": properties, "required": required, "additionalProperties": False}
 
 
+def _ontology_upsert_resource_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "description": (
+            "One complete Ontology resource. Put the resource kind beside a definition object; "
+            "for an object type the definition includes apiName, primaryKey, backing, and properties."
+        ),
+        "properties": {
+            "kind": {"type": "string", "enum": ["objectType", "linkType", "actionType"]},
+            "definition": {
+                "type": "object",
+                "properties": {"apiName": {"type": "string", "minLength": 1}},
+                "required": ["apiName"],
+                "additionalProperties": True,
+            },
+        },
+        "required": ["kind", "definition"],
+        "additionalProperties": False,
+    }
+
+
+def _ontology_delete_resource_schema() -> dict[str, object]:
+    return _schema(
+        {
+            "kind": {"type": "string", "enum": ["objectType", "linkType", "actionType"]},
+            "apiName": {"type": "string", "minLength": 1},
+        },
+        ["kind", "apiName"],
+    )
+
+
 def _tool(
     tool_id: str,
     description: str,
@@ -272,8 +303,12 @@ _FDE_TOOLS = (
         "Atomically patch supported resources on the selected Ontology branch; never edits active Ontology.",
         "ontology:validate",
         {
-            "upsertResources": {"type": "array"},
-            "deleteResources": {"type": "array"},
+            "upsertResources": {
+                "type": "array",
+                "items": _ontology_upsert_resource_schema(),
+                "description": "Resources to create or replace; every entry must be an object, never a string.",
+            },
+            "deleteResources": {"type": "array", "items": _ontology_delete_resource_schema()},
             "changeSummary": {"type": "string"},
         },
         ["upsertResources", "deleteResources", "changeSummary"],

@@ -229,9 +229,16 @@ def tool_domain_error(exc: FdePlatformToolError | FdeOntologyToolError) -> Permi
     return ValidationFailed(scrub_error_text(exc.detail), details={"reason": scrub_error_text(exc.reason)})
 
 
-def mcp_run_id(ctx: RequestContext, request: FdeMcpCallLike) -> str:
-    identity = internal_mcp_request_id(request.json_rpc_id)
-    raw = ":".join((ctx.tenant_id, request.application_id, request.session_id, identity))
+def mcp_run_id(
+    ctx: RequestContext,
+    request: FdeMcpCallLike,
+    write_binding: FdeMcpRequestBinding | None = None,
+) -> str:
+    if write_binding is not None:
+        raw = ":".join((ctx.tenant_id, request.application_id, write_binding.execution_fingerprint))
+    else:
+        identity = internal_mcp_request_id(request.json_rpc_id)
+        raw = ":".join((ctx.tenant_id, request.application_id, request.session_id, identity))
     return f"aip-mcp-{hashlib.sha256(raw.encode()).hexdigest()[:32]}"
 
 

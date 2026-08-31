@@ -271,8 +271,9 @@ class FdeMcpGateway:
         if not isinstance(schema, Mapping):
             raise ValidationFailed("Builder MCP tool input schema is invalid")
         validate_outer_shape(request, schema)
-        run_id = _mcp_run_id(ctx, request)
-        replay = self.security_ledger.replay(ctx, run_id, _binding(ctx, request, spec))
+        binding = _binding(ctx, request, spec)
+        run_id = _mcp_run_id(ctx, request, binding if spec.effect != "READ" else None)
+        replay = self.security_ledger.replay(ctx, run_id, binding)
         if replay is not None:
             return _replay_result_payload(run_id, replay)
         try:
@@ -311,8 +312,8 @@ class FdeMcpGateway:
         catalog: tuple[ToolSpec, ...],
         spec: ToolSpec,
     ) -> dict[str, object]:
-        run_id = _mcp_run_id(ctx, request)
         binding = _binding(ctx, request, spec)
+        run_id = _mcp_run_id(ctx, request, binding if spec.effect != "READ" else None)
         early_result = self._replay_or_confirm(ctx, request, spec, run_id, binding)
         if early_result is not None:
             return early_result

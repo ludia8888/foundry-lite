@@ -54,6 +54,14 @@ class FdeMcpRequestBinding:
     def fingerprint(self) -> str:
         return hash_json(self.payload)
 
+    @property
+    def execution_fingerprint(self) -> str:
+        """Identify one exact write independently of host-assigned request/session ids."""
+
+        payload = self.payload
+        payload.pop("sessionId")
+        return hash_json(payload)
+
     def as_recorded_session(self, budget: Mapping[str, object]) -> FdeMcpRequestBinding:
         """Re-key this binding onto the MCP session the challenge was recorded under.
 
@@ -112,6 +120,7 @@ def execution_binding_budget(binding: FdeMcpRequestBinding) -> dict[str, object]
         "maxModelCalls": 0,
         "requestBinding": binding.payload,
         "requestBindingHash": binding.fingerprint,
+        "executionBindingHash": binding.execution_fingerprint,
     }
 
 
@@ -300,6 +309,21 @@ def binding_matches(run: Mapping[str, object], binding: FdeMcpRequestBinding) ->
         and run.get("compiled_prompt_hash") == binding.fingerprint
         and isinstance(budget, Mapping)
         and budget.get("requestBindingHash") == binding.fingerprint
+    )
+
+
+def execution_binding_matches(run: Mapping[str, object], binding: FdeMcpRequestBinding) -> bool:
+    """Allow an exact host recovery to cross only the ephemeral MCP transport session."""
+
+    budget = run.get("budget_json")
+    if not isinstance(budget, Mapping) or "executionBindingHash" not in budget:
+        return binding_matches(run, binding)
+    recorded_hash = budget.get("requestBindingHash")
+    return (
+        run.get("actor_user_id") == binding.actor_user_id
+        and isinstance(recorded_hash, str)
+        and run.get("compiled_prompt_hash") == recorded_hash
+        and budget.get("executionBindingHash") == binding.execution_fingerprint
     )
 
 

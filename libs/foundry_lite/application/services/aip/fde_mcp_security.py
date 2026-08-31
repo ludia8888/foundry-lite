@@ -14,9 +14,6 @@ from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import 
     FdeMcpRequestBinding,
 )
 from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
-    binding_matches as _binding_matches,
-)
-from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
     challenge_binding as _challenge_binding,
 )
 from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
@@ -33,6 +30,9 @@ from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import 
 )
 from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
     confirmation_conflict as _confirmation_conflict,
+)
+from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
+    execution_binding_matches as _execution_binding_matches,
 )
 from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import (
     existing_challenge_payload as _existing_challenge_payload,
@@ -90,7 +90,7 @@ class FdeMcpSecurityLedger:
             ledger = self.repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
             if ledger is None:
                 return None
-            if not _binding_matches(ledger["run"], binding):
+            if not _execution_binding_matches(ledger["run"], binding):
                 conflict_reason = "request_binding_mismatch"
                 self._append_conflict(conn, ctx, run_id, ledger["events"], conflict_reason, binding)
             elif ledger["run"].get("status") == "failed":
