@@ -16,6 +16,13 @@ from foundry_lite_api import runtime as api_runtime
 ROOT = Path(__file__).resolve().parents[2]
 BLUEPRINT = ROOT / "deploy" / "render" / "render.staging-bootstrap.yaml"
 DOCKERFILE = ROOT / "deploy" / "render" / "Dockerfile.api"
+KUBERNETES_DOCKERFILE = ROOT / "deploy" / "kubernetes" / "Dockerfile.api"
+MCP_APP_ASSET_DIRECTORIES = (
+    "chatgpt-builder-widget",
+    "chatgpt-domain-os-widget",
+    "chatgpt-business-system-widget",
+    "chatgpt-release-widget",
+)
 
 
 def test_protected_runtime_host_requires_postgres_and_active_durable_mount(tmp_path: Path) -> None:
@@ -177,3 +184,11 @@ def test_api_container_is_non_root_and_binds_render_port_through_a_fixed_entrypo
     assert "postgresql+psycopg://" in normalization_script
     assert "normalize_render_environment.sh" in start_script
     assert "normalize_render_environment.sh" in migration_script
+
+
+@pytest.mark.parametrize("dockerfile_path", (DOCKERFILE, KUBERNETES_DOCKERFILE))
+def test_api_container_packages_every_mcp_app_resource(dockerfile_path: Path) -> None:
+    dockerfile = dockerfile_path.read_text(encoding="utf-8")
+
+    for directory in MCP_APP_ASSET_DIRECTORIES:
+        assert f"COPY apps/{directory} ./apps/{directory}" in dockerfile
