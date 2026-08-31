@@ -273,6 +273,32 @@ def test_kafka_outbox_subscription_is_packaged_for_runtime_and_macmini() -> None
     assert ".Values.external.kafka.subscriptionsJson" in configmap
 
 
+def test_governed_release_kubernetes_delivery_is_opt_in_and_source_bound() -> None:
+    values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
+    configmap = (ROOT / "deploy/helm/foundry-lite/templates/configmap.yaml").read_text(encoding="utf-8")
+
+    governed = values["governedRelease"]
+    assert governed["enabled"] is False
+    assert governed["source"]["provider"] == "github"
+    assert governed["source"]["tokenSecretRef"] == ""
+    assert governed["deployment"] == {
+        "provider": "kubernetes",
+        "serviceId": "",
+        "releaseMode": "immutable_artifact",
+        "workloadKind": "deployment",
+    }
+    for setting in (
+        "FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER",
+        "FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY_ID",
+        "FOUNDRY_LITE_GITHUB_RELEASE_TOKEN_SECRET_REF",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID",
+        "FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE",
+    ):
+        assert setting in configmap
+    assert "if .Values.governedRelease.enabled" in configmap
+
+
 def test_runtime_and_migration_database_principals_are_separate() -> None:
     values = yaml.safe_load((ROOT / "deploy/helm/foundry-lite/values.yaml").read_text(encoding="utf-8"))
     jobs = (ROOT / "deploy/helm/foundry-lite/templates/jobs.yaml").read_text(encoding="utf-8")

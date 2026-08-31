@@ -64,6 +64,24 @@ data:
 {{- if .Values.mcp.resourceAudienceScopePrefix }}
   FOUNDRY_LITE_MCP_RESOURCE_AUDIENCE_SCOPE_PREFIX: {{ .Values.mcp.resourceAudienceScopePrefix | quote }}
 {{- end }}
+{{- if .Values.governedRelease.enabled }}
+  FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_REQUIRED: "true"
+  FOUNDRY_LITE_GOVERNED_RELEASE_SOURCE_PROVIDER: {{ .Values.governedRelease.source.provider | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY_ID: {{ .Values.governedRelease.source.repositoryId | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_OWNER: {{ .Values.governedRelease.source.owner | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_REPOSITORY: {{ .Values.governedRelease.source.repository | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_BASE_REF: {{ .Values.governedRelease.source.baseRef | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_HEAD_PREFIX: {{ .Values.governedRelease.source.headPrefix | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_TOKEN_SECRET_REF: {{ .Values.governedRelease.source.tokenSecretRef | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_MERGE_METHOD: {{ .Values.governedRelease.source.mergeMethod | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_MINIMUM_APPROVALS: {{ .Values.governedRelease.source.minimumApprovals | quote }}
+  FOUNDRY_LITE_GITHUB_RELEASE_BYPASS_POLICY_VERIFIED: {{ .Values.governedRelease.source.bypassPolicyVerified | quote }}
+  FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_REQUIRED: "true"
+  FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_PROVIDER: {{ .Values.governedRelease.deployment.provider | quote }}
+  FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_SERVICE_ID: {{ default .Values.api.serviceId .Values.governedRelease.deployment.serviceId | quote }}
+  FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_RELEASE_MODE: {{ .Values.governedRelease.deployment.releaseMode | quote }}
+  FOUNDRY_LITE_GOVERNED_RELEASE_DEPLOYMENT_WORKLOAD_KIND: {{ .Values.governedRelease.deployment.workloadKind | quote }}
+{{- end }}
 {{- if .Values.auth.localOAuthIssuer }}
   FOUNDRY_LITE_OAUTH_ISSUER: {{ .Values.auth.localOAuthIssuer | quote }}
 {{- end }}
