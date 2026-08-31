@@ -230,6 +230,11 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
     changed_python_tests = _changed_python_tests(paths)
     selected_tests, untested, dropped_linked = _source_test_evidence(paths, existing_tests, changed_python_tests)
     should_build_code_execution_image = _selected_tests_require_code_execution_image(selected_tests)
+    should_install_node = (
+        _should_install_node_runtime(paths)
+        or _selected_tests_require_node_dependencies(selected_tests)
+        or should_build_code_execution_image
+    )
     return PullRequestPlan(
         changed_files=paths,
         selected_tests=selected_tests,
@@ -239,7 +244,7 @@ def build_plan(paths: tuple[str, ...]) -> PullRequestPlan:
         has_frontend=any(_is_frontend_path(path) for path in paths),
         has_sdk_contract=any(_needs_sdk_contract(path) for path in paths),
         is_docs_only=bool(paths) and all(_is_docs_path(path) for path in paths),
-        should_install_node=_should_install_node_runtime(paths) or should_build_code_execution_image,
+        should_install_node=should_install_node,
         should_build_code_execution_image=should_build_code_execution_image,
     )
 
@@ -262,6 +267,12 @@ def _should_install_node_runtime(paths: tuple[str, ...]) -> bool:
 def _selected_tests_require_code_execution_image(selected_tests: Sequence[str]) -> bool:
     """Detect focused tests whose contract executes real user code in the pinned sandbox."""
     marker = "pytest.mark.code_execution_image"
+    return any(marker in (ROOT / path).read_text(encoding="utf-8") for path in selected_tests)
+
+
+def _selected_tests_require_node_dependencies(selected_tests: Sequence[str]) -> bool:
+    """Install Node packages when any focused Python test shells into the JS toolchain."""
+    marker = "pytest.mark.node_dependencies"
     return any(marker in (ROOT / path).read_text(encoding="utf-8") for path in selected_tests)
 
 

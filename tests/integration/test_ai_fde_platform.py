@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
 from foundry_lite.application.services.aip.fde_mcp_widget_confirmation import widget_token_id
@@ -1973,6 +1974,7 @@ def _property_maintenance_domain_brief() -> dict[str, object]:
     }
 
 
+@pytest.mark.node_dependencies
 def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
     foundry: Any, monkeypatch: Any, tmp_path: Any
 ) -> None:
