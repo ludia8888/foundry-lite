@@ -40,6 +40,10 @@ COPY alembic.ini ./
 COPY apps/api ./apps/api
 COPY apps/cli ./apps/cli
 COPY apps/worker ./apps/worker
+COPY apps/chatgpt-builder-widget ./apps/chatgpt-builder-widget
+COPY apps/chatgpt-domain-os-widget ./apps/chatgpt-domain-os-widget
+COPY apps/chatgpt-business-system-widget ./apps/chatgpt-business-system-widget
+COPY apps/chatgpt-release-widget ./apps/chatgpt-release-widget
 COPY libs ./libs
 COPY migrations ./migrations
 COPY scripts/operations ./scripts/operations
