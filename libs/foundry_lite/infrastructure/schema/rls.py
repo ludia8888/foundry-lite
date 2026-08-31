@@ -56,6 +56,7 @@ def apply_postgres_rls(engine: Engine) -> None:
         for table in tenant_rls_tables():
             _apply_tenant_rls_policy(conn, table)
         _apply_dataset_schema_rls_policy(conn)
+        _apply_public_osdk_lookup_functions(conn)
 
 
 def set_postgres_tenant_context(conn: Connection, tenant_id: str, *, is_local: bool = True) -> None:
@@ -92,6 +93,61 @@ def _apply_dataset_schema_rls_policy(conn: Connection) -> None:
     conn.execute(text(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY"))
     conn.execute(text(f"DROP POLICY IF EXISTS {policy_name} ON {table_name}"))
     conn.execute(text(f"CREATE POLICY {policy_name} ON {table_name} USING ({condition}) WITH CHECK ({condition})"))
+
+
+def _apply_public_osdk_lookup_functions(conn: Connection) -> None:
+    """Install narrowly scoped OAuth bootstrap lookups that preserve table RLS.
+
+    OAuth protected-resource discovery begins before a tenant-bearing token exists.
+    These functions expose only the tenant identifier for an exact active opaque app
+    (or app/client pair); every subsequent read still runs with that tenant's RLS
+    context. A fixed search path and fully qualified tables keep SECURITY DEFINER from
+    resolving attacker-controlled objects.
+    """
+
+    conn.execute(
+        text(
+            """
+            CREATE OR REPLACE FUNCTION public.foundry_lite_active_osdk_application_tenant(requested_app_id text)
+            RETURNS text
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = pg_catalog
+            AS $function$
+                SELECT application.tenant_id
+                FROM public.osdk_applications AS application
+                WHERE application.id = requested_app_id AND application.status = 'active'
+            $function$
+            """
+        )
+    )
+    conn.execute(
+        text(
+            """
+            CREATE OR REPLACE FUNCTION public.foundry_lite_active_osdk_application_client_tenant(
+                requested_app_id text,
+                requested_client_id text
+            )
+            RETURNS text
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = pg_catalog
+            AS $function$
+                SELECT application.tenant_id
+                FROM public.osdk_applications AS application
+                JOIN public.osdk_application_clients AS client
+                  ON client.app_id = application.id
+                 AND client.tenant_id = application.tenant_id
+                WHERE application.id = requested_app_id
+                  AND application.status = 'active'
+                  AND client.client_id = requested_client_id
+                  AND client.status = 'active'
+            $function$
+            """
+        )
+    )
 
 
 def _table_identifier(conn: Connection, table: Table) -> str:
