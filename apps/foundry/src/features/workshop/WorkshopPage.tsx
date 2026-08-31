@@ -1,4 +1,4 @@
-import type { FoundryLiteApiError, ResourceItem } from "@foundry-lite/sdk";
+import type { FoundryLiteApiError } from "@foundry-lite/sdk";
 import {
   createRequestId,
   normalizeFoundryLiteError,
@@ -19,7 +19,6 @@ import {
   isActiveOntologyMissingError,
 } from "@/components/shared/OntologyRequiredState";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { RequestTelemetry } from "@/components/shared/RequestTelemetry";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { cn } from "@/lib/utils";
 
@@ -62,7 +61,6 @@ export default function WorkshopPage() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(
     () => definition.version === 0,
   );
-  const [resource, setResource] = useState<ResourceItem | null>(null);
   const [persistenceError, setPersistenceError] =
     useState<FoundryLiteApiError | null>(null);
   const [isLoadingDefinition, setIsLoadingDefinition] = useState(true);
@@ -98,7 +96,6 @@ export default function WorkshopPage() {
       .then((result) => {
         if (!isActive) return;
         const savedResource = findWorkshopAppResource(result.items, sourceRef);
-        setResource(savedResource);
         const savedDefinition = savedResource
           ? appDefinitionFromResource(savedResource)
           : null;
@@ -147,7 +144,6 @@ export default function WorkshopPage() {
         { idempotencyKey: createRequestId("workshop-save") },
       );
       const persisted = appDefinitionFromResource(updated) ?? saved;
-      setResource(updated);
       setSavedVersion(persisted.version);
       if (hasUserEditedRef.current) {
         setHasUnsavedChanges(true);
@@ -173,8 +169,8 @@ export default function WorkshopPage() {
     return (
       <div className="space-y-4 p-4">
         <PageHeader
-          title="Workshop"
-          description="객체 뷰 조합으로 최소 업무 앱 구성"
+          title="업무 앱 만들기"
+          description="회사 업무에 맞는 화면을 준비하고 있습니다"
         />
         <LoadingState rowCount={6} />
       </div>
@@ -185,8 +181,8 @@ export default function WorkshopPage() {
     return (
       <div className="space-y-4 p-4">
         <PageHeader
-          title="Workshop"
-          description="객체 뷰 조합으로 최소 업무 앱 구성"
+          title="업무 앱 만들기"
+          description="회사 업무 화면을 불러오지 못했습니다"
         />
         <ErrorState
           error={workspace.error}
@@ -198,55 +194,54 @@ export default function WorkshopPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[#d5dce1] bg-white px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-6 items-center justify-center rounded bg-[#7548c9] text-[12px] font-bold text-white">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#e1e6eb] bg-white px-3 py-2 sm:h-16 sm:flex-nowrap sm:gap-3 sm:px-5 sm:py-0">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:flex-none">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-[#6651c7] text-[13px] font-black text-white">
             W
           </span>
-          <span className="truncate text-[13px] font-semibold text-[#1c2127]">
-            Workshop › {definition.name}
+          <span className="truncate text-[14px] font-bold text-[#1c2127]">
+            {definition.name}
           </span>
           {workspace.versionLabel ? (
-            <StatusPill intent="neutral">{workspace.versionLabel}</StatusPill>
+            <StatusPill intent="success">업무 데이터 연결됨</StatusPill>
           ) : isOntologyMissing ? (
-            <StatusPill intent="warning">온톨로지 미연결</StatusPill>
+            <StatusPill intent="warning">업무 데이터 미연결</StatusPill>
           ) : null}
         </div>
 
-        <div className="ml-4 flex items-center rounded border border-[#d5dce1] p-0.5">
+        <div className="order-3 grid w-full grid-cols-2 items-center rounded-lg border border-[#d5dce1] p-0.5 sm:order-none sm:ml-4 sm:flex sm:w-auto">
           <button
             type="button"
             onClick={() => setMode("builder")}
             className={cn(
-              "flex h-7 items-center gap-1.5 rounded px-3 text-[12px] font-medium",
+              "flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 text-[12px] font-medium sm:h-7 sm:px-3",
               mode === "builder"
                 ? "bg-[#e8f0fb] text-[#215db0]"
                 : "text-[#5f6b7c] hover:bg-muted/50",
             )}
           >
             <Pencil className="size-3.5" />
-            빌더
+            AI FDE 검토
           </button>
           <button
             type="button"
             onClick={() => setMode("runtime")}
             className={cn(
-              "flex h-7 items-center gap-1.5 rounded px-3 text-[12px] font-medium",
+              "flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 text-[12px] font-medium sm:h-7 sm:px-3",
               mode === "runtime"
                 ? "bg-[#e8f0fb] text-[#215db0]"
                 : "text-[#5f6b7c] hover:bg-muted/50",
             )}
           >
             <Eye className="size-3.5" />
-            런타임
+            사용자 미리보기
           </button>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          <RequestTelemetry />
+        <div className="order-4 flex w-full items-center gap-2 sm:order-none sm:ml-auto sm:w-auto">
           {definition.savedAt ? (
-            <span className="hidden font-mono text-[11px] text-muted-foreground lg:inline">
-              서버 저장 v{definition.version}
+            <span className="hidden text-[11px] font-medium text-muted-foreground lg:inline">
+              변경사항 게시됨
             </span>
           ) : null}
           {isLoadingDefinition ? (
@@ -258,37 +253,35 @@ export default function WorkshopPage() {
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={!isDirty || isSavingDefinition}
-                className="flex h-8 items-center gap-1.5 rounded bg-[#238551] px-3 text-[13px] font-semibold text-white shadow-sm hover:bg-[#1c7048] disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-8 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded bg-[#238551] px-3 text-[13px] font-semibold text-white shadow-sm hover:bg-[#1c7048] disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
               >
                 <Save className="size-3.5" />
-                {isSavingDefinition ? "저장 중" : "저장 후 게시"}
+                {isSavingDefinition ? "게시 중" : "변경사항 게시"}
               </button>
               <button
                 type="button"
                 onClick={() => void handleEnterRuntime()}
-                className="flex h-8 items-center gap-1.5 rounded border border-[#d5dce1] bg-white px-3 text-[13px] font-medium text-[#404854] hover:bg-muted/40"
+                className="flex h-8 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded border border-[#d5dce1] bg-white px-3 text-[13px] font-medium text-[#404854] hover:bg-muted/40 sm:flex-none"
               >
                 <Eye className="size-3.5" />
-                보기
+                사용자 화면 보기
               </button>
             </>
           ) : null}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 border-b border-[#e4e9ed] bg-[#fbfcfd] px-4 py-1.5">
+      <div className="flex min-h-9 flex-wrap items-center gap-2 border-b border-[#e4e9ed] bg-[#f8fafb] px-3 py-2 sm:px-5">
         <Info className="size-3.5 text-[#8f99a8]" />
-        <span className="text-[11px] text-muted-foreground">
-          앱 정의는 서버 Resources 카탈로그에 저장됩니다
-          {resource ? ` · ${resource.rid}` : ""}. GPT 미리보기와 외부 앱이
-          같은 테마·페이지·컴포넌트·Action 정의를 사용합니다.
+        <span className="hidden min-w-0 flex-1 text-[11px] text-muted-foreground md:inline">
+          여기서 확인한 화면과 업무 규칙은 GPT 안의 화면과 외부 앱에 동일하게 적용됩니다.
         </span>
         {isOntologyMissing ? (
           <Link
             to="/ontology"
             className="text-[11px] font-semibold text-[#215db0] hover:underline"
           >
-            객체·액션 바인딩을 위해 Ontology 연결
+            업무 데이터와 실행 규칙 연결하기
           </Link>
         ) : null}
         {persistenceError ? (
@@ -296,13 +289,13 @@ export default function WorkshopPage() {
         ) : null}
         {isOntologyMissing ? (
           <StatusPill intent="warning">
-            빌더 편집 가능 · 런타임은 Ontology 필요
+            화면 검토 가능 · 실제 업무 사용 전 데이터 연결 필요
           </StatusPill>
         ) : runnable ? (
-          <StatusPill intent="success">최소 업무 앱 구성 완료</StatusPill>
+          <StatusPill intent="success">사용자 화면 준비 완료</StatusPill>
         ) : (
           <StatusPill intent="warning">
-            테이블·상세·액션 위젯을 모두 배치하세요
+            목록·상세·다음 업무 화면을 확인해 주세요
           </StatusPill>
         )}
       </div>

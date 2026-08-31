@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from foundry_lite.application.services.aip.fde_workshop_contract import (
     action_widget,
+    app_presentation,
     app_shell,
     app_theme,
     date_property,
@@ -23,9 +24,9 @@ from foundry_lite.application.services.aip.fde_workshop_contract import (
 
 JsonObject = Mapping[str, object]
 
-WORKSHOP_COMPONENT_CATALOG_VERSION = "foundry-lite-workshop-components/v3"
+WORKSHOP_COMPONENT_CATALOG_VERSION = "foundry-lite-workshop-components/v4"
 WORKSHOP_METADATA_KIND = "foundry-lite.workshop.app-definition"
-WORKSHOP_METADATA_SCHEMA_VERSION = 3
+WORKSHOP_METADATA_SCHEMA_VERSION = 4
 
 
 def build_workshop_app_definition(
@@ -45,6 +46,7 @@ def build_workshop_app_definition(
         "purpose": str(blueprint.get("summary") or "업무를 한곳에서 처리합니다."),
         "theme": app_theme(application_name),
         "shell": app_shell(),
+        "presentation": app_presentation(blueprint),
         "header": header(application_name),
         "page": pages[0],
         "pages": pages,
@@ -63,6 +65,8 @@ def _pages(
     blueprint: JsonObject,
 ) -> list[dict[str, object]]:
     pages = [_work_page(primary, actions), _detail_page(primary, actions)]
+    if status_property(primary):
+        pages.append(_workflow_page(primary))
     if items(blueprint.get("functions") or []):
         pages.insert(1, _kpi_page(primary))
     if date_property(primary):
@@ -79,13 +83,13 @@ def _work_page(primary: JsonObject, actions: list[dict[str, object]]) -> dict[st
     object_type = str(primary["apiName"])
     properties = visible_properties(primary)
     status = status_property(primary)
-    queue_widgets = [widget("objectTable", "업무 목록", object_type, {"propertyApiNames": properties})]
-    if status:
-        queue_widgets.append(widget("kanban", "상태별 보드", object_type, {"groupByProperty": status}))
+    queue_widgets = [
+        _filter_widget(object_type, status),
+        widget("objectTable", "처리할 업무", object_type, {"propertyApiNames": properties}),
+    ]
     sections = [
         section("업무 요약", "toolbar", _summary_widgets(object_type, status), 12),
-        section("업무 찾기", "flow", [_filter_widget(object_type, status)], 3, "bordered"),
-        section("처리 대기열", "tabs", queue_widgets, 6, "shadow"),
+        section("처리 대기열", "flow", queue_widgets, 8, "shadow"),
         section(
             "선택한 업무",
             "flow",
@@ -93,8 +97,8 @@ def _work_page(primary: JsonObject, actions: list[dict[str, object]]) -> dict[st
                 widget("objectDetail", "업무 정보", object_type, {"propertyApiNames": properties}),
                 action_widget("다음 업무", object_type, actions),
             ],
-            3,
-            "bordered",
+            4,
+            "shadow",
         ),
     ]
     return page("today", "오늘 할 일", True, "workbench", sections)
@@ -147,6 +151,28 @@ def _calendar_page(primary: JsonObject) -> dict[str, object]:
         ),
     ]
     return page("calendar", "일정", False, "overview", sections)
+
+
+def _workflow_page(primary: JsonObject) -> dict[str, object]:
+    object_type = str(primary["apiName"])
+    status = status_property(primary)
+    sections = [
+        section(
+            "단계별 업무",
+            "flow",
+            [widget("kanban", "업무 진행 보드", object_type, {"groupByProperty": status})],
+            8,
+            "shadow",
+        ),
+        section(
+            "전체 흐름",
+            "flow",
+            [widget("statusTracker", "단계별 현황", object_type, {"groupByProperty": status})],
+            4,
+            "bordered",
+        ),
+    ]
+    return page("workflow", "업무 흐름", False, "overview", sections)
 
 
 def _policy_page(

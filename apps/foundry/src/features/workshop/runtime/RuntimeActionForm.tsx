@@ -19,7 +19,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ErrorState } from "@/components/shared/ErrorState";
 import { StatusPill } from "@/components/shared/StatusPill";
-import { useWorkshopRuntimeApplicationId } from "./runtime-application-context";
+import { businessActionName, businessObjectTitle } from "../lib/business-display";
+import { useWorkshopRuntimeApplicationId, useWorkshopRuntimeDefinition } from "./runtime-application-context";
 
 /** apply 성공 evidence 형태. */
 type ActionRunResult = {
@@ -68,6 +69,7 @@ export function RuntimeActionForm({
   const osdk = useFoundryLiteOsdkClient();
   const client = useFoundryLiteClient();
   const applicationId = useWorkshopRuntimeApplicationId();
+  const definition = useWorkshopRuntimeDefinition();
   const session = useFoundryLiteSession();
   const [pinnedRequest, setPinnedRequest] = useState<PinnedRequest | null>(
     null,
@@ -165,10 +167,10 @@ export function RuntimeActionForm({
 
   return (
     <div className="space-y-3">
-      <div className="rounded-lg border border-[var(--workshop-line,#d5dce1)] bg-[var(--workshop-subtle,#f6f8fa)] p-3">
-        <div className="text-[10px] font-semibold tracking-wide text-[#748195] uppercase">처리할 업무</div>
-        <div className="mt-1 truncate text-[12px] font-medium text-[var(--workshop-ink,#1c2127)]">
-          {targetObject.objectId}
+      <div className="rounded-xl bg-[var(--workshop-subtle,#f6f8fa)] p-3.5">
+        <div className="text-[10px] font-bold tracking-wide text-[#748195]">처리할 업무</div>
+        <div className="mt-1.5 truncate text-[14px] font-bold text-[var(--workshop-ink,#1c2127)]">
+          {businessObjectTitle(targetObject, null, definition.presentation)}
         </div>
         <div className="mt-1 text-[10px] text-[#748195]">현재 화면에 선택된 항목만 변경됩니다.</div>
       </div>
@@ -205,7 +207,7 @@ export function RuntimeActionForm({
               />
             ) : field.inputKind === "json" ? (
               <Textarea
-                className="min-h-16 font-mono text-[11px]"
+                className="min-h-16 text-[11px]"
                 value={
                   typeof field.value === "string"
                     ? field.value
@@ -214,7 +216,7 @@ export function RuntimeActionForm({
                 onChange={(event) =>
                   form.setParam(field.name, event.target.value)
                 }
-                placeholder="JSON 값"
+                placeholder="필요한 정보를 입력해 주세요"
               />
             ) : (
               <Input
@@ -230,15 +232,15 @@ export function RuntimeActionForm({
         ))
       ) : (
         <p className="text-[11px] text-muted-foreground">
-          이 액션은 파라미터가 없습니다.
+          추가로 입력할 정보가 없습니다.
         </p>
       )}
 
       {applyMutation.error ? <ErrorState error={applyMutation.error} /> : null}
 
       {requiresHumanConfirmation && isConfirmationOpen ? (
-        <div className="space-y-2 rounded border border-[#d99a3d] bg-[#fff8e8] p-3">
-          <p className="text-[12px] font-semibold text-[#7a4b08]">사람 확인이 필요한 업무입니다</p>
+        <div className="space-y-2 rounded-xl border border-[#d99a3d] bg-[#fff8e8] p-3.5">
+          <p className="text-[13px] font-bold text-[#7a4b08]">{definition.presentation.feedback.approvalTitle}</p>
           <p className="text-[11px] leading-5 text-[#6d5a3d]">
             대상, 입력값, 현재 버전을 확인하세요. “확인하고 실행”을 누르기 전에는 아무것도 바뀌지 않습니다.
           </p>
@@ -246,10 +248,10 @@ export function RuntimeActionForm({
       ) : null}
 
       {runEvidence ? (
-        <div className="space-y-1 rounded border border-success/40 bg-success/5 p-2">
+        <div className="space-y-1 rounded-xl border border-success/40 bg-success/5 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill intent="success">
-              {runEvidence.status ?? "적용됨"}
+              {definition.presentation.feedback.successTitle}
             </StatusPill>
             {runEvidence.idempotentReplay ? <StatusPill intent="info">안전하게 재확인됨</StatusPill> : null}
           </div>
@@ -267,18 +269,18 @@ export function RuntimeActionForm({
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         {form.hasRequiredParameters && !form.hasAllRequiredParameters ? (
-          <StatusPill intent="warning">필수 파라미터 미입력</StatusPill>
+          <StatusPill intent="warning">필수 정보가 남아 있습니다</StatusPill>
         ) : null}
         <button
           type="button"
-          className="h-8 rounded border px-3 text-[13px] font-medium text-foreground hover:bg-muted/60"
+          className="h-10 rounded-xl border px-4 text-[13px] font-semibold text-foreground hover:bg-muted/60"
           onClick={onCancel}
         >
           취소
         </button>
         <button
           type="button"
-          className="h-8 rounded bg-[#2b9f6c] px-3.5 text-[13px] font-semibold text-white shadow-sm hover:bg-[#24895c] disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-10 rounded-xl bg-[var(--workshop-accent)] px-4 text-[13px] font-bold text-white shadow-sm hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={
             (pinnedRequest === null && !form.canSubmitAction) ||
             applyMutation.isRunning
@@ -293,7 +295,7 @@ export function RuntimeActionForm({
                 ? "확인하고 실행"
                 : requiresHumanConfirmation
                   ? "내용 검토"
-                  : actionView.displayName}
+                  : businessActionName(actionView.apiName, actionView, definition.presentation)}
         </button>
       </div>
     </div>

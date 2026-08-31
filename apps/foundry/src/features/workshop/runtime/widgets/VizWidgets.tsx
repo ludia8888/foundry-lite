@@ -8,9 +8,12 @@ import { ChartXY } from "../../components/ChartXY";
 import { PieChartMini } from "../../components/MiniCharts";
 import {
   formatCellValue,
-  objectTitleOf,
-  statusIntentOf,
 } from "../../lib/app-model";
+import {
+  businessObjectTitle,
+  businessPropertyName,
+  businessStatus,
+} from "../../lib/business-display";
 import {
   computeMetric,
   crossAggregate,
@@ -27,11 +30,12 @@ import {
   WidgetPlaceholder,
   type WidgetRuntimeProps,
 } from "./widget-kit";
+import { useWorkshopRuntimeDefinition } from "../runtime-application-context";
 
 const MISSING_OBJECT = (
   <WidgetPlaceholder
-    label="객체 타입 미지정"
-    hint="인스펙터에서 객체 타입을 선택하세요."
+    label="분석할 업무가 필요합니다"
+    hint="AI FDE에게 어떤 업무를 시각화할지 설명해 주세요."
   />
 );
 
@@ -192,6 +196,7 @@ export function BarChartWidget(props: WidgetRuntimeProps) {
     widget.config.variableFilters,
   );
   const objectView = objectViewFor(props, objectApiName);
+  const definition = useWorkshopRuntimeDefinition();
 
   if (!objectApiName) return MISSING_OBJECT;
 
@@ -199,29 +204,44 @@ export function BarChartWidget(props: WidgetRuntimeProps) {
   const chartType = widget.config.chartType ?? "bar";
   const groupBy = widget.config.groupByProperty;
   const seriesProperty = widget.config.seriesProperty ?? null;
-  const title = widget.config.title || (groupBy ? `${groupBy} 분포` : "차트");
+  const groupLabel = groupBy
+    ? businessPropertyName(
+        objectApiName,
+        groupBy,
+        objectView,
+        definition.presentation,
+      )
+    : null;
+  const title =
+    widget.config.title || (groupLabel ? `${groupLabel} 분포` : "비교 차트");
 
   if (!groupBy) {
     return (
       <WidgetFrame title={title}>
         <WidgetPlaceholder
-          label="그룹 기준 속성 미지정"
-          hint="인스펙터에서 group-by 속성을 선택하세요."
+          label="비교 기준이 필요합니다"
+          hint="AI FDE에게 어떤 기준으로 나누어 볼지 설명해 주세요."
         />
       </WidgetFrame>
     );
   }
 
-  const data = crossAggregate(
+  const rawData = crossAggregate(
     objects,
     groupBy,
     seriesProperty,
     metric,
     widget.config.metricProperty,
   );
-  const xLabel =
-    objectView?.properties.find((p) => p.apiName === groupBy)?.displayName ??
-    groupBy;
+  const data = /status|state|priority|severity/i.test(groupBy)
+    ? { ...rawData, categories: rawData.categories.map((category) => businessStatus(category, definition.presentation).label) }
+    : rawData;
+  const xLabel = businessPropertyName(
+    objectApiName,
+    groupBy,
+    objectView,
+    definition.presentation,
+  );
   const yLabel = metricLabel(metric);
 
   return (
@@ -248,24 +268,33 @@ export function PieChartWidget(props: WidgetRuntimeProps) {
     objectApiName,
     widget.config.variableFilters,
   );
+  const definition = useWorkshopRuntimeDefinition();
+  const objectView = objectViewFor(props, objectApiName);
 
   if (!objectApiName) return MISSING_OBJECT;
 
   const groupBy = widget.config.groupByProperty;
-  const title = widget.config.title || (groupBy ? `${groupBy} 비중` : "비중");
+  const title =
+    widget.config.title ||
+    (groupBy
+      ? `${businessPropertyName(objectApiName, groupBy, objectView, definition.presentation)} 비중`
+      : "비중 차트");
 
   if (!groupBy) {
     return (
       <WidgetFrame title={title}>
         <WidgetPlaceholder
-          label="그룹 기준 속성 미지정"
-          hint="인스펙터에서 group-by 속성을 선택하세요."
+          label="비교 기준이 필요합니다"
+          hint="AI FDE에게 어떤 기준으로 나누어 볼지 설명해 주세요."
         />
       </WidgetFrame>
     );
   }
 
-  const buckets = groupAggregate(objects, groupBy, "count");
+  const rawBuckets = groupAggregate(objects, groupBy, "count");
+  const buckets = /status|state|priority|severity/i.test(groupBy)
+    ? rawBuckets.map((bucket) => ({ ...bucket, label: businessStatus(bucket.label, definition.presentation).label }))
+    : rawBuckets;
 
   return (
     <WidgetFrame
@@ -305,14 +334,14 @@ export function TimelineWidget(props: WidgetRuntimeProps) {
   if (!objectApiName) return MISSING_OBJECT;
 
   const dateProp = widget.config.dateProperty;
-  const title = widget.config.title || "타임라인";
+  const title = widget.config.title || "진행 기록";
 
   if (!dateProp) {
     return (
       <WidgetFrame title={title}>
         <WidgetPlaceholder
-          label="날짜 속성 미지정"
-          hint="인스펙터에서 날짜 속성을 선택하세요."
+          label="날짜 기준이 필요합니다"
+          hint="AI FDE에게 어떤 날짜를 기준으로 흐름을 볼지 설명해 주세요."
         />
       </WidgetFrame>
     );
@@ -369,6 +398,7 @@ function TimelineItem({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const definition = useWorkshopRuntimeDefinition();
   const status = object.properties.status;
   const hasStatus = status !== undefined && status !== null;
 
@@ -393,11 +423,11 @@ function TimelineItem({
         </span>
         <span className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#1c2127]">
-            {objectTitleOf(object, objectView)}
+            {businessObjectTitle(object, objectView, definition.presentation)}
           </span>
           {hasStatus ? (
-            <StatusPill intent={statusIntentOf(status)}>
-              {String(status)}
+            <StatusPill intent={businessStatus(status, definition.presentation).intent}>
+              {businessStatus(status, definition.presentation).label}
             </StatusPill>
           ) : null}
         </span>

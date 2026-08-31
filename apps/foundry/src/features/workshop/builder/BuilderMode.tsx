@@ -2,6 +2,7 @@ import type {
   FoundryLiteOntologyActionView,
   FoundryLiteOntologyObjectView,
 } from "@foundry-lite/sdk/react";
+import { CheckCircle2, MonitorSmartphone, Sparkles, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -63,7 +64,7 @@ function resizedSections(page: AppPage, count: number) {
   if (count >= page.sections.length) {
     const additions = Array.from({
       length: count - page.sections.length,
-    }).map(() => createSection("Section"));
+    }).map(() => createSection("업무 영역"));
     return [...page.sections, ...additions];
   }
   const kept = page.sections.slice(0, count);
@@ -183,48 +184,35 @@ export function BuilderMode({
 
   return (
     <>
-      <div className="grid h-full min-h-0 grid-cols-[260px_1fr_320px] divide-x divide-[#d5dce1]">
-        <StructurePanel
-          definition={definition}
-          activeContainerId={activeContainerId}
-          selection={selection}
-          onChange={onChange}
-          onSelect={select}
-          onActiveContainer={setActiveContainerId}
-          onOpenTemplates={() => setIsTemplateGalleryOpen(true)}
-        />
-        <BuilderCanvas
-          page={page}
-          objectViews={objectViews}
-          actionViews={actionViews}
-          selectedSectionId={currentSectionId}
-          selectedWidgetId={selectedWidgetId}
-          onSelectSection={(sectionId) =>
-            select({ type: "section", sectionId })
-          }
-          onSelectWidget={(sectionId, widgetId) =>
-            select({ type: "widget", sectionId, widgetId })
-          }
-          onAddWidget={handleAddWidget}
-          onRemoveWidget={(_sectionId, widgetId) =>
-            handleRemoveWidget(widgetId)
-          }
-          onBindWidgetObject={(_sectionId, widgetId, objectApiName) =>
-            handleBindObject(widgetId, objectApiName)
-          }
-          onBindWidgetAction={(_sectionId, widgetId, actionApiName) =>
-            handleBindAction(widgetId, actionApiName)
-          }
-          onApplyLayout={handleApplyLayout}
-        />
-        <InspectorPanel
-          definition={definition}
-          selection={selection}
-          objectViews={objectViews}
-          actionViews={actionViews}
-          onChange={onChange}
-          onSelect={select}
-        />
+      <div className="flex h-full min-h-0 flex-col bg-[#f3f5f7]">
+        <BusinessReviewHeader definition={definition} objectCount={objectViews.length} actionCount={actionViews.length} />
+        <div className="grid min-h-0 flex-1 grid-cols-[288px_1fr_352px] divide-x divide-[#e1e6eb]">
+          <StructurePanel
+            definition={definition}
+            activeContainerId={activeContainerId}
+            selection={selection}
+            onChange={onChange}
+            onSelect={select}
+            onActiveContainer={setActiveContainerId}
+            onOpenTemplates={() => setIsTemplateGalleryOpen(true)}
+          />
+          <BuilderCanvas
+            page={page}
+            presentation={definition.presentation}
+            objectViews={objectViews}
+            actionViews={actionViews}
+            selectedSectionId={currentSectionId}
+            selectedWidgetId={selectedWidgetId}
+            onSelectSection={(sectionId) => select({ type: "section", sectionId })}
+            onSelectWidget={(sectionId, widgetId) => select({ type: "widget", sectionId, widgetId })}
+            onAddWidget={handleAddWidget}
+            onRemoveWidget={(_sectionId, widgetId) => handleRemoveWidget(widgetId)}
+            onBindWidgetObject={(_sectionId, widgetId, objectApiName) => handleBindObject(widgetId, objectApiName)}
+            onBindWidgetAction={(_sectionId, widgetId, actionApiName) => handleBindAction(widgetId, actionApiName)}
+            onApplyLayout={handleApplyLayout}
+          />
+          <InspectorPanel definition={definition} selection={selection} objectViews={objectViews} actionViews={actionViews} onChange={onChange} onSelect={select} />
+        </div>
       </div>
       <TemplateGallery
         open={isTemplateGalleryOpen}
@@ -233,4 +221,23 @@ export function BuilderMode({
       />
     </>
   );
+}
+
+function BusinessReviewHeader({ definition, objectCount, actionCount }: { definition: AppDefinition; objectCount: number; actionCount: number }) {
+  const roles = definition.presentation.roles;
+  return (
+    <div className="shrink-0 border-b border-[#e1e6eb] bg-white px-5 py-4">
+      <div className="flex items-center gap-5">
+        <div className="flex size-10 items-center justify-center rounded-2xl bg-[#eeeafd] text-[#6651c7]"><Sparkles className="size-5" /></div>
+        <div className="min-w-0 flex-1"><div className="text-[11px] font-bold text-[#6651c7]">AI FDE 검토</div><h1 className="mt-0.5 truncate text-[17px] font-bold tracking-[-.025em] text-[#172033]">누가 무엇을 보고, 어떤 일을 할지 확인하세요</h1></div>
+        <ReviewSignal icon={UsersRound} label="사용자" value={roles.length ? roles.slice(0, 2).join(" · ") : "역할 확인 필요"} />
+        <ReviewSignal icon={MonitorSmartphone} label="화면" value={`${definition.pages.length}개 · 모바일 포함`} />
+        <ReviewSignal icon={CheckCircle2} label="업무 연결" value={`${objectCount}개 개념 · ${actionCount}개 행동`} isReady={objectCount > 0 && actionCount > 0} />
+      </div>
+    </div>
+  );
+}
+
+function ReviewSignal({ icon: Icon, label, value, isReady = false }: { icon: typeof UsersRound; label: string; value: string; isReady?: boolean }) {
+  return <div className="hidden min-w-[150px] items-center gap-2.5 rounded-xl bg-[#f7f9fb] px-3 py-2 xl:flex"><Icon className={isReady ? "size-4 text-emerald-600" : "size-4 text-[#718096]"} /><div className="min-w-0"><div className="text-[9px] font-bold text-[#8a96a6]">{label}</div><div className="mt-0.5 max-w-36 truncate text-[11px] font-semibold text-[#3e4c60]">{value}</div></div></div>;
 }

@@ -90,19 +90,19 @@ export const WIDGET_CATEGORIES: ReadonlyArray<{
   id: WidgetCategory;
   label: string;
 }> = [
-  { id: "display", label: "표시" },
-  { id: "visualization", label: "시각화" },
-  { id: "input", label: "필터·입력" },
-  { id: "action", label: "액션·네비" },
-  { id: "content", label: "콘텐츠" },
-  { id: "aip", label: "AIP" },
+  { id: "display", label: "업무 보기" },
+  { id: "visualization", label: "현황 분석" },
+  { id: "input", label: "검색·선택" },
+  { id: "action", label: "업무 처리" },
+  { id: "content", label: "안내" },
+  { id: "aip", label: "AI 지원" },
 ];
 
 export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   objectTable: {
     kind: "objectTable",
-    label: "객체 테이블",
-    description: "객체 타입을 정렬·선택 가능한 테이블로 렌더링합니다.",
+    label: "업무 목록",
+    description: "정렬하고 선택할 수 있는 업무 목록을 보여줍니다.",
     icon: Table2,
     category: "display",
     role: "source",
@@ -115,8 +115,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   objectList: {
     kind: "objectList",
-    label: "객체 리스트",
-    description: "객체를 카드형 리스트로 표시하고 선택할 수 있습니다.",
+    label: "업무 카드 목록",
+    description: "모바일에서도 보기 쉬운 카드 목록을 보여줍니다.",
     icon: List,
     category: "display",
     role: "source",
@@ -126,8 +126,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   objectDetail: {
     kind: "objectDetail",
-    label: "객체 상세",
-    description: "선택한 객체의 속성을 key-value로 표시합니다.",
+    label: "선택 업무 정보",
+    description: "선택한 업무에 필요한 정보를 한곳에 보여줍니다.",
     icon: PanelRight,
     category: "display",
     role: "consumer",
@@ -137,8 +137,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   objectSetTitle: {
     kind: "objectSetTitle",
-    label: "객체 세트 제목",
-    description: "현재 객체 집합의 개수를 제목/카운트로 표시합니다.",
+    label: "업무 범위 요약",
+    description: "현재 보고 있는 업무 범위와 건수를 알려줍니다.",
     icon: Heading,
     category: "display",
     role: "aggregate",
@@ -148,8 +148,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   links: {
     kind: "links",
-    label: "링크",
-    description: "선택 객체의 연결(관계) 객체를 표시합니다.",
+    label: "연결된 업무",
+    description: "선택한 업무와 연결된 다른 업무를 보여줍니다.",
     icon: Link2,
     category: "display",
     role: "consumer",
@@ -159,8 +159,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   objectLinks: {
     kind: "objectLinks",
-    label: "관계 순회",
-    description: "선택 객체에서 링크를 따라가 실제 연결된 객체를 표시합니다.",
+    label: "관계 탐색",
+    description: "연결 관계를 따라 관련 고객과 업무를 탐색합니다.",
     icon: Link2,
     category: "display",
     role: "consumer",
@@ -170,8 +170,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   metricCard: {
     kind: "metricCard",
-    label: "메트릭 카드",
-    description: "집계 값을 KPI 카드/리스트/태그로 보여줍니다 (다중 지표).",
+    label: "핵심 숫자",
+    description: "건수, 합계, 평균 같은 핵심 숫자를 보여줍니다.",
     icon: Hash,
     category: "visualization",
     role: "aggregate",
@@ -186,8 +186,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   barChart: {
     kind: "barChart",
-    label: "Chart XY",
-    description: "카테고리×시리즈 집계를 막대·라인·영역·산점도로 시각화합니다.",
+    label: "비교 차트",
+    description: "업무 그룹별 수치와 추이를 비교해 보여줍니다.",
     icon: BarChart3,
     category: "visualization",
     role: "aggregate",
@@ -212,8 +212,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   pieChart: {
     kind: "pieChart",
-    label: "파이 차트",
-    description: "속성별 비중을 파이 차트로 시각화합니다.",
+    label: "비중 차트",
+    description: "각 업무 상태나 분류가 차지하는 비중을 보여줍니다.",
     icon: PieChart,
     category: "visualization",
     role: "aggregate",
@@ -226,8 +226,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   timeline: {
     kind: "timeline",
-    label: "타임라인",
-    description: "객체를 날짜 속성 기준 시간 순으로 나열합니다.",
+    label: "진행 기록",
+    description: "날짜 순서대로 업무 진행 기록을 보여줍니다.",
     icon: Activity,
     category: "visualization",
     role: "source",
@@ -240,7 +240,7 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   kanban: {
     kind: "kanban",
-    label: "칸반 보드",
+    label: "단계별 업무 보드",
     description: "상태별 업무를 열로 나누고 선택 가능한 카드로 보여줍니다.",
     icon: Columns3,
     category: "visualization",
@@ -255,7 +255,7 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   calendar: {
     kind: "calendar",
-    label: "업무 캘린더",
+    label: "일정 캘린더",
     description: "날짜별 업무를 월간 캘린더와 일정 목록으로 보여줍니다.",
     icon: CalendarDays,
     category: "visualization",
@@ -270,7 +270,7 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   statusTracker: {
     kind: "statusTracker",
-    label: "상태 추적기",
+    label: "업무 흐름",
     description: "업무 상태별 건수와 흐름을 한 줄 운영 지표로 보여줍니다.",
     icon: Route,
     category: "visualization",
@@ -284,8 +284,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   pivotTable: {
     kind: "pivotTable",
-    label: "피벗 테이블",
-    description: "두 업무 기준을 교차해 개수·합계·평균을 표로 비교합니다.",
+    label: "교차 분석표",
+    description: "두 업무 기준을 교차해 개수·합계·평균을 비교합니다.",
     icon: TableProperties,
     category: "visualization",
     role: "aggregate",
@@ -309,8 +309,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   filterList: {
     kind: "filterList",
-    label: "필터 리스트",
-    description: "속성별 값 분포를 필터 패싯으로 렌더링합니다.",
+    label: "빠른 필터",
+    description: "상태와 담당자 같은 기준으로 업무를 빠르게 좁힙니다.",
     icon: Filter,
     category: "input",
     role: "filter",
@@ -323,8 +323,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   objectDropdown: {
     kind: "objectDropdown",
-    label: "객체 드롭다운",
-    description: "단일 속성 값을 드롭다운으로 선택해 필터·변수를 설정합니다.",
+    label: "조건 선택",
+    description: "하나의 기준을 선택해 모든 화면에 함께 적용합니다.",
     icon: ListFilter,
     category: "input",
     role: "filter",
@@ -337,8 +337,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   searchBar: {
     kind: "searchBar",
-    label: "검색 바",
-    description: "객체 속성 전체를 대상으로 키워드 검색합니다.",
+    label: "업무 검색",
+    description: "고객, 담당자, 업무 내용을 키워드로 찾습니다.",
     icon: Search,
     category: "input",
     role: "filter",
@@ -348,8 +348,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   stringSelector: {
     kind: "stringSelector",
-    label: "문자열 셀렉터",
-    description: "속성 값을 토글 칩으로 선택해 필터링합니다.",
+    label: "빠른 조건 버튼",
+    description: "자주 쓰는 조건을 버튼으로 골라 업무를 좁힙니다.",
     icon: ListChecks,
     category: "input",
     role: "filter",
@@ -362,8 +362,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   buttonGroup: {
     kind: "buttonGroup",
-    label: "버튼 그룹",
-    description: "선택 객체에 실행할 액션 버튼들을 묶습니다.",
+    label: "다음 업무",
+    description: "선택한 업무에서 할 수 있는 다음 행동을 보여줍니다.",
     icon: MousePointerClick,
     category: "action",
     role: "consumer",
@@ -376,8 +376,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   actionForm: {
     kind: "actionForm",
-    label: "액션 폼",
-    description: "선택 객체에 검증 가능한 액션을 폼으로 실행합니다.",
+    label: "업무 처리 양식",
+    description: "필요한 내용을 확인하고 안전하게 업무를 실행합니다.",
     icon: Play,
     category: "action",
     role: "consumer",
@@ -390,8 +390,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   markdown: {
     kind: "markdown",
-    label: "마크다운",
-    description: "서식 있는 텍스트/설명을 표시합니다.",
+    label: "안내문",
+    description: "사용자에게 제목과 설명을 보기 좋게 안내합니다.",
     icon: Type,
     category: "content",
     role: "content",
@@ -403,8 +403,8 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   sectionHeader: {
     kind: "sectionHeader",
-    label: "섹션 헤더",
-    description: "굵은 제목 라벨을 표시합니다.",
+    label: "영역 제목",
+    description: "화면 영역의 제목을 분명하게 표시합니다.",
     icon: AlignLeft,
     category: "content",
     role: "content",
@@ -425,14 +425,14 @@ export const WIDGET_DEFINITIONS: Record<WidgetKind, WidgetDefinition> = {
   },
   aipChatbot: {
     kind: "aipChatbot",
-    label: "AIP 챗봇",
-    description: "온톨로지 컨텍스트 기반 대화형 어시스턴트입니다.",
+    label: "AI 업무 도우미",
+    description: "현재 업무 맥락을 이해하고 질문과 제안을 돕습니다.",
     icon: Bot,
     category: "aip",
     role: "content",
     fields: ["title"],
     compact: false,
-    defaultConfig: () => ({ title: "AIP Assistant" }),
+    defaultConfig: () => ({ title: "AI 업무 도우미" }),
   },
 };
 

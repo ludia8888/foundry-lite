@@ -448,6 +448,15 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
         "statusTracker",
         "kanban",
     }
+    for workshop_widget in workshop_widgets:
+        visible_names = workshop_widget["config"].get("propertyApiNames", [])
+        assert all(str(name).lower() != "id" and not str(name).lower().endswith("_id") for name in visible_names)
+    if slug == "hospital-operations":
+        presentation = workshop["presentation"]
+        assert presentation["objectTypeNames"]["CareVisit"] == "진료 방문"
+        assert presentation["actionNames"]["ConfirmConsent"] == "동의 확인"
+        assert presentation["statusLabels"]["CONSENT_CONFIRMED"]["label"] == "동의 확정"
+        assert presentation["booleanLabels"]["falseLabel"] == "아니요"
     files = react_files(plan)
     package_name = f"@foundry-lite/{slug}-osdk"
     assert f'from "{package_name}/react"' in files["src/App.tsx"]

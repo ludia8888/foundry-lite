@@ -156,17 +156,17 @@ const SEED_MESSAGES: ChatMessage[] = [
   {
     id: 0,
     role: "assistant",
-    text: "온톨로지 컨텍스트에 연결된 어시스턴트입니다. 객체·액션에 대해 질문해 보세요.",
+    text: "현재 회사 데이터와 업무 규칙을 이해하는 AI 도우미입니다. 궁금한 업무를 질문해 보세요.",
   },
   {
     id: 1,
     role: "user",
-    text: "현재 활성 상태인 객체가 몇 개인가요?",
+    text: "현재 진행 중인 업무가 몇 건인가요?",
   },
 ];
 
 const CANNED_REPLY =
-  "이 위젯은 미리보기입니다. 전체 기능은 AIP 화면에서 제공됩니다.";
+  "AI FDE가 현재 업무를 바탕으로 답변과 개선안을 제안합니다.";
 
 /** Workshop 임베드용 경량 AIP 챗봇 미리보기 (백엔드 호출 없음). */
 export function AipChatbotWidget(props: WidgetRuntimeProps) {
@@ -189,7 +189,7 @@ export function AipChatbotWidget(props: WidgetRuntimeProps) {
 
   return (
     <WidgetFrame
-      title={props.widget.config.title || "AIP Assistant"}
+      title={props.widget.config.title || "AI 업무 도우미"}
       subtitle="preview"
       actions={<Bot className="size-4 shrink-0 text-[#7961db]" />}
       bodyClassName="flex flex-col"

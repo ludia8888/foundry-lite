@@ -134,7 +134,7 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
     assert definition["definitionFingerprint"].startswith("sha256:")
     experience = definition["experience"]
     workshop = experience["workshopApp"]
-    assert experience["componentCatalogVersion"] == "foundry-lite-workshop-components/v3"
+    assert experience["componentCatalogVersion"] == "foundry-lite-workshop-components/v4"
     assert workshop["theme"]["preset"] in {"ocean", "indigo", "emerald", "amber", "graphite"}
     assert workshop["theme"]["brandName"] == "Property Care Desk"
     assert workshop["shell"] == {
@@ -143,6 +143,18 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
         "pageWidth": "wide",
         "showContextBar": True,
     }
+    assert workshop["presentation"]["booleanLabels"] == {
+        "trueLabel": "예",
+        "falseLabel": "아니요",
+        "emptyLabel": "정보 없음",
+    }
+    assert workshop["presentation"]["objectTypeNames"]["WorkOrder"] == "수리 요청"
+    assert workshop["presentation"]["actionNames"]["TriageWorkOrder"] == "요청 분류"
+    assert workshop["presentation"]["statusLabels"]["REPORTED"] == {
+        "label": "접수됨",
+        "intent": "info",
+    }
+    assert workshop["presentation"]["showTechnicalDetails"] is False
     page_ids = [page["pageId"] for page in workshop["pages"]]
     assert experience["surfaces"] == [
         {"id": "chatgpt", "pageIds": page_ids, "runtime": "workshop"},
@@ -158,13 +170,12 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
         "statusTracker",
         "filterList",
         "objectTable",
-        "kanban",
         "objectDetail",
         "buttonGroup",
     ]
-    assert [section["span"] for section in today["sections"]] == [12, 3, 6, 3]
+    assert [section["span"] for section in today["sections"]] == [12, 8, 4]
     assert widgets[5]["config"]["objectApiName"] == "WorkOrder"
-    assert set(widgets[8]["config"]["humanApprovalActionApiNames"]) == {
+    assert set(widgets[7]["config"]["humanApprovalActionApiNames"]) == {
         "TriageWorkOrder",
         "ScheduleRepair",
     }

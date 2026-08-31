@@ -11,9 +11,11 @@ import { useState } from "react";
 
 import { cn } from "@/lib/utils";
 
+import { businessActionName, businessObjectTypeName } from "../../lib/business-display";
 import { useRuntimeDispatch, useRuntimeState } from "../../lib/runtime-state";
 import { actionsForObject } from "../../lib/ontology-context";
 import { RuntimeActionForm } from "../RuntimeActionForm";
+import { useWorkshopRuntimeDefinition } from "../runtime-application-context";
 import {
   actionViewFor,
   objectViewFor,
@@ -25,8 +27,8 @@ import {
 
 const MISSING_OBJECT = (
   <WidgetPlaceholder
-    label="객체 타입 미지정"
-    hint="인스펙터에서 객체 타입을 선택하세요."
+    label="업무 데이터 연결이 필요합니다"
+    hint="AI FDE에게 이 화면에서 어떤 업무를 처리할지 알려주세요."
   />
 );
 
@@ -45,6 +47,7 @@ export function ActionFormWidget(props: WidgetRuntimeProps) {
   const { allObjects } = useWidgetObjects(objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
   const actionView = actionViewFor(props, widget.config.actionApiName);
 
   if (!objectApiName) return MISSING_OBJECT;
@@ -53,20 +56,19 @@ export function ActionFormWidget(props: WidgetRuntimeProps) {
 
   return (
     <WidgetFrame
-      title={widget.config.title || actionView?.displayName || "액션 폼"}
-      subtitle={actionView ? actionView.apiName : undefined}
+      title={widget.config.title || (actionView ? businessActionName(actionView.apiName, actionView, definition.presentation) : "업무 처리")}
       className="min-h-[200px]"
       bodyClassName="p-3"
     >
       {!actionView ? (
         <WidgetPlaceholder
-          label="액션 미지정"
-          hint="인스펙터에서 실행할 액션을 선택하세요."
+          label="실행할 업무가 정해지지 않았습니다"
+          hint="누가 어떤 일을 할 수 있어야 하는지 AI FDE에게 알려주세요."
         />
       ) : !object ? (
         <WidgetPlaceholder
-          label="객체를 선택하세요"
-          hint="테이블에서 대상 객체를 선택하면 액션 폼이 열립니다."
+          label="처리할 업무를 선택해 주세요"
+          hint="목록에서 업무를 선택하면 가능한 다음 행동을 보여드립니다."
         />
       ) : (
         <RuntimeActionForm
@@ -102,6 +104,7 @@ export function ButtonGroupWidget(props: WidgetRuntimeProps) {
   const objectView = objectViewFor(props, objectApiName);
   const state = useRuntimeState();
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
   const [activeAction, setActiveAction] = useState<string | null>(null);
 
   if (!objectApiName) return MISSING_OBJECT;
@@ -119,13 +122,13 @@ export function ButtonGroupWidget(props: WidgetRuntimeProps) {
 
   return (
     <WidgetFrame
-      title={widget.config.title || "액션"}
-      subtitle={objectView?.displayName}
+      title={widget.config.title || "다음 업무"}
+      subtitle={objectView ? businessObjectTypeName(objectView.apiName, objectView, definition.presentation) : undefined}
       className="min-h-[120px]"
       bodyClassName="p-3 space-y-3"
     >
       {actionViews.length === 0 ? (
-        <WidgetPlaceholder label="실행 가능한 액션이 없습니다" />
+        <WidgetPlaceholder label="지금 실행할 수 있는 업무가 없습니다" />
       ) : (
         <div className="flex flex-wrap gap-2">
           {actionViews.map((view) => {
@@ -143,14 +146,14 @@ export function ButtonGroupWidget(props: WidgetRuntimeProps) {
                   )
                 }
                 className={cn(
-                  "flex items-center gap-1.5 rounded px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm",
+                  "flex min-h-10 items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-bold text-white shadow-sm",
                   style.bg,
                   isActive && "ring-2 ring-[#1c2127]/25 ring-offset-1",
                   !object && "cursor-not-allowed opacity-40",
                 )}
               >
                 <Icon className="size-3.5" strokeWidth={2.5} />
-                {view.displayName}
+                {businessActionName(view.apiName, view, definition.presentation)}
                 <ChevronDown
                   className={cn(
                     "size-3 transition-transform",
@@ -163,11 +166,11 @@ export function ButtonGroupWidget(props: WidgetRuntimeProps) {
         </div>
       )}
       {!object ? (
-        <p className="text-[11px] text-muted-foreground">
-          테이블에서 대상 객체를 선택하면 액션을 실행할 수 있습니다.
+        <p className="text-[12px] leading-5 text-muted-foreground">
+          목록에서 처리할 업무를 선택하면 가능한 다음 행동이 활성화됩니다.
         </p>
       ) : activeView ? (
-        <div className="rounded border border-[#e4e9ed] p-2.5">
+        <div className="rounded-xl bg-[var(--workshop-subtle)] p-3.5">
           <RuntimeActionForm
             key={`${activeView.apiName}:${object.objectId}`}
             actionView={activeView}

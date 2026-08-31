@@ -169,6 +169,49 @@ export type AppShell = {
   showContextBar: boolean;
 };
 
+export type AppStatusPresentation = {
+  label: string;
+  intent: StatusIntent;
+  description?: string;
+};
+
+/**
+ * 고객에게 보이는 업무 언어. Ontology apiName은 연결 키로만 남고 모든 runtime이
+ * 이 사전을 우선 사용한다. GPT 미리보기와 외부 앱 사이의 표현 차이를 막는 계약이다.
+ */
+export type AppPresentation = {
+  locale: string;
+  objectTypeNames: Record<string, string>;
+  propertyNames: Record<string, string>;
+  actionNames: Record<string, string>;
+  statusLabels: Record<string, AppStatusPresentation>;
+  booleanLabels: {
+    trueLabel: string;
+    falseLabel: string;
+    emptyLabel: string;
+  };
+  feedback: {
+    loadingTitle: string;
+    loadingDescription: string;
+    emptyTitle: string;
+    emptyDescription: string;
+    errorTitle: string;
+    errorDescription: string;
+    forbiddenTitle: string;
+    forbiddenDescription: string;
+    approvalTitle: string;
+    successTitle: string;
+  };
+  chrome: {
+    workspaceLabel: string;
+    helpLabel: string;
+    notificationLabel: string;
+    userLabel: string;
+  };
+  roles: string[];
+  showTechnicalDetails: boolean;
+};
+
 /** 헤더 위젯 슬롯 (Palantir: 좌/중/우 3개 슬롯, 각 위젯 배치 가능). */
 export type AppHeaderSlots = {
   left: AppSection;
@@ -215,6 +258,7 @@ export type AppDefinition = {
   purpose: string;
   theme: AppTheme;
   shell: AppShell;
+  presentation: AppPresentation;
   header: AppHeader;
   /** Legacy representative page alias. Mirrors the default page in `pages`. */
   page: AppPage;
@@ -267,19 +311,19 @@ export const SECTION_LAYOUTS: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { id: "flow", label: "플로우", description: "위젯을 세로로 쌓습니다." },
-  { id: "columns", label: "컬럼", description: "위젯을 좌우로 배치합니다." },
+  { id: "flow", label: "세로", description: "정보를 위에서 아래로 보여줍니다." },
+  { id: "columns", label: "나란히", description: "정보를 좌우로 나누어 보여줍니다." },
   {
     id: "rows",
     label: "로우",
-    description: "위젯을 가로 스크롤 행으로 배치합니다.",
+    description: "정보 카드를 가로로 이어서 보여줍니다.",
   },
   {
     id: "toolbar",
     label: "툴바",
-    description: "작은 위젯(메트릭·버튼)을 가로 툴바로 배치합니다.",
+    description: "핵심 숫자와 버튼을 한 줄로 요약합니다.",
   },
-  { id: "tabs", label: "탭", description: "각 위젯을 탭 패널로 분리합니다." },
+  { id: "tabs", label: "탭", description: "정보를 탭으로 나누어 보여줍니다." },
 ];
 
 /** 레거시 builder 레이아웃 템플릿 팝오버 항목. */
@@ -304,51 +348,51 @@ export type PaletteItem = {
 };
 
 export const WIDGET_LABELS: Record<WidgetKind, string> = {
-  objectTable: "객체 테이블",
-  objectList: "객체 목록",
-  objectDetail: "객체 상세",
-  objectSetTitle: "객체 세트 제목",
-  objectLinks: "관계 순회",
-  links: "링크",
-  metricCard: "메트릭 카드",
-  barChart: "막대 차트",
-  pieChart: "파이 차트",
-  timeline: "타임라인",
-  kanban: "칸반 보드",
+  objectTable: "업무 목록",
+  objectList: "업무 카드 목록",
+  objectDetail: "선택 업무 정보",
+  objectSetTitle: "업무 현황 제목",
+  objectLinks: "연결된 업무",
+  links: "업무 관계",
+  metricCard: "핵심 숫자",
+  barChart: "비교 차트",
+  pieChart: "비중 차트",
+  timeline: "진행 기록",
+  kanban: "단계별 업무 보드",
   calendar: "업무 캘린더",
-  statusTracker: "상태 추적기",
-  pivotTable: "피벗 테이블",
-  filterList: "필터 목록",
-  objectDropdown: "객체 드롭다운",
+  statusTracker: "업무 흐름",
+  pivotTable: "교차 분석표",
+  filterList: "빠른 필터",
+  objectDropdown: "업무 선택",
   searchBar: "검색",
-  stringSelector: "문자열 선택",
-  buttonGroup: "버튼 그룹",
-  actionForm: "액션 폼",
-  markdown: "마크다운",
-  sectionHeader: "섹션 헤더",
+  stringSelector: "조건 선택",
+  buttonGroup: "다음 업무",
+  actionForm: "업무 처리 양식",
+  markdown: "안내문",
+  sectionHeader: "화면 제목",
   divider: "구분선",
-  aipChatbot: "AIP 챗봇",
+  aipChatbot: "AI 업무 도우미",
 };
 
 export const WIDGET_PALETTE: readonly PaletteItem[] = [
   {
     kind: "objectTable",
     label: WIDGET_LABELS.objectTable,
-    description: "객체 타입을 컴팩트 테이블로 렌더링합니다.",
+    description: "업무를 정렬 가능한 목록으로 보여줍니다.",
     group: "core",
     isAvailable: true,
   },
   {
     kind: "objectDetail",
     label: WIDGET_LABELS.objectDetail,
-    description: "선택한 객체의 속성을 key-value로 표시합니다.",
+    description: "선택한 업무의 상세 정보를 보여줍니다.",
     group: "core",
     isAvailable: true,
   },
   {
     kind: "actionForm",
     label: WIDGET_LABELS.actionForm,
-    description: "객체에 검증 가능한 액션을 실행합니다.",
+    description: "선택한 업무에서 안전하게 다음 일을 실행합니다.",
     group: "core",
     isAvailable: true,
   },
@@ -362,28 +406,28 @@ export const WIDGET_PALETTE: readonly PaletteItem[] = [
   {
     kind: "barChart",
     label: WIDGET_LABELS.barChart,
-    description: "속성 분포를 막대 차트로 시각화합니다.",
+    description: "업무 분포를 비교 차트로 보여줍니다.",
     group: "widget",
     isAvailable: false,
   },
   {
     kind: "objectDropdown",
     label: WIDGET_LABELS.objectDropdown,
-    description: "객체 세트를 변수로 선택합니다.",
+    description: "화면들이 함께 사용할 업무 조건을 선택합니다.",
     group: "widget",
     isAvailable: false,
   },
   {
     kind: "buttonGroup",
     label: WIDGET_LABELS.buttonGroup,
-    description: "라우팅·액션 버튼을 그룹으로 묶습니다.",
+    description: "다음 업무 버튼을 한곳에 모아 보여줍니다.",
     group: "widget",
     isAvailable: false,
   },
   {
     kind: "aipChatbot",
     label: WIDGET_LABELS.aipChatbot,
-    description: "온톨로지 컨텍스트 기반 대화형 위젯입니다.",
+    description: "회사 데이터와 업무 규칙을 이해하는 AI 도우미입니다.",
     group: "widget",
     isAvailable: false,
   },
@@ -396,8 +440,8 @@ export const WORKSHOP_APP_SOURCE_SURFACE = "workshop";
 export const WORKSHOP_APP_SOURCE_REF = "default-workshop-app";
 export const WORKSHOP_APP_METADATA_KIND =
   "foundry-lite.workshop.app-definition";
-/** v3 = reusable SaaS shell/theme + responsive spans + operational visualizations. */
-export const WORKSHOP_APP_METADATA_SCHEMA_VERSION = 3;
+/** v4 = shared business language + product states + commercial responsive runtime. */
+export const WORKSHOP_APP_METADATA_SCHEMA_VERSION = 4;
 
 export const DEFAULT_APP_THEME: AppTheme = {
   preset: "ocean",
@@ -410,6 +454,39 @@ export const DEFAULT_APP_SHELL: AppShell = {
   density: "comfortable",
   pageWidth: "wide",
   showContextBar: true,
+};
+
+export const DEFAULT_APP_PRESENTATION: AppPresentation = {
+  locale: "ko-KR",
+  objectTypeNames: {},
+  propertyNames: {},
+  actionNames: {},
+  statusLabels: {},
+  booleanLabels: {
+    trueLabel: "예",
+    falseLabel: "아니요",
+    emptyLabel: "정보 없음",
+  },
+  feedback: {
+    loadingTitle: "업무를 불러오고 있습니다",
+    loadingDescription: "허용된 최신 기록을 안전하게 확인하고 있습니다.",
+    emptyTitle: "표시할 업무가 없습니다",
+    emptyDescription: "검색 조건을 바꾸거나 새 업무를 시작해 보세요.",
+    errorTitle: "업무를 불러오지 못했습니다",
+    errorDescription: "연결 상태를 확인한 뒤 다시 시도해 주세요.",
+    forbiddenTitle: "이 업무를 볼 권한이 없습니다",
+    forbiddenDescription: "필요한 경우 관리자에게 접근 권한을 요청해 주세요.",
+    approvalTitle: "사람의 확인이 필요합니다",
+    successTitle: "업무를 완료했습니다",
+  },
+  chrome: {
+    workspaceLabel: "업무 운영 공간",
+    helpLabel: "도움말",
+    notificationLabel: "알림",
+    userLabel: "내 계정",
+  },
+  roles: [],
+  showTechnicalDetails: false,
 };
 
 let idCounter = 0;
@@ -452,13 +529,13 @@ export function createPage(name: string, isDefault: boolean): AppPage {
     name,
     pageId: name
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/[^a-z0-9가-힣]+/g, "-")
       .replace(/^-|-$/g, ""),
     isDefault,
     backgroundColor: "transparent",
     layoutDirection: "columns",
     intent: "workbench",
-    sections: [createSection("Section")],
+    sections: [createSection("업무 영역")],
   };
 }
 
@@ -482,7 +559,7 @@ export function createOverlay(
     id: createId("ovl"),
     name,
     kind,
-    sections: [createSection("Section")],
+    sections: [createSection("업무 영역")],
     widthPx: 420,
   };
 }
@@ -504,15 +581,16 @@ export function initialVariableValues(
 }
 
 export function createEmptyAppDefinition(): AppDefinition {
-  const page = createPage("Home", true);
+  const page = createPage("홈", true);
   return {
-    name: "새 Workshop 앱",
-    purpose: "온톨로지 객체·액션을 조합한 운영 앱",
+    name: "새 업무 앱",
+    purpose: "우리 회사의 데이터와 업무 규칙을 연결한 운영 앱",
     theme: { ...DEFAULT_APP_THEME },
     shell: { ...DEFAULT_APP_SHELL },
+    presentation: structuredClone(DEFAULT_APP_PRESENTATION),
     header: {
       visible: true,
-      title: "새 Workshop 앱",
+      title: "새 업무 앱",
       slots: createHeaderSlots(),
     },
     page,
@@ -583,8 +661,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 저장된 정의를 현재 스키마(v3)로 정규화한다.
- * v1/v2 contracts gain safe shell, theme, intent, and responsive-span defaults.
+ * 저장된 정의를 현재 스키마(v4)로 정규화한다.
+ * v1-v3 contracts gain safe shell, theme, intent, responsive-span, and
+ * customer-facing business-language defaults.
  */
 export function migrateAppDefinition(value: unknown): AppDefinition | null {
   if (!isRecord(value)) return null;
@@ -614,6 +693,7 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
   const variables = migrateVariables(value.variables);
   const theme = migrateTheme(value.theme, value.name);
   const shell = migrateShell(value.shell);
+  const presentation = migratePresentation(value.presentation);
 
   // v2: pages[] 존재
   if (Array.isArray(value.pages)) {
@@ -627,6 +707,7 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
       purpose: typeof value.purpose === "string" ? value.purpose : "",
       theme,
       shell,
+      presentation,
       header,
       page,
       pages,
@@ -647,6 +728,7 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
       purpose: typeof value.purpose === "string" ? value.purpose : "",
       theme,
       shell,
+      presentation,
       header,
       page,
       pages: [page],
@@ -684,7 +766,7 @@ function migrateVariable(value: unknown): AppVariable | null {
       : null;
   return {
     id: typeof value.id === "string" ? value.id : createId("var"),
-    name: typeof value.name === "string" ? value.name : "변수",
+    name: typeof value.name === "string" ? value.name : "공유 조건",
     type,
     defaultValue,
   };
@@ -708,10 +790,10 @@ function migrateOverlay(value: unknown): AppOverlay | null {
     .filter((section): section is AppSection => section !== null);
   return {
     id: typeof value.id === "string" ? value.id : createId("ovl"),
-    name: typeof value.name === "string" ? value.name : "Overlay",
+    name: typeof value.name === "string" ? value.name : "보조 화면",
     kind: value.kind === "modal" ? "modal" : "drawer",
     widthPx: typeof value.widthPx === "number" ? value.widthPx : 420,
-    sections: sections.length > 0 ? sections : [createSection("Section")],
+    sections: sections.length > 0 ? sections : [createSection("업무 영역")],
   };
 }
 
@@ -723,7 +805,7 @@ function migratePage(value: unknown): AppPage | null {
     .filter((section): section is AppSection => section !== null);
   return {
     id: typeof value.id === "string" ? value.id : createId("page"),
-    name: typeof value.name === "string" ? value.name : "Page",
+    name: typeof value.name === "string" ? value.name : "업무 화면",
     pageId: typeof value.pageId === "string" ? value.pageId : "page",
     isDefault: value.isDefault === true,
     backgroundColor:
@@ -732,7 +814,7 @@ function migratePage(value: unknown): AppPage | null {
         : "transparent",
     layoutDirection: value.layoutDirection === "rows" ? "rows" : "columns",
     intent: isPageIntent(value.intent) ? value.intent : "workbench",
-    sections: sections.length > 0 ? sections : [createSection("Section")],
+    sections: sections.length > 0 ? sections : [createSection("업무 영역")],
   };
 }
 
@@ -759,7 +841,7 @@ function migrateSection(value: unknown): AppSection | null {
     : defaultSectionStyle();
   return {
     id: typeof value.id === "string" ? value.id : createId("sec"),
-    title: typeof value.title === "string" ? value.title : "Section",
+    title: typeof value.title === "string" ? value.title : "업무 영역",
     layout,
     style,
     span: isSectionSpan(value.span) ? value.span : 12,
@@ -784,6 +866,75 @@ function migrateShell(value: unknown): AppShell {
     pageWidth: record.pageWidth === "contained" ? "contained" : "wide",
     showContextBar: record.showContextBar !== false,
   };
+}
+
+function migratePresentation(value: unknown): AppPresentation {
+  const record = isRecord(value) ? value : {};
+  const booleans = isRecord(record.booleanLabels) ? record.booleanLabels : {};
+  const feedback = isRecord(record.feedback) ? record.feedback : {};
+  const chrome = isRecord(record.chrome) ? record.chrome : {};
+  const textMap = (candidate: unknown): Record<string, string> =>
+    isRecord(candidate)
+      ? Object.fromEntries(
+          Object.entries(candidate).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : {};
+  const statusLabels = isRecord(record.statusLabels)
+    ? Object.fromEntries(
+        Object.entries(record.statusLabels).flatMap(([key, candidate]) => {
+          if (!isRecord(candidate) || typeof candidate.label !== "string") return [];
+          return [[key, {
+            label: candidate.label,
+            intent: isStatusIntent(candidate.intent) ? candidate.intent : "neutral",
+            ...(typeof candidate.description === "string"
+              ? { description: candidate.description }
+              : {}),
+          }]];
+        }),
+      )
+    : {};
+  const textOr = (candidate: unknown, fallback: string) =>
+    typeof candidate === "string" && candidate.trim() ? candidate : fallback;
+  return {
+    locale: textOr(record.locale, DEFAULT_APP_PRESENTATION.locale),
+    objectTypeNames: textMap(record.objectTypeNames),
+    propertyNames: textMap(record.propertyNames),
+    actionNames: textMap(record.actionNames),
+    statusLabels,
+    booleanLabels: {
+      trueLabel: textOr(booleans.trueLabel, DEFAULT_APP_PRESENTATION.booleanLabels.trueLabel),
+      falseLabel: textOr(booleans.falseLabel, DEFAULT_APP_PRESENTATION.booleanLabels.falseLabel),
+      emptyLabel: textOr(booleans.emptyLabel, DEFAULT_APP_PRESENTATION.booleanLabels.emptyLabel),
+    },
+    feedback: {
+      loadingTitle: textOr(feedback.loadingTitle, DEFAULT_APP_PRESENTATION.feedback.loadingTitle),
+      loadingDescription: textOr(feedback.loadingDescription, DEFAULT_APP_PRESENTATION.feedback.loadingDescription),
+      emptyTitle: textOr(feedback.emptyTitle, DEFAULT_APP_PRESENTATION.feedback.emptyTitle),
+      emptyDescription: textOr(feedback.emptyDescription, DEFAULT_APP_PRESENTATION.feedback.emptyDescription),
+      errorTitle: textOr(feedback.errorTitle, DEFAULT_APP_PRESENTATION.feedback.errorTitle),
+      errorDescription: textOr(feedback.errorDescription, DEFAULT_APP_PRESENTATION.feedback.errorDescription),
+      forbiddenTitle: textOr(feedback.forbiddenTitle, DEFAULT_APP_PRESENTATION.feedback.forbiddenTitle),
+      forbiddenDescription: textOr(feedback.forbiddenDescription, DEFAULT_APP_PRESENTATION.feedback.forbiddenDescription),
+      approvalTitle: textOr(feedback.approvalTitle, DEFAULT_APP_PRESENTATION.feedback.approvalTitle),
+      successTitle: textOr(feedback.successTitle, DEFAULT_APP_PRESENTATION.feedback.successTitle),
+    },
+    chrome: {
+      workspaceLabel: textOr(chrome.workspaceLabel, DEFAULT_APP_PRESENTATION.chrome.workspaceLabel),
+      helpLabel: textOr(chrome.helpLabel, DEFAULT_APP_PRESENTATION.chrome.helpLabel),
+      notificationLabel: textOr(chrome.notificationLabel, DEFAULT_APP_PRESENTATION.chrome.notificationLabel),
+      userLabel: textOr(chrome.userLabel, DEFAULT_APP_PRESENTATION.chrome.userLabel),
+    },
+    roles: Array.isArray(record.roles)
+      ? record.roles.filter((role): role is string => typeof role === "string")
+      : [],
+    showTechnicalDetails: record.showTechnicalDetails === true,
+  };
+}
+
+function isStatusIntent(value: unknown): value is StatusIntent {
+  return ["neutral", "info", "success", "warning", "danger"].includes(String(value));
 }
 
 function isThemePreset(value: unknown): value is AppThemePreset {
@@ -944,9 +1095,10 @@ const NUMERIC_KEYS = new Set([
 /** 셀·속성 값 표시 포맷. */
 export function formatCellValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
-  if (typeof value === "number") return value.toLocaleString("en-US");
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "number") return value.toLocaleString("ko-KR");
+  if (typeof value === "boolean") return value ? "예" : "아니요";
+  if (Array.isArray(value)) return `${value.length.toLocaleString("ko-KR")}개 항목`;
+  if (typeof value === "object") return "상세 정보 있음";
   return String(value);
 }
 

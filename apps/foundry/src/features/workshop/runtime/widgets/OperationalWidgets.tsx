@@ -6,7 +6,7 @@ import { StatusPill } from "@/components/shared/StatusPill";
 import { cn } from "@/lib/utils";
 
 import { formatMetricValue, crossAggregate, metricLabel } from "../../lib/aggregate";
-import { formatCellValue, objectTitleOf, statusIntentOf } from "../../lib/app-model";
+import { businessObjectTitle, businessPropertyName, businessStatus, businessValue } from "../../lib/business-display";
 import { useRuntimeDispatch, useRuntimeState } from "../../lib/runtime-state";
 import {
   objectViewFor,
@@ -15,6 +15,7 @@ import {
   WidgetPlaceholder,
   type WidgetRuntimeProps,
 } from "./widget-kit";
+import { useWorkshopRuntimeDefinition } from "../runtime-application-context";
 
 const MISSING_OBJECT = <WidgetPlaceholder label="업무 기록이 연결되지 않았습니다." />;
 
@@ -26,6 +27,7 @@ export function KanbanWidget(props: WidgetRuntimeProps) {
   const groupBy = widget.config.groupByProperty;
   const dispatch = useRuntimeDispatch();
   const state = useRuntimeState();
+  const definition = useWorkshopRuntimeDefinition();
   if (!objectApiName) return MISSING_OBJECT;
   if (!groupBy) return <WidgetPlaceholder label="상태 기준을 정해주세요." hint="업무가 어떤 단계로 나뉘는지 선택하면 보드가 만들어집니다." />;
   const groups = groupObjects(objects, groupBy).slice(0, 8);
@@ -36,7 +38,7 @@ export function KanbanWidget(props: WidgetRuntimeProps) {
           <section key={status} className="rounded-xl bg-[var(--workshop-subtle)] p-2.5">
             <div className="mb-2 flex items-center gap-2 px-1">
               <span className="size-2 rounded-full bg-[var(--workshop-accent)]" />
-              <h3 className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--workshop-ink)]">{status}</h3>
+              <h3 className="min-w-0 flex-1 truncate text-[12px] font-bold text-[var(--workshop-ink)]">{businessStatus(status, definition.presentation).label}</h3>
               <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-semibold text-[#657386]">{items.length}</span>
             </div>
             <div className="space-y-2">
@@ -50,8 +52,8 @@ export function KanbanWidget(props: WidgetRuntimeProps) {
                     state.selectedObjectId === object.objectId ? "border-[var(--workshop-accent)] ring-2 ring-[var(--workshop-accent-soft)]" : "border-[var(--workshop-line)]",
                   )}
                 >
-                  <strong className="block truncate text-[12px] text-[var(--workshop-ink)]">{objectTitleOf(object, objectView)}</strong>
-                  <CardProperties object={object} properties={widget.config.propertyApiNames} excluded={groupBy} />
+                  <strong className="block truncate text-[13px] text-[var(--workshop-ink)]">{businessObjectTitle(object, objectView, definition.presentation)}</strong>
+                  <CardProperties object={object} objectApiName={objectApiName} objectView={objectView} properties={widget.config.propertyApiNames} excluded={groupBy} presentation={definition.presentation} />
                 </button>
               ))}
             </div>
@@ -62,7 +64,7 @@ export function KanbanWidget(props: WidgetRuntimeProps) {
   );
 }
 
-function CardProperties({ object, properties, excluded }: { object: GenericObject; properties?: string[]; excluded: string }) {
+function CardProperties({ object, objectApiName, objectView, properties, excluded, presentation }: { object: GenericObject; objectApiName: string; objectView: ReturnType<typeof objectViewFor>; properties?: string[]; excluded: string; presentation: ReturnType<typeof useWorkshopRuntimeDefinition>["presentation"] }) {
   const selected = (properties?.length ? properties : Object.keys(object.properties))
     .filter((name) => name !== excluded && object.properties[name] !== undefined)
     .slice(0, 2);
@@ -70,8 +72,8 @@ function CardProperties({ object, properties, excluded }: { object: GenericObjec
     <div className="mt-2 space-y-1">
       {selected.map((name) => (
         <div key={name} className="flex gap-2 text-[10px] text-[#748195]">
-          <span className="min-w-0 flex-1 truncate">{name}</span>
-          <span className="max-w-[55%] truncate font-medium text-[#465468]">{formatCellValue(object.properties[name])}</span>
+          <span className="min-w-0 flex-1 truncate">{businessPropertyName(objectApiName, name, objectView, presentation)}</span>
+          <span className="max-w-[55%] truncate font-medium text-[#465468]">{businessValue(object.properties[name], name, objectView?.properties.find((property) => property.apiName === name)?.dataType, presentation)}</span>
         </div>
       ))}
     </div>
@@ -83,6 +85,7 @@ export function StatusTrackerWidget(props: WidgetRuntimeProps) {
   const objectApiName = widget.config.objectApiName ?? null;
   const { objects } = useWidgetObjects(objectApiName, widget.config.variableFilters);
   const groupBy = widget.config.groupByProperty;
+  const definition = useWorkshopRuntimeDefinition();
   if (!objectApiName) return MISSING_OBJECT;
   if (!groupBy) return <WidgetPlaceholder label="추적할 상태 기준을 정해주세요." />;
   const groups = groupObjects(objects, groupBy);
@@ -93,7 +96,7 @@ export function StatusTrackerWidget(props: WidgetRuntimeProps) {
           <li key={status} className="relative rounded-lg border border-[var(--workshop-line)] bg-white p-3">
             <div className="flex items-center gap-2">
               <span className="flex size-5 items-center justify-center rounded-full bg-[var(--workshop-accent-soft)] text-[10px] font-bold text-[var(--workshop-accent)]">{index + 1}</span>
-              <StatusPill intent={statusIntentOf(status)}>{status}</StatusPill>
+              <StatusPill intent={businessStatus(status, definition.presentation).intent}>{businessStatus(status, definition.presentation).label}</StatusPill>
             </div>
             <div className="mt-2 text-[22px] font-semibold tracking-tight text-[var(--workshop-ink)]">{items.length}<span className="ml-1 text-[11px] font-normal text-[#748195]">건</span></div>
           </li>
@@ -113,6 +116,7 @@ export function CalendarWidget(props: WidgetRuntimeProps) {
   const [selectedMonth, setSelectedMonth] = useState<Date | null>(null);
   const visibleMonth = selectedMonth ?? monthStart(dated[0]?.date ?? new Date());
   const dispatch = useRuntimeDispatch();
+  const definition = useWorkshopRuntimeDefinition();
   if (!objectApiName) return MISSING_OBJECT;
   if (!dateProperty) return <WidgetPlaceholder label="일정 날짜를 정해주세요." hint="예약일, 마감일, 방문일 같은 정보를 선택하면 캘린더가 만들어집니다." />;
   const days = calendarDays(visibleMonth);
@@ -134,7 +138,7 @@ export function CalendarWidget(props: WidgetRuntimeProps) {
                 <div className="mt-1 space-y-1">
                   {items.slice(0, 3).map((item) => (
                     <button key={item.object.objectId} type="button" onClick={() => dispatch({ type: "selectObject", objectId: item.object.objectId })} className="block w-full truncate rounded bg-[var(--workshop-accent-soft)] px-1.5 py-1 text-left text-[9px] font-medium text-[var(--workshop-accent)] hover:ring-1 hover:ring-[var(--workshop-accent)]">
-                      {objectTitleOf(item.object, objectView)}
+                      {businessObjectTitle(item.object, objectView, definition.presentation)}
                     </button>
                   ))}
                   {items.length > 3 ? <div className="px-1 text-[9px] text-[#748195]">+{items.length - 3}건</div> : null}
@@ -164,14 +168,19 @@ export function PivotTableWidget(props: WidgetRuntimeProps) {
   const objectApiName = widget.config.objectApiName ?? null;
   const { objects, isTruncated } = useWidgetObjects(objectApiName, widget.config.variableFilters);
   const groupBy = widget.config.groupByProperty;
+  const objectView = objectViewFor(props, objectApiName);
+  const definition = useWorkshopRuntimeDefinition();
   if (!objectApiName) return MISSING_OBJECT;
   if (!groupBy) return <WidgetPlaceholder label="행으로 비교할 업무 기준을 정해주세요." />;
   const metric = widget.config.metric ?? "count";
-  const data = crossAggregate(objects, groupBy, widget.config.seriesProperty, metric, widget.config.metricProperty);
+  const rawData = crossAggregate(objects, groupBy, widget.config.seriesProperty, metric, widget.config.metricProperty);
+  const data = /status|state|priority|severity/i.test(groupBy)
+    ? { ...rawData, categories: rawData.categories.map((category) => businessStatus(category, definition.presentation).label) }
+    : rawData;
   return (
-    <WidgetFrame title={widget.config.title || "업무 피벗"} subtitle={`${metricLabel(metric)}${isTruncated ? " · 상한 표본" : ""}`} actions={<TableProperties className="size-4 text-[var(--workshop-accent)]" />} bodyClassName="overflow-auto">
+    <WidgetFrame title={widget.config.title || "교차 분석표"} subtitle={`${metricLabel(metric)}${isTruncated ? " · 상한 표본" : ""}`} actions={<TableProperties className="size-4 text-[var(--workshop-accent)]" />} bodyClassName="overflow-auto">
       <table className="w-full min-w-[520px] border-collapse text-[11px]">
-        <thead><tr className="bg-[var(--workshop-subtle)] text-[#657386]"><th className="sticky left-0 bg-[var(--workshop-subtle)] px-3 py-2 text-left">{groupBy}</th>{data.series.map((series) => <th key={series} className="px-3 py-2 text-right">{series}</th>)}<th className="px-3 py-2 text-right">합계</th></tr></thead>
+        <thead><tr className="bg-[var(--workshop-subtle)] text-[#657386]"><th className="sticky left-0 bg-[var(--workshop-subtle)] px-3 py-2 text-left">{businessPropertyName(objectApiName, groupBy, objectView, definition.presentation)}</th>{data.series.map((series) => <th key={series} className="px-3 py-2 text-right">{series}</th>)}<th className="px-3 py-2 text-right">합계</th></tr></thead>
         <tbody>{data.categories.map((category, rowIndex) => <tr key={category} className="border-t border-[var(--workshop-line)]"><th className="sticky left-0 bg-white px-3 py-2 text-left font-medium text-[var(--workshop-ink)]">{category}</th>{data.matrix[rowIndex].map((value, columnIndex) => <td key={`${category}-${data.series[columnIndex]}`} className="px-3 py-2 text-right tabular-nums text-[#465468]">{formatMetricValue(value)}</td>)}<td className="px-3 py-2 text-right font-semibold tabular-nums text-[var(--workshop-ink)]">{formatMetricValue(data.categoryTotals[rowIndex])}</td></tr>)}</tbody>
       </table>
     </WidgetFrame>

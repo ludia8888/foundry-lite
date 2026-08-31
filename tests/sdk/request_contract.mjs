@@ -1181,7 +1181,7 @@ const pilotPlan = {
     identity: { applicationId: "dining_concierge", name: "Dining Concierge", summary: "Booking operations" },
     businessModel: {},
     access: {},
-    experience: { componentCatalogVersion: "foundry-lite-workshop-components/v3", workshopApp: {}, surfaces: [] },
+    experience: { componentCatalogVersion: "foundry-lite-workshop-components/v4", workshopApp: {}, surfaces: [] },
     agentWork: {},
     deployment: {},
   },

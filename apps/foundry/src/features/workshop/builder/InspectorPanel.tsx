@@ -24,6 +24,7 @@ import {
   createWidget,
   type AggregationMetric,
   type AppDefinition,
+  type AppPresentation,
   type AppSection,
   type AppVariable,
   type ChartType,
@@ -36,6 +37,11 @@ import {
   type WidgetKind,
 } from "../lib/app-model";
 import { metricLabel } from "../lib/aggregate";
+import {
+  businessActionName,
+  businessObjectTypeName,
+  isTechnicalIdentifierProperty,
+} from "../lib/business-display";
 import {
   addWidget,
   removeOverlay,
@@ -116,9 +122,9 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   if (!selection) {
     return (
-      <InspectorShell title="인스펙터">
-        <p className="text-[11px] text-muted-foreground">
-          캔버스에서 위젯·섹션을 선택하거나 페이지를 선택해 속성을 편집하세요.
+      <InspectorShell title="화면 설정">
+        <p className="text-[12px] leading-5 text-muted-foreground">
+          가운데 미리보기에서 바꾸고 싶은 화면이나 정보를 선택하세요.
         </p>
       </InspectorShell>
     );
@@ -126,7 +132,7 @@ export function InspectorPanel({
 
   if (selection.type === "widget") {
     const widget = findWidget(definition, selection.widgetId);
-    if (!widget) return <InspectorShell title="위젯" />;
+    if (!widget) return <InspectorShell title="화면 요소" />;
     const definitionMeta = widgetDefinition(widget.kind);
     const objectView =
       objectViews.find(
@@ -136,7 +142,7 @@ export function InspectorPanel({
       onChange(setWidgetConfig(definition, widget.id, next));
 
     return (
-      <InspectorShell title={definitionMeta.label} subtitle={widget.kind}>
+      <InspectorShell title={`${definitionMeta.label} 설정`}>
         {definitionMeta.fields.map((field) => (
           <WidgetField
             key={field}
@@ -146,6 +152,7 @@ export function InspectorPanel({
             objectViews={objectViews}
             actionViews={actionViews}
             variables={definition.variables}
+            presentation={definition.presentation}
             onPatch={patch}
           />
         ))}
@@ -166,7 +173,7 @@ export function InspectorPanel({
     const section = findSection(definition, selection.sectionId);
     if (!section) return <InspectorShell title="섹션" />;
     return (
-      <InspectorShell title="섹션" subtitle={section.layout}>
+      <InspectorShell title="화면 영역 설정">
         <Field label="제목">
           <Input
             className="h-8 text-[12px]"
@@ -180,7 +187,7 @@ export function InspectorPanel({
         </Field>
         <Field label="레이아웃">
           <p className="mb-1.5 text-[11px] text-muted-foreground">
-            섹션 내 위젯 배치 방식을 결정합니다.
+            이 영역 안에서 정보가 보이는 방식을 정합니다.
           </p>
           <div className="grid grid-cols-3 gap-1.5">
             {SECTION_LAYOUTS.map((layout) => {
@@ -313,7 +320,7 @@ export function InspectorPanel({
 
   if (selection.type === "header") {
     return (
-      <InspectorShell title="헤더" subtitle="module header">
+      <InspectorShell title="앱 상단 설정">
         <label className="flex items-center gap-2 text-[12px] text-[#404854]">
           <input
             type="checkbox"
@@ -333,10 +340,9 @@ export function InspectorPanel({
             }
           />
         </Field>
-        <Field label="위젯 슬롯">
+        <Field label="헤더에 보여줄 정보">
           <p className="mb-1.5 text-[11px] text-muted-foreground">
-            헤더 좌·중·우 슬롯에 위젯을 배치합니다. 메트릭·버튼·검색 등 작은
-            위젯에 적합합니다.
+            화면 위쪽의 왼쪽·가운데·오른쪽에 핵심 숫자, 버튼, 검색을 배치합니다.
           </p>
           <div className="space-y-2">
             <HeaderSlotEditor
@@ -378,13 +384,13 @@ export function InspectorPanel({
 
   if (selection.type === "overlay") {
     const overlay = findOverlay(definition, selection.overlayId);
-    if (!overlay) return <InspectorShell title="오버레이" />;
+    if (!overlay) return <InspectorShell title="보조 화면" />;
     const kinds: { id: OverlayKind; label: string }[] = [
-      { id: "drawer", label: "드로어" },
-      { id: "modal", label: "모달" },
+      { id: "drawer", label: "옆 상세창" },
+      { id: "modal", label: "가운데 확인창" },
     ];
     return (
-      <InspectorShell title="오버레이" subtitle={overlay.kind}>
+      <InspectorShell title="보조 화면">
         <Field label="이름">
           <Input
             className="h-8 text-[12px]"
@@ -418,7 +424,7 @@ export function InspectorPanel({
           </div>
         </Field>
         {overlay.kind === "drawer" ? (
-          <Field label="너비 (px)">
+          <Field label="옆 상세창 너비">
             <Input
               type="number"
               className="h-8 text-[12px]"
@@ -436,8 +442,8 @@ export function InspectorPanel({
           </Field>
         ) : null}
         <p className="text-[11px] text-muted-foreground">
-          런타임 헤더의 오버레이 버튼으로 열립니다. 내부 위젯은 페이지와 동일한
-          객체 선택·필터 상태를 공유합니다.
+          사용자가 상세 내용이나 확인이 필요할 때 열리는 화면입니다. 현재 보고
+          있는 업무와 검색 조건이 그대로 이어집니다.
         </p>
         <button
           type="button"
@@ -447,7 +453,7 @@ export function InspectorPanel({
           }}
           className="flex w-full items-center justify-center gap-1.5 rounded border border-[#d5dce1] py-1.5 text-[12px] text-[#cd4246] hover:bg-[#fbeaea]"
         >
-          <Trash2 className="size-3.5" /> 오버레이 삭제
+          <Trash2 className="size-3.5" /> 보조 화면 삭제
         </button>
       </InspectorShell>
     );
@@ -455,14 +461,14 @@ export function InspectorPanel({
 
   if (selection.type === "variable") {
     const variable = findVariable(definition, selection.variableId);
-    if (!variable) return <InspectorShell title="변수" />;
+    if (!variable) return <InspectorShell title="화면 공유 조건" />;
     const types: { id: VariableType; label: string }[] = [
       { id: "string", label: "문자열" },
       { id: "number", label: "숫자" },
-      { id: "boolean", label: "불리언" },
+      { id: "boolean", label: "예·아니요" },
     ];
     return (
-      <InspectorShell title="변수" subtitle={variable.type}>
+      <InspectorShell title="화면 공유 조건">
         <Field label="이름">
           <Input
             className="h-8 text-[12px]"
@@ -518,10 +524,8 @@ export function InspectorPanel({
           />
         </Field>
         <p className="text-[11px] text-muted-foreground">
-          컨트롤 위젯(드롭다운)이 이 변수를 설정하고, 데이터
-          위젯(테이블·메트릭·차트)이
-          <span className="font-medium"> 변수 필터</span>로 읽어 서로를
-          구동합니다.
+          한 화면에서 고른 검색 조건을 다른 목록·숫자·차트에서도 함께
+          사용하도록 연결합니다.
         </p>
         <button
           type="button"
@@ -531,7 +535,7 @@ export function InspectorPanel({
           }}
           className="flex w-full items-center justify-center gap-1.5 rounded border border-[#d5dce1] py-1.5 text-[12px] text-[#cd4246] hover:bg-[#fbeaea]"
         >
-          <Trash2 className="size-3.5" /> 변수 삭제
+          <Trash2 className="size-3.5" /> 공유 조건 삭제
         </button>
       </InspectorShell>
     );
@@ -585,7 +589,6 @@ export function InspectorPanel({
 
 function InspectorShell({
   title,
-  subtitle,
   children,
 }: {
   title: string;
@@ -593,18 +596,13 @@ function InspectorShell({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[#e4e9ed] px-3">
-        <span className="text-[12px] font-semibold text-[#1c2127]">
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <div className="flex min-h-14 shrink-0 items-center border-b border-[#e4e9ed] px-4 py-3">
+        <span className="text-[13px] font-bold text-[#1c2127]">
           {title}
         </span>
-        {subtitle ? (
-          <span className="font-mono text-[10px] text-muted-foreground">
-            {subtitle}
-          </span>
-        ) : null}
       </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+      <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
         {children}
       </div>
     </div>
@@ -650,7 +648,7 @@ function HeaderSlotEditor({
               type="button"
               className="flex items-center gap-1 rounded border border-[#d5dce1] px-1.5 py-0.5 text-[10px] text-[#404854] hover:bg-[#f6f8fa]"
             >
-              <Plus className="size-3" /> 위젯
+              <Plus className="size-3" /> 정보 추가
             </button>
           }
         />
@@ -685,7 +683,7 @@ function HeaderSlotEditor({
                 </button>
                 <button
                   type="button"
-                  aria-label="위젯 제거"
+                  aria-label="화면 요소 제거"
                   onClick={() => {
                     onChange(removeWidget(definition, widget.id));
                     onSelect(null);
@@ -808,6 +806,7 @@ interface WidgetFieldProps {
   objectViews: readonly FoundryLiteOntologyObjectView[];
   actionViews: readonly FoundryLiteOntologyActionView[];
   variables: readonly AppVariable[];
+  presentation: AppPresentation;
   onPatch: (patch: Partial<import("../lib/app-model").WidgetConfig>) => void;
 }
 
@@ -818,9 +817,16 @@ function WidgetField({
   objectViews,
   actionViews,
   variables,
+  presentation,
   onPatch,
 }: WidgetFieldProps) {
-  const properties = objectView?.properties ?? [];
+  const properties = (objectView?.properties ?? []).filter(
+    (property) =>
+      !isTechnicalIdentifierProperty(
+        property.apiName,
+        property.isPrimaryKey === true,
+      ),
+  );
 
   switch (field) {
     case "title":
@@ -836,18 +842,18 @@ function WidgetField({
       );
     case "object":
       return (
-        <Field label="객체 타입">
+        <Field label="보여줄 업무">
           <Select
             value={config.objectApiName ?? undefined}
             onValueChange={(value) => onPatch({ objectApiName: value })}
           >
             <SelectTrigger size="sm" className="h-8 w-full text-[12px]">
-              <SelectValue placeholder="객체 선택" />
+              <SelectValue placeholder="업무 선택" />
             </SelectTrigger>
             <SelectContent>
-              {objectViews.map((view) => (
+              {objectViews.filter((view) => !view.displayName.startsWith("[LOG]")).map((view) => (
                 <SelectItem key={view.apiName} value={view.apiName}>
-                  {view.displayName}
+                  {businessObjectTypeName(view.apiName, view, presentation)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -859,18 +865,18 @@ function WidgetField({
         (view) => view.targetObjectApiName === config.objectApiName,
       );
       return (
-        <Field label="액션">
+        <Field label="실행할 업무">
           <Select
             value={config.actionApiName ?? undefined}
             onValueChange={(value) => onPatch({ actionApiName: value })}
           >
             <SelectTrigger size="sm" className="h-8 w-full text-[12px]">
-              <SelectValue placeholder="액션 선택" />
+              <SelectValue placeholder="업무 선택" />
             </SelectTrigger>
             <SelectContent>
               {options.map((view) => (
                 <SelectItem key={view.apiName} value={view.apiName}>
-                  {view.displayName}
+                  {businessActionName(view.apiName, view, presentation)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -885,11 +891,11 @@ function WidgetField({
       );
       const selected = new Set(config.actionApiNames ?? []);
       return (
-        <Field label="액션 (다중)">
+        <Field label="사용자가 할 수 있는 일">
           <div className="space-y-1 rounded border border-[#e4e9ed] p-2">
             {options.length === 0 ? (
               <p className="text-[11px] text-muted-foreground">
-                이 객체의 액션이 없습니다.
+                현재 연결된 업무가 없습니다.
               </p>
             ) : (
               options.map((apiName) => {
@@ -911,7 +917,7 @@ function WidgetField({
                         onPatch({ actionApiNames: Array.from(next) });
                       }}
                     />
-                    {view?.displayName ?? apiName}
+                    {businessActionName(apiName, view ?? null, presentation)}
                   </label>
                 );
               })
@@ -923,7 +929,7 @@ function WidgetField({
     case "properties": {
       const selected = new Set(config.propertyApiNames ?? []);
       return (
-        <Field label="속성 (비우면 전체)">
+        <Field label="보여줄 정보 (비우면 전체)">
           <div className="max-h-40 space-y-1 overflow-auto rounded border border-[#e4e9ed] p-2">
             {properties.map((property) => (
               <label
@@ -941,10 +947,7 @@ function WidgetField({
                     onPatch({ propertyApiNames: Array.from(next) });
                   }}
                 />
-                <span className="truncate">{property.apiName}</span>
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-                  {property.dataType}
-                </span>
+                <span className="truncate">{property.displayName}</span>
               </label>
             ))}
           </div>
@@ -962,7 +965,7 @@ function WidgetField({
     case "filterProperty":
       return (
         <PropertySelect
-          label="필터 속성"
+          label="필터 기준"
           value={config.filterProperty ?? null}
           properties={properties}
           onChange={(value) => onPatch({ filterProperty: value })}
@@ -971,7 +974,7 @@ function WidgetField({
     case "groupBy":
       return (
         <PropertySelect
-          label="그룹 기준 속성 (X축)"
+          label="묶어서 볼 기준"
           value={config.groupByProperty ?? null}
           properties={properties}
           onChange={(value) => onPatch({ groupByProperty: value })}
@@ -980,7 +983,7 @@ function WidgetField({
     case "series":
       return (
         <PropertySelect
-          label="시리즈 (누적·범례)"
+          label="비교할 두 번째 기준"
           value={config.seriesProperty ?? null}
           properties={properties}
           allowNone
@@ -1012,7 +1015,7 @@ function WidgetField({
     case "dateProperty":
       return (
         <PropertySelect
-          label="날짜 속성"
+          label="일정 날짜"
           value={config.dateProperty ?? null}
           properties={properties}
           onChange={(value) => onPatch({ dateProperty: value })}
@@ -1021,7 +1024,7 @@ function WidgetField({
     case "metricProperty":
       return (
         <PropertySelect
-          label="대상 속성 (숫자)"
+          label="계산할 숫자 정보"
           value={config.metricProperty ?? null}
           properties={properties}
           allowNone
@@ -1043,7 +1046,7 @@ function WidgetField({
             <SelectContent>
               {METRICS.map((metric) => (
                 <SelectItem key={metric} value={metric}>
-                  {metric}
+                  {metricLabel(metric)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1122,10 +1125,10 @@ function WidgetField({
       );
     case "setsVariable":
       return (
-        <Field label="설정할 변수 (선택 시 값을 씀)">
+        <Field label="연결할 공유 조건">
           {variables.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">
-              변수 패널에서 변수를 먼저 만드세요.
+              왼쪽의 공유 조건에서 먼저 기준을 만들어 주세요.
             </p>
           ) : (
             <Select
@@ -1137,7 +1140,7 @@ function WidgetField({
               }
             >
               <SelectTrigger size="sm" className="h-8 w-full text-[12px]">
-                <SelectValue placeholder="변수 선택" />
+                <SelectValue placeholder="공유 조건 선택" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL_VALUE}>(없음 · 로컬 필터)</SelectItem>
@@ -1165,7 +1168,7 @@ function WidgetField({
   }
 }
 
-/** 데이터 위젯의 변수 필터 바인딩 편집기: property === 변수 값 조건 목록. */
+/** 여러 화면이 같은 선택 조건을 공유하도록 연결한다. */
 function VariableFilterEditor({
   filters,
   properties,
@@ -1179,9 +1182,9 @@ function VariableFilterEditor({
 }) {
   if (variables.length === 0) {
     return (
-      <Field label="변수 필터">
+      <Field label="화면 공유 조건">
         <p className="text-[11px] text-muted-foreground">
-          변수 패널에서 변수를 먼저 만드세요.
+          왼쪽의 공유 조건에서 먼저 기준을 만들어 주세요.
         </p>
       </Field>
     );
@@ -1202,7 +1205,7 @@ function VariableFilterEditor({
     onChange(filters.filter((_, i) => i !== index));
 
   return (
-    <Field label="변수 필터 (property = 변수)">
+    <Field label="화면 공유 조건 연결">
       <div className="space-y-2">
         {filters.map((filter, index) => (
           <div
@@ -1215,12 +1218,12 @@ function VariableFilterEditor({
                 onValueChange={(value) => update(index, { property: value })}
               >
                 <SelectTrigger size="sm" className="h-7 flex-1 text-[12px]">
-                  <SelectValue placeholder="속성" />
+                  <SelectValue placeholder="업무 정보" />
                 </SelectTrigger>
                 <SelectContent>
                   {properties.map((property) => (
                     <SelectItem key={property.apiName} value={property.apiName}>
-                      {property.apiName}
+                      {property.displayName}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1239,12 +1242,12 @@ function VariableFilterEditor({
               onValueChange={(value) => update(index, { variableId: value })}
             >
               <SelectTrigger size="sm" className="h-7 w-full text-[12px]">
-                <SelectValue placeholder="변수" />
+                <SelectValue placeholder="공유 조건" />
               </SelectTrigger>
               <SelectContent>
                 {variables.map((variable) => (
                   <SelectItem key={variable.id} value={variable.id}>
-                    = {variable.name}
+                    {variable.name}와 함께 사용
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1256,7 +1259,7 @@ function VariableFilterEditor({
           onClick={add}
           className="w-full rounded border border-dashed border-[#c5ccd3] py-1.5 text-[11px] text-[#5f6b7c] hover:border-[#2d72d2] hover:text-[#215db0]"
         >
-          + 변수 필터 추가
+          + 공유 조건 연결
         </button>
       </div>
     </Field>
@@ -1283,13 +1286,13 @@ function PropertySelect({
         onValueChange={(next) => onChange(next === ALL_VALUE ? null : next)}
       >
         <SelectTrigger size="sm" className="h-8 w-full text-[12px]">
-          <SelectValue placeholder="속성 선택" />
+          <SelectValue placeholder="업무 정보 선택" />
         </SelectTrigger>
         <SelectContent>
           {allowNone ? <SelectItem value={ALL_VALUE}>(없음)</SelectItem> : null}
           {properties.map((property) => (
             <SelectItem key={property.apiName} value={property.apiName}>
-              {property.apiName}
+              {property.displayName}
             </SelectItem>
           ))}
         </SelectContent>
@@ -1345,12 +1348,12 @@ function ColumnConfigEditor({
   };
 
   return (
-    <Field label="컬럼">
+    <Field label="목록에 보여줄 정보">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="text-[10px] text-muted-foreground">
           {isExplicit
-            ? `${columns.length}개 컬럼`
-            : "전체 (커스터마이즈 시 고정)"}
+            ? `${columns.length}개 정보`
+            : "모든 정보 표시"}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -1358,7 +1361,7 @@ function ColumnConfigEditor({
             onClick={() => onChange(properties.map((p) => p.apiName))}
             className="text-[11px] font-medium text-[#2d72d2] hover:underline"
           >
-            모든 속성
+            모두 표시
           </button>
           {isExplicit ? (
             <button
@@ -1397,12 +1400,9 @@ function ColumnConfigEditor({
             <span className="min-w-0 flex-1 truncate text-[12px] text-[#1c2127]">
               {nameFor(apiName)}
             </span>
-            <span className="shrink-0 font-mono text-[10px] text-[#a7b1bd]">
-              {apiName}
-            </span>
             <button
               type="button"
-              aria-label={`${apiName} 컬럼 제거`}
+              aria-label={`${nameFor(apiName)} 정보 제거`}
               onClick={() => onChange(columns.filter((c) => c !== apiName))}
               className="flex size-5 shrink-0 items-center justify-center rounded text-[#8f99a8] hover:bg-[#fbeaea] hover:text-[#cd4246]"
             >
@@ -1419,14 +1419,14 @@ function ColumnConfigEditor({
               autoFocus
               className="h-7 text-[12px]"
               value={query}
-              placeholder="속성 검색..."
+              placeholder="보여줄 정보 검색..."
               onChange={(event) => setQuery(event.target.value)}
             />
           </div>
           <div className="max-h-40 overflow-auto p-1">
             {available.length === 0 ? (
               <p className="px-1.5 py-2 text-center text-[11px] text-[#8f99a8]">
-                추가할 속성이 없습니다.
+                추가할 정보가 없습니다.
               </p>
             ) : (
               available.map((property) => (
@@ -1443,9 +1443,6 @@ function ColumnConfigEditor({
                   <span className="min-w-0 flex-1 truncate text-[12px] text-[#1c2127]">
                     {property.displayName}
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                    {property.dataType}
-                  </span>
                 </button>
               ))
             )}
@@ -1457,7 +1454,7 @@ function ColumnConfigEditor({
           onClick={() => setShowPicker(true)}
           className="mt-1.5 flex w-full items-center justify-center gap-1 rounded border border-dashed border-[#c5ccd3] py-1.5 text-[11px] text-[#5f6b7c] hover:border-[#2d72d2] hover:text-[#215db0]"
         >
-          <Plus className="size-3" /> 컬럼 추가
+          <Plus className="size-3" /> 보여줄 정보 추가
         </button>
       )}
     </Field>
@@ -1522,7 +1519,7 @@ function MetricsEditor({
                 <SelectContent>
                   {METRICS.map((metric) => (
                     <SelectItem key={metric} value={metric}>
-                      {metric}
+                      {metricLabel(metric)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1537,7 +1534,7 @@ function MetricsEditor({
                   }
                 >
                   <SelectTrigger size="sm" className="h-7 flex-1 text-[12px]">
-                    <SelectValue placeholder="속성" />
+                    <SelectValue placeholder="업무 정보" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={ALL_VALUE}>(없음)</SelectItem>
@@ -1546,7 +1543,7 @@ function MetricsEditor({
                         key={property.apiName}
                         value={property.apiName}
                       >
-                        {property.apiName}
+                        {property.displayName}
                       </SelectItem>
                     ))}
                   </SelectContent>

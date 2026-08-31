@@ -7,7 +7,7 @@ const template = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const runtime = readFileSync(new URL("./foundry-lite-mcp-osdk.js", import.meta.url), "utf8");
 
 test("GPT 업무 화면은 Workshop 정의와 위젯만 렌더링한다", () => {
-  assert.match(template, /Workshop definition · shared runtime/);
+  assert.match(template, /GPT와 외부 앱이 같은 업무 정의를 사용합니다/);
   assert.match(template, /data-workshop-widget/);
   assert.match(template, /experience\?\.workshopApp/);
   assert.match(template, /사람 확인 대기함/);
@@ -18,7 +18,10 @@ test("GPT 업무 화면은 Workshop 정의와 위젯만 렌더링한다", () => 
   assert.match(template, /kind === "pivotTable"/);
   assert.match(template, /section\.span/);
   assert.match(template, /theme\.preset/);
-  assert.match(template, /Live work pulse/);
+  assert.match(template, /오늘의 업무 흐름/);
+  assert.match(template, /statusDisplay/);
+  assert.match(template, /displayValue/);
+  assert.doesNotMatch(template, /Operational workspace|Live work pulse/);
   assert.doesNotMatch(template, /LIVE WORK SYSTEM|work_queue|action_panel|ai_suggestion_panel/);
   assert.doesNotMatch(template, /tools\/call|action\.[A-Za-z].*\.apply|object\.[A-Za-z].*\.search/);
   assert.match(runtime, /createFoundryLiteBusinessSystemOsdk|BusinessSystem/);

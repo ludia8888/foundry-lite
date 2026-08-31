@@ -43,6 +43,12 @@ export function CommandPalette({ isOpen, onOpenChange }: CommandPaletteProps) {
         (event.key === "k" || event.key === "j") &&
         (event.metaKey || event.ctrlKey)
       ) {
+        if (
+          event.key === "k" &&
+          document.querySelector("[data-workshop-runtime]")
+        ) {
+          return;
+        }
         event.preventDefault();
         onOpenChange(!isOpen);
       }
