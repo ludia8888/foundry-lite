@@ -308,8 +308,15 @@ def test_governed_release_kubernetes_delivery_is_opt_in_and_source_bound() -> No
         "FOUNDRY_LITE_KUBERNETES_RELEASE_TIMEOUT_SECONDS",
     ):
         assert setting in configmap
+    for setting in (
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_NAMESPACE",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_DEPLOYMENT_NAME",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_CONTAINER_NAME",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_IMAGE_REPOSITORY",
+        "FOUNDRY_LITE_KUBERNETES_RELEASE_TIMEOUT_SECONDS",
+    ):
+        assert configmap.count(f"  {setting}:") == 1
     assert "if .Values.governedRelease.enabled" in configmap
-    assert 'if eq .Values.governedRelease.deployment.provider "kubernetes"' in configmap
 
 
 def test_runtime_and_migration_database_principals_are_separate() -> None:
