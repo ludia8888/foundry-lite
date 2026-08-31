@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import cast
 
 from foundry_lite.application.ports import (
@@ -27,6 +28,7 @@ from foundry_lite.application.services.mcp_session_oauth_owner import (
 from foundry_lite.application.services.mcp_stream_lease import mcp_stream_conflict, new_mcp_stream_lease
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound
+from foundry_lite.security.tenant_context import tenant_context
 
 JsonObject = Mapping[str, object]
 LAZY_DISCOVERY_MARKER = "__foundry_lite_builder_lazy_discovery__"
@@ -52,7 +54,7 @@ class FdeMcpSessionLedger:
     def open(self, ctx: RequestContext, application_id: str, session_id: str) -> OsdkMcpSessionRow:
         self._require_session_id(session_id)
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             existing = self.repository.insert_mcp_session_or_get_existing(
                 transaction=conn,
                 record=_session_record(ctx, application_id, session_id, now),
@@ -75,7 +77,7 @@ class FdeMcpSessionLedger:
 
     def require_active(self, ctx: RequestContext, application_id: str, session_id: str) -> OsdkMcpSessionRow:
         self._require_session_id(session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             row = self.repository.mcp_session_by_id(transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id)
             return self._required_owner(conn, ctx, application_id, row)
 
@@ -88,7 +90,7 @@ class FdeMcpSessionLedger:
         after_sequence: int = 0,
     ) -> list[OsdkMcpSessionEventRow]:
         self._require_session_id(session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             row = self.repository.mcp_session_by_id(transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id)
             self._required_owner(conn, ctx, application_id, row)
             return self.repository.mcp_session_events_after(
@@ -101,7 +103,7 @@ class FdeMcpSessionLedger:
     def claim_stream(self, ctx: RequestContext, application_id: str, session_id: str) -> OsdkMcpStreamLease:
         self._require_session_id(session_id)
         claimed_at, lease = new_mcp_stream_lease()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             row = self.repository.mcp_session_by_id(transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id)
             self._required_owner(conn, ctx, application_id, row)
             claimed = self.repository.claim_mcp_session_stream_lease(
@@ -121,7 +123,7 @@ class FdeMcpSessionLedger:
 
     def release_stream(self, ctx: RequestContext, application_id: str, session_id: str, lease_id: str) -> bool:
         self._require_session_id(session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             row = self.repository.mcp_session_by_id(transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id)
             self._required_owner(conn, ctx, application_id, row, allow_terminated=True)
             return self.repository.release_mcp_session_stream_lease(
@@ -134,7 +136,7 @@ class FdeMcpSessionLedger:
 
     def close(self, ctx: RequestContext, application_id: str, session_id: str) -> OsdkMcpSessionRow:
         self._require_session_id(session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             row = self.repository.mcp_session_by_id(transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id)
             active = self._required_owner(conn, ctx, application_id, row)
             self._append(conn, ctx, active, "notifications/foundry-lite/session_closed", {})
@@ -150,7 +152,7 @@ class FdeMcpSessionLedger:
 
     def activated_tool_ids(self, ctx: RequestContext, application_id: str, session_id: str) -> set[str]:
         self.require_active(ctx, application_id, session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             rows = self.repository.mcp_tool_activations(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -163,7 +165,7 @@ class FdeMcpSessionLedger:
 
     def mark_lazy(self, ctx: RequestContext, application_id: str, session_id: str) -> None:
         self.require_active(ctx, application_id, session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self.repository.activate_mcp_tool(
                 transaction=conn,
                 record=_activation_record(ctx, application_id, session_id, LAZY_DISCOVERY_MARKER, "lazy"),
@@ -178,7 +180,7 @@ class FdeMcpSessionLedger:
         payload: JsonObject,
     ) -> OsdkMcpSessionEventRow:
         self._require_session_id(session_id)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             row = self.repository.mcp_session_by_id(transaction=conn, tenant_id=ctx.tenant_id, session_id=session_id)
             owner = self._required_owner(conn, ctx, application_id, row)
             return self._append(conn, ctx, owner, event_type, payload)
@@ -218,6 +220,14 @@ class FdeMcpSessionLedger:
         if event is None:
             raise _session_not_found(self.plane)
         return event
+
+    @contextmanager
+    def _transaction(self, ctx: RequestContext) -> Iterator[TransactionContext]:
+        """Begin each ledger transaction with the authenticated tenant bound."""
+
+        with tenant_context(ctx.tenant_id):
+            with self.engine.begin() as conn:
+                yield conn
 
     def _require_session_id(self, session_id: str) -> None:
         require_mcp_session_namespace(session_id, self.plane)

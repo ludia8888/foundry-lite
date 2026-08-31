@@ -13,7 +13,8 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.osdk_application_repository import (
     SqlAlchemyOsdkApplicationRepository,
 )
-from sqlalchemy import create_engine
+from foundry_lite.security.tenant_context import current_tenant_id
+from sqlalchemy import create_engine, event
 
 
 def test_release_mcp_session_rejects_a_different_oauth_session_without_storing_raw_sid() -> None:
@@ -43,6 +44,25 @@ def test_release_mcp_session_rejects_a_different_oauth_session_without_storing_r
     assert "raw-oauth-session-must-not-persist" not in persisted
     assert "oauth-session:sha256:original" in persisted
     assert '"oauthSessionAuthority": "local"' in persisted
+
+
+def test_release_mcp_session_binds_authenticated_tenant_before_each_transaction() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    db.create_database(engine)
+    observed_tenants: list[str | None] = []
+    event.listen(engine, "begin", lambda _conn: observed_tenants.append(current_tenant_id()))
+    ledger = FdeMcpSessionLedger(
+        engine,
+        SqlAlchemyOsdkApplicationRepository(engine),
+        plane="release",
+    )
+    ctx = _context()
+
+    ledger.open(ctx, "release-app", "mcp-release-tenant-binding-0001")
+    ledger.require_active(ctx, "release-app", "mcp-release-tenant-binding-0001")
+
+    assert observed_tenants == [ctx.tenant_id, ctx.tenant_id]
+    assert current_tenant_id() is None
 
 
 def _context() -> RequestContext:
