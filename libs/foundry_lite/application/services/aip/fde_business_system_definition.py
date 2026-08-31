@@ -12,7 +12,7 @@ from foundry_lite.application.services.aip.fde_workshop_definition import (
 
 JsonObject = Mapping[str, object]
 
-_SCHEMA_VERSION = "foundry-lite-business-system-definition/v2"
+_SCHEMA_VERSION = "foundry-lite-business-system-definition/v3"
 
 
 def build_business_system_definition(

@@ -19,6 +19,9 @@ test("GPT 업무 화면은 Workshop 정의와 위젯만 렌더링한다", () => 
   assert.match(template, /section\.span/);
   assert.match(template, /theme\.preset/);
   assert.match(template, /오늘의 업무 흐름/);
+  assert.match(template, /capabilityGroups/);
+  assert.match(template, /trustCenter/);
+  assert.match(template, /approvalStatement/);
   assert.match(template, /statusDisplay/);
   assert.match(template, /displayValue/);
   assert.doesNotMatch(template, /Operational workspace|Live work pulse/);

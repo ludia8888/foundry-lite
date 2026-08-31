@@ -27,10 +27,10 @@ export default function AipPage() {
   return (
     <div className="space-y-4 p-4">
       <PageHeader
-        title="AIP"
-        description="온톨로지·데이터·운영 근거를 바탕으로 AI 에이전트와 빌더 플로우를 실행하고, 평가·릴리스를 운영 evidence와 연결합니다."
+        title="AI 업무 운영"
+        description="회사의 사람, 기록, 규칙과 목표를 설명하면 AI FDE가 업무 서비스로 설계하고 안전한 실행과 배포 준비까지 이어갑니다."
         meta={
-          <StatusPill intent="info">AI FDE · agent-runtime · builder · evals</StatusPill>
+          <StatusPill intent="info">AI FDE · 업무 설계 · 실행 · 배포 검토</StatusPill>
         }
       />
 
@@ -40,16 +40,16 @@ export default function AipPage() {
           className="h-9 w-full justify-start gap-4 border-b"
         >
           <TabsTrigger value="agent" className="grow-0 px-1 text-[13px]">
-            에이전트 실행
+            실제 업무
           </TabsTrigger>
           <TabsTrigger value="fde" className="grow-0 px-1 text-[13px]">
-            AI FDE
+            업무 앱 만들기
           </TabsTrigger>
           <TabsTrigger value="builder" className="grow-0 px-1 text-[13px]">
-            빌더
+            자동화 만들기
           </TabsTrigger>
           <TabsTrigger value="evals" className="grow-0 px-1 text-[13px]">
-            평가 · 릴리스
+            운영 시작과 개선
           </TabsTrigger>
         </TabsList>
 

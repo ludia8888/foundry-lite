@@ -2,7 +2,7 @@ import type {
   FoundryLiteOntologyActionView,
   FoundryLiteOntologyObjectView,
 } from "@foundry-lite/sdk/react";
-import { CheckCircle2, MonitorSmartphone, Sparkles, UsersRound } from "lucide-react";
+import { ListChecks, MonitorSmartphone, Sparkles, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -224,15 +224,18 @@ export function BuilderMode({
 }
 
 function BusinessReviewHeader({ definition, objectCount, actionCount }: { definition: AppDefinition; objectCount: number; actionCount: number }) {
-  const roles = definition.presentation.roles;
+  const audiences = definition.product.audiences;
+  const readySteps = definition.product.onboarding.filter(
+    (step) => step.status === "design_ready",
+  ).length;
   return (
     <div className="shrink-0 border-b border-[#e1e6eb] bg-white px-5 py-4">
       <div className="flex items-center gap-5">
         <div className="flex size-10 items-center justify-center rounded-2xl bg-[#eeeafd] text-[#6651c7]"><Sparkles className="size-5" /></div>
         <div className="min-w-0 flex-1"><div className="text-[11px] font-bold text-[#6651c7]">AI FDE 검토</div><h1 className="mt-0.5 truncate text-[17px] font-bold tracking-[-.025em] text-[#172033]">누가 무엇을 보고, 어떤 일을 할지 확인하세요</h1></div>
-        <ReviewSignal icon={UsersRound} label="사용자" value={roles.length ? roles.slice(0, 2).join(" · ") : "역할 확인 필요"} />
-        <ReviewSignal icon={MonitorSmartphone} label="화면" value={`${definition.pages.length}개 · 모바일 포함`} />
-        <ReviewSignal icon={CheckCircle2} label="업무 연결" value={`${objectCount}개 개념 · ${actionCount}개 행동`} isReady={objectCount > 0 && actionCount > 0} />
+        <ReviewSignal icon={UsersRound} label="사용자" value={audiences.length ? audiences.slice(0, 2).map((audience) => audience.name).join(" · ") : "역할 확인 필요"} />
+        <ReviewSignal icon={MonitorSmartphone} label="제품 구성" value={`${definition.pages.length}개 화면 · ${definition.product.capabilityGroups.length}개 업무 영역`} />
+        <ReviewSignal icon={ListChecks} label="운영 준비" value={`${readySteps}/${definition.product.onboarding.length} 확인 · 기록 ${objectCount} · 업무 ${actionCount}`} isReady={readySteps === definition.product.onboarding.length && readySteps > 0} />
       </div>
     </div>
   );

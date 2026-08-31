@@ -63,7 +63,16 @@ export function AiFdePanel({ workspace }: { workspace: AipWorkspace }) {
   };
 
   return (
-    <div className="grid gap-3 xl:grid-cols-[minmax(360px,470px)_minmax(0,1fr)]">
+    <div className="space-y-4">
+      <DomainOsStudioPanel workspace={workspace} />
+      <details className="rounded-xl border border-slate-300/70 bg-card p-3 dark:border-slate-700">
+        <summary className="cursor-pointer list-none rounded-lg px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900">
+          고급 운영 도구 · 전문 담당자용
+          <span className="ml-2 font-normal text-muted-foreground">
+            작업 공간, 도구 권한, 실행 증거를 직접 관리할 때만 엽니다
+          </span>
+        </summary>
+        <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(360px,470px)_minmax(0,1fr)]">
       <div className="space-y-3">
         <div className="overflow-hidden rounded border bg-card">
           <div className="border-b bg-muted/25 px-3 py-2.5">
@@ -169,9 +178,6 @@ export function AiFdePanel({ workspace }: { workspace: AipWorkspace }) {
             </Button>
           </div>
         </div>
-
-        <DomainOsStudioPanel workspace={workspace} />
-
         {fdeCatalog ? <ModeBoundary modes={fdeCatalog.modes} /> : null}
         {fdeCatalogError ? (
           <div className="rounded border border-destructive/30 bg-destructive/5 p-2 text-[11px] text-destructive">
@@ -246,6 +252,8 @@ export function AiFdePanel({ workspace }: { workspace: AipWorkspace }) {
           />
         )}
       </div>
+        </div>
+      </details>
     </div>
   );
 }

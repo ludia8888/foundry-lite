@@ -99,8 +99,8 @@ function RuntimeSidebar({ definition, selectedPage, onSelect }: { definition: Ap
           return <button key={page.id} type="button" onClick={() => onSelect(page.id)} className={cn("group flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[13px] font-semibold transition", isSelected ? "bg-white text-[var(--workshop-nav)] shadow-[0_8px_24px_-18px_rgba(0,0,0,.8)]" : "text-white/62 hover:bg-white/8 hover:text-white")}><Icon className={cn("size-[18px]", isSelected ? "text-[var(--workshop-accent)]" : "text-white/42")} /><span className="min-w-0 flex-1 truncate">{page.name}</span>{isSelected ? <ChevronRight className="size-4 text-[var(--workshop-accent)]" /> : null}</button>;
         })}
       </nav>
-      <div className="m-3 rounded-2xl border border-white/10 bg-white/6 p-4"><div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 size-5 text-emerald-300" /><div><div className="text-[12px] font-semibold text-white/88">안전한 업무 실행</div><p className="mt-1 text-[10px] leading-4 text-white/46">권한과 승인 규칙이 모든 변경에 적용됩니다.</p></div></div></div>
-      <button type="button" className="flex items-center gap-3 border-t border-white/10 px-5 py-4 text-left"><CircleUserRound className="size-8 text-white/58" /><div className="min-w-0 flex-1"><div className="text-[12px] font-semibold">{definition.presentation.chrome.userLabel}</div><div className="mt-0.5 text-[10px] text-white/42">역할별 권한 적용 중</div></div><ChevronRight className="size-4 text-white/35" /></button>
+      <div className="m-3 rounded-2xl border border-white/10 bg-white/6 p-4"><div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 size-5 text-emerald-300" /><div><div className="text-[12px] font-semibold text-white/88">안전한 업무 실행</div><p className="mt-1 text-[10px] leading-4 text-white/46">{definition.product.trustCenter.approvalStatement}</p></div></div></div>
+      <div className="flex items-center gap-3 border-t border-white/10 px-5 py-4"><CircleUserRound className="size-8 text-white/58" /><div className="min-w-0 flex-1"><div className="text-[12px] font-semibold">{definition.presentation.chrome.userLabel}</div><div className="mt-0.5 text-[10px] text-white/42">로그인 역할에 맞는 업무만 표시</div></div></div>
     </aside>
   );
 }
@@ -128,28 +128,36 @@ function DesktopProductBar({ definition }: { definition: AppDefinition }) {
   return (
     <div className="relative hidden h-16 shrink-0 items-center border-b border-[var(--workshop-line)] bg-white px-7 lg:flex">
       <label className="flex h-10 w-full max-w-[420px] items-center gap-2 rounded-xl bg-[var(--workshop-subtle)] px-3 text-[#7b8798]"><Search className="size-4" /><span className="sr-only">전체 업무 검색</span><input data-workshop-runtime-search ref={searchRef} value={state.searchText} onChange={(event) => dispatch({ type: "setSearch", text: event.target.value })} className="min-w-0 flex-1 bg-transparent text-[12px] text-[#334155] outline-none placeholder:text-[#8a96a6]" placeholder="고객, 업무, 담당자 검색" /><kbd className="rounded-md border border-[var(--workshop-line)] bg-white px-1.5 py-0.5 text-[9px]">⌘ K</kbd></label>
-      <div className="ml-auto flex items-center gap-1"><ChromeButton icon={CircleHelp} label={definition.presentation.chrome.helpLabel} isExpanded={openPanel === "help"} onClick={() => setOpenPanel((current) => current === "help" ? null : "help")} /><ChromeButton icon={Bell} label={definition.presentation.chrome.notificationLabel} hasDot isExpanded={openPanel === "notifications"} onClick={() => setOpenPanel((current) => current === "notifications" ? null : "notifications")} /><button type="button" aria-expanded={openPanel === "user"} onClick={() => setOpenPanel((current) => current === "user" ? null : "user")} className="ml-2 flex items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-[var(--workshop-subtle)]"><CircleUserRound className="size-7 text-[#64748b]" /><span className="text-[12px] font-semibold text-[#334155]">{definition.presentation.chrome.userLabel}</span></button></div>
+      <div className="ml-auto flex items-center gap-1"><ChromeButton icon={CircleHelp} label={definition.presentation.chrome.helpLabel} isExpanded={openPanel === "help"} onClick={() => setOpenPanel((current) => current === "help" ? null : "help")} /><ChromeButton icon={Bell} label={definition.presentation.chrome.notificationLabel} isExpanded={openPanel === "notifications"} onClick={() => setOpenPanel((current) => current === "notifications" ? null : "notifications")} /><button type="button" aria-expanded={openPanel === "user"} onClick={() => setOpenPanel((current) => current === "user" ? null : "user")} className="ml-2 flex items-center gap-2 rounded-xl px-2 py-1.5 hover:bg-[var(--workshop-subtle)]"><CircleUserRound className="size-7 text-[#64748b]" /><span className="text-[12px] font-semibold text-[#334155]">{definition.presentation.chrome.userLabel}</span></button></div>
       {openPanel ? <ProductPopover kind={openPanel} definition={definition} onClose={() => setOpenPanel(null)} /> : null}
     </div>
   );
 }
 
-function ChromeButton({ icon: Icon, label, hasDot = false, isExpanded, onClick }: { icon: LucideIcon; label: string; hasDot?: boolean; isExpanded?: boolean; onClick?: () => void }) {
-  return <button type="button" aria-label={label} aria-expanded={isExpanded} onClick={onClick} className="relative rounded-xl p-2.5 text-[#64748b] hover:bg-[var(--workshop-subtle)] hover:text-[var(--workshop-ink)]"><Icon className="size-[18px]" />{hasDot ? <span className="absolute right-2 top-2 size-2 rounded-full border-2 border-white bg-[var(--workshop-accent)]" /> : null}</button>;
+function ChromeButton({ icon: Icon, label, isExpanded, onClick }: { icon: LucideIcon; label: string; isExpanded?: boolean; onClick?: () => void }) {
+  return <button type="button" aria-label={label} aria-expanded={isExpanded} onClick={onClick} className="relative rounded-xl p-2.5 text-[#64748b] hover:bg-[var(--workshop-subtle)] hover:text-[var(--workshop-ink)]"><Icon className="size-[18px]" /></button>;
 }
 
 function MobileProductBar({ definition, isOpen, onToggle }: { definition: AppDefinition; isOpen: boolean; onToggle: () => void }) {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  return <div className="relative flex h-16 shrink-0 items-center gap-3 border-b border-[var(--workshop-line)] bg-white px-4 lg:hidden"><button type="button" aria-label={isOpen ? "메뉴 닫기" : "메뉴 열기"} onClick={onToggle} className="rounded-xl p-2 text-[#475569] hover:bg-[var(--workshop-subtle)]">{isOpen ? <X className="size-5" /> : <Menu className="size-5" />}</button><BrandMark definition={definition} /><span className="min-w-0 flex-1 truncate text-[14px] font-bold">{definition.theme.brandName}</span><ChromeButton icon={Bell} label={definition.presentation.chrome.notificationLabel} hasDot isExpanded={isNotificationsOpen} onClick={() => setIsNotificationsOpen((current) => !current)} />{isNotificationsOpen ? <ProductPopover kind="notifications" definition={definition} onClose={() => setIsNotificationsOpen(false)} /> : null}</div>;
+  return <div className="relative flex h-16 shrink-0 items-center gap-3 border-b border-[var(--workshop-line)] bg-white px-4 lg:hidden"><button type="button" aria-label={isOpen ? "메뉴 닫기" : "메뉴 열기"} onClick={onToggle} className="rounded-xl p-2 text-[#475569] hover:bg-[var(--workshop-subtle)]">{isOpen ? <X className="size-5" /> : <Menu className="size-5" />}</button><BrandMark definition={definition} /><span className="min-w-0 flex-1 truncate text-[14px] font-bold">{definition.theme.brandName}</span><ChromeButton icon={Bell} label={definition.presentation.chrome.notificationLabel} isExpanded={isNotificationsOpen} onClick={() => setIsNotificationsOpen((current) => !current)} />{isNotificationsOpen ? <ProductPopover kind="notifications" definition={definition} onClose={() => setIsNotificationsOpen(false)} /> : null}</div>;
 }
 
 function ProductPopover({ kind, definition, onClose }: { kind: "help" | "notifications" | "user"; definition: AppDefinition; onClose: () => void }) {
-  const content = {
-    help: { title: "업무 도움말", body: "원하는 업무를 자연어로 설명하면 AI FDE가 화면, 규칙, 자동화 개선안을 함께 제안합니다.", action: "AI FDE에게 질문하기" },
-    notifications: { title: "알림", body: "승인 요청과 담당 업무 변경이 이곳에 모입니다. 현재 새로 확인할 알림은 없습니다.", action: "모든 알림 보기" },
-    user: { title: definition.presentation.chrome.userLabel, body: `${definition.presentation.roles.join(" · ") || "등록된 사용자"} 역할의 허용된 업무만 표시됩니다.`, action: "계정과 권한 보기" },
-  }[kind];
-  return <section aria-label={content.title} className="absolute right-3 top-[58px] z-50 w-[min(340px,calc(100vw-24px))] rounded-2xl border border-[var(--workshop-line)] bg-white p-4 shadow-[0_24px_70px_-28px_rgba(15,23,42,.55)] lg:right-7 lg:top-[58px]"><div className="flex items-center gap-3"><div className="min-w-0 flex-1"><h2 className="text-[14px] font-bold text-[var(--workshop-ink)]">{content.title}</h2><p className="mt-2 text-[12px] leading-5 text-[#64748b]">{content.body}</p></div><button type="button" aria-label="닫기" onClick={onClose} className="self-start rounded-lg p-1.5 text-[#7b8798] hover:bg-[var(--workshop-subtle)]"><X className="size-4" /></button></div><button type="button" onClick={onClose} className="mt-4 w-full rounded-xl bg-[var(--workshop-accent-soft)] px-3 py-2.5 text-[12px] font-bold text-[var(--workshop-accent)]">{content.action}</button></section>;
+  const title = kind === "help" ? "업무 도움말" : kind === "notifications" ? "알림" : "사용자와 권한";
+  return <section aria-label={title} className="absolute right-3 top-[58px] z-50 w-[min(380px,calc(100vw-24px))] rounded-2xl border border-[var(--workshop-line)] bg-white p-4 shadow-[0_24px_70px_-28px_rgba(15,23,42,.55)] lg:right-7 lg:top-[58px]"><div className="flex items-center gap-3"><h2 className="min-w-0 flex-1 text-[14px] font-bold text-[var(--workshop-ink)]">{title}</h2><button type="button" aria-label="닫기" onClick={onClose} className="rounded-lg p-1.5 text-[#7b8798] hover:bg-[var(--workshop-subtle)]"><X className="size-4" /></button></div>{kind === "help" ? <ProductHelp definition={definition} /> : kind === "notifications" ? <ProductNotifications /> : <ProductAudiences definition={definition} />}</section>;
+}
+
+function ProductHelp({ definition }: { definition: AppDefinition }) {
+  return <div className="mt-3 space-y-3"><p className="text-[11px] leading-5 text-[#64748b]">이 서비스는 {definition.product.capabilityGroups.map((group) => group.name).join(" · ") || "회사의 업무 흐름"}을 한곳에서 처리합니다.</p><div className="rounded-xl bg-[var(--workshop-subtle)] p-3"><div className="flex items-center gap-2 text-[11px] font-bold"><ShieldCheck className="size-4 text-emerald-600" />정보와 변경 보호</div><p className="mt-1.5 text-[10px] leading-4 text-[#64748b]">{definition.product.trustCenter.accessStatement}</p><p className="mt-1 text-[10px] leading-4 text-[#64748b]">{definition.product.trustCenter.auditStatement}</p></div></div>;
+}
+
+function ProductNotifications() {
+  return <div className="mt-3 rounded-xl bg-[var(--workshop-subtle)] p-4 text-center"><Bell className="mx-auto size-5 text-[#94a3b8]" /><div className="mt-2 text-[11px] font-bold text-[#475569]">지금 표시할 새 알림이 없습니다</div><p className="mt-1 text-[10px] leading-4 text-[#7b8798]">승인 요청, 담당 업무 변경, 다가오는 기한이 생기면 이곳에 표시됩니다.</p></div>;
+}
+
+function ProductAudiences({ definition }: { definition: AppDefinition }) {
+  return <div className="mt-3 space-y-2"><p className="text-[10px] leading-4 text-[#7b8798]">실제 화면과 업무 버튼은 로그인한 사용자의 역할을 기준으로 제한됩니다.</p>{definition.product.audiences.length ? definition.product.audiences.map((audience) => <div key={audience.id} className="rounded-xl border border-[var(--workshop-line)] p-3"><div className="text-[11px] font-bold text-[#334155]">{audience.name}</div><p className="mt-1 text-[10px] leading-4 text-[#7b8798]">{audience.summary}</p></div>) : <div className="rounded-xl bg-amber-50 p-3 text-[10px] text-amber-800">운영 전에 사용자 역할을 확인해야 합니다.</div>}</div>;
 }
 
 function MobileNavigation({ pages, selectedPage, onSelect }: { pages: AppPage[]; selectedPage: AppPage; onSelect: (pageId: string) => void }) {
@@ -159,9 +167,12 @@ function MobileNavigation({ pages, selectedPage, onSelect }: { pages: AppPage[];
 function PageContext({ definition, page, actionCount }: { definition: AppDefinition; page: AppPage; actionCount: number }) {
   const state = useRuntimeState();
   const filterCount = Object.keys(state.filters).length + (state.searchText ? 1 : 0);
+  const capabilityName = definition.product.capabilityGroups.find((group) =>
+    group.pageIds.includes(page.pageId),
+  )?.name ?? "오늘의 업무 흐름";
   return (
     <header className="bg-white px-4 pb-5 pt-5 md:px-7 md:pb-6 md:pt-7">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end"><div className="min-w-0 flex-1"><div className="flex items-center gap-2 text-[11px] font-bold text-[var(--workshop-accent)]"><Sparkles className="size-4" />오늘의 업무 흐름</div><h1 className="mt-2 text-[26px] font-bold tracking-[-.045em] text-[var(--workshop-ink)] md:text-[32px]">{page.name}</h1><p className="mt-2 max-w-3xl text-[13px] leading-6 text-[#64748b]">{definition.purpose}</p></div><div className="grid grid-cols-3 gap-2 xl:w-[350px]"><Pulse label="현재 범위" value={filterCount ? `${filterCount}개 조건` : "전체 업무"} /><Pulse label="선택 상태" value={state.selectedObjectId ? "선택 완료" : "선택 전"} /><Pulse label="운영 상태" value="최신" isLive /></div></div>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end"><div className="min-w-0 flex-1"><div className="flex items-center gap-2 text-[11px] font-bold text-[var(--workshop-accent)]"><Sparkles className="size-4" />{capabilityName}</div><h1 className="mt-2 text-[26px] font-bold tracking-[-.045em] text-[var(--workshop-ink)] md:text-[32px]">{page.name}</h1><p className="mt-2 max-w-3xl text-[13px] leading-6 text-[#64748b]">{definition.purpose}</p></div><div className="grid grid-cols-3 gap-2 xl:w-[350px]"><Pulse label="현재 범위" value={filterCount ? `${filterCount}개 조건` : "전체 업무"} /><Pulse label="선택 상태" value={state.selectedObjectId ? "선택 완료" : "선택 전"} /><Pulse label="운영 상태" value="최신" isLive /></div></div>
       <DecisionRail isSelected={Boolean(state.selectedObjectId)} actionCount={actionCount} />
     </header>
   );

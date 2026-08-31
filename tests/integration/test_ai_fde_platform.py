@@ -1998,7 +1998,7 @@ def test_pilot_generates_replay_safe_seed_ontology_osdk_and_retrievable_bundle(
         "exceptions": [],
     }
     assert plan["domainOsBlueprint"]["readiness"]["isReady"] is True
-    assert plan["businessSystemDefinition"]["schemaVersion"] == "foundry-lite-business-system-definition/v2"
+    assert plan["businessSystemDefinition"]["schemaVersion"] == "foundry-lite-business-system-definition/v3"
     assert plan["businessSystemDefinition"]["experience"]["surfaces"][0]["id"] == "chatgpt"
     assert plan["businessSystemDefinition"]["experience"]["surfaces"][1]["id"] == "external_app"
     assert plan["businessSystemDefinition"]["experience"]["surfaces"][2]["id"] == "workshop"

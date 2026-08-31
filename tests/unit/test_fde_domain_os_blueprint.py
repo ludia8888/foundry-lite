@@ -130,11 +130,11 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
 
     definition = build_business_system_definition("Property Care Desk", blueprint, consumer_osdk)
 
-    assert definition["schemaVersion"] == "foundry-lite-business-system-definition/v2"
+    assert definition["schemaVersion"] == "foundry-lite-business-system-definition/v3"
     assert definition["definitionFingerprint"].startswith("sha256:")
     experience = definition["experience"]
     workshop = experience["workshopApp"]
-    assert experience["componentCatalogVersion"] == "foundry-lite-workshop-components/v4"
+    assert experience["componentCatalogVersion"] == "foundry-lite-workshop-components/v5"
     assert workshop["theme"]["preset"] in {"ocean", "indigo", "emerald", "amber", "graphite"}
     assert workshop["theme"]["brandName"] == "Property Care Desk"
     assert workshop["shell"] == {
@@ -155,6 +155,32 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
         "intent": "info",
     }
     assert workshop["presentation"]["showTechnicalDetails"] is False
+    product = workshop["product"]
+    assert product["schemaVersion"] == "foundry-lite-commercial-product/v1"
+    assert product["productKind"] == "domain_operating_saas"
+    assert product["designStatus"] == "ready_for_business_review"
+    assert [audience["name"] for audience in product["audiences"]] == [
+        "resident",
+        "coordinator",
+        "vendor",
+    ]
+    coordinator = product["audiences"][1]
+    assert coordinator["homePageId"] == "today"
+    assert coordinator["actionNames"] == ["요청 분류", "수리 일정 확정", "수리 완료"]
+    assert [group["name"] for group in product["capabilityGroups"]] == [
+        "일상 업무 운영",
+        "현황과 개선",
+        "승인과 업무 증거",
+        "사용자와 서비스 운영",
+    ]
+    assert [step["status"] for step in product["onboarding"]] == [
+        "design_ready",
+        "needs_configuration",
+        "needs_configuration",
+        "needs_review",
+        "blocked",
+    ]
+    assert product["trustCenter"]["evidenceNames"] == ["상태 변경 전후", "담당자", "완료 사진"]
     page_ids = [page["pageId"] for page in workshop["pages"]]
     assert experience["surfaces"] == [
         {"id": "chatgpt", "pageIds": page_ids, "runtime": "workshop"},

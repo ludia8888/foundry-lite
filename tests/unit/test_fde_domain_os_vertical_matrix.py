@@ -56,12 +56,15 @@ def _blocking_policy(
     value: object,
     evidence: str,
 ) -> dict[str, object]:
+    condition: dict[str, object] = {"propertyApiName": property_name, "operator": operator}
+    if operator != "exists":
+        condition["value"] = value
     return {
         "name": name,
         "statement": statement,
         "enforcement": "blocking",
         "appliesToActions": [action_name],
-        "conditions": [{"propertyApiName": property_name, "operator": operator, "value": value}],
+        "conditions": [condition],
         "evidence": evidence,
     }
 
@@ -318,6 +321,94 @@ VERTICAL_SPECS = (
         ["본인 확인", "동의서 버전", "검사 결과와 후속 담당자"],
     ),
     _spec(
+        "crm-operations",
+        "고객 매출 운영 OS",
+        "문의부터 기회, 제안, 계약과 고객 인계까지 매출 업무를 같은 기록으로 운영합니다.",
+        ["잠재 고객", "영업 담당자", "영업 관리자", "고객 성공 담당자"],
+        [
+            _record(
+                "영업 기회",
+                "SalesOpportunity",
+                ("예상 금액", "expectedAmount", "float"),
+                ("다음 연락일", "nextContactDate", "date"),
+            ),
+            _record("고객", "CustomerAccount", ("업종", "industry", "string")),
+            _record("제안", "SalesProposal", ("제안 금액", "proposalAmount", "float")),
+            _record("고객 후속 업무", "CustomerSuccessTask", ("기한", "dueAt", "timestamp")),
+        ],
+        ["NEW", "QUALIFIED", "PROPOSAL_READY", "PROPOSED", "CONTRACT_REVIEW", "WON", "HANDED_OVER"],
+        [
+            _action("문의 확인", "QualifyOpportunity", ["NEW"], "QUALIFIED"),
+            _action("제안 준비", "PrepareProposal", ["QUALIFIED"], "PROPOSAL_READY"),
+            _action("제안 전달", "SendProposal", ["PROPOSAL_READY"], "PROPOSED"),
+            _action("계약 검토", "RequestContractReview", ["PROPOSED"], "CONTRACT_REVIEW"),
+            _action("계약 완료", "CloseWonOpportunity", ["CONTRACT_REVIEW"], "WON"),
+            _action("고객 인계", "HandOverCustomer", ["WON"], "HANDED_OVER"),
+        ],
+        [
+            _blocking_policy(
+                "다음 연락일 확인",
+                "진행 중인 영업 기회에는 다음 연락일이 필요합니다.",
+                "QualifyOpportunity",
+                "nextContactDate",
+                "exists",
+                True,
+                "담당자와 연락 계획",
+            ),
+            _human_policy(
+                "계약 조건 승인",
+                "특별 계약 조건은 영업 관리자가 확인합니다.",
+                "RequestContractReview",
+                "승인자와 계약서 버전",
+            ),
+        ],
+        ["고객 요청", "활동 이력", "제안서 버전", "계약 승인", "인계 담당자"],
+    ),
+    _spec(
+        "hr-operations",
+        "구성원 여정 운영 OS",
+        "채용, 입사 준비, 재직 중 요청과 퇴사 인계를 역할과 증거 중심으로 운영합니다.",
+        ["지원자", "인사 담당자", "팀 관리자", "승인권자"],
+        [
+            _record(
+                "구성원 여정",
+                "EmployeeJourney",
+                ("필수 확인 완료", "requiredChecksComplete", "boolean"),
+                ("시작일", "startDate", "date"),
+            ),
+            _record("지원자", "Candidate", ("지원 직무", "positionName", "string")),
+            _record("입사 준비 업무", "OnboardingTask", ("기한", "dueAt", "timestamp")),
+            _record("인사 요청", "PeopleRequest", ("요청 종류", "requestType", "string")),
+        ],
+        ["APPLIED", "REVIEWING", "OFFERED", "ONBOARDING", "ACTIVE", "OFFBOARDING", "CLOSED"],
+        [
+            _action("채용 검토", "ReviewCandidate", ["APPLIED"], "REVIEWING"),
+            _action("입사 확정", "ConfirmOffer", ["REVIEWING"], "OFFERED"),
+            _action("입사 준비", "StartOnboarding", ["OFFERED"], "ONBOARDING"),
+            _action("입사 완료", "ActivateEmployee", ["ONBOARDING"], "ACTIVE"),
+            _action("퇴사 준비", "StartOffboarding", ["ACTIVE"], "OFFBOARDING"),
+            _action("퇴사 종료", "CloseOffboarding", ["OFFBOARDING"], "CLOSED"),
+        ],
+        [
+            _blocking_policy(
+                "필수 확인 완료",
+                "입사 완료 전 필수 서류와 안내 확인이 끝나야 합니다.",
+                "ActivateEmployee",
+                "requiredChecksComplete",
+                "eq",
+                True,
+                "확인 항목과 완료 시각",
+            ),
+            _human_policy(
+                "접근 권한 변경 승인",
+                "입사와 퇴사 시 접근 권한 변경은 권한 있는 사람이 확인합니다.",
+                "CloseOffboarding",
+                "승인자와 권한 변경 결과",
+            ),
+        ],
+        ["검토 의견", "처우 승인", "서류 확인", "자산 반납", "접근 권한 변경"],
+    ),
+    _spec(
         "manufacturing-operations",
         "제조 생산 품질 OS",
         "주문, 생산, 품질검사, 출하와 클레임을 추적 가능한 상태로 운영합니다.",
@@ -439,6 +530,18 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
         for widget in section_row["widgets"]
     ]
     assert workshop["shell"]["navigation"] == "sidebar"
+    product = workshop["product"]
+    assert product["productKind"] == "domain_operating_saas"
+    assert product["designStatus"] == "ready_for_business_review"
+    assert len(product["audiences"]) == len(spec["brief"]["actors"])
+    assert {group["id"] for group in product["capabilityGroups"]} >= {
+        "operations",
+        "insights",
+        "governance",
+        "administration",
+    }
+    assert product["onboarding"][0]["status"] == "design_ready"
+    assert product["onboarding"][-1]["status"] == "blocked"
     assert all(
         section_row["span"] in {3, 4, 6, 8, 9, 12}
         for page_row in workshop["pages"]
@@ -457,6 +560,12 @@ def test_vertical_brief_compiles_to_independent_objects_actions_policies_and_str
         assert presentation["actionNames"]["ConfirmConsent"] == "동의 확인"
         assert presentation["statusLabels"]["CONSENT_CONFIRMED"]["label"] == "동의 확정"
         assert presentation["booleanLabels"]["falseLabel"] == "아니요"
+    if slug == "crm-operations":
+        assert product["audiences"][1]["actionNames"][0] == "문의 확인"
+        assert workshop["presentation"]["objectTypeNames"]["SalesOpportunity"] == "영업 기회"
+    if slug == "hr-operations":
+        assert product["audiences"][1]["actionNames"][-1] == "퇴사 종료"
+        assert workshop["presentation"]["actionNames"]["ActivateEmployee"] == "입사 완료"
     files = react_files(plan)
     package_name = f"@foundry-lite/{slug}-osdk"
     assert f'from "{package_name}/react"' in files["src/App.tsx"]
