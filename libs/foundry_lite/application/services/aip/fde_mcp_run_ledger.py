@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from foundry_lite.application.ports import (
     AiRunRepository,
     AiSessionRecord,
     AiToolCallRecord,
+    TransactionContext,
     TransactionManager,
 )
 from foundry_lite.application.ports.transaction_context import AI_RUN_SUCCEEDED
@@ -17,6 +21,7 @@ from foundry_lite.application.services.aip.fde_mcp_security import FdeMcpSecurit
 from foundry_lite.application.services.aip.fde_mcp_types import FdeMcpToolCall
 from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class FdeMcpRunLedger:
@@ -41,7 +46,7 @@ class FdeMcpRunLedger:
         catalog: tuple[ToolSpec, ...],
     ) -> bool:
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self.repository.create_session(
                 transaction=conn,
                 record=AiSessionRecord(
@@ -70,7 +75,7 @@ class FdeMcpRunLedger:
 
     def complete(self, ctx: RequestContext, run_id: str, tool_record: AiToolCallRecord) -> None:
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self.repository.record_tool_call(transaction=conn, record=tool_record)
             self.repository.append_execution_event(
                 transaction=conn,
@@ -85,3 +90,11 @@ class FdeMcpRunLedger:
                 error_json=None,
                 completed_at=now,
             )
+
+    @contextmanager
+    def _transaction(self, ctx: RequestContext) -> Iterator[TransactionContext]:
+        """Begin every Builder run-ledger transaction for the authenticated tenant."""
+
+        with tenant_context(ctx.tenant_id):
+            with self.engine.begin() as conn:
+                yield conn

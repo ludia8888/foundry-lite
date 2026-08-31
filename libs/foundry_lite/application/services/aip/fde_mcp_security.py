@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 
 from foundry_lite.application.ports import AiRunRepository, AiSessionRecord, TransactionContext, TransactionManager
 from foundry_lite.application.ports.transaction_context import AI_RUN_FAILED, AI_RUN_SUCCEEDED
@@ -68,6 +69,7 @@ from foundry_lite.application.services.runtime_error_payloads import scrub_error
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
 from foundry_lite.security.policy import PolicyService
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class FdeMcpSecurityLedger:
@@ -84,7 +86,7 @@ class FdeMcpSecurityLedger:
 
     def replay(self, ctx: RequestContext, run_id: str, binding: FdeMcpRequestBinding) -> FdeMcpReplay | None:
         conflict_reason: str | None = None
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             ledger = self.repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
             if ledger is None:
                 return None
@@ -111,7 +113,7 @@ class FdeMcpSecurityLedger:
     def fail_execution(self, ctx: RequestContext, run_id: str, exc: Exception) -> None:
         now = _now()
         error = _execution_error(ctx, exc)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self.repository.append_execution_event(
                 transaction=conn,
                 record=event_record(ctx, run_id, 2, "failed", error, now),
@@ -135,7 +137,7 @@ class FdeMcpSecurityLedger:
         expires_at = _expires_at(now := _now())
         challenge_id = _challenge_id(run_id)
         replay_result: tuple[dict[str, object] | None, str | None] | None = None
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             self._create_session(conn, ctx, binding, now)
             existing = self.repository.insert_execution_run_or_get_existing(
                 transaction=conn,
@@ -206,7 +208,7 @@ class FdeMcpSecurityLedger:
         receipt_id = _new_id("aip_mcp_receipt")
         now = _now()
         expires_at = _expires_at(now)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             ledger = self.repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=challenge_id)
             binding = _challenge_binding(ledger, application_id, now)
             self.policy.require(ctx, binding.required_permission)
@@ -397,6 +399,14 @@ class FdeMcpSecurityLedger:
                 last_activity_at=now,
             ),
         )
+
+    @contextmanager
+    def _transaction(self, ctx: RequestContext) -> Iterator[TransactionContext]:
+        """Begin every Builder security-ledger transaction for the authenticated tenant."""
+
+        with tenant_context(ctx.tenant_id):
+            with self.engine.begin() as conn:
+                yield conn
 
     def _append_conflict(
         self,
