@@ -1,7 +1,19 @@
 import type { AipPilotDomainBrief, AipPilotPlan } from "@foundry-lite/sdk";
-import { ArrowRight, Blocks, CircleCheckBig, FileClock, Rocket, Search, ShieldCheck, UsersRound } from "lucide-react";
+import {
+  ArrowRight,
+  Blocks,
+  BriefcaseBusiness,
+  Calculator,
+  CircleCheckBig,
+  FileClock,
+  HeartPulse,
+  Rocket,
+  Search,
+  ShieldCheck,
+  UsersRound,
+} from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 import { ErrorState } from "@/components/shared/ErrorState";
 import { StatusPill } from "@/components/shared/StatusPill";
@@ -10,35 +22,29 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
 import type { AipWorkspace } from "../use-aip-workspace";
+import {
+  SOLUTION_PLAYBOOKS,
+  solutionPlaybookById,
+  type SolutionPlaybook,
+  type SolutionPlaybookId,
+} from "../solution-playbooks";
 import { SectionLabel } from "./Evidence";
 
-const DEFAULT_DESCRIPTION =
-  "고객이 원하는 시간과 인원을 선택하면 좌석 운영 규칙을 확인하고, 예약 확정·결제·취소와 변경 이력을 한곳에서 처리합니다.";
-const DEFAULT_RECORDS = [
-  "예약 (Reservation) | 고객명, 인원수:숫자, 방문시간:날짜시간",
-  "테이블 (DiningTable) | 좌석수:숫자, 구역",
-].join("\n");
-const DEFAULT_ACTIONS = [
-  "예약 접수 (RequestReservation) | 요청됨 → 확인중 | 고객 연락처 | 고객, 홀 직원",
-  "예약 확정 (ConfirmReservation) | 확인중 → 확정됨 | 확인 메모 | 매니저, 홀 직원",
-  "예약 취소 (CancelReservation) | 확정됨 → 취소됨 | 취소 사유 | 고객, 매니저 | 사람 확인",
-].join("\n");
-const DEFAULT_POLICIES = [
-  "차단 | 운영 시간 중복 | 같은 테이블의 이용 시간이 겹치면 예약할 수 없습니다. | 예약 변경 기록",
-  "사람 확인 | 큰 모임 | 8명 이상 예약은 매니저가 한 번 확인합니다. | 확인 담당자와 시각",
-].join("\n");
-
 export function DomainOsStudioPanel({ workspace }: { workspace: AipWorkspace }) {
-  const [applicationName, setApplicationName] = useState("Dining Concierge");
-  const [domainDescription, setDomainDescription] = useState(DEFAULT_DESCRIPTION);
-  const [actors, setActors] = useState("고객, 매니저, 홀 직원");
-  const [records, setRecords] = useState(DEFAULT_RECORDS);
-  const [states, setStates] = useState("요청됨 → 확인중 → 확정됨 → 방문완료 → 취소됨");
-  const [actions, setActions] = useState(DEFAULT_ACTIONS);
-  const [policies, setPolicies] = useState(DEFAULT_POLICIES);
-  const [evidence, setEvidence] = useState("요청 시각, 규칙 판정 결과, 담당자, 상태 변경 전후 값");
-  const [integrations, setIntegrations] = useState("예약 DB, 결제 서비스, 문자 알림");
-  const [successMeasures, setSuccessMeasures] = useState("중복 예약 0건, 예약 처리 2분 이내");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialPlaybook = solutionPlaybookById(searchParams.get("solution"));
+  const [selectedPlaybookId, setSelectedPlaybookId] =
+    useState<SolutionPlaybookId>(initialPlaybook.id);
+  const [applicationName, setApplicationName] = useState(initialPlaybook.form.applicationName);
+  const [domainDescription, setDomainDescription] = useState(initialPlaybook.form.domainDescription);
+  const [actors, setActors] = useState(initialPlaybook.form.actors);
+  const [records, setRecords] = useState(initialPlaybook.form.records);
+  const [states, setStates] = useState(initialPlaybook.form.states);
+  const [actions, setActions] = useState(initialPlaybook.form.actions);
+  const [policies, setPolicies] = useState(initialPlaybook.form.policies);
+  const [evidence, setEvidence] = useState(initialPlaybook.form.evidence);
+  const [integrations, setIntegrations] = useState(initialPlaybook.form.integrations);
+  const [successMeasures, setSuccessMeasures] = useState(initialPlaybook.form.successMeasures);
   const { planPilot, generatePilot } = workspace;
   const domainBrief = useMemo(
     () => buildDomainBrief({ actors, records, states, actions, policies, evidence, integrations, successMeasures }),
@@ -48,10 +54,25 @@ export function DomainOsStudioPanel({ workspace }: { workspace: AipWorkspace }) 
   const canPlan = applicationName.trim().length > 0 && domainDescription.trim().length >= 20;
   const canGenerate = blueprint?.readiness.isReady === true;
 
+  const applyPlaybook = (playbook: SolutionPlaybook) => {
+    setSelectedPlaybookId(playbook.id);
+    setApplicationName(playbook.form.applicationName);
+    setDomainDescription(playbook.form.domainDescription);
+    setActors(playbook.form.actors);
+    setRecords(playbook.form.records);
+    setStates(playbook.form.states);
+    setActions(playbook.form.actions);
+    setPolicies(playbook.form.policies);
+    setEvidence(playbook.form.evidence);
+    setIntegrations(playbook.form.integrations);
+    setSuccessMeasures(playbook.form.successMeasures);
+    setSearchParams({ solution: playbook.id }, { replace: true });
+  };
+
   return (
     <section className="overflow-hidden rounded-xl border border-slate-300/70 bg-card shadow-[0_12px_30px_-24px_rgba(15,23,42,0.65)] dark:border-slate-700">
       <header className="border-b border-slate-200 bg-slate-950 px-4 py-4 text-slate-50 dark:border-slate-800">
-        <SectionLabel right={<StatusPill intent="info">Domain OS Studio</StatusPill>}>
+        <SectionLabel right={<StatusPill intent="info">AI FDE 업무 설계</StatusPill>}>
           내 업무를 앱으로 설계하기
         </SectionLabel>
         <p className="mt-2 max-w-[68ch] text-[11px] leading-5 text-slate-300">
@@ -60,6 +81,10 @@ export function DomainOsStudioPanel({ workspace }: { workspace: AipWorkspace }) 
       </header>
 
       <div className="space-y-4 p-4">
+        <SolutionPlaybookPicker
+          selectedId={selectedPlaybookId}
+          onSelect={applyPlaybook}
+        />
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="앱 이름" hint="팀에서 바로 알아볼 이름">
             <Input value={applicationName} onChange={(event) => setApplicationName(event.target.value)} />
@@ -143,6 +168,75 @@ export function DomainOsStudioPanel({ workspace }: { workspace: AipWorkspace }) 
         ) : null}
         {planPilot.error ? <ErrorState error={planPilot.error} /> : null}
         {generatePilot.error ? <ErrorState error={generatePilot.error} /> : null}
+      </div>
+    </section>
+  );
+}
+
+const PLAYBOOK_ICONS = {
+  hospital: HeartPulse,
+  accounting: Calculator,
+  crm: BriefcaseBusiness,
+  hr: UsersRound,
+} as const;
+
+function SolutionPlaybookPicker({
+  selectedId,
+  onSelect,
+}: {
+  selectedId: SolutionPlaybookId;
+  onSelect: (playbook: SolutionPlaybook) => void;
+}) {
+  return (
+    <section aria-labelledby="solution-playbook-title">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 id="solution-playbook-title" className="text-[13px] font-semibold">
+            어떤 업무용 서비스를 만들까요?
+          </h2>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            가까운 예시를 고른 뒤 회사에 맞지 않는 부분만 평소 쓰는 말로 바꾸세요.
+          </p>
+        </div>
+        <StatusPill intent="success">개발 용어 없이 시작</StatusPill>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        {SOLUTION_PLAYBOOKS.map((playbook) => {
+          const Icon = PLAYBOOK_ICONS[playbook.id];
+          const isSelected = playbook.id === selectedId;
+          return (
+            <button
+              key={playbook.id}
+              type="button"
+              aria-pressed={isSelected}
+              onClick={() => onSelect(playbook)}
+              className={
+                "group rounded-xl border p-3 text-left transition " +
+                (isSelected
+                  ? "border-sky-500 bg-sky-50 shadow-[0_12px_28px_-22px_rgba(2,132,199,.8)] dark:bg-sky-950/30"
+                  : "border-slate-200 bg-white hover:border-sky-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/30")
+              }
+            >
+              <div className="flex items-center gap-2">
+                <span className="grid size-8 place-items-center rounded-lg bg-slate-950 text-white dark:bg-slate-100 dark:text-slate-950">
+                  <Icon className="size-4" />
+                </span>
+                <div>
+                  <div className="text-[9px] font-bold text-sky-700 dark:text-sky-300">
+                    {playbook.eyebrow}
+                  </div>
+                  <div className="text-[11px] font-semibold">{playbook.name}</div>
+                </div>
+              </div>
+              <p className="mt-3 text-[10px] leading-4 text-muted-foreground">
+                {playbook.outcome}
+              </p>
+              <div className="mt-3 text-[9px] font-semibold text-slate-700 dark:text-slate-200">
+                핵심 화면 · {playbook.signature}
+              </div>
+            </button>
+          );
+        })}
       </div>
     </section>
   );

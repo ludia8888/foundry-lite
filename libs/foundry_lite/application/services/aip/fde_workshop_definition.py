@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from foundry_lite.application.services.aip.fde_commercial_product_contract import (
+    build_commercial_product,
+)
 from foundry_lite.application.services.aip.fde_workshop_contract import (
     action_widget,
     app_presentation,
@@ -24,9 +27,9 @@ from foundry_lite.application.services.aip.fde_workshop_contract import (
 
 JsonObject = Mapping[str, object]
 
-WORKSHOP_COMPONENT_CATALOG_VERSION = "foundry-lite-workshop-components/v4"
+WORKSHOP_COMPONENT_CATALOG_VERSION = "foundry-lite-workshop-components/v5"
 WORKSHOP_METADATA_KIND = "foundry-lite.workshop.app-definition"
-WORKSHOP_METADATA_SCHEMA_VERSION = 4
+WORKSHOP_METADATA_SCHEMA_VERSION = 5
 
 
 def build_workshop_app_definition(
@@ -47,6 +50,7 @@ def build_workshop_app_definition(
         "theme": app_theme(application_name),
         "shell": app_shell(),
         "presentation": app_presentation(blueprint),
+        "product": build_commercial_product(application_name, blueprint, pages),
         "header": header(application_name),
         "page": pages[0],
         "pages": pages,

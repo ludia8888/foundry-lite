@@ -866,7 +866,7 @@ export type BusinessSystemScreen = {
   components: BusinessSystemComponent[];
 };
 export type BusinessSystemDefinition = {
-  schemaVersion: "foundry-lite-business-system-definition/v2";
+  schemaVersion: "foundry-lite-business-system-definition/v3";
   definitionFingerprint: string;
   identity: { applicationId: string; name: string; summary: string };
   businessModel: Record<string, unknown>;

@@ -14,6 +14,7 @@ import {
 import {
   createHeaderSlots,
   createId,
+  createDefaultProduct,
   DEFAULT_APP_SHELL,
   DEFAULT_APP_PRESENTATION,
   DEFAULT_APP_THEME,
@@ -106,6 +107,7 @@ function definition(
     theme: { ...DEFAULT_APP_THEME, brandName: name, logoText: name.slice(0, 2) },
     shell: { ...DEFAULT_APP_SHELL },
     presentation: structuredClone(DEFAULT_APP_PRESENTATION),
+    product: createDefaultProduct(name),
     header: { visible: true, title: name, slots: createHeaderSlots() },
     page: defaultPage,
     pages,

@@ -212,6 +212,57 @@ export type AppPresentation = {
   showTechnicalDetails: boolean;
 };
 
+export type AppProductAudience = {
+  id: string;
+  name: string;
+  summary: string;
+  homePageId: string;
+  pageIds: string[];
+  actionNames: string[];
+};
+
+export type AppCapabilityGroup = {
+  id: string;
+  name: string;
+  description: string;
+  pageIds: string[];
+  recordNames: string[];
+  actionNames: string[];
+};
+
+export type AppOnboardingStatus =
+  | "design_ready"
+  | "needs_configuration"
+  | "needs_review"
+  | "blocked";
+
+export type AppOnboardingStep = {
+  id: string;
+  title: string;
+  description: string;
+  status: AppOnboardingStatus;
+};
+
+export type AppTrustCenter = {
+  accessStatement: string;
+  approvalStatement: string;
+  auditStatement: string;
+  evidenceNames: string[];
+  policyNames: string[];
+};
+
+/** 같은 정의를 GPT, 외부 앱, Workshop이 공유하는 상용 SaaS 제품 계약. */
+export type AppProduct = {
+  schemaVersion: string;
+  productKind: "domain_operating_saas";
+  designStatus: "ready_for_business_review" | "needs_business_detail";
+  name: string;
+  audiences: AppProductAudience[];
+  capabilityGroups: AppCapabilityGroup[];
+  onboarding: AppOnboardingStep[];
+  trustCenter: AppTrustCenter;
+};
+
 /** 헤더 위젯 슬롯 (Palantir: 좌/중/우 3개 슬롯, 각 위젯 배치 가능). */
 export type AppHeaderSlots = {
   left: AppSection;
@@ -259,6 +310,7 @@ export type AppDefinition = {
   theme: AppTheme;
   shell: AppShell;
   presentation: AppPresentation;
+  product: AppProduct;
   header: AppHeader;
   /** Legacy representative page alias. Mirrors the default page in `pages`. */
   page: AppPage;
@@ -440,8 +492,8 @@ export const WORKSHOP_APP_SOURCE_SURFACE = "workshop";
 export const WORKSHOP_APP_SOURCE_REF = "default-workshop-app";
 export const WORKSHOP_APP_METADATA_KIND =
   "foundry-lite.workshop.app-definition";
-/** v4 = shared business language + product states + commercial responsive runtime. */
-export const WORKSHOP_APP_METADATA_SCHEMA_VERSION = 4;
+/** v5 = v4 runtime + audiences, product modules, onboarding, and trust contract. */
+export const WORKSHOP_APP_METADATA_SCHEMA_VERSION = 5;
 
 export const DEFAULT_APP_THEME: AppTheme = {
   preset: "ocean",
@@ -488,6 +540,44 @@ export const DEFAULT_APP_PRESENTATION: AppPresentation = {
   roles: [],
   showTechnicalDetails: false,
 };
+
+export function createDefaultProduct(name: string): AppProduct {
+  return {
+    schemaVersion: "foundry-lite-commercial-product/v1",
+    productKind: "domain_operating_saas",
+    designStatus: "needs_business_detail",
+    name,
+    audiences: [],
+    capabilityGroups: [],
+    onboarding: [
+      {
+        id: "describe-business",
+        title: "우리 업무 설명",
+        description: "사용자, 기록, 업무 흐름과 중요한 규칙을 알려주세요.",
+        status: "needs_configuration",
+      },
+      {
+        id: "connect-data",
+        title: "실제 데이터 연결",
+        description: "운영 데이터의 원본과 갱신 주기를 확인합니다.",
+        status: "blocked",
+      },
+      {
+        id: "release",
+        title: "사람 승인 후 운영 시작",
+        description: "실제 로그인과 업무 실행을 시험한 뒤 운영 URL을 엽니다.",
+        status: "blocked",
+      },
+    ],
+    trustCenter: {
+      accessStatement: "로그인 역할과 허용 범위 안에서만 정보와 업무를 제공합니다.",
+      approvalStatement: "중요한 업무는 사람의 확인을 받은 뒤 실행합니다.",
+      auditStatement: "담당자, 시각, 변경 내용과 판단 근거를 남깁니다.",
+      evidenceNames: [],
+      policyNames: [],
+    },
+  };
+}
 
 let idCounter = 0;
 export function createId(prefix: string): string {
@@ -588,6 +678,7 @@ export function createEmptyAppDefinition(): AppDefinition {
     theme: { ...DEFAULT_APP_THEME },
     shell: { ...DEFAULT_APP_SHELL },
     presentation: structuredClone(DEFAULT_APP_PRESENTATION),
+    product: createDefaultProduct("새 업무 앱"),
     header: {
       visible: true,
       title: "새 업무 앱",
@@ -694,6 +785,7 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
   const theme = migrateTheme(value.theme, value.name);
   const shell = migrateShell(value.shell);
   const presentation = migratePresentation(value.presentation);
+  const product = migrateProduct(value.product, value.name);
 
   // v2: pages[] 존재
   if (Array.isArray(value.pages)) {
@@ -708,6 +800,7 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
       theme,
       shell,
       presentation,
+      product,
       header,
       page,
       pages,
@@ -729,6 +822,7 @@ export function migrateAppDefinition(value: unknown): AppDefinition | null {
       theme,
       shell,
       presentation,
+      product,
       header,
       page,
       pages: [page],
@@ -931,6 +1025,89 @@ function migratePresentation(value: unknown): AppPresentation {
       : [],
     showTechnicalDetails: record.showTechnicalDetails === true,
   };
+}
+
+function migrateProduct(value: unknown, appName: string): AppProduct {
+  if (!isRecord(value)) return createDefaultProduct(appName);
+  return {
+    schemaVersion:
+      typeof value.schemaVersion === "string"
+        ? value.schemaVersion
+        : "foundry-lite-commercial-product/v1",
+    productKind: "domain_operating_saas",
+    designStatus:
+      value.designStatus === "ready_for_business_review"
+        ? "ready_for_business_review"
+        : "needs_business_detail",
+    name: typeof value.name === "string" ? value.name : appName,
+    audiences: arrayRecords(value.audiences).map(migrateAudience),
+    capabilityGroups: arrayRecords(value.capabilityGroups).map(migrateCapabilityGroup),
+    onboarding: arrayRecords(value.onboarding).map(migrateOnboardingStep),
+    trustCenter: migrateTrustCenter(value.trustCenter),
+  };
+}
+
+function migrateAudience(value: Record<string, unknown>): AppProductAudience {
+  return {
+    id: textValue(value.id, createId("audience")),
+    name: textValue(value.name, "사용자"),
+    summary: textValue(value.summary, "허용된 정보와 업무를 사용합니다."),
+    homePageId: textValue(value.homePageId, "today"),
+    pageIds: stringArray(value.pageIds),
+    actionNames: stringArray(value.actionNames),
+  };
+}
+
+function migrateCapabilityGroup(value: Record<string, unknown>): AppCapabilityGroup {
+  return {
+    id: textValue(value.id, createId("capability")),
+    name: textValue(value.name, "업무 기능"),
+    description: textValue(value.description, "필요한 업무를 한곳에서 처리합니다."),
+    pageIds: stringArray(value.pageIds),
+    recordNames: stringArray(value.recordNames),
+    actionNames: stringArray(value.actionNames),
+  };
+}
+
+function migrateOnboardingStep(value: Record<string, unknown>): AppOnboardingStep {
+  return {
+    id: textValue(value.id, createId("onboarding")),
+    title: textValue(value.title, "운영 준비"),
+    description: textValue(value.description, "운영 전에 필요한 내용을 확인합니다."),
+    status: isOnboardingStatus(value.status) ? value.status : "needs_configuration",
+  };
+}
+
+function migrateTrustCenter(value: unknown): AppTrustCenter {
+  const record = isRecord(value) ? value : {};
+  const fallback = createDefaultProduct("업무 앱").trustCenter;
+  return {
+    accessStatement: textValue(record.accessStatement, fallback.accessStatement),
+    approvalStatement: textValue(record.approvalStatement, fallback.approvalStatement),
+    auditStatement: textValue(record.auditStatement, fallback.auditStatement),
+    evidenceNames: stringArray(record.evidenceNames),
+    policyNames: stringArray(record.policyNames),
+  };
+}
+
+function arrayRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function textValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function isOnboardingStatus(value: unknown): value is AppOnboardingStatus {
+  return ["design_ready", "needs_configuration", "needs_review", "blocked"].includes(
+    String(value),
+  );
 }
 
 function isStatusIntent(value: unknown): value is StatusIntent {

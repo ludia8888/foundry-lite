@@ -135,6 +135,28 @@ mcp:
   governedReleaseApplicationId: foundry-lite
   resourceAudienceScopePrefix: mcp-audience
 
+# Opt-in external source + Kubernetes delivery wiring for the Governed Release
+# MCP.  Coordinates are public configuration; the token itself stays in the
+# application Secret and is resolved only through tokenSecretRef.
+governedRelease:
+  enabled: false
+  source:
+    provider: github
+    repositoryId: ""
+    owner: ""
+    repository: ""
+    baseRef: main
+    headPrefix: codex/
+    tokenSecretRef: ""
+    mergeMethod: squash
+    minimumApprovals: 0
+    bypassPolicyVerified: false
+  deployment:
+    provider: kubernetes
+    serviceId: ""
+    releaseMode: immutable_artifact
+    workloadKind: deployment
+
 auth:
   profile: oidc
   localOAuthIssuer: ""

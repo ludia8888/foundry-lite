@@ -131,6 +131,10 @@ PYTHONPATH=.:libs:apps/api:apps/worker uv run python \
 
 ## 6. Keycloak과 hosted ChatGPT
 
+Governed Release의 실제 GitHub 후보 게시·병합과 Kubernetes 배포를 켤 때는 tracked values에 계정 좌표나 token을 쓰지 않는다. `governedRelease.enabled=true`와 repository/service 좌표만 QA root 아래 mode `0600` private override에 두고, `governedRelease.source.tokenSecretRef`가 가리키는 실제 token은 runtime application Secret에서만 해석한다. 이 opt-in이 없으면 일반 Mac mini 폐루프는 유지되지만 Release MCP의 외부 source/deployment adapter는 의도적으로 사용할 수 없다.
+
+활성화된 chart는 GitHub source 좌표와 Kubernetes의 exact service/deployment/image 좌표를 같은 API runtime에 주입한다. 따라서 실제 hosted run 전에는 source repository가 `ludia8888/foundry-lite`, base branch가 `main`, deployment service가 현재 `foundry-lite` API Deployment와 일치하는지 private override와 rendered ConfigMap에서 다시 확인한다. token 원문은 Helm values, ConfigMap, receipt에 넣지 않는다.
+
 1차 내장 OAuth 검증 뒤 2차 Keycloak issuer로 바꾼다. Keycloak QA realm은 Authorization Code, PKCE S256, consent, public DCR, HTTPS ChatGPT/OpenAI redirect host, client ceiling과 protocol-mapper 제한을 적용한다.
 
 Keycloak 26.7은 OAuth `resource` parameter를 직접 audience로 해석하지 못하므로 QA profile은 `mcp-audience:<exact-resource-uri>` parameterized scope를 exact token `aud`로 매핑한다. 이 보완은 opt-in이며 다른 IdP 계약을 완화하지 않는다.

@@ -126,7 +126,30 @@ test("Workshop exposes the rich template and full widget catalogs", async ({
   await expect(page.getByRole("dialog")).toContainText("다음 업무");
 });
 
-test("Workshop v4 composes one responsive SaaS shell from governed components", async ({
+test("Workshop starts hospital, accounting, CRM, and HR products in business language", async ({
+  page,
+}) => {
+  await page.goto("/workshop");
+  await waitForWorkshopReady(page);
+
+  await page.getByRole("button", { name: "AI FDE 추천 구성 적용" }).click();
+  const gallery = page.getByRole("dialog");
+  await expect(gallery.getByText("상용 SaaS 청사진")).toBeVisible();
+  await expect(gallery.getByRole("link", { name: /병원 운영/ })).toBeVisible();
+  await expect(gallery.getByRole("link", { name: /세무·회계/ })).toBeVisible();
+  await expect(gallery.getByRole("link", { name: /CRM·영업/ })).toBeVisible();
+  await expect(gallery.getByRole("link", { name: /HR·인사/ })).toBeVisible();
+
+  await gallery.getByRole("link", { name: /병원 운영/ }).click();
+  await expect(page).toHaveURL(/\/aip\?solution=hospital$/);
+  await expect(page.getByRole("heading", { name: "어떤 업무용 서비스를 만들까요?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /병원 운영/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('label:has-text("앱 이름") input')).toHaveValue("CareFlow");
+  await expect(page.getByText("개발 용어 없이 시작")).toBeVisible();
+  await expect(page.getByText("환자 여정 타임라인")).toBeVisible();
+});
+
+test("Workshop v5 composes one commercial SaaS product from governed components", async ({
   page,
 }) => {
   await page.goto("/workshop");
