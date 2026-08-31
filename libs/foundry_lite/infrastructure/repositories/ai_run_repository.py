@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -162,7 +163,7 @@ class SqlAlchemyAiRunRepository:
                 "error_json": _json_or_none(error_json),
                 "completed_at": completed_at,
             },
-            conditions=(db.ai_execution_runs.c.budget_json == dict(expected_budget_json),),
+            conditions=(_json_equality(transaction, db.ai_execution_runs.c.budget_json, expected_budget_json),),
         )
         if not updated:
             return None
@@ -184,7 +185,7 @@ class SqlAlchemyAiRunRepository:
                     db.ai_execution_runs.c.tenant_id == tenant_id,
                     db.ai_execution_runs.c.id == ai_run_id,
                     db.ai_execution_runs.c.status == "running",
-                    db.ai_execution_runs.c.budget_json == dict(expected_budget_json),
+                    _json_equality(transaction, db.ai_execution_runs.c.budget_json, expected_budget_json),
                 )
             )
             .values(budget_json=dict(recovery_budget_json))
@@ -210,7 +211,7 @@ class SqlAlchemyAiRunRepository:
                     db.ai_execution_runs.c.tenant_id == tenant_id,
                     db.ai_execution_runs.c.id == ai_run_id,
                     db.ai_execution_runs.c.status == expected_status,
-                    db.ai_execution_runs.c.budget_json == dict(expected_budget_json),
+                    _json_equality(transaction, db.ai_execution_runs.c.budget_json, expected_budget_json),
                 )
             )
             .values(budget_json=dict(replacement_budget_json))
@@ -381,6 +382,14 @@ class SqlAlchemyAiRunRepository:
 
 def _json_or_none(value: AiJsonObject | None) -> dict[str, object] | None:
     return dict(value) if value is not None else None
+
+
+def _json_equality(transaction: Any, column: Any, expected: AiJsonObject) -> Any:
+    """Compare canonical JSON on SQLite and PostgreSQL's equality-capable JSONB view."""
+
+    if transaction.dialect.name == "postgresql":
+        return column.cast(JSONB) == dict(expected)
+    return column == dict(expected)
 
 
 def _same_session_owner(existing: AiLedgerRow, record: AiSessionRecord) -> bool:
