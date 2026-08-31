@@ -216,11 +216,21 @@ def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tup
     repository.record_citation(transaction=transaction, record=_citation_record())
     repository.record_usage(transaction=transaction, record=_usage_record())
     repository.record_prompt_artifact(transaction=transaction, record=_prompt_artifact_record())
-    updated = repository.update_execution_run_status(
+    claimed = repository.compare_and_swap_execution_run_budget(
+        transaction=transaction,
+        tenant_id=_TENANT,
+        ai_run_id="ai-run-1",
+        expected_status="started",
+        expected_budget_json={"maxTokens": 512, "maxCostUsd": 0.25},
+        replacement_budget_json={"maxTokens": 512, "maxCostUsd": 0.25},
+    )
+    assert claimed is not None
+    updated = repository.update_execution_run_status_if_budget(
         transaction=transaction,
         tenant_id=_TENANT,
         ai_run_id="ai-run-1",
         transition=AI_RUN_SUCCEEDED,
+        expected_budget_json={"maxTokens": 512, "maxCostUsd": 0.25},
         usage_json={"inputTokens": 128, "outputTokens": 64},
         error_json=None,
         completed_at="2026-06-25T00:00:05Z",
