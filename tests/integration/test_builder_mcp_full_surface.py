@@ -6,17 +6,26 @@ import base64
 import hashlib
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from foundry_lite.application.ports import AiToolCallRecord
 from foundry_lite.application.services.aip.fde_catalog import FDE_MODES, fde_tool_catalog
+from foundry_lite.application.services.aip.fde_mcp_confirmation_contract import FdeMcpRequestBinding
+from foundry_lite.application.services.aip.fde_mcp_run_ledger import FdeMcpRunLedger
+from foundry_lite.application.services.aip.fde_mcp_security import FdeMcpSecurityLedger
+from foundry_lite.application.services.aip.fde_mcp_types import FdeMcpToolCall
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import KafkaSourceStreamAdapter
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider
+from foundry_lite.infrastructure.repositories.ai_run_repository import SqlAlchemyAiRunRepository
+from foundry_lite.security.policy import PolicyService
+from foundry_lite.security.tenant_context import current_tenant_id
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
-from sqlalchemy import select
+from sqlalchemy import create_engine, event, select
 
 FDE_USER = RequestContext(
     tenant_id="tenant-demo",
@@ -24,6 +33,42 @@ FDE_USER = RequestContext(
     roles=("data_engineer",),
     request_id="req-fde-full-surface",
 )
+
+
+def test_builder_execution_ledgers_bind_authenticated_tenant_before_transactions(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'builder-tenant-context.db'}", future=True)
+    db.create_database(engine)
+    observed_tenants: list[str | None] = []
+    event.listen(engine, "begin", lambda _conn: observed_tenants.append(current_tenant_id()))
+    repository = SqlAlchemyAiRunRepository(engine)
+    security = FdeMcpSecurityLedger(engine, repository, PolicyService())
+    runs = FdeMcpRunLedger(engine, repository, security)
+    ctx = _builder_ledger_context()
+    request = _builder_ledger_request()
+    binding = _builder_ledger_binding(ctx, request)
+    run_id = "builder-tenant-context-run"
+
+    assert runs.seed(ctx, request, binding, run_id, ()) is True
+    runs.complete(ctx, run_id, _builder_tool_record(ctx, run_id, binding))
+    challenge = security.issue_challenge(ctx, run_id, binding)
+    metadata = challenge.get("_meta")
+    assert isinstance(metadata, Mapping)
+    widget_token = metadata.get("widgetApprovalToken")
+    assert isinstance(widget_token, str)
+    structured = challenge.get("structuredContent")
+    assert isinstance(structured, Mapping)
+    security.approve_widget(
+        ctx,
+        request.application_id,
+        request.session_id,
+        str(structured["challengeId"]),
+        widget_token,
+        request.origin,
+    )
+    assert security.replay(ctx, run_id, binding) is not None
+
+    assert observed_tenants == [ctx.tenant_id] * 5
+    assert current_tenant_id() is None
 
 
 def test_builder_mcp_executes_every_catalog_tool_through_real_json_rpc(
@@ -805,6 +850,75 @@ def _run_documentation_tools(runner: _FullSurfaceRunner) -> None:
     )
     for tool_id, arguments, keys in cases:
         runner.call("platform_qa", workspace, tool_id, arguments, keys)
+
+
+def _builder_ledger_context() -> RequestContext:
+    return RequestContext(
+        tenant_id="tenant-builder-ledger",
+        actor_user_id="builder-ledger-user",
+        roles=("admin",),
+        application_id="builder-ledger-app",
+        client_id="builder-ledger-client",
+        token_scopes=("osdk:connector:fde_exploration:execute",),
+        oauth_session_id="builder-ledger-oauth-session",
+        request_id="builder-ledger-request",
+    )
+
+
+def _builder_ledger_request() -> FdeMcpToolCall:
+    return FdeMcpToolCall(
+        application_id="builder-ledger-app",
+        session_id="mcp-builder-ledger-session",
+        json_rpc_id="builder-ledger-call",
+        mode="exploration",
+        workspace_ref="tenant:tenant-builder-ledger",
+        tool_id="platform.docs.search",
+        arguments={"query": "hospital"},
+        origin="https://chatgpt.com",
+    )
+
+
+def _builder_ledger_binding(ctx: RequestContext, request: FdeMcpToolCall) -> FdeMcpRequestBinding:
+    return FdeMcpRequestBinding(
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.actor_user_id,
+        application_id=request.application_id,
+        client_id=str(ctx.client_id),
+        oauth_session_id=str(ctx.oauth_session_id),
+        session_id=request.session_id,
+        tool_id=request.tool_id,
+        mode=request.mode,
+        workspace_ref=request.workspace_ref,
+        arguments_hash="sha256:builder-ledger-arguments",
+        required_permission="ontology:write",
+        origin=str(request.origin),
+    )
+
+
+def _builder_tool_record(
+    ctx: RequestContext,
+    run_id: str,
+    binding: FdeMcpRequestBinding,
+) -> AiToolCallRecord:
+    return AiToolCallRecord(
+        id=f"{run_id}-tool-1",
+        tenant_id=ctx.tenant_id,
+        ai_run_id=run_id,
+        sequence=1,
+        tool_id=binding.tool_id,
+        tool_version="1",
+        arguments_hash=binding.arguments_hash,
+        effect="READ",
+        authorization_decision="allowed",
+        confirmation_policy="none",
+        status="succeeded",
+        result_hash="sha256:builder-ledger-result",
+        linked_action_run_id=None,
+        started_at="2026-08-31T00:00:00+00:00",
+        completed_at="2026-08-31T00:00:01+00:00",
+        error_json=None,
+        result_json={"status": "ok"},
+    )
 
 
 def _canonical_catalog() -> dict[str, Any]:

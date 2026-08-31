@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 
 from foundry_lite.application.ports import (
     AiRunRepository,
@@ -33,6 +34,7 @@ from foundry_lite.application.services.aip.fde_mcp_widget_confirmation_contract 
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.security.policy import PolicyService
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class FdeMcpWidgetConfirmationLedger:
@@ -154,7 +156,7 @@ class FdeMcpWidgetConfirmationLedger:
         now = _now()
         receipt_id = _new_id("aip_mcp_receipt")
         receipt_expires_at = expires_at(now)
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             ledger = self.repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=challenge_id)
             binding = challenge_binding(ledger, application_id, now)
             # The MCP session is a transport identifier, not an authorization boundary. A host
@@ -192,7 +194,7 @@ class FdeMcpWidgetConfirmationLedger:
         origin: str | None,
     ) -> bool:
         now = _now()
-        with self.engine.begin() as conn:
+        with self._transaction(ctx) as conn:
             ledger = self.repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=challenge_id)
             binding = challenge_binding(ledger, application_id, now)
             # The MCP session is a transport identifier, not an authorization boundary. A host
@@ -381,6 +383,14 @@ class FdeMcpWidgetConfirmationLedger:
                 now,
             ),
         )
+
+    @contextmanager
+    def _transaction(self, ctx: RequestContext) -> Iterator[TransactionContext]:
+        """Begin every Builder widget-ledger transaction for the authenticated tenant."""
+
+        with tenant_context(ctx.tenant_id):
+            with self.engine.begin() as conn:
+                yield conn
 
 
 def _receipt_recovery_references(challenge: Mapping[str, object]) -> tuple[str, str] | None:
