@@ -1383,7 +1383,14 @@ def _candidate_pull_body(request: SourceCandidatePublicationRequest) -> str:
         f"Proposal: `{request.proposal_id}`\n"
         f"Manifest: `{request.manifest.artifact_path}`\n"
         f"Manifest fingerprint: `{request.manifest.manifest_fingerprint}`\n\n"
-        "The release service will re-read the exact commit, tree, and manifest bytes before merge."
+        "## Root Cause\n\n"
+        "The reviewed proposal is not yet represented by immutable source-control evidence on the base branch.\n\n"
+        "## Impact\n\n"
+        f"This candidate adds only `{request.manifest.artifact_path}` for the reviewed proposal. "
+        "It does not change application source files.\n\n"
+        "## Regression Test\n\n"
+        "Required pull-request checks must pass for this exact candidate commit. The release service will also "
+        "re-read the exact commit, tree, and manifest bytes before merge."
     )
 
 
