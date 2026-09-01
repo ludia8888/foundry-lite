@@ -253,6 +253,18 @@ def test_candidate_publish_creates_exact_git_objects_ref_and_pull_then_replays_r
     assert replay.manifest_fingerprint == receipt.manifest_fingerprint
     assert _post_paths(transport) == first_posts
     assert _MANIFEST_BYTES.decode() not in repr(transport.requests)
+    pull_request = next(
+        request
+        for request in transport.requests
+        if request.method == "POST" and urlsplit(request.url).path.endswith("/pulls")
+    )
+    assert pull_request.body is not None
+    pull_body = pull_request.body["body"]
+    assert isinstance(pull_body, str)
+    assert "## Root Cause" in pull_body
+    assert "## Impact" in pull_body
+    assert "## Regression Test" in pull_body
+    assert f"`{_MANIFEST_PATH}`" in pull_body
 
 
 def test_exact_branch_without_pull_recovers_by_creating_only_pull_request() -> None:
