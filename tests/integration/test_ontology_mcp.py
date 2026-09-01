@@ -300,7 +300,8 @@ def test_pilot_business_system_opens_the_same_live_work_screen_inside_gpt(
     assert resources_response.json()["result"]["resources"][0]["uri"] == BUSINESS_SYSTEM_RESOURCE_URI
     html = resource_response.json()["result"]["contents"][0]["text"]
     content_hash = hashlib.sha256(html.encode()).hexdigest()[:12]
-    assert BUSINESS_SYSTEM_RESOURCE_URI == f"ui://foundry-lite/business-system-v4-{content_hash}.html"
+    expected_resource_uri = f"ui://foundry-lite/business-system-v4-{content_hash}.html"
+    assert BUSINESS_SYSTEM_RESOURCE_URI == expected_resource_uri, "business-system URI must match served HTML bytes"
     assert "createFoundryLiteBusinessSystemOsdk" in html
 
     definition_result = _call(
