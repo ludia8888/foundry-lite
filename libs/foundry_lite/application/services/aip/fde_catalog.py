@@ -190,6 +190,14 @@ def _ontology_upsert_resource_schema() -> dict[str, object]:
         ),
         "properties": {
             "kind": {"type": "string", "enum": ["objectType", "linkType", "actionType"]},
+            "apiName": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Optional explicit resource name for MCP clients that project array entries as named resources. "
+                    "When provided, it must exactly match definition.apiName."
+                ),
+            },
             "definition": {
                 "type": "object",
                 "properties": {"apiName": {"type": "string", "minLength": 1}},

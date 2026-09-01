@@ -2812,6 +2812,7 @@ def _mcp_patch_call(branch_id: str, rpc_id: str) -> dict[str, object]:
                     "upsertResources": [
                         {
                             "kind": "objectType",
+                            "apiName": "Restaurant",
                             "definition": {
                                 "apiName": "Restaurant",
                                 "primaryKey": "id",

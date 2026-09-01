@@ -348,6 +348,34 @@ def test_ai_fde_tool_output_is_bounded_before_model_followup(foundry: Any, tmp_p
     assert _has_added_restaurant(foundry.ontology.branch_diff(str(branch["id"]), ctx=FDE_USER))
 
 
+def test_ai_fde_rejects_conflicting_explicit_upsert_api_name(foundry: Any, tmp_path: Any) -> None:
+    _prepare_ontology(foundry, tmp_path)
+    branch = foundry.ontology.create_branch(name="ai-fde-name-binding", idempotency_key="name-binding", ctx=FDE_USER)
+    patch = _restaurant_patch()
+    upserts = patch["upsertResources"]
+    assert isinstance(upserts, list)
+    resource = upserts[0]
+    assert isinstance(resource, dict)
+    resource["apiName"] = "DifferentRestaurant"
+    patch_spec = next(
+        spec for spec in fde_tool_manifest("ontology_editing", ()) if spec.tool_id.endswith("apply_patch")
+    )
+    request = FdeOntologyToolRequest(
+        tool_call_id="fde-name-binding-tool",
+        ai_run_id="fde-name-binding-run",
+        sequence=1,
+        branch_id=str(branch["id"]),
+        spec=patch_spec,
+        arguments=patch,
+        approved_tool_ids=(patch_spec.tool_id,),
+        max_output_bytes=4096,
+        occurred_at="2026-08-04T00:00:00Z",
+    )
+
+    with pytest.raises(ValidationFailed, match="must match definition.apiName"):
+        foundry._services.fde_ontology_tools.execute(FDE_USER, request)
+
+
 def test_ai_fde_api_exposes_catalog_and_branch_run(foundry: Any, tmp_path: Any, monkeypatch: Any) -> None:
     _prepare_ontology(foundry, tmp_path)
     branch_name = "fde-api-test"
@@ -409,6 +437,7 @@ def _restaurant_patch() -> dict[str, object]:
         "upsertResources": [
             {
                 "kind": "objectType",
+                "apiName": "Restaurant",
                 "definition": {
                     "apiName": "Restaurant",
                     "primaryKey": "restaurantId",

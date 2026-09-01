@@ -278,6 +278,12 @@ def _apply_upserts(resources: ResourceMap, value: object) -> None:
             raise ValidationFailed("AI FDE resource definition must be an object")
         normalized = _json_mapping(definition)
         api_name = _required_text(normalized, "apiName")
+        explicit_api_name = entry.get("apiName")
+        if explicit_api_name is not None and explicit_api_name != api_name:
+            raise ValidationFailed(
+                "AI FDE resource apiName must match definition.apiName",
+                details={"apiName": explicit_api_name, "definitionApiName": api_name},
+            )
         resources[(kind, api_name)] = normalized
 
 
