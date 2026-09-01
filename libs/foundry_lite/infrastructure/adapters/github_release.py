@@ -1698,7 +1698,7 @@ def _matching_check_runs(
     head_sha: str,
     rows: tuple[object, ...],
 ) -> tuple[RequiredCheckEvidence, ...]:
-    matches: list[RequiredCheckEvidence] = []
+    matches: list[tuple[int, RequiredCheckEvidence]] = []
     for value in rows:
         row = _mapping(value)
         app_id = _positive_int(_mapping(row.get("app")).get("id"))
@@ -1706,20 +1706,26 @@ def _matching_check_runs(
             continue
         if policy.source_app_id is not None and app_id != policy.source_app_id:
             continue
+        check_run_id = _require_positive_int(row.get("id"), "check_run_id")
         status = _text(row.get("status")).lower()
         conclusion = _optional_text(row.get("conclusion"))
         matches.append(
-            RequiredCheckEvidence(
-                policy.context,
-                head_sha,
-                status,
-                conclusion,
-                "github_check_run",
-                app_id,
-                status == "completed" and conclusion == "success",
+            (
+                check_run_id,
+                RequiredCheckEvidence(
+                    policy.context,
+                    head_sha,
+                    status,
+                    conclusion,
+                    "github_check_run",
+                    app_id,
+                    status == "completed" and conclusion == "success",
+                ),
             )
         )
-    return tuple(matches)
+    if not matches:
+        return ()
+    return (max(matches, key=lambda item: item[0])[1],)
 
 
 def _matching_commit_status(

@@ -352,6 +352,7 @@ def test_matching_check_runs_require_exact_context_commit_and_app() -> None:
     policy = github._RequiredCheckPolicy("codeql", 42)
     rows = (
         {
+            "id": 101,
             "name": "codeql",
             "head_sha": _SHA,
             "status": "completed",
@@ -359,6 +360,7 @@ def test_matching_check_runs_require_exact_context_commit_and_app() -> None:
             "app": {"id": 7},
         },
         {
+            "id": 102,
             "name": "another-check",
             "head_sha": _SHA,
             "status": "completed",
@@ -366,6 +368,7 @@ def test_matching_check_runs_require_exact_context_commit_and_app() -> None:
             "app": {"id": 42},
         },
         {
+            "id": 103,
             "name": "codeql",
             "head_sha": "b" * 40,
             "status": "completed",
@@ -373,6 +376,7 @@ def test_matching_check_runs_require_exact_context_commit_and_app() -> None:
             "app": {"id": 42},
         },
         {
+            "id": 104,
             "name": "codeql",
             "head_sha": _SHA,
             "status": "completed",

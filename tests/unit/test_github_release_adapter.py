@@ -223,6 +223,7 @@ def _reviews() -> list[object]:
 def _check_runs() -> list[object]:
     return [
         {
+            "id": 101,
             "name": "quality-gate",
             "head_sha": _HEAD_SHA,
             "status": "completed",
@@ -311,6 +312,23 @@ def test_inspect_returns_active_rules_exact_head_checks_and_review_evidence() ->
     assert snapshot.required_checks[0].source_app_id == _CHECK_APP_ID
     assert snapshot.required_checks[0].is_successful is True
     assert {rule.rule_type for rule in snapshot.active_rules} == {"pull_request", "required_status_checks"}
+
+
+def test_inspect_uses_latest_same_context_check_run_across_workflow_suites() -> None:
+    transport = _GitHubFixtureTransport()
+    old_failure = deepcopy(transport.check_runs[0])
+    latest_success = deepcopy(transport.check_runs[0])
+    assert isinstance(old_failure, dict)
+    assert isinstance(latest_success, dict)
+    old_failure.update({"id": 101, "conclusion": "failure"})
+    latest_success.update({"id": 202, "conclusion": "success"})
+    transport.check_runs = [old_failure, latest_success]
+
+    snapshot = _adapter(transport).inspect_pull_request(_target())
+
+    assert len(snapshot.required_checks) == 1
+    assert snapshot.required_checks[0].is_successful is True
+    assert snapshot.is_ready_to_merge is True
 
 
 def test_inspect_allows_zero_extra_github_reviews_when_repository_rules_do_not_require_them() -> None:
