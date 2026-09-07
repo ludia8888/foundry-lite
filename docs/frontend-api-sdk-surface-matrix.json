@@ -4,6 +4,26 @@
   "rawRequestRule": "apps/foundry/src must reach the backend through named generated SDK methods; raw fetch/XMLHttpRequest/EventSource calls are forbidden.",
   "surfaces": [
     {
+      "id": "auth.browser.configuration",
+      "route": "GET /api/auth/browser/config",
+      "productArea": "authentication",
+      "sdkSurface": "auth.browser.configuration",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Public no-store login coordinates contain no credentials or private owner identity; strict auth never falls back to a demo session.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "auth.browser.session",
+      "route": "GET /api/auth/browser/session",
+      "productArea": "authentication",
+      "sdkSurface": "auth.browser.session",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "No-store verified principal context is bound to one private browser client, app and owner. No bearer or refresh token is returned.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "system.health",
       "route": "GET /healthz",
       "productArea": "system",

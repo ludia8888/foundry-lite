@@ -1,11 +1,10 @@
-import { FoundryLiteProvider } from "@foundry-lite/sdk/react";
 import { lazy } from "react";
 import { BrowserRouter, Route, Routes } from "react-router";
 
 import { AppShell } from "@/components/shell/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { API_BASE_URL, DEMO_CONTEXT, DEMO_SESSION } from "@/lib/api";
+import { BrowserAuthGate } from "@/features/auth/BrowserAuthGate";
 import CustomerReservationPage from "@/features/reservations/CustomerReservationPage";
 
 const HomePage = lazy(() => import("@/features/home/HomePage"));
@@ -53,11 +52,7 @@ const SecurityPage = lazy(() => import("@/features/security/SecurityPage"));
 
 export function App() {
   return (
-    <FoundryLiteProvider
-      baseUrl={API_BASE_URL}
-      sessionProvider={() => DEMO_SESSION}
-      context={DEMO_CONTEXT}
-    >
+    <BrowserAuthGate>
       <TooltipProvider delayDuration={300}>
         <BrowserRouter>
           <Routes>
@@ -96,6 +91,6 @@ export function App() {
         </BrowserRouter>
         <Toaster position="bottom-right" />
       </TooltipProvider>
-    </FoundryLiteProvider>
+    </BrowserAuthGate>
   );
 }

@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import cast
 from urllib.parse import parse_qs, unquote
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from foundry_lite.application.services.osdk_dynamic_client_registration import parse_dynamic_client_registration
 from foundry_lite.domain.context import RequestContext
@@ -25,6 +25,34 @@ from foundry_lite_api.schemas import JsonObject, OsdkOAuthRefreshRequest, OsdkOA
 
 router = APIRouter()
 _MAX_TOKEN_REQUEST_BYTES = 16_384
+
+
+@router.get("/api/auth/browser/config")
+def browser_login_configuration(response: Response) -> dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+    return runtime.get_browser_auth_config().public_configuration()
+
+
+@router.get("/api/auth/browser/session")
+def browser_login_session(request: Request, response: Response) -> JsonObject:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        # Authenticate the real bearer, never a caller-supplied user/role header.
+        provider = runtime.get_auth_provider()
+        principal = provider.authenticate({"Authorization": request.headers.get("Authorization", "")})
+        runtime.get_browser_auth_config().require_browser_principal(principal)
+        return {
+            "tenantId": principal.tenant_id,
+            "userId": principal.actor_user_id,
+            "roles": list(principal.roles),
+            "applicationId": principal.application_id,
+            "clientId": principal.client_id,
+            "scopes": list(principal.token_scopes),
+        }
+    except FoundryLiteError as exc:
+        error = _handle_error(exc, request)
+        error.headers = {**(error.headers or {}), "Cache-Control": "no-store"}
+        raise error from exc
 
 
 def _scope_query(scope: str | None) -> tuple[str, ...]:

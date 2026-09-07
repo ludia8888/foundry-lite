@@ -4317,6 +4317,18 @@ assertMissingIdempotencyFailFast(
   "resources.admin.reconcile",
 );
 await expectSdkCall(
+  "auth.browser.configuration",
+  () => client.auth.browser.configuration(),
+  { path: "/api/auth/browser/config", method: "GET" },
+);
+
+await expectSdkCall(
+  "auth.browser.session",
+  () => client.auth.browser.session(),
+  { path: "/api/auth/browser/session", method: "GET" },
+);
+
+await expectSdkCall(
   "auth.osdkOAuth.authorize",
   () =>
     client.auth.osdkOAuth.authorize({

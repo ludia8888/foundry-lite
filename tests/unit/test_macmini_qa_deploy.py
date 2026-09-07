@@ -281,6 +281,7 @@ def test_runtime_contract_preserves_embedded_oauth_empty_values() -> None:
             "global": {"protectedProfile": False, "runtimeProfile": "test"},
             "secrets": {"applicationExistingSecret": "foundry-lite-application"},
             "auth": {"profile": "header-trust", "localOAuthIssuer": "https://foundry.invalid"},
+            "browserAuth": {"clientId": "private-client", "ownerSubject": "private-owner"},
             "mcp": {"authorizationServer": "", "publicBaseUrl": "https://foundry.invalid"},
             "external": {"oidc": {"discoveryUrl": ""}},
             "qaDependencies": {"keycloak": {"publicBaseUrl": "https://identity.invalid"}},
@@ -290,6 +291,7 @@ def test_runtime_contract_preserves_embedded_oauth_empty_values() -> None:
     assert contract["global"] == {"protectedProfile": False, "runtimeProfile": "test"}
     assert contract["mcp"] == {"authorizationServer": "", "publicBaseUrl": "https://foundry.invalid"}
     assert contract["external"] == {"oidc": {"discoveryUrl": ""}}
+    assert contract["browserAuth"] == {"clientId": "private-client", "ownerSubject": "private-owner"}
 
 
 def test_helm_upgrade_cannot_install_a_missing_release(monkeypatch, tmp_path: Path) -> None:

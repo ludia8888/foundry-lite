@@ -83,8 +83,13 @@ class OsdkApplicationScopeService(CoreService):
 
     def get_application(self, app_id: str, *, ctx: RequestContext | None = None) -> OsdkApplicationBundle:
         ctx = ctx or RequestContext()
-        self.policy.require(ctx, "developer_console:read")
+        is_consumer_read = ctx.application_id == app_id
+        if not is_consumer_read:
+            self.policy.require(ctx, "developer_console:read")
         with self.engine.begin() as conn:
+            if is_consumer_read:
+                self._require_active_application(conn, ctx)
+                self._require_active_client(conn, ctx, app_id)
             self._require_application(conn, ctx, app_id)
             return self._application_bundle(conn, ctx, app_id)
 

@@ -54,6 +54,13 @@ web:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 500m, memory: 512Mi}
 
+# Optional private browser pilot. No public signup or default role elevation.
+browserAuth:
+  clientId: ""
+  publicBaseUrl: ""
+  applicationId: ""
+  ownerSubject: ""
+
 workers:
   outbox:
     enabled: true

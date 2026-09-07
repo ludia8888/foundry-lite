@@ -19,7 +19,7 @@ from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
 )
 from foundry_lite.application.services.aip.fde_domain_os_tool_schema import DOMAIN_BRIEF_SCHEMA
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import consumer_osdk_plan, react_files
-from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError
+from foundry_lite.application.services.aip.fde_tool_result import FdePlatformToolError, hash_json
 from foundry_lite.application.services.mcp_json_schema import McpJsonSchemaError, validate_mcp_json_schema
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -212,6 +212,31 @@ def test_business_system_definition_is_one_fingerprinted_contract_for_both_surfa
     changed["experience"]["workshopApp"]["pages"][0]["name"] = "변조된 화면"
     with pytest.raises(FdePlatformToolError, match="정의서가 변경"):
         require_business_system_definition(changed)
+
+
+def test_existing_workshop_v2_keeps_original_definition_and_integrity_check() -> None:
+    args = property_maintenance_arguments()
+    blueprint = build_domain_os_blueprint(args)
+    definition = build_business_system_definition(
+        "기존 업무 앱", blueprint, consumer_osdk_plan("기존 업무 앱", "legacy")
+    )
+    definition["schemaVersion"] = "foundry-lite-business-system-definition/v2"
+    definition["definitionFingerprint"] = hash_json(
+        {k: v for k, v in definition.items() if k != "definitionFingerprint"}
+    )
+    original = deepcopy(definition)
+    assert require_business_system_definition(definition) == original
+    assert definition == original
+    definition["experience"]["workshopApp"]["pages"][0]["name"] = "변경됨"
+    with pytest.raises(FdePlatformToolError):
+        require_business_system_definition(definition)
+
+
+@pytest.mark.parametrize("version", ["v1", "v4", "unknown"])
+def test_unknown_or_pre_workshop_versions_remain_rejected(version: str) -> None:
+    payload = {"schemaVersion": f"foundry-lite-business-system-definition/{version}"}
+    with pytest.raises(FdePlatformToolError):
+        require_business_system_definition({**payload, "definitionFingerprint": hash_json(payload)})
 
 
 def test_incomplete_brief_returns_plain_language_questions_and_cannot_generate() -> None:

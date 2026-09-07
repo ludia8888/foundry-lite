@@ -129,7 +129,10 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("trash", ("list", "restore")),
             OperationClientSurface("admin", ("reconcile",)),
         ),
-        auth=(OperationClientSurface("osdkOAuth", ("authorize", "token", "refresh", "revoke")),),
+        auth=(
+            OperationClientSurface("browser", ("configuration", "session")),
+            OperationClientSurface("osdkOAuth", ("authorize", "token", "refresh", "revoke")),
+        ),
         developer_console=(
             OperationClientSurface(
                 "osdkApplications",

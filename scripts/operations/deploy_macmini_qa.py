@@ -423,6 +423,7 @@ def _runtime_contract_values(current: dict[str, object]) -> dict[str, object]:
         },
         "secrets": {"applicationExistingSecret": secrets.get("applicationExistingSecret")},
         "auth": auth,
+        "browserAuth": current.get("browserAuth", {}),
         "mcp": mcp,
         "external": {"oidc": oidc},
         "qaDependencies": {"keycloak": {"publicBaseUrl": keycloak.get("publicBaseUrl")}},
