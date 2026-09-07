@@ -29,7 +29,7 @@ def browser_client(monkeypatch: pytest.MonkeyPatch):
             issuer="https://id.example.test/realms/private",
             audience="api",
             jwks={"keys": [public_key]},
-            allowed_client_ids=frozenset({"browser"}),
+            allowed_client_ids=frozenset({"browser", "existing-mcp"}),
             client_id_claim="azp",
             session_claim="sid",
             grant_type_claim="gty",
@@ -191,3 +191,23 @@ def test_private_browser_context_requires_owner_on_every_app_request(browser_cli
     )
     with pytest.raises(PermissionDenied):
         _websocket_ctx(websocket)
+
+
+def test_invited_owner_cannot_borrow_existing_operator_client_authority(browser_client) -> None:
+    _, key, _ = browser_client
+
+    def request_for(subject):
+        token = _token(key, sub=subject, azp="existing-mcp", roles=["admin"], osdk_app_id="release-app")
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/datasets",
+                "headers": [(b"authorization", f"Bearer {token}".encode())],
+            }
+        )
+
+    with pytest.raises(PermissionDenied):
+        _ctx(request_for("owner"))
+    # This change restricts only the invited consumer, not existing operators.
+    assert _ctx(request_for("existing-reviewer")).actor_user_id == "existing-reviewer"

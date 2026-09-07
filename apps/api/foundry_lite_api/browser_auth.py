@@ -46,7 +46,10 @@ class BrowserAuthConfig:
         }
 
     def check_principal(self, principal: Principal) -> None:
-        if self.mode == "keycloak" and principal.client_id == self.client_id:
+        is_private_identity = principal.client_id == self.client_id or principal.actor_user_id == self.owner_subject
+        if self.mode == "keycloak" and is_private_identity:
+            # The QA realm has existing operator clients. The invited consumer
+            # must not acquire their API authority by signing into another client.
             self.require_browser_principal(principal)
 
     def check_request(self, principal: Principal, path: str, method: str) -> None:

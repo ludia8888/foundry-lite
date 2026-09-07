@@ -33,8 +33,12 @@ credential, or token. Both browser auth responses are `Cache-Control: no-store`.
 Configured browsers use the issuer's actual login screen and verify their bearer
 through `GET /api/auth/browser/session`. The backend binds the signed subject,
 client, app, and human Authorization Code grant to the configured private owner.
-Spoofed context headers cannot change that identity. Access/refresh credentials
-stay in memory; only an allowlisted app return path survives navigation. Logout
+Spoofed context headers cannot change that identity.
+The owner subject is also denied on every other client, including existing QA
+operator clients; the browser accepts only the `viewer` platform role. Existing
+operator subjects retain their original client permissions.
+Access/refresh credentials stay in memory; the app persists only an allowlisted
+return path, while the adapter manages temporary OAuth callback state. Logout
 or failed refresh unmounts the protected screen. Editor links return to the app
 runtime; this consumer identity does not receive Workshop builder privileges.
 

@@ -105,6 +105,8 @@ def test_private_browser_principal_is_bound_to_one_owner_and_application() -> No
     # Existing MCP identities retain their own authentication path, without gaining browser access.
     config.check_principal(replace(owner, actor_user_id="reviewer", client_id="existing-mcp"))
     with pytest.raises(PermissionDenied):
+        config.check_principal(replace(owner, client_id="existing-mcp", roles=("admin",)))
+    with pytest.raises(PermissionDenied):
         config.check_principal(replace(owner, actor_user_id="reviewer"))
     config.check_request(owner, "/api/aip/pilot/operating-applications/private-app", "GET")
     config.check_request(owner, "/api/aip/pilot/operating-applications/private-app/objects/Patient/query", "POST")
