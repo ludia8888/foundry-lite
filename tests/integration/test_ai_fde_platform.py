@@ -847,7 +847,9 @@ def test_builder_mcp_enforces_initialize_and_json_rpc_wire_lifecycle(foundry: An
     assert "Mcp-Session-Id" not in reinitialized.headers
     assert initialized.status_code == 202 and initialized.content == b""
     assert initialized_with_null_id.json()["error"]["code"] == -32600
-    assert resource_list.json()["result"]["resources"][0]["uri"] == ("ui://foundry-lite/builder-confirmation-v1.html")
+    assert resource_list.json()["result"]["resources"][0]["uri"] == (
+        "ui://foundry-lite/builder-confirmation-v2-670562894313.html"
+    )
     assert unknown_notification.status_code == 400 and unknown_notification.content == b""
     assert invalid_cursor.json()["error"]["code"] == -32602
     assert "nextCursor" not in complete_list.json()["result"]

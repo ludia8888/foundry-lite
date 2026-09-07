@@ -1,5 +1,45 @@
 # Governed Release Hosted Staging 배포 Runbook
 
+## 2026-09-07 추가 실증: 병원 Ontology 릴리스 완료, Pipeline·앱 배포는 미완료
+
+실제 hosted ChatGPT 작성자·별도 검토자 대화의 MCP App에서 병원 `ReopenFollowUp`
+변경 후보 게시 → 검토 담당 수락·승인 → exact GitHub PR 병합 → Ontology 활성화를 수행했다.
+사용자가 승인한 외부 실행 범위 안에서 에이전트가 브라우저 버튼을 조작했으며, 사용자의
+물리적 클릭을 암호학적으로 증명했다는 의미는 아니다.
+
+- [PR #274](https://github.com/ludia8888/foundry-lite/pull/274)는 required checks 통과 뒤
+  2026-09-07 01:14:13 UTC에 병합됐다. Merge commit은
+  `931bc8deccb83f4271a75ec8f9c04e3773322fc4`다.
+- Proposal `ontprop_efd9a0caad5e488eaaf785c1c07f9897`의 서버 상태는 `active`이며,
+  Ontology v4 `ont_db7b0682bd8f4157b8dc0531d03d529b`가 활성화됐다.
+- Mac mini는 runtime revision `0a02f70c197e76cef9a544e3431c736e1d6ddc4e`,
+  Helm revision 101에서 upgrade receipt `passed`와 API 준비 완료를 확인했다.
+  데이터베이스에 활성화되는 업무 정의 버전과 실행 이미지 버전은 별개다.
+- 이 proposal의 외부 앱 배포 상태는 `not_started`다. 새로운 Action의 외부 앱 권한·화면 연결,
+  Pipeline 실행·승격, 외부 SaaS 배포·지속 운영 URL, rollback 실증은 완료로 계산하지 않는다.
+  사용한 공개 HTTPS 주소도 임시 QA tunnel이지 상용 고정 주소가 아니다.
+
+후속 Pipeline 후보 작성에서는 MCP가 canonical node descriptor를 알려주지 않아 GPT가
+지원하지 않는 node 형식을 작성했고, 서버가 저장 전에 `VALIDATION_FAILED`로 거절했다
+(request `8bcbfede3b4392efa85f9214e5effd5e`). 원본 데이터 변경·Pipeline 실행은 없었다.
+새 격리 branch `pbr_43a94375a5b64653a912c439d08fbe38`는 작성 대기 상태다.
+이 변경은 `pipeline.branch.inspect`의 선택적 `includeAuthoring`으로 실제 node catalog와
+graph template을 제공하고, 큰 Workshop metadata 때문에 MCP 검색이 실패하는 문제를
+명시적 metadata summary로 보완한다. 실행 뒤 승인 카드가 입력을 지우던 동작은 비밀값을
+제거한 검토 사본만 유지하도록 바꾸며, 새 content-addressed Builder resource URI로 기존
+ChatGPT 자산 캐시와 구분한다. 아래 테스트는 저장·권한 경계를 유지하는 repository
+회귀 증거이며, 수정 이미지 배포 뒤 hosted 재실행 성공을 대신하지 않는다.
+
+- `tests/integration/test_builder_mcp_full_surface.py`
+- `tests/integration/test_builder_mcp_compass_large_resources.py`
+- `tests/unit/test_fde_compass_tool_projections.py`
+
+검색·검사에서 요약된 큰 metadata 원문은 durable resource에 보존된다. 이 조치는 전체 목록의
+무제한 크기를 해결하거나 큰 앱 정의의 MCP 전용 편집·조회 경로를 완성한 것은 아니다.
+Pipeline의 정적 구조 검증도 실제 환자 데이터 처리나 Action 변경을 반영하는 live 업무 큐
+실증으로 해석하지 않는다. 아래 기존 표와 상세 기록의 날짜별 미검증 범위는 이 추가 실증보다
+앞선 상태를 설명하며, 전체 SaaS 또는 전체 Palantir parity 완료 주장은 여전히 하지 않는다.
+
 이 문서는 최초 외부 연결이 끝난 뒤 사용자가 ChatGPT 화면을 떠나지 않고 변경 검토부터 배포·상태 확인·필요한 롤백까지 수행하기 위한 **보호형 staging 부트스트랩** 절차다. IdP client 등록, 공개 HTTPS 배포, GitHub·Render secret/target 연결, Render 유료 리소스 생성과 최초 비용 승인은 ChatGPT 대화형 릴리스가 대신할 수 없는 1회 운영자 설정이다. 현재 파일은 배포 가능한 모양을 고정하지만, Render나 다른 외부 계정에 서비스를 생성했다는 증거는 아니다.
 
 ## 현재 판정

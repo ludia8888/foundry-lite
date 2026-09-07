@@ -11,6 +11,7 @@ from foundry_lite.application.services.aip.fde_application_tool_projections impo
     lineage_graph,
     pilot_generation_tool_result,
 )
+from foundry_lite.application.services.aip.fde_compass_tool_projections import compass_tool_result
 from foundry_lite.application.services.aip.fde_object_tools import search_around_ontology_objects
 from foundry_lite.application.services.aip.fde_pilot import FdePilotService
 from foundry_lite.application.services.aip.fde_platform_docs import (
@@ -120,7 +121,9 @@ class FdeApplicationToolService(CoreService):
         if tool_id == "resource.search":
             return self._search_resources(ctx, required_text(request.arguments, "query"))
         if tool_id == "resource.inspect":
-            return self.resource_catalog_service.get_resource(required_text(request.arguments, "rid"), ctx=ctx)
+            return compass_tool_result(
+                self.resource_catalog_service.get_resource(required_text(request.arguments, "rid"), ctx=ctx)
+            )
         if tool_id == "governance.project.inspect":
             return self._project(ctx, required_text(request.arguments, "projectId"))
         if tool_id.startswith("osdk.application."):
@@ -172,11 +175,13 @@ class FdeApplicationToolService(CoreService):
     def _palantir_compass(self, ctx: RequestContext, request: FdePlatformToolRequest) -> dict[str, object]:
         tool_id = request.spec.tool_id
         if tool_id == "list_resources_in_foundry_folder":
-            return self.resource_catalog_service.list_resources(
-                project_id=_optional_text(request.arguments, "projectId"),
-                folder_id=required_text(request.arguments, "folderId"),
-                include_trashed=False,
-                ctx=ctx,
+            return compass_tool_result(
+                self.resource_catalog_service.list_resources(
+                    project_id=_optional_text(request.arguments, "projectId"),
+                    folder_id=required_text(request.arguments, "folderId"),
+                    include_trashed=False,
+                    ctx=ctx,
+                )
             )
         if tool_id == "get_project_imports":
             return self._project_imports(ctx, required_text(request.arguments, "projectId"))
@@ -198,7 +203,7 @@ class FdeApplicationToolService(CoreService):
             ctx=ctx,
         )
         items = [item for item in _mapping_items(payload.get("items")) if item.get("resourceType") == "dataset"]
-        return {"projectId": project_id, "items": items, "count": len(items), "nextCursor": None}
+        return compass_tool_result({"projectId": project_id, "items": items, "count": len(items), "nextCursor": None})
 
     def _palantir_objects(self, ctx: RequestContext, request: FdePlatformToolRequest) -> dict[str, object]:
         if request.spec.tool_id == "search_around_ontology_objects":
@@ -306,22 +311,24 @@ class FdeApplicationToolService(CoreService):
         )
         terms = tuple(term for term in query.lower().split() if term)
         items = [item for item in _mapping_items(payload.get("items")) if _matches(item, terms)][:50]
-        return {"query": query, "items": items, "count": len(items), "nextCursor": None}
+        return compass_tool_result({"query": query, "items": items, "count": len(items), "nextCursor": None})
 
     def _search_projects(self, ctx: RequestContext, query: str) -> dict[str, object]:
         projects = _mapping_items(self.resource_catalog_service.list_projects(ctx=ctx).get("projects"))
         terms = tuple(term for term in query.lower().split() if term)
         items = [item for item in projects if _matches_project(item, terms)][:50]
-        return {"query": query, "items": items, "count": len(items), "nextCursor": None}
+        return compass_tool_result({"query": query, "items": items, "count": len(items), "nextCursor": None})
 
     def _project(self, ctx: RequestContext, project_id: str) -> dict[str, object]:
-        return {
-            **self.resource_catalog_service.get_project(project_id, ctx=ctx),
-            **self.resource_catalog_service.list_folders(project_id, ctx=ctx),
-            "resources": self.resource_catalog_service.list_resources(
-                project_id=project_id, folder_id=None, include_trashed=False, ctx=ctx
-            )["items"],
-        }
+        return compass_tool_result(
+            {
+                **self.resource_catalog_service.get_project(project_id, ctx=ctx),
+                **self.resource_catalog_service.list_folders(project_id, ctx=ctx),
+                "resources": self.resource_catalog_service.list_resources(
+                    project_id=project_id, folder_id=None, include_trashed=False, ctx=ctx
+                )["items"],
+            }
+        )
 
     def _osdk(self, ctx: RequestContext, request: FdePlatformToolRequest) -> dict[str, object]:
         app_id = scope_value(request.scope_ref, "osdk-app:")

@@ -346,7 +346,13 @@ _FDE_TOOLS = (
         "PROPOSE_WRITE",
         "HUMAN_REVIEW",
     ),
-    _tool("pipeline.branch.inspect", "Inspect the selected Pipeline branch and graph diff.", "pipeline:read"),
+    _tool(
+        "pipeline.branch.inspect",
+        "Inspect the selected Pipeline branch and graph diff. Before authoring a graph, set includeAuthoring=true "
+        "to read the server-owned node descriptors, ports, and canonical graph field names; do not guess node types.",
+        "pipeline:read",
+        {"includeAuthoring": {"type": "boolean", "default": False}},
+    ),
     _tool("pipeline.branch.validate", "Validate the selected Pipeline graph and source contracts.", "pipeline:read"),
     _tool(
         "pipeline.branch.update_graph",

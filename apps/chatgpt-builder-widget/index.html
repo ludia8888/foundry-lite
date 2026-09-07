@@ -102,6 +102,7 @@
         const state = {
           challenge: null,
           originalInput: null,
+          reviewInput: null,
           widgetToken: "",
           recoveryReceipt: "",
           busy: false,
@@ -163,6 +164,9 @@
 
         function changeSummary(input) {
           const args = isObject(input?.arguments) ? input.arguments : {};
+          if (isObject(args.graph) && Array.isArray(args.graph.nodes)) {
+            return `${args.graph.nodes.length}개 처리 단계를 별도 작업 공간에 저장합니다. 데이터 실행과 운영 반영은 하지 않습니다.`;
+          }
           return String(args.changeSummary || args.description || args.title || args.displayName || "명시적 요약 없음 — 입력 미리보기를 확인하세요.");
         }
 
@@ -189,9 +193,9 @@
           const [category, impact] = operationImpact(String(challenge.toolId || ""));
           byId("category").textContent = category;
           byId("impact").textContent = impact;
-          byId("change-summary").textContent = changeSummary(state.originalInput);
+          byId("change-summary").textContent = changeSummary(state.reviewInput);
           byId("request-hash").textContent = String(challenge.requestBindingHash || "미제공");
-          byId("preview").textContent = JSON.stringify(redacted(state.originalInput?.arguments || {}), null, 2);
+          byId("preview").textContent = JSON.stringify(state.reviewInput?.arguments || {}, null, 2);
           byId("expiry").textContent = String(challenge.expiresAt || "미제공");
           const button = byId("approve");
           button.disabled = !isReady() || state.busy || state.completed;
@@ -222,7 +226,10 @@
             .filter((key) => value[key] !== undefined && value[key] !== null)
             .sort()
             .join(", ") || "없음";
-          if (isObject(value.toolInput)) state.originalInput = clone(value.toolInput);
+          if (isObject(value.toolInput)) {
+            state.originalInput = clone(value.toolInput);
+            state.reviewInput = redacted(value.toolInput);
+          }
           const output = structuredContent(value.toolOutput || value);
           if (isObject(output) && output.status === "approval_required") state.challenge = clone(output);
           const meta = responseMeta(value);

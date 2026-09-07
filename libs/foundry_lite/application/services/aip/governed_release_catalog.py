@@ -202,7 +202,11 @@ _ACTION_TOOL_NAMES = (
 GOVERNED_RELEASE_TOOLS = (
     GovernedReleaseToolSpec(
         "open_release_workspace",
-        "Open a GPT release workspace for a new isolated Ontology or Pipeline branch.",
+        "Open a GPT release workspace for a new isolated Ontology or Pipeline branch. For pipeline releases, "
+        "pipelineId identifies the logical pipeline: use its known ID for an existing pipeline, or choose a "
+        "stable new business-specific ID for a new pipeline, which starts empty. Do not ask non-developers "
+        "to provide internal IDs. The returned MCP App contains the confirmation button; mutations are "
+        "app-only and need not be exposed as model-callable tools.",
         _workspace_schema(),
         True,
         False,

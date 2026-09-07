@@ -257,6 +257,28 @@ test("큰 변경 미리보기는 21번째 배열 항목과 51번째 객체 키�
   assert.doesNotMatch(harness.nodes.get("preview").textContent, /more items hidden|more keys hidden/);
 });
 
+for (const isError of [false, true]) {
+  test(`실행 결과 ${isError ? "실패" : "성공"} 뒤에도 비밀값 없는 검토 내용을 보존한다`, async () => {
+    const harness = createHarness(async (name) => {
+      if (name === "approve_builder_mutation") return { _meta: { confirmationReceipt: "review-receipt" } };
+      return { isError, structuredContent: isError ? { error: { message: "invalid graph" } } : {} };
+    }, {
+      toolId: "pipeline.branch.update_graph",
+      argumentOverrides: {
+        graph: { nodes: [{ id: "source" }, { id: "output" }] },
+        password: "never-retain-password",
+      },
+    });
+    const before = harness.nodes.get("preview").textContent;
+    await harness.api.approveAndRetry();
+    assert.equal(harness.nodes.get("preview").textContent, before);
+    assert.match(before, /source|output/);
+    assert.match(harness.nodes.get("change-summary").textContent, /2개 처리 단계/);
+    assert.doesNotMatch(before, /never-retain-password|review-receipt/);
+    assert.equal(harness.api.getState().isReady, false);
+  });
+}
+
 test("위젯은 외부 네트워크나 브라우저 저장소 없이 단일 HTML로 동작한다", () => {
   assert.ok(script);
   assert.doesNotMatch(html, /https?:\/\//i);
