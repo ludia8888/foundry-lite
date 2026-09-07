@@ -64,6 +64,9 @@ Ontology, or reports operator provisioning as a human OAuth execution.
 Helm `browserAuth` carries the exact client, public origin, application, and owner
 subject. All four must be set together with strict OIDC; otherwise startup fails.
 The existing MCP clients and auth settings must be preserved during deployment.
+The upgrade operator accepts `--browser-auth-values` so the owner binding and new
+allowed client are applied in the same rollout as the API guard, not admitted on
+an older verifier first. These value files are included in the upgrade receipt hash.
 
 ## Evidence and remaining proof
 

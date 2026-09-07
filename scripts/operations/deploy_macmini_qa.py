@@ -99,14 +99,15 @@ def upgrade(args: argparse.Namespace) -> dict[str, object]:
     token = _qa_input_path(args.registry_token_file, is_directory=False)
     _assert_deployed_release(args)
     runtime_contract = _write_upgrade_runtime_contract(args)
+    value_files = _upgrade_value_files(args, values, runtime_contract)
     image_prepull = _prepull_images(manifest, token)
     override = _write_runtime_override(args.run_id, manifest, _kubernetes_api_endpoint(args))
-    helm_result = _helm_upgrade(args, chart, (values, runtime_contract), override)
+    helm_result = _helm_upgrade(args, chart, value_files, override)
     evidence = _collect_evidence(args)
     receipt = _upgrade_receipt(
         args,
         manifest,
-        (values, runtime_contract),
+        value_files,
         override,
         image_prepull,
         helm_result,
@@ -116,6 +117,15 @@ def upgrade(args: argparse.Namespace) -> dict[str, object]:
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_json_receipt(target, receipt)
     return receipt
+
+
+def _upgrade_value_files(args: argparse.Namespace, values: Path, runtime_contract: Path) -> tuple[Path, ...]:
+    private_values = getattr(args, "browser_auth_values", None)
+    if private_values is None:
+        return values, runtime_contract
+    # Apply the invited-owner settings in the SAME rollout as the new verifier.
+    # Never admit the new client on an older API before its owner guard exists.
+    return values, runtime_contract, _qa_input_path(private_values, is_directory=False)
 
 
 def _load_manifest(path: Path) -> dict[str, object]:
@@ -752,6 +762,7 @@ def main_upgrade(argv: list[str] | None = None) -> int:
     parser.add_argument("--helm", default=str(QA_ROOT / "bin" / "helm"))
     parser.add_argument("--chart", required=True)
     parser.add_argument("--values", required=True)
+    parser.add_argument("--browser-auth-values")
     parser.add_argument("--image-manifest", required=True)
     parser.add_argument("--registry-token-file", required=True)
     upgrade(parser.parse_args(argv))

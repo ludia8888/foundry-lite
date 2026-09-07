@@ -294,6 +294,19 @@ def test_runtime_contract_preserves_embedded_oauth_empty_values() -> None:
     assert contract["browserAuth"] == {"clientId": "private-client", "ownerSubject": "private-owner"}
 
 
+def test_owner_configuration_is_part_of_same_image_rollout_and_receipt(monkeypatch, tmp_path: Path) -> None:
+    base = tmp_path / "base.json"
+    current = tmp_path / "current.json"
+    owner = tmp_path / "owner.json"
+    monkeypatch.setattr(subject, "_qa_input_path", lambda path, **_kwargs: Path(path))
+    assert subject._upgrade_value_files(Namespace(), base, current) == (base, current)
+    assert subject._upgrade_value_files(Namespace(browser_auth_values=str(owner)), base, current) == (
+        base,
+        current,
+        owner,
+    )
+
+
 def test_helm_upgrade_cannot_install_a_missing_release(monkeypatch, tmp_path: Path) -> None:
     command: list[str] = []
 
