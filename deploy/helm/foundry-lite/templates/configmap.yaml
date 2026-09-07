@@ -7,6 +7,10 @@ metadata:
 data:
   FOUNDRY_LITE_RUNTIME_PROFILE: {{ .Values.global.runtimeProfile | quote }}
   FOUNDRY_LITE_AUTH_PROFILE: {{ .Values.auth.profile | quote }}
+  FOUNDRY_LITE_BROWSER_CLIENT_ID: {{ .Values.browserAuth.clientId | quote }}
+  FOUNDRY_LITE_BROWSER_PUBLIC_BASE_URL: {{ .Values.browserAuth.publicBaseUrl | quote }}
+  FOUNDRY_LITE_BROWSER_APPLICATION_ID: {{ .Values.browserAuth.applicationId | quote }}
+  FOUNDRY_LITE_BROWSER_OWNER_SUBJECT: {{ .Values.browserAuth.ownerSubject | quote }}
   FOUNDRY_LITE_HOME: /var/data/runtime
   FOUNDRY_LITE_DURABLE_STATE_MOUNT: /var/data
   FOUNDRY_LITE_OAUTH_PRIVATE_KEY_PATH: /var/run/foundry-lite/oauth/{{ .Values.secrets.oauthSigningKey }}

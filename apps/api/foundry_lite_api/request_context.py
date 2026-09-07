@@ -59,6 +59,9 @@ class _AudienceBoundAuthProvider(Protocol):
 
 
 def _principal_context(principal: Principal, request: Request | None, default_request_id: str) -> RequestContext:
+    runtime.get_browser_auth_config().check_principal(principal)
+    if request is not None:
+        runtime.get_browser_auth_config().check_request(principal, request.url.path, request.method)
     return RequestContext(
         tenant_id=principal.tenant_id,
         actor_user_id=principal.actor_user_id,
@@ -85,6 +88,8 @@ def _websocket_ctx(websocket: WebSocket) -> RequestContext:
     credentials = _collect_websocket_credentials(websocket)
     auth_provider = runtime.get_auth_provider()
     principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
+    runtime.get_browser_auth_config().check_principal(principal)
+    runtime.get_browser_auth_config().check_request(principal, websocket.url.path, "WEBSOCKET")
     return RequestContext(
         tenant_id=principal.tenant_id,
         actor_user_id=principal.actor_user_id,

@@ -25,6 +25,7 @@ from foundry_lite.infrastructure.local_runtime import create_runtime_core_depend
 from foundry_lite.observability.tracing import configure_observability
 from sqlalchemy.engine import Engine
 
+from foundry_lite_api.browser_auth import BrowserAuthConfig, browser_auth_from_env
 from foundry_lite_api.mcp_authorization_config import (
     McpAuthorizationConfig,
     governed_release_mcp_authority,
@@ -67,6 +68,7 @@ class ApiRuntime:
     foundry: FoundryLite
     auth_provider: AuthProvider
     mcp_authorization: McpAuthorizationConfig
+    browser_auth: BrowserAuthConfig = BrowserAuthConfig()
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,7 @@ def initialize_api_runtime(environ: Mapping[str, str] | None = None) -> ApiRunti
             _configure_observability_once()
             auth_provider = auth_provider_from_env(source)
             mcp_authorization = mcp_authorization_config_from_env(source, auth_provider)
+            browser_auth = browser_auth_from_env(source, auth_provider)
             dependencies = create_runtime_core_dependencies(
                 profile=RuntimeProfile.from_value(source.get("FOUNDRY_LITE_RUNTIME_PROFILE")),
                 db_url=source.get("FOUNDRY_LITE_DB_URL"),
@@ -134,6 +137,7 @@ def initialize_api_runtime(environ: Mapping[str, str] | None = None) -> ApiRunti
                     foundry=foundry,
                     auth_provider=auth_provider,
                     mcp_authorization=mcp_authorization,
+                    browser_auth=browser_auth,
                 )
             except BaseException:  # noqa: BLE001 - release resources even during process cancellation.
                 foundry.close()
@@ -174,6 +178,10 @@ def get_auth_provider() -> AuthProvider:
 
 def get_mcp_authorization_config() -> McpAuthorizationConfig:
     return get_api_runtime().mcp_authorization
+
+
+def get_browser_auth_config() -> BrowserAuthConfig:
+    return get_api_runtime().browser_auth
 
 
 def is_api_runtime_initialized() -> bool:

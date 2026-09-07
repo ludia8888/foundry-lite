@@ -496,7 +496,10 @@ def test_sdk_package_output_matches_the_ontology_client_surface() -> None:
     assert objects_surface["Order"] == ["get", "query", "aggregate"]
     assert ts_surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
     assert ts_surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
-    assert ts_surface["auth"] == {"osdkOAuth": ["authorize", "token", "refresh", "revoke"]}
+    assert ts_surface["auth"] == {
+        "osdkOAuth": ["authorize", "token", "refresh", "revoke"],
+        "browser": ["configuration", "session"],
+    }
     assert ts_surface["developerConsole"] == {
         "osdkApplications": [
             "create",

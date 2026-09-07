@@ -13,6 +13,7 @@ from foundry_lite.application.services.aip.fde_workshop_definition import (
 JsonObject = Mapping[str, object]
 
 _SCHEMA_VERSION = "foundry-lite-business-system-definition/v3"
+_READABLE_SCHEMA_VERSIONS = frozenset({_SCHEMA_VERSION, "foundry-lite-business-system-definition/v2"})
 
 
 def build_business_system_definition(
@@ -43,8 +44,12 @@ def require_business_system_definition(value: object) -> dict[str, object]:
 
     definition = _mapping(value, "businessSystemDefinition")
     fingerprint = definition.get("definitionFingerprint")
+    version = definition.get("schemaVersion")
     payload = {name: item for name, item in definition.items() if name != "definitionFingerprint"}
-    if definition.get("schemaVersion") != _SCHEMA_VERSION or fingerprint != hash_json(payload):
+    # v2 already carries the same Workshop/access/action contract. Read its
+    # original bytes without recompiling screens or replacing its fingerprint;
+    # new generation remains v3. Pre-Workshop v1 and unknown versions fail closed.
+    if not isinstance(version, str) or version not in _READABLE_SCHEMA_VERSIONS or fingerprint != hash_json(payload):
         raise FdePlatformToolError(
             "business_system_definition_invalid",
             "업무 시스템 정의서가 변경되었거나 버전을 확인할 수 없어 앱을 만들지 않았습니다.",
