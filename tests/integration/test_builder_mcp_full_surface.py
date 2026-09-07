@@ -575,7 +575,23 @@ def _run_official_ontology_mutations(runner: _FullSurfaceRunner, workspace: str)
 def _run_pipeline_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> None:
     branch = state["pipelineBranch"]
     workspace = f"pipeline-branch:{branch['id']}"
-    runner.call("data_integration", workspace, "pipeline.branch.inspect", {}, ("branch", "diff"))
+    inspected = runner.call(
+        "data_integration",
+        workspace,
+        "pipeline.branch.inspect",
+        {"includeAuthoring": True},
+        ("branch", "diff", "authoring"),
+    )
+    catalog = runner.foundry.pipelines.node_types(ctx=FDE_USER)
+    assert inspected["authoring"]["nodeCatalog"] == catalog
+    assert "descriptorId" in inspected["authoring"]["nodeFields"]
+    assert "sourcePortId" in inspected["authoring"]["edgeFields"]
+    template = inspected["authoring"]["graphTemplate"]
+    assert template["schemaVersion"] == 2
+    assert template["nodes"] == template["edges"] == template["tests"] == []
+    assert template["outputContract"] == {"columns": []}
+    assert "not actual data execution" in inspected["authoring"]["guidance"]
+    assert inspected["authoring"]["sqlInputReferenceTemplate"] == "{{ input('actual.dataset.ref') }}"
     runner.call(
         "data_integration",
         workspace,

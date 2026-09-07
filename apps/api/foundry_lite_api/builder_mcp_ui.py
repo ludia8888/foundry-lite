@@ -8,7 +8,8 @@ from pathlib import Path
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
 BUILDER_CONFIRMATION_TOOL = "approve_builder_mutation"
-BUILDER_CONFIRMATION_RESOURCE_URI = "ui://foundry-lite/builder-confirmation-v1.html"
+BUILDER_CONFIRMATION_RESOURCE_URI = "ui://foundry-lite/builder-confirmation-v2-670562894313.html"
+_BUILDER_CONFIRMATION_LEGACY_URIS = frozenset({"ui://foundry-lite/builder-confirmation-v1.html"})
 BUILDER_CONFIRMATION_MIME_TYPE = "text/html;profile=mcp-app"
 DOMAIN_OS_RESOURCE_URI = "ui://foundry-lite/domain-os-studio-v1-e1b0fd5e5fa8.html"
 _BUILDER_CONFIRMATION_PATH = Path(__file__).resolve().parents[3] / "apps" / "chatgpt-builder-widget" / "index.html"
@@ -48,7 +49,7 @@ def read_builder_resource(params: Mapping[str, object]) -> dict[str, object]:
     uri = _required_text(params, "uri")
     if uri == DOMAIN_OS_RESOURCE_URI:
         return _read_domain_os_resource(uri)
-    if uri != BUILDER_CONFIRMATION_RESOURCE_URI:
+    if uri != BUILDER_CONFIRMATION_RESOURCE_URI and uri not in _BUILDER_CONFIRMATION_LEGACY_URIS:
         raise NotFound("Builder MCP UI resource was not found", details={"uri": uri})
     text = _read_asset(_BUILDER_CONFIRMATION_PATH, uri, "apps/chatgpt-builder-widget/index.html")
     return {

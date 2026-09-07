@@ -22,11 +22,14 @@ from foundry_lite.application.services.aip.fde_tool_result import (
 )
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerResult, ToolSpec
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_graph_normalizer import empty_pipeline_graph_v2
 from foundry_lite.domain.context import RequestContext
 
 
 class FdePipelineCatalog(Protocol):
-    """Read the governed trained-model catalog."""
+    """Read governed Pipeline authoring and trained-model catalogs."""
+
+    def node_types(self, *, ctx: RequestContext | None = None) -> dict[str, object]: ...
 
     def trained_models(self, *, ctx: RequestContext | None = None) -> dict[str, object]: ...
 
@@ -180,10 +183,7 @@ class FdePlatformToolService(CoreService):
         branch_id = scope_value(request.scope_ref, "pipeline-branch:")
         tool_id = request.spec.tool_id
         if tool_id == "pipeline.branch.inspect":
-            return {
-                "branch": self.pipeline_definition_service.get_branch(branch_id, ctx=ctx),
-                "diff": self.pipeline_definition_service.diff_branch(branch_id, ctx=ctx),
-            }
+            return self._inspect_pipeline(ctx, request, branch_id)
         if tool_id == "pipeline.branch.validate":
             return self.pipeline_graph_validation_service.validate_branch(branch_id, ctx=ctx)
         if tool_id == "pipeline.branch.update_graph":
@@ -198,6 +198,30 @@ class FdePlatformToolService(CoreService):
         if tool_id == "pipeline.branch.propose":
             return self._propose_pipeline(ctx, request, branch_id)
         raise FdePlatformToolError("unknown_fde_tool", f"unsupported pipeline tool {tool_id}")
+
+    def _inspect_pipeline(
+        self, ctx: RequestContext, request: FdePlatformToolRequest, branch_id: str
+    ) -> dict[str, object]:
+        result: dict[str, object] = {
+            "branch": self.pipeline_definition_service.get_branch(branch_id, ctx=ctx),
+            "diff": self.pipeline_definition_service.diff_branch(branch_id, ctx=ctx),
+        }
+        if request.arguments.get("includeAuthoring") is True:
+            result["authoring"] = {
+                "nodeCatalog": self.pipeline_catalog_service.node_types(ctx=ctx),
+                "graphTemplate": empty_pipeline_graph_v2(),
+                "sqlInputReferenceTemplate": "{{ input('actual.dataset.ref') }}",
+                "nodeFields": ["id", "kind", "descriptorId", "specVersion", "config"],
+                "edgeFields": ["id", "sourceNodeId", "sourcePortId", "targetNodeId", "targetPortId"],
+                "guidance": "Use schemaVersion=2 and exact descriptor IDs, kinds, versions, ports and config fields "
+                "from nodeCatalog. Do not invent type names or test assertions. Read source schemas separately. "
+                "In transform.sql, reference a connected input with sqlInputReferenceTemplate, substituting its "
+                "actual datasetRef, not the graph node ID. Use distinct intermediate and final output dataset refs. "
+                "Set outputContract.columns from the intended output schema. Leave tests empty unless using a "
+                "documented declaration; arbitrary test assertions are not executed. run_tests proves static "
+                "graph and output-contract checks, not actual data execution.",
+            }
+        return result
 
     def _propose_pipeline(
         self, ctx: RequestContext, request: FdePlatformToolRequest, branch_id: str
