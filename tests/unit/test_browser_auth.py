@@ -85,7 +85,7 @@ def test_private_browser_principal_is_bound_to_one_owner_and_application() -> No
     owner = Principal(
         tenant_id="tenant",
         actor_user_id="owner-subject",
-        roles=(),
+        roles=("viewer",),
         client_id="private-browser",
         application_id="private-app",
         is_human_oauth=True,
@@ -97,6 +97,8 @@ def test_private_browser_principal_is_bound_to_one_owner_and_application() -> No
         replace(owner, application_id="other"),
         replace(owner, client_id="existing-mcp"),
         replace(owner, is_human_oauth=False),
+        replace(owner, roles=("admin",)),
+        replace(owner, roles=("viewer", "admin")),
     ]:
         with pytest.raises(PermissionDenied):
             config.require_browser_principal(principal)

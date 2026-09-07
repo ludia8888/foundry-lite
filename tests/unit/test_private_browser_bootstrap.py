@@ -5,7 +5,12 @@ from copy import deepcopy
 
 import pytest
 
-from scripts.operations.bootstrap_private_browser_login import _ensure_client, _ensure_redirect_host, _ensure_user
+from scripts.operations.bootstrap_private_browser_login import (
+    _ensure_client,
+    _ensure_redirect_host,
+    _ensure_user,
+    _verify_private_client,
+)
 from scripts.operations.private_browser_keycloak import client_payload
 
 
@@ -83,3 +88,11 @@ def test_new_user_has_temporary_private_handoff_and_no_operator_roles(tmp_path) 
     assert created["requiredActions"] == ["UPDATE_PASSWORD"]
     assert created["emailVerified"] is False
     assert "realmRoles" not in created
+
+
+def test_live_client_readback_rejects_inherited_operator_scope() -> None:
+    client = {"id": "client", "attributes": {"pkce.code.challenge.method": "S256"}}
+    good = [{"name": "profile"}, {"name": "email"}]
+    _verify_private_client(IdentityFixture([[client], good]), "browser")
+    with pytest.raises(RuntimeError, match="unexpected_scope"):
+        _verify_private_client(IdentityFixture([[client], [*good, {"name": "foundry-lite-runtime"}]]), "browser")

@@ -122,6 +122,23 @@ def _initial_password(email: str, application_id: str, state_dir: Path, public_b
     return str(password)
 
 
+def _verify_private_client(admin: KeycloakAdmin, client_id: str) -> None:
+    rows = admin.request("/clients?" + urlencode({"clientId": client_id}))
+    if not isinstance(rows, list) or len(rows) != 1:
+        raise RuntimeError("private_browser_client_verification_failed")
+    client = rows[0]
+    scopes = admin.request(f"/clients/{quote(client['id'], safe='')}/default-client-scopes")
+    if not isinstance(scopes, list) or {item["name"] for item in scopes} != {"profile", "email"}:
+        raise RuntimeError("private_browser_client_inherits_unexpected_scope")
+    if client.get("attributes", {}).get("pkce.code.challenge.method") != "S256":
+        raise RuntimeError("private_browser_pkce_not_enforced")
+    if any(
+        client.get(name)
+        for name in ("implicitFlowEnabled", "directAccessGrantsEnabled", "serviceAccountsEnabled", "fullScopeAllowed")
+    ):
+        raise RuntimeError("private_browser_client_has_unexpected_grant")
+
+
 def _ensure_user(admin: KeycloakAdmin, email: str, application_id: str, state_dir: Path, public_base: str) -> str:
     rows = admin.request("/users?" + urlencode({"username": email, "exact": "true"}))
     if not isinstance(rows, list) or len(rows) > 1:
@@ -211,6 +228,7 @@ def bootstrap(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("private_browser_public_signup_must_be_disabled")
     _ensure_redirect_host(admin, public_base)
     _ensure_client(admin, desired)
+    _verify_private_client(admin, args.client_id)
     subject = _ensure_user(admin, args.email, args.application_id, state_dir, public_base)
     clients = sorted(set(json.loads(str(oidc["allowedClientIdsJson"]))) | {args.client_id})
     override: dict[str, object] = {

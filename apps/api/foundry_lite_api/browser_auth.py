@@ -71,6 +71,7 @@ class BrowserAuthConfig:
             and principal.client_id == self.client_id
             and principal.application_id == self.application_id
             and principal.actor_user_id == self.owner_subject
+            and principal.roles == ("viewer",)
             and principal.is_human_oauth is True
             and principal.oauth_grant_type == "authorization_code"
         ):

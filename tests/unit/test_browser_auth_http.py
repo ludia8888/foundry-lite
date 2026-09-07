@@ -62,7 +62,7 @@ def _token(key, **overrides: object) -> str:
         "aud": "api",
         "sub": "owner",
         "tenant_id": "private-tenant",
-        "roles": ["hospital_reader"],
+        "roles": ["viewer"],
         "azp": "browser",
         "osdk_app_id": "private-app",
         "sid": "login-session",
@@ -100,7 +100,7 @@ def test_browser_session_uses_signed_identity_not_demo_headers(browser_client) -
     assert response.headers["cache-control"] == "no-store"
     assert response.json()["userId"] == "owner"
     assert response.json()["tenantId"] == "private-tenant"
-    assert response.json()["roles"] == ["hospital_reader"]
+    assert response.json()["roles"] == ["viewer"]
     assert "Bearer" not in response.text
 
 
@@ -113,6 +113,7 @@ def test_browser_session_uses_signed_identity_not_demo_headers(browser_client) -
         {"azp": "other"},
         {"exp": 1},
         {"gty": "client_credentials"},
+        {"roles": ["admin", "viewer"]},
     ],
 )
 def test_other_accounts_apps_clients_and_expired_sessions_are_rejected(browser_client, claims) -> None:
