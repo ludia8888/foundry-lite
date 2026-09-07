@@ -210,10 +210,13 @@ class FdePlatformToolService(CoreService):
             result["authoring"] = {
                 "nodeCatalog": self.pipeline_catalog_service.node_types(ctx=ctx),
                 "graphTemplate": empty_pipeline_graph_v2(),
+                "sqlInputReferenceTemplate": "{{ input('actual.dataset.ref') }}",
                 "nodeFields": ["id", "kind", "descriptorId", "specVersion", "config"],
                 "edgeFields": ["id", "sourceNodeId", "sourcePortId", "targetNodeId", "targetPortId"],
                 "guidance": "Use schemaVersion=2 and exact descriptor IDs, kinds, versions, ports and config fields "
                 "from nodeCatalog. Do not invent type names or test assertions. Read source schemas separately. "
+                "In transform.sql, reference a connected input with sqlInputReferenceTemplate, substituting its "
+                "actual datasetRef, not the graph node ID. Use distinct intermediate and final output dataset refs. "
                 "Set outputContract.columns from the intended output schema. Leave tests empty unless using a "
                 "documented declaration; arbitrary test assertions are not executed. run_tests proves static "
                 "graph and output-contract checks, not actual data execution.",

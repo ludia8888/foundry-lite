@@ -591,6 +591,7 @@ def _run_pipeline_tools(runner: _FullSurfaceRunner, state: dict[str, Any]) -> No
     assert template["nodes"] == template["edges"] == template["tests"] == []
     assert template["outputContract"] == {"columns": []}
     assert "not actual data execution" in inspected["authoring"]["guidance"]
+    assert inspected["authoring"]["sqlInputReferenceTemplate"] == "{{ input('actual.dataset.ref') }}"
     runner.call(
         "data_integration",
         workspace,
