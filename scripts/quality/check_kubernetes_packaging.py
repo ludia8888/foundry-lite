@@ -233,6 +233,8 @@ def _template_findings(root: Path) -> list[KubernetesPackagingFinding]:
         "livenessProbe:",
         "resources:",
         "persistentVolumeClaim:",
+        'add_header Cache-Control "public, max-age=31536000, immutable" always;',
+        'add_header Cache-Control "no-cache, no-store, must-revalidate" always;',
         "helm.sh/hook: pre-install,pre-upgrade",
         "foundry-lite.io/migration-contract: idempotent-twice",
     )

@@ -172,6 +172,16 @@ def test_macmini_nodeports_expose_web_api_gateway_and_keycloak_separately() -> N
     assert 'proxy_pass http://{{ include "foundry-lite.fullname" . }}-api:10000;' in web_config
 
 
+def test_web_entrypoint_revalidates_while_hashed_assets_are_immutable() -> None:
+    web_config = (ROOT / "deploy/helm/foundry-lite/templates/web-config.yaml").read_text(encoding="utf-8")
+
+    assert "location /assets/" in web_config
+    assert 'add_header Cache-Control "public, max-age=31536000, immutable" always;' in web_config
+    assert "location = /index.html" in web_config
+    assert web_config.count('add_header Cache-Control "no-cache, no-store, must-revalidate" always;') == 2
+    assert "try_files $uri $uri/ /index.html;" in web_config
+
+
 def test_production_web_uses_the_deployment_origin_for_api_requests() -> None:
     api_config = (ROOT / "apps/foundry/src/lib/api.ts").read_text(encoding="utf-8")
 
