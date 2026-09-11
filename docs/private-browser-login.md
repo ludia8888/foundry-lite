@@ -34,6 +34,9 @@ Configured browsers use the issuer's actual login screen and verify their bearer
 through `GET /api/auth/browser/session`. The backend binds the signed subject,
 client, app, and human Authorization Code grant to the configured private owner.
 Spoofed context headers cannot change that identity.
+The web gateway serves the SPA entry document with `no-store` so a returning user
+cannot keep running a pre-login release after an upgrade. Content-hashed assets
+under `/assets/` remain immutable for efficient repeat loading.
 The owner subject is also denied on every other client, including existing QA
 operator clients; the browser accepts only the `viewer` platform role. Existing
 operator subjects retain their original client permissions.
