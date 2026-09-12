@@ -254,6 +254,8 @@ def _model_item(catalog: Mapping[str, object], ref: str) -> dict[str, object]:
 
 def _require_tenant_scope(ctx: RequestContext, workspace_ref: str) -> None:
     value = workspace_ref.split(":", maxsplit=1)[1]
+    if value == "self":
+        return
     if value not in {ctx.tenant_id, "platform"}:
         raise ValidationFailed("AI FDE tenant scope is outside the invoking user's tenant")
 

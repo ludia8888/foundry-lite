@@ -941,7 +941,10 @@ def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_
     )
 
     assert initialized.status_code == listed_tools.status_code == listed_resources.status_code == 200
-    assert "Do not ask the user for API names" in initialized.json()["result"]["instructions"]
+    instructions = initialized.json()["result"]["instructions"]
+    assert "Never switch to generic Sites" in instructions
+    assert "workspaceRef tenant:self" in instructions
+    assert "do not ask for workspaceRef" in instructions
     tools = {item["name"]: item for item in listed_tools.json()["result"]["tools"]}
     assert tools["pilot.application.plan"]["_meta"]["ui"]["resourceUri"] == DOMAIN_OS_RESOURCE_URI
     assert tools["pilot.application.generate"]["_meta"]["openai/outputTemplate"] == DOMAIN_OS_RESOURCE_URI
@@ -958,6 +961,45 @@ def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_
     assert result["domainOsBlueprint"]["readiness"]["isReady"] is True
     assert result["slug"].startswith("domain-os-")
     assert result["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"osdk-app:{app_id}"}
+
+
+def test_builder_mcp_bootstraps_first_project_from_self_scope_before_domain_planning(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    governance_app, governance_headers = _builder_mcp_application(foundry, monkeypatch, "governance")
+    created = _mcp_native_call(
+        client,
+        governance_app,
+        governance_headers,
+        "first-project",
+        "governance",
+        "tenant:self",
+        "create_foundry_project",
+        {"displayName": "LedgerFlow", "idempotencyKey": "first-project-ledgerflow"},
+    )
+    project_id = str(created["project"]["id"])
+    osdk_app, osdk_headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    planned = _mcp_native_call(
+        client,
+        osdk_app,
+        osdk_headers,
+        "first-project-plan",
+        "osdk_react",
+        f"project:{project_id}",
+        "pilot.application.plan",
+        {
+            "applicationName": "LedgerFlow",
+            "domainDescription": "고객 증빙 접수부터 결산 검토와 신고 승인까지 관리합니다.",
+            "domainBrief": _property_maintenance_domain_brief(),
+        },
+    )
+
+    assert created["project"]["displayName"] == "LedgerFlow"
+    assert planned["domainOsBlueprint"]["readiness"]["isReady"] is True
+    assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"project:{project_id}"}
 
 
 def test_builder_mcp_confirmation_receipt_is_human_idempotent_and_one_time(foundry: Any, monkeypatch: Any) -> None:
