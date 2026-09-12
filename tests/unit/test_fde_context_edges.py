@@ -92,6 +92,8 @@ def _service() -> FdeContextService:
         ("exploration", "dataset:raw.orders"),
         ("exploration", "tenant:tenant-a"),
         ("exploration", "tenant:self"),
+        ("governance", "tenant:self"),
+        ("governance", "governance"),
         ("platform_qa", "docs:tenant-a"),
     ],
 )
@@ -131,6 +133,7 @@ def test_fde_context_rejects_cross_scope_branch_tenant_unknown_and_missing_resou
         lambda: service.validate_scope(_CTX, "ontology_editing", "dataset:raw.orders"),
         lambda: service.validate_scope(_CTX, "exploration", "tenant:tenant-b"),
         lambda: service.validate_scope(_CTX, "exploration", "tenant:current"),
+        lambda: service.validate_scope(_CTX, "exploration", "governance"),
         lambda: service.resolve(_CTX, ("ontology-branch:branch-2",), "ontology-branch:branch-1"),
         lambda: service.resolve(_CTX, ("function:missing",), "ontology-branch:branch-1"),
         lambda: service.resolve(_CTX, ("model:missing",), "ontology-branch:branch-1"),

@@ -76,6 +76,8 @@ class FdeContextService(CoreService):
     source_onboarding_service: FdeSourceReader
 
     def validate_scope(self, ctx: RequestContext, mode: str, workspace_ref: str) -> None:
+        if _is_invoking_tenant_governance_alias(mode, workspace_ref):
+            return
         spec = current_fde_mode(mode)
         if not any(workspace_ref.startswith(prefix) for prefix in spec.scope_prefixes):
             raise ValidationFailed(
@@ -258,6 +260,12 @@ def _require_tenant_scope(ctx: RequestContext, workspace_ref: str) -> None:
         return
     if value not in {ctx.tenant_id, "platform"}:
         raise ValidationFailed("AI FDE tenant scope is outside the invoking user's tenant")
+
+
+def _is_invoking_tenant_governance_alias(mode: str, workspace_ref: str) -> bool:
+    """Treat the host's governance sentinel as the authenticated tenant only."""
+
+    return mode == "governance" and workspace_ref == "governance"
 
 
 def _source_version(payload: Mapping[str, object]) -> str:
