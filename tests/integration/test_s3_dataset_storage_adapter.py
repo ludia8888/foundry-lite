@@ -211,7 +211,7 @@ class _AccessExpiredClient:
 @pytest.fixture(scope="session")
 def minio_server() -> Iterator[MinioServer]:
     container = (
-        DockerContainer("minio/minio")
+        DockerContainer("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
         .with_env("MINIO_ROOT_USER", MINIO_ACCESS_KEY)
         .with_env("MINIO_ROOT_PASSWORD", MINIO_SECRET_KEY)
         .with_command("server /data --address :9000")
