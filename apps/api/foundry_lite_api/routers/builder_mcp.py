@@ -322,12 +322,18 @@ def _initialize_result(protocol_version: str) -> dict[str, object]:
         },
         "serverInfo": {"name": "foundry-lite-builder-mcp", "version": "1.0.0"},
         "instructions": (
-            "When a user describes any business domain in natural language, infer a bounded domainBrief and call "
-            "pilot.application.plan in osdk_react mode. Do not ask the user for API names or developer vocabulary. "
+            "Use only Foundry-lite tools for a Foundry-lite business application request. Never switch to generic "
+            "Sites, website builders, or unrelated app generators. When a user describes any business domain in "
+            "natural language, do not ask for workspaceRef, project IDs, API names, or developer vocabulary. If no "
+            "Foundry project is selected, call create_foundry_project in governance mode with workspaceRef "
+            "tenant:self, a business-readable displayName, and a stable idempotencyKey. After the user approves that "
+            "mutation, use "
+            "the returned project ID as workspaceRef project:<project-id>. Infer a bounded domainBrief and call "
+            "pilot.application.plan in osdk_react mode with that project workspace. "
             "If its readiness questions are non-empty, ask only those concrete business questions and plan again. "
             "The embedded Domain OS Studio lets the user review the resulting people, records, states, rules, actions, "
             "and evidence, then explicitly create a test application. Use lazy discovery with search_tools or eager "
-            "tools/list fallback and explicit workspaceRef values. "
+            "tools/list fallback. Never ask a non-developer to discover or type a technical workspace reference. "
             "Mutations return an approval challenge rendered by the embedded Builder confirmation app; "
             "the user can approve and retry the exact call inside ChatGPT. The authenticated human "
             "control-plane endpoint remains available for non-App clients. "
