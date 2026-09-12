@@ -963,7 +963,7 @@ def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_
     assert result["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"osdk-app:{app_id}"}
 
 
-def test_builder_mcp_bootstraps_first_project_from_self_scope_before_domain_planning(
+def test_builder_mcp_bootstraps_first_project_from_host_governance_alias_before_domain_planning(
     foundry: Any,
     monkeypatch: Any,
 ) -> None:
@@ -976,7 +976,7 @@ def test_builder_mcp_bootstraps_first_project_from_self_scope_before_domain_plan
         governance_headers,
         "first-project",
         "governance",
-        "tenant:self",
+        "governance",
         "create_foundry_project",
         {"displayName": "LedgerFlow", "idempotencyKey": "first-project-ledgerflow"},
     )
