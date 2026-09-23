@@ -70,6 +70,7 @@ function bundle() {
     applicationPath: "/projects/project-1/pilot/property-care-desk",
     status: "generated_on_branch",
     domainOsBlueprint: plan().domainOsBlueprint,
+    workshopPreview: [{ name: "오늘 할 일", components: [{ kind: "statusTracker", name: "현재 상태" }] }],
     generatedFiles: { count: 2, names: ["src/App.tsx", "packages/application-osdk/src/generated.ts"] },
   };
 }
@@ -197,8 +198,35 @@ test("압축된 Workshop 화면 요약도 같은 컴포넌트 이름으로 보�
   const view = harness({ output: compact });
 
   assert.match(view.root.innerHTML, /접수 담당자 화면/);
-  assert.match(view.root.innerHTML, /업무 목록 · 검색 · 업무 폼/);
+  assert.match(view.root.innerHTML, /업무 카드 목록 · 검색 · 업무 폼/);
   assert.doesNotMatch(view.root.innerHTML, /설계의 빈칸을 확인하면/);
+});
+
+test("Workshop의 실제 화면 제목과 상태 번역을 보여주고 내부 코드를 숨긴다", () => {
+  const compact = plan();
+  compact.domainOsBlueprint.workflow.states = ["INQUIRY", "CONSENT_CONFIRMED"];
+  compact.domainOsBlueprint.workflow.actions[0].fromStates = ["INQUIRY"];
+  compact.domainOsBlueprint.workflow.actions[0].toState = "CONSENT_CONFIRMED";
+  compact.workshopPresentation = {
+    statusLabels: {
+      INQUIRY: { label: "문의 접수" },
+      CONSENT_CONFIRMED: { label: "동의 확인" },
+    },
+  };
+  compact.workshopPreview = [{
+    name: "접수 담당자 화면",
+    components: [
+      { kind: "statusTracker", name: "현재 단계" },
+      { kind: "filterList", name: "빠른 필터" },
+      { kind: "futureWidget", name: "맞춤 분석" },
+    ],
+  }];
+  const view = harness({ output: compact });
+
+  assert.match(view.root.innerHTML, /문의 접수.*동의 확인/);
+  assert.match(view.root.innerHTML, /현재 단계 · 빠른 필터 · 맞춤 분석/);
+  assert.doesNotMatch(view.root.innerHTML, /INQUIRY|CONSENT_CONFIRMED|statusTracker|filterList|futureWidget/);
+  assert.ok(view.root.innerHTML.indexOf("테스트 앱을 만들 준비") < view.root.innerHTML.indexOf("업무 운영 지도"));
 });
 
 test("생성 버튼은 고수준 MCP OSDK에서 challenge→app-only 확인→exact retry를 수행한다", async () => {
@@ -229,6 +257,9 @@ test("생성 버튼은 고수준 MCP OSDK에서 challenge→app-only 확인→ex
   assert.equal(view.calls[2].args.confirmationReceipt, "receipt-1");
   assert.match(view.root.innerHTML, /Property Care Desk 준비 완료/);
   assert.match(view.root.innerHTML, /화면은 이 앱에 허용된 기능만 사용/);
+  assert.match(view.root.innerHTML, /오늘 할 일/);
+  assert.match(view.root.innerHTML, /현재 상태/);
+  assert.doesNotMatch(view.root.innerHTML, /설계의 빈칸을 확인하면/);
 });
 
 test("MCP Apps 표준 postMessage bridge가 window.openai callTool 없이 생성 흐름을 완료한다", async () => {

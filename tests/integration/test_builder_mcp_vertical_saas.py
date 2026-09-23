@@ -52,6 +52,7 @@ def test_builder_mcp_generates_four_distinct_commercial_saas_products(
         product_name, primary_record, approval_action = VERTICAL_PRODUCTS[str(spec["id"])]
         plan = _call_plan(client, app_id, session_headers, workspace_ref, spec, product_name)
         generated = _call_generate(client, app_id, session_headers, headers, workspace_ref, spec, plan)
+        assert generated["workshopPreview"] == plan["workshopPreview"]
         bundle = foundry.aip.get_pilot_application(str(generated["resource"]["rid"]), ctx=FDE_USER)
         _assert_commercial_bundle(bundle, product_name, primary_record, approval_action)
         generated_products.append(
@@ -105,6 +106,10 @@ def _call_plan(
     assert plan["isReadOnlyPreview"] is True
     assert plan["workshopPreview"]
     assert all(page["name"] and page["components"] for page in plan["workshopPreview"])
+    assert all(
+        component["kind"] and component["name"] for page in plan["workshopPreview"] for component in page["components"]
+    )
+    assert plan["workshopPresentation"]["statusLabels"]
     assert "businessSystemDefinition" not in plan
     assert "ontologyResources" not in plan
     assert len(json.dumps(plan, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()) < 65_536

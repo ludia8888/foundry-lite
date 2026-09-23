@@ -945,6 +945,8 @@ def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_
     assert "Never switch to generic Sites" in instructions
     assert "workspaceRef tenant:self" in instructions
     assert "do not ask for workspaceRef" in instructions
+    assert "extract every business record, actor, lifecycle step, action, rule" in instructions
+    assert "in the user's language" in instructions
     assert "do not claim that no interactive card appeared" in instructions
     tools = {item["name"]: item for item in listed_tools.json()["result"]["tools"]}
     assert tools["pilot.application.plan"]["_meta"]["ui"]["resourceUri"] == DOMAIN_OS_RESOURCE_URI
