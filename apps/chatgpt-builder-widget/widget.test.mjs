@@ -27,6 +27,7 @@ function createHarness(
     structuredToken,
     toolId = "ontology.branch.apply_patch",
     argumentOverrides = {},
+    sendFollowUpMessage,
   } = {},
 ) {
   const nodes = new Map([
@@ -69,6 +70,7 @@ function createHarness(
         ...(recoveryReceipt ? { confirmationReceipt: recoveryReceipt } : {}),
       },
       callTool,
+      ...(sendFollowUpMessage ? { sendFollowUpMessage } : {}),
     },
     addEventListener(name, handler) {
       listeners.set(name, handler);
@@ -240,6 +242,29 @@ test("즉시 저장 작업의 영향과 요청 해시를 표시하고 secret-lik
   assert.match(harness.nodes.get("preview").textContent, /GPT Complete|visible-value/);
   assert.doesNotMatch(harness.nodes.get("preview").textContent, /never-render-this/);
   assert.match(harness.nodes.get("preview").textContent, /\[redacted\]/);
+});
+
+test("프로젝트 생성 완료 뒤에는 추가 변경 없이 ChatGPT에 읽기 전용 확인을 요청한다", async () => {
+  const calls = [];
+  const prompts = [];
+  const harness = createHarness(async (name, args) => {
+    calls.push({ name, args: clone(args) });
+    return name === "approve_builder_mutation"
+      ? { _meta: { confirmationReceipt: "receipt-secret" } }
+      : { structuredContent: { project: { id: "project-1" } } };
+  }, {
+    toolId: "create_foundry_project",
+    sendFollowUpMessage: async (message) => { prompts.push(clone(message)); },
+  });
+
+  await harness.api.approveAndRetry();
+
+  assert.deepEqual(calls.map((item) => item.name), ["approve_builder_mutation", "create_foundry_project"]);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].prompt, /읽기 전용으로 다시 확인/);
+  assert.match(prompts[0].prompt, /이 프로젝트 안에서 이어가/);
+  assert.doesNotMatch(JSON.stringify(prompts), /receipt-secret|widget-secret/);
+  assert.equal(harness.api.getState().completed, true);
 });
 
 test("큰 변경 미리보기는 21번째 배열 항목과 51번째 객체 키도 숨기지 않는다", () => {

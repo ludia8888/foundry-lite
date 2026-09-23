@@ -143,6 +143,7 @@ class FdeApplicationToolService(CoreService):
                     ctx,
                     _mapping(request.arguments.get("plan"), "plan"),
                     required_text(request.arguments, "idempotencyKey"),
+                    project_id=request.scope_ref[8:] if request.scope_ref.startswith("project:") else None,
                 )
             )
         if tool_id in _PALANTIR_NATIVE_TOOL_IDS:

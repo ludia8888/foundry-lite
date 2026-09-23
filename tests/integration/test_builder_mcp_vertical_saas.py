@@ -6,7 +6,10 @@ import json
 from collections.abc import Mapping
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import app
 
@@ -69,6 +72,72 @@ def test_builder_mcp_generates_four_distinct_commercial_saas_products(
     assert len(generated_products) == 4
     for key in ("resourceRid", "projectId", "applicationId", "ontologyBranchId", "operatingPath"):
         assert len({str(product[key]) for product in generated_products}) == 4
+
+
+def test_builder_mcp_generates_into_the_selected_project_without_creating_another(
+    foundry: Any,
+    monkeypatch: Any,
+) -> None:
+    foundry.ontology.apply_text("objectTypes: []\nactionTypes: []\nlinkTypes: []\n", ctx=FDE_USER)
+    project = foundry.resources.create_project(
+        display_name="Momo Care Test",
+        idempotency_key="momo-care-selected-project",
+        ctx=FDE_USER,
+    )["project"]
+    project_id = str(project["id"])
+    project_count = len(foundry.resources.list_projects(ctx=FDE_USER)["projects"])
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    session_headers = _builder_session_headers(client, app_id, headers)
+    spec = next(item for item in _target_specs() if item["id"] == "crm-operations")
+    workspace_ref = f"project:{project_id}"
+
+    plan = _call_plan(client, app_id, session_headers, workspace_ref, spec, "Momo Care")
+    viewer = RequestContext(
+        tenant_id=FDE_USER.tenant_id,
+        actor_user_id="pilot-viewer",
+        roles=("viewer",),
+    )
+    foundry.resources.upsert_project_grant(
+        project_id,
+        principal_type="user",
+        principal_id=viewer.actor_user_id,
+        role="viewer",
+        idempotency_key="pilot-viewer-grant",
+        ctx=FDE_USER,
+    )
+    with pytest.raises(PermissionDenied):
+        foundry.aip.generate_pilot_application(
+            plan, idempotency_key="viewer-generation", project_id=project_id, ctx=viewer
+        )
+    generated = _call_generate(client, app_id, session_headers, headers, workspace_ref, spec, plan)
+    bundle = foundry.aip.get_pilot_application(str(generated["resource"]["rid"]), ctx=FDE_USER)
+    resources = foundry.resources.list_resources(
+        project_id=project_id, folder_id=None, include_trashed=False, ctx=FDE_USER
+    )["items"]
+
+    assert bundle["project"]["id"] == project_id
+    assert generated["resource"]["projectId"] == project_id
+    assert {item["resourceType"] for item in resources} >= {
+        "pilot_application",
+        "business_application_role_mapping",
+        "workshop_app",
+    }
+    assert len(foundry.resources.list_projects(ctx=FDE_USER)["projects"]) == project_count
+
+    other_project = foundry.resources.create_project(
+        display_name="Other Test",
+        idempotency_key="other-selected-project",
+        ctx=FDE_USER,
+    )["project"]
+    with pytest.raises(ConflictDetected, match="another project"):
+        foundry.aip.generate_pilot_application(
+            plan,
+            idempotency_key="mcp-saas-crm-operations",
+            project_id=str(other_project["id"]),
+            ctx=FDE_USER,
+        )
 
 
 def _target_specs() -> list[Mapping[str, object]]:

@@ -5,6 +5,8 @@
 
 이 문서는 현재 커밋이 실제로 보장하는 것과, 계획 문서에 남아 있는 다음 목표를 구분한다. 스프린트 체크박스별 PR, merge commit, 테스트, 품질 게이트 근거는 [Sprint Evidence Ledger](./sprint-evidence-ledger.md)를 따른다.
 
+ChatGPT Pilot 생성의 현재 경계: `project:<id>`를 선택한 Builder MCP 요청은 해당 프로젝트의 편집 권한과 활성 상태를 확인한 뒤 바로 그 프로젝트에 Pilot, Workshop, 역할 연결 리소스를 저장한다. 같은 생성 키를 다른 프로젝트에 재사용하면 충돌로 거절한다. ChatGPT 승인 결과를 받은 Domain OS 카드는 새 생성 키를 만들지 않고 원래 입력·키·확인 토큰을 사용해 이어간다. 호스트가 확인 토큰을 빠뜨리면 동일 요청만 재조회해 복구하며, 원래 입력이나 유효한 확인 정보가 끝내 없으면 생성하지 않는다. 프로젝트/테스트 앱 생성 완료 후의 대화 재개는 읽기 전용 확인 요청이며, 실제 고객 데이터 연결이나 외부 배포 승인이 아니다. 이 수정의 증거는 로컬 MCP 통합 및 위젯 테스트이고, 변경된 버전의 hosted ChatGPT·운영 URL 종단간 재검증은 별개다.
+
 현재 proposal/release 검토 정책은 검토 담당 배정, 사람 Authorization Code principal, 위젯의 명시적 one-time 확인, exact fingerprint와 stale 차단을 요구한다. 보호 프로필(`staging`/`production`)에서는 작성자와 검토자의 IdP `subject`가 달라야 하고, live attestation은 OAuth session과 MCP session set도 겹치지 않아야 한다. 따라서 작성자는 자신의 Ontology/Pipeline 제안을 self-claim하거나 승인할 수 없다. local/demo/test는 한 사람이 빠르게 개발할 수 있도록 명시적인 비운영 self-review 호환 경로를 유지한다. 외부 GitHub ruleset의 reviewer 조건은 이 제품 규칙 위에 추가로 적용된다.
 
 ## MVP Core Boundary

@@ -205,24 +205,14 @@
     return `domain-os-${slug || "app"}-${identity.slice(0, 32)}`;
   }
 
-  async function generateTestApplication(input) {
-    const outer = {
-      mode: input.mode,
-      workspaceRef: input.workspaceRef,
-      arguments: {
-        plan: clone(input.plan),
-        idempotencyKey: input.idempotencyKey || randomKey(input.plan?.slug),
-      },
-    };
-    let token = "";
+  async function confirmGenerationChallenge(outer, challenge, widgetApprovalToken) {
+    let token = String(widgetApprovalToken || "");
     let receipt = "";
     let retry = null;
     try {
-      const challenged = await callTool("pilot.application.generate", outer);
-      const challenge = structured(challenged);
-      if (!isObject(challenge) || challenge.status !== "approval_required") return challenged;
-      token = String(metadata(challenged)?.widgetApprovalToken || "");
-      if (!token || !challenge.challengeId) throw new Error("사용자 확인 토큰이 없어 앱을 만들지 않았습니다.");
+      if (!token || !challenge?.challengeId || challenge.toolId !== "pilot.application.generate") {
+        throw new Error("사용자 확인 정보가 없어 앱을 만들지 않았습니다. ChatGPT에서 설계를 다시 열어 주세요.");
+      }
       const approved = await withOneRecovery(
         () => callTool("approve_builder_mutation", {
           challengeId: challenge.challengeId,
@@ -246,9 +236,50 @@
     }
   }
 
+  async function generateTestApplication(input) {
+    const outer = {
+      mode: input.mode,
+      workspaceRef: input.workspaceRef,
+      arguments: {
+        plan: clone(input.plan),
+        idempotencyKey: input.idempotencyKey || randomKey(input.plan?.slug),
+      },
+    };
+    const challenged = await callTool("pilot.application.generate", outer);
+    const challenge = structured(challenged);
+    if (!isObject(challenge) || challenge.status !== "approval_required") return challenged;
+    return confirmGenerationChallenge(outer, challenge, metadata(challenged)?.widgetApprovalToken);
+  }
+
+  async function resumePendingGeneration(input) {
+    if (!isObject(input) || !isObject(input.originalInput) || !isObject(input.challenge)) {
+      throw new Error("이전 생성 요청을 복원하지 못해 앱을 만들지 않았습니다.");
+    }
+    const originalInput = clone(input.originalInput);
+    if (!isObject(originalInput.arguments) || !originalInput.arguments.idempotencyKey
+      || !isObject(originalInput.arguments.plan) || originalInput.confirmationReceipt) {
+      throw new Error("처음 생성 요청의 내용이 불완전해 앱을 만들지 않았습니다.");
+    }
+    if (input.challenge.toolId !== "pilot.application.generate" || !input.challenge.challengeId) {
+      throw new Error("처음 생성 요청의 확인 대상을 검증하지 못했습니다.");
+    }
+    let token = input.widgetApprovalToken;
+    if (!token) {
+      const replayed = await callTool("pilot.application.generate", originalInput);
+      const challenge = structured(replayed);
+      if (challenge?.operationType === "pilot_application_bundle") return replayed;
+      if (challenge?.status !== "approval_required" || challenge.challengeId !== input.challenge.challengeId) {
+        throw new Error("처음 생성 요청과 확인 정보가 달라 앱을 만들지 않았습니다.");
+      }
+      token = metadata(replayed)?.widgetApprovalToken;
+    }
+    return confirmGenerationChallenge(originalInput, input.challenge, token);
+  }
+
   function domainOsBinding() {
     return Object.freeze({
       generateTestApplication,
+      resumePendingGeneration,
       askInConversation: followUp,
     });
   }
