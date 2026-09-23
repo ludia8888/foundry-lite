@@ -344,26 +344,30 @@ test("도구 찾기 결과는 설계 실패가 아니라 준비 완료 단계로
   assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "discovery_ready");
 });
 
-test("알 수 없는 호스트 결과는 즉시 실패시키지 않고 제한된 복원 시간 뒤 안내한다", () => {
+test("알 수 없는 호스트 결과는 설계 성공이나 형식 오류로 오인하지 않고 안내한다", () => {
   const view = harness({ output: { unexpected: true }, fakeIntervals: true });
 
   assert.match(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
   for (let attempt = 0; attempt < 40; attempt += 1) view.timers[0].fn();
 
-  assert.match(view.root.innerHTML, /업무 설계 결과의 형식을 확인하지 못했습니다/);
-  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "failed");
+  assert.match(view.root.innerHTML, /이 카드에는 업무 설계가 없습니다/);
+  assert.match(view.root.innerHTML, /아직 업무 설계 결과로 확인되지 않았습니다/);
+  assert.doesNotMatch(view.root.innerHTML, /불러오기 실패|테스트 앱을 만들 준비/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "unavailable");
 });
 
-test("호스트가 결과를 끝내 전달하지 않으면 무한 로딩 대신 실패와 복구 버튼을 보여준다", () => {
+test("호스트가 결과를 끝내 전달하지 않으면 입력만 있는 봉투를 형식 오류로 오인하지 않는다", () => {
   const view = harness({ includeToolOutput: false, fakeIntervals: true });
 
   for (let attempt = 0; attempt < 40; attempt += 1) view.timers[0].fn();
 
-  assert.match(view.root.innerHTML, /업무 설계를 표시하지 못했습니다/);
+  assert.match(view.root.innerHTML, /이 카드에는 업무 설계가 없습니다/);
+  assert.match(view.root.innerHTML, /설계 결과를 전달받지 못했습니다/);
   assert.match(view.root.innerHTML, /다시 확인/);
   assert.match(view.root.innerHTML, /ChatGPT에서 설계 다시 열기/);
-  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
-  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "failed");
+  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다|결과의 형식|불러오기 실패/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().hasUnrecognizedResult, false);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "unavailable");
 });
 
 test("실패 화면의 다시 확인은 뒤늦게 복원된 결과를 읽어 화면을 되살린다", async () => {
@@ -422,5 +426,7 @@ test("호스트의 작업공간 오류를 형식 오류가 아닌 쉬운 복구 
   const view = harness({ output: { error: { message: "AI FDE workspaceRef is not valid" } } });
 
   assert.match(view.root.innerHTML, /업무 설계 공간을 찾지 못했습니다/);
+  assert.match(view.root.innerHTML, /불러오기 실패/);
   assert.doesNotMatch(view.root.innerHTML, /결과의 형식/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "failed");
 });
