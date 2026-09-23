@@ -1005,6 +1005,29 @@ def test_builder_mcp_bootstraps_first_project_from_host_governance_alias_before_
     assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"project:{project_id}"}
 
 
+def test_builder_mcp_previews_domain_without_creating_a_project(foundry: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    planned = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "tenant-preview-plan",
+        "osdk_react",
+        "tenant:self",
+        "pilot.application.plan",
+        {
+            "applicationName": "시설관리 업무 OS",
+            "domainDescription": "입주민 요청을 접수하고 수리 완료 증거까지 관리합니다.",
+            "domainBrief": _property_maintenance_domain_brief(),
+        },
+    )
+
+    assert planned["operationType"] == "pilot_generation_plan"
+    assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
+
+
 def test_builder_mcp_confirmation_receipt_is_human_idempotent_and_one_time(foundry: Any, monkeypatch: Any) -> None:
     app_id, headers = _builder_mcp_application(foundry, monkeypatch, "governance")
     monkeypatch.setattr(api_runtime, "foundry", foundry)

@@ -298,3 +298,24 @@ test("openai set_globals로 늦게 온 도구 결과도 업무 설계로 반영�
   assert.match(view.root.innerHTML, /Property Care Desk/);
   assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
 });
+
+test("프로젝트 없는 설계는 바로 생성을 시도하지 않고 대화에서 사람 승인으로 이어간다", async () => {
+  let prompt = "";
+  const view = harness({
+    output: { ...plan(), mcpExecution: { mode: "osdk_react", workspaceRef: "tenant:self" } },
+    sendFollowUpMessage: async (value) => { prompt = value.prompt; },
+  });
+
+  await view.context.__foundryDomainOsWidgetTest.generate();
+
+  assert.equal(view.calls.length, 0);
+  assert.match(prompt, /프로젝트/);
+  assert.match(prompt, /사람 승인/);
+});
+
+test("호스트의 작업공간 오류를 형식 오류가 아닌 쉬운 복구 안내로 보여준다", () => {
+  const view = harness({ output: { error: { message: "AI FDE workspaceRef is not valid" } } });
+
+  assert.match(view.root.innerHTML, /업무 설계 공간을 찾지 못했습니다/);
+  assert.doesNotMatch(view.root.innerHTML, /결과의 형식/);
+});
