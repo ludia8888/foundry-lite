@@ -963,7 +963,7 @@ def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_
     result = planned.json()["result"]["structuredContent"]
     assert result["domainOsBlueprint"]["readiness"]["isReady"] is True
     assert result["slug"].startswith("domain-os-")
-    assert result["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"osdk-app:{app_id}"}
+    assert result["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
 
 
 def test_builder_mcp_bootstraps_first_project_from_host_governance_alias_before_domain_planning(
@@ -1002,7 +1002,7 @@ def test_builder_mcp_bootstraps_first_project_from_host_governance_alias_before_
 
     assert created["project"]["displayName"] == "LedgerFlow"
     assert planned["domainOsBlueprint"]["readiness"]["isReady"] is True
-    assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": f"project:{project_id}"}
+    assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
 
 
 def test_builder_mcp_previews_domain_without_creating_a_project(foundry: Any, monkeypatch: Any) -> None:
@@ -1036,6 +1036,62 @@ def test_builder_mcp_previews_domain_without_creating_a_project(foundry: Any, mo
 
     assert any(tool["toolId"] == "pilot.application.plan" for tool in discovered["activatedTools"])
     assert planned["operationType"] == "pilot_generation_plan"
+    assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
+
+
+@pytest.mark.parametrize("host_workspace_ref", ["", "momo-petcare-preview", "project:momo-petcare-preview"])
+def test_builder_mcp_previews_with_host_guessed_workspace_ref(
+    foundry: Any, monkeypatch: Any, host_workspace_ref: str
+) -> None:
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    planned = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        f"host-guessed-preview-{host_workspace_ref}",
+        "osdk_react",
+        host_workspace_ref,
+        "pilot.application.plan",
+        {
+            "applicationName": "시설관리 업무 OS",
+            "domainDescription": "입주민 요청을 접수하고 수리 완료 증거까지 관리합니다.",
+            "domainBrief": _property_maintenance_domain_brief(),
+        },
+    )
+
+    assert planned["domainOsBlueprint"]["readiness"]["isReady"] is True
+    assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
+
+
+def test_builder_mcp_returns_questions_without_compiling_incomplete_workshop(foundry: Any, monkeypatch: Any) -> None:
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    app_id, headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    brief = _property_maintenance_domain_brief()
+    brief["records"] = []
+    brief["policies"] = []
+    planned = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "host-incomplete-preview",
+        "osdk_react",
+        "",
+        "pilot.application.plan",
+        {
+            "applicationName": "시설관리 업무 OS",
+            "domainDescription": "입주민 요청을 접수하고 수리 완료 증거까지 관리합니다.",
+            "domainBrief": brief,
+        },
+    )
+
+    assert "domainOsBlueprint" in planned, planned
+    assert planned["domainOsBlueprint"]["readiness"]["isReady"] is False
+    assert any(item["field"] == "records" for item in planned["domainOsBlueprint"]["readiness"]["questions"])
+    assert "businessSystemDefinition" not in planned
+    assert planned["requiredApprovals"] == []
     assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
 
 

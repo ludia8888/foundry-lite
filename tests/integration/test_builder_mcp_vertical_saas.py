@@ -100,7 +100,7 @@ def _call_plan(
     assert response.status_code == 200 and "error" not in body, body
     plan = cast(dict[str, Any], body["result"]["structuredContent"])
     assert plan["domainOsBlueprint"]["readiness"]["isReady"] is True
-    assert plan["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": workspace_ref}
+    assert plan["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
     return plan
 
 
