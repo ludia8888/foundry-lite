@@ -963,6 +963,8 @@ def test_builder_mcp_exposes_chatgpt_domain_os_studio_and_plans_korean_business_
     assert "MAX_LOAD_ATTEMPTS = 40" in html
     assert 'state.loadStatus = "discovery_ready"' in html
     assert "업무 설계를 준비했습니다" in html
+    assert 'state.loadStatus = "unavailable"' in html
+    assert "이 카드에는 업무 설계가 없습니다" in html
     content_hash = hashlib.sha256(html.encode("utf-8")).hexdigest()[:12]
     assert DOMAIN_OS_RESOURCE_URI == f"ui://foundry-lite/domain-os-studio-v1-{content_hash}.html"
     result = planned.json()["result"]["structuredContent"]
