@@ -294,6 +294,9 @@ def _call_tool(
             request.headers.get("origin"),
             ctx=ctx,
         )
+    # A read-only first design is scoped to the authenticated tenant, not to a
+    # project name guessed by the host. Never apply this to a mutation.
+    arguments = _tenant_preview_input(tool_name, arguments)
     tool_arguments = _mapping(arguments.get("arguments"), "params.arguments.arguments")
     rpc_id = payload.id
     if not isinstance(rpc_id, str | int):
@@ -313,6 +316,16 @@ def _call_tool(
     return runtime.foundry.aip.run_fde_mcp_tool(call, ctx=ctx)
 
 
+def _tenant_preview_input(tool_name: str, arguments: Mapping[str, object]) -> dict[str, object]:
+    if arguments.get("mode") == "osdk_react" and tool_name in {
+        "search_tools",
+        "fde.tools.search",
+        "pilot.application.plan",
+    }:
+        return {**arguments, "workspaceRef": "tenant:self"}
+    return dict(arguments)
+
+
 def _initialize_result(protocol_version: str) -> dict[str, object]:
     return {
         "protocolVersion": protocol_version,
@@ -327,6 +340,8 @@ def _initialize_result(protocol_version: str) -> dict[str, object]:
             "natural language, do not ask for workspaceRef, project IDs, API names, or developer vocabulary. If no "
             "Foundry project is selected, preview the business design without a mutation: infer a bounded "
             "domainBrief and call pilot.application.plan in osdk_react mode with workspaceRef tenant:self. "
+            "For that read-only plan, include a business record when known and make every action fromStates/toState "
+            "match lifecycleStates; leave uncertain business details for readiness questions rather than guessing. "
             "Only when the user asks to create a test app, call create_foundry_project in governance mode "
             "with workspaceRef tenant:self, a business-readable displayName, and a stable idempotencyKey. "
             "After the user approves that mutation, use the returned project ID as workspaceRef "

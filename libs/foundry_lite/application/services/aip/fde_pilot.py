@@ -2,19 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
-from foundry_lite.application.services.aip.fde_domain_os_blueprint import (
-    application_resources,
-    build_business_system_definition,
-    build_domain_os_blueprint,
-    ontology_resources,
-    require_ready_blueprint,
-    seed_plan,
-)
 from foundry_lite.application.services.aip.fde_pilot_operating import (
     OntologyReleaseReader,
     active_application_coordinates,
@@ -26,9 +16,13 @@ from foundry_lite.application.services.aip.fde_pilot_operating import (
 )
 from foundry_lite.application.services.aip.fde_pilot_osdk_bundle import (
     ci_workflow,
-    consumer_osdk_plan,
     deployment_plan,
     react_files,
+)
+from foundry_lite.application.services.aip.fde_pilot_plan import (
+    build_preview_pilot_plan,
+    normalized_pilot_plan,
+    pilot_identifier,
 )
 from foundry_lite.application.services.aip.fde_tool_result import (
     FdePlatformToolError,
@@ -67,41 +61,7 @@ class FdePilotService(CoreService):
     resource_catalog_service: ResourceCatalogService
 
     def plan(self, arguments: JsonObject) -> dict[str, object]:
-        app_name = required_text(arguments, "applicationName")
-        description = required_text(arguments, "domainDescription")
-        slug = _slug(app_name)
-        identifier = _identifier(slug)
-        blueprint = build_domain_os_blueprint(arguments)
-        dataset_ref = f"seed.{identifier}"
-        records = _mapping_items(blueprint.get("records"))
-        workflow = _mapping(blueprint.get("workflow"), "domainOsBlueprint.workflow")
-        actions = _mapping_items(workflow.get("actions"))
-        functions = _mapping_items(blueprint.get("functions") or [])
-        consumer_osdk = consumer_osdk_plan(app_name, slug)
-        business_system = build_business_system_definition(app_name, blueprint, consumer_osdk)
-        return {
-            "operationType": "pilot_generation_plan",
-            "applicationName": app_name,
-            "domainDescription": description,
-            "domainBrief": dict(_mapping(arguments.get("domainBrief"), "domainBrief")),
-            "domainOsBlueprint": blueprint,
-            "businessSystemDefinition": business_system,
-            "slug": slug,
-            "projectDisplayName": f"{app_name} Pilot",
-            "seed": seed_plan(identifier, blueprint),
-            "ontologyResources": ontology_resources(blueprint, dataset_ref),
-            "applicationResources": application_resources(blueprint),
-            "consumerOsdk": consumer_osdk,
-            "react": {
-                "routes": ["/apps/:applicationId", "/workshop/:applicationId"],
-                "objectTypes": [row["apiName"] for row in records],
-                "actionTypes": [row["apiName"] for row in actions],
-                "functionTypes": [row["apiName"] for row in functions],
-                "framework": "foundry_workshop_runtime",
-            },
-            "ci": {"commands": ["pnpm consumer-osdk:check", "pnpm typecheck", "pnpm test", "pnpm build"]},
-            "requiredApprovals": ["pilot.application.generate"],
-        }
+        return build_preview_pilot_plan(arguments)
 
     def generate(
         self,
@@ -112,7 +72,7 @@ class FdePilotService(CoreService):
         existing = self._existing_bundle(ctx, idempotency_key)
         if existing is not None:
             return self._replayed_application(ctx, existing, idempotency_key)
-        normalized = _normalized_plan(plan)
+        normalized = normalized_pilot_plan(plan)
         project = self._project(ctx, normalized, idempotency_key)
         seed = self._seed(ctx, normalized, idempotency_key)
         branch = self._ontology_branch(ctx, normalized, idempotency_key)
@@ -374,31 +334,12 @@ class FdePilotService(CoreService):
         return dict(
             self.osdk_application_service.create_application(
                 ctx=ctx,
-                app_api_name=_identifier(str(plan["slug"])),
+                app_api_name=pilot_identifier(str(plan["slug"])),
                 display_name=str(plan["applicationName"]),
                 resources=_mapping_items(plan.get("applicationResources")),
                 idempotency_key=f"{key}:osdk-app",
             )
         )
-
-
-def _normalized_plan(plan: JsonObject) -> dict[str, object]:
-    normalized = {str(name): value for name, value in plan.items()}
-    app_name = required_text(normalized, "applicationName")
-    normalized["domainDescription"] = required_text(normalized, "domainDescription")
-    slug = _slug(app_name)
-    blueprint = build_domain_os_blueprint(normalized)
-    require_ready_blueprint(blueprint)
-    normalized["slug"] = slug
-    normalized["projectDisplayName"] = f"{app_name} Pilot"
-    normalized["domainOsBlueprint"] = blueprint
-    normalized["seed"] = seed_plan(_identifier(slug), blueprint)
-    normalized["ontologyResources"] = ontology_resources(blueprint, f"seed.{_identifier(slug)}")
-    normalized["applicationResources"] = application_resources(blueprint)
-    consumer_osdk = consumer_osdk_plan(app_name, slug)
-    normalized["consumerOsdk"] = consumer_osdk
-    normalized["businessSystemDefinition"] = build_business_system_definition(app_name, blueprint, consumer_osdk)
-    return normalized
 
 
 def _bundle(
@@ -480,20 +421,3 @@ def _pilot_metadata_for_application(resource: JsonObject, application_id: str) -
     if not isinstance(app_record, Mapping) or app_record.get("id") != application_id:
         return None
     return {str(name): value for name, value in metadata.items()}
-
-
-def _slug(value: str) -> str:
-    if not value.isascii():
-        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:10]
-        return f"domain-os-{digest}"
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    if not slug:
-        raise FdePlatformToolError("schema_invalid", "applicationName must contain letters or numbers")
-    return slug[:64]
-
-
-def _identifier(slug: str) -> str:
-    value = re.sub(r"[^a-z0-9_]", "_", slug.lower()).strip("_")
-    if not value or not value[0].isalpha():
-        value = f"pilot_{value}"
-    return value[:64]

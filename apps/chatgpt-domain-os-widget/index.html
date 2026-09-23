@@ -254,6 +254,7 @@
           const experience = isObject(definition?.experience) ? definition.experience : {};
           const workshop = isObject(experience.workshopApp) ? experience.workshopApp : {};
           const pages = list(workshop.pages);
+          if (!pages.length) return '<p class="muted">업무 기록을 정리하면 사용할 화면을 함께 제안합니다.</p>';
           const componentNames = {
             objectTable: "업무 테이블", objectList: "업무 목록", objectDetail: "업무 상세",
             objectSetTitle: "업무 제목", searchBar: "검색", metricCard: "핵심 지표",
@@ -287,7 +288,7 @@
               ${readiness.isReady ? '<div class="notice success"><strong>테스트 앱을 만들 준비가 됐습니다.</strong><br>지금은 안전하게 분리된 테스트 공간과 예시 데이터만 만들며, 실제 업무 연결과 배포는 별도 검토 단계입니다.</div>' : `<div class="notice"><strong>${questions.length}가지만 더 알려주세요.</strong><ol class="questions">${questions.map((item) => `<li>${escapeHtml(item.question)}</li>`).join("")}</ol></div>`}
               <div class="actions">${readiness.isReady ? '<button id="generate" class="button" type="button">이 설계로 테스트 앱 만들기</button>' : '<button id="ask" class="button" type="button">대화에서 질문에 답하기</button>'}<button id="revise" class="button secondary" type="button">ChatGPT에 수정 내용 말하기</button></div>
               <p id="status" class="status" data-tone="${escapeHtml(state.tone)}">${escapeHtml(state.message)}</p>
-            </section><footer class="receipt"><span>업무 설계 버전 1</span><span>이 앱에 허용된 기능만 사용</span><span>${state.workspaceRef ? "테스트 공간 연결됨" : "테스트 공간 연결 확인 중"}</span></footer>`;
+            </section><footer class="receipt"><span>업무 설계 버전 1</span><span>이 앱에 허용된 기능만 사용</span><span>${state.workspaceRef === "tenant:self" ? "읽기 전용 설계 검토" : state.workspaceRef ? "테스트 공간 연결됨" : "테스트 공간 연결 확인 중"}</span></footer>`;
         }
 
         function bundleMarkup(bundle) {
