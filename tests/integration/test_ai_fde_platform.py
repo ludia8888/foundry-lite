@@ -1009,6 +1009,16 @@ def test_builder_mcp_previews_domain_without_creating_a_project(foundry: Any, mo
     monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     app_id, headers = _builder_mcp_application(foundry, monkeypatch, "osdk_react")
+    discovered = _mcp_native_call(
+        client,
+        app_id,
+        headers,
+        "tenant-preview-discovery",
+        "osdk_react",
+        "tenant:self",
+        "search_tools",
+        {"query": "pilot.application.plan"},
+    )
     planned = _mcp_native_call(
         client,
         app_id,
@@ -1024,6 +1034,7 @@ def test_builder_mcp_previews_domain_without_creating_a_project(foundry: Any, mo
         },
     )
 
+    assert any(tool["toolId"] == "pilot.application.plan" for tool in discovered["activatedTools"])
     assert planned["operationType"] == "pilot_generation_plan"
     assert planned["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
 

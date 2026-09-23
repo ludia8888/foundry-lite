@@ -147,6 +147,8 @@ def test_fde_context_rejects_cross_scope_branch_tenant_unknown_and_missing_resou
 
 def test_tenant_preview_scope_is_read_only_and_cannot_be_reused_for_generation() -> None:
     service = _service()
+    service.validate_scope(_CTX, "osdk_react", "tenant:self", "search_tools")
+    service.validate_scope(_CTX, "osdk_react", "tenant:self", "fde.tools.search")
     service.validate_scope(_CTX, "osdk_react", "tenant:self", "pilot.application.plan")
     with pytest.raises(ValidationFailed):
         service.validate_scope(_CTX, "osdk_react", "tenant:self", "pilot.application.generate")
