@@ -93,6 +93,11 @@
       .status[data-tone="success"] { color: var(--mint-ink); }
       .receipt { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 18px; border-top: 1px solid var(--line); color: var(--muted); font: 10px/1.4 ui-monospace, monospace; }
       .empty { padding: 30px 20px; text-align: center; }
+      .empty strong { display: block; color: var(--navy); font-size: 17px; }
+      .empty p { max-width: 52ch; margin: 9px auto 0; line-height: 1.6; }
+      .empty .actions { justify-content: center; margin-top: 18px; }
+      .load-badge { display: inline-flex; margin-bottom: 10px; border-radius: 999px; padding: 5px 9px; color: var(--amber-ink); background: var(--amber); font-size: 10px; font-weight: 850; }
+      .load-badge.error { color: var(--danger); background: #fbe6e4; }
       @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } .flow { grid-template-columns: repeat(6, 96px); } }
       @media (prefers-color-scheme: dark) {
         :root { --ink:#e9f0f7; --muted:#a4b1c1; --paper:#101923; --sheet:#172331; --line:#334355; --navy:#09121d; --sky:#46b9df; --sky-soft:#173c4b; --mint:#163b29; --mint-ink:#86e4af; --amber:#3c2b13; --amber-ink:#f5c26f; }
@@ -112,11 +117,44 @@
         "use strict";
         const osdk = globalThis.createFoundryLiteMcpAppsOsdk();
         const domainOs = osdk(globalThis.FoundryLiteMcpResources.DomainOsStudio);
-        const state = { plan: null, bundle: null, mode: "", workspaceRef: "", busy: false, message: "", tone: "info" };
+        const state = {
+          plan: null,
+          bundle: null,
+          mode: "",
+          workspaceRef: "",
+          busy: false,
+          message: "",
+          tone: "info",
+          loadStatus: "loading",
+          loadDetail: "",
+          loadAttempts: 0,
+        };
+        const MAX_LOAD_ATTEMPTS = 40;
+        let loadPoll = null;
         const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
         const list = (value) => Array.isArray(value) ? value : [];
         const text = (value) => String(value ?? "");
         const escapeHtml = (value) => text(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+
+        function stopLoadingPoll() {
+          if (loadPoll !== null && typeof clearInterval === "function") clearInterval(loadPoll);
+          loadPoll = null;
+        }
+
+        function markLoaded() {
+          state.loadStatus = "ready";
+          state.loadDetail = "";
+          stopLoadingPoll();
+        }
+
+        function markLoadFailure(message) {
+          state.loadStatus = "failed";
+          state.loadDetail = text(message || "이 화면이 ChatGPT의 업무 설계 결과를 받지 못했습니다.");
+          state.tone = "error";
+          if (state.plan || state.bundle) state.message = state.loadDetail;
+          stopLoadingPoll();
+          render();
+        }
 
         function receive(value) {
           if (!isObject(value)) return false;
@@ -130,16 +168,47 @@
           if (input) {
             state.mode = text(input.mode || state.mode);
             state.workspaceRef = text(input.workspaceRef || state.workspaceRef);
+            const inputArguments = isObject(input.arguments) ? input.arguments : {};
+            const inputPlan = isObject(inputArguments.plan) ? inputArguments.plan : null;
+            if (inputPlan?.operationType === "pilot_generation_plan") {
+              state.plan = inputPlan;
+              markLoaded();
+            }
           }
-          const output = osdk.structured(value.toolOutput || value);
+          const rawResult = value.toolOutput || value;
+          const output = osdk.structured(rawResult);
           if (!isObject(output)) return false;
+          if (rawResult?.isError === true || value.isError === true) {
+            const failure = isObject(output.error) ? output.error : {};
+            markLoadFailure(failure.message || "업무 설계 요청이 완료되지 않았습니다. 대화에서 다시 시도해 주세요.");
+            return true;
+          }
           if (output.operationType === "pilot_generation_plan") {
             state.plan = output;
             const execution = isObject(output.mcpExecution) ? output.mcpExecution : {};
             state.mode = text(execution.mode || state.mode);
             state.workspaceRef = text(execution.workspaceRef || state.workspaceRef);
+            markLoaded();
           }
-          if (output.operationType === "pilot_application_bundle") state.bundle = output;
+          if (output.operationType === "pilot_application_bundle") {
+            state.bundle = output;
+            markLoaded();
+          }
+          if (output.status === "approval_required") {
+            state.loadStatus = state.plan ? "ready" : "approval_pending";
+            state.message = "테스트 앱 생성은 승인 대기 중입니다. 대화의 승인 카드에서 확인해 주세요.";
+            state.tone = "info";
+            stopLoadingPoll();
+            render();
+            return true;
+          }
+          const isExplicitResult = (Object.prototype.hasOwnProperty.call(value, "toolOutput") && value.toolOutput != null)
+            || Object.prototype.hasOwnProperty.call(value, "structuredContent")
+            || Boolean(output.operationType || output.status);
+          if (!state.plan && !state.bundle && isExplicitResult) {
+            markLoadFailure("업무 설계 결과의 형식을 확인하지 못했습니다. 대화에서 설계를 다시 열어 주세요.");
+            return true;
+          }
           render();
           return Boolean(state.plan || state.bundle);
         }
@@ -231,13 +300,32 @@
           </section><footer class="receipt"><span>테스트 공간 저장 완료</span><span>업무 화면 준비됨</span><span>생성 파일 ${escapeHtml(bundle.generatedFiles?.count ?? Object.keys(bundle.reactFiles || {}).length)}개</span></footer>`;
         }
 
+        function loadingMarkup() {
+          return '<div class="empty"><span class="load-badge">설계 확인 중</span><strong>업무 설계를 불러오고 있습니다.</strong><p class="muted">ChatGPT가 정리한 업무 지도를 안전하게 복원합니다. 잠시만 기다려 주세요.</p></div>';
+        }
+
+        function approvalPendingMarkup() {
+          return '<div class="empty"><span class="load-badge">사람 확인 필요</span><strong>테스트 앱 생성 승인을 기다리고 있습니다.</strong><p class="muted">대화에 표시된 승인 카드에서 내용을 확인하면 이어서 진행할 수 있습니다.</p><div class="actions"><button id="recover" class="button secondary" type="button">ChatGPT에서 계속하기</button></div></div>';
+        }
+
+        function failureMarkup() {
+          const detail = state.message || state.loadDetail || "이 화면이 ChatGPT의 업무 설계 결과를 받지 못했습니다.";
+          return `<div class="empty"><span class="load-badge error">불러오기 실패</span><strong>업무 설계를 표시하지 못했습니다.</strong><p class="muted">${escapeHtml(detail)}</p><div class="actions"><button id="retry" class="button" type="button">다시 확인</button><button id="recover" class="button secondary" type="button">ChatGPT에서 설계 다시 열기</button></div></div>`;
+        }
+
         function render() {
           const root = document.getElementById("app");
-          root.innerHTML = state.bundle ? bundleMarkup(state.bundle) : state.plan ? blueprintMarkup(state.plan) : '<div class="empty"><strong>업무 설계를 불러오는 중입니다.</strong><p class="muted">ChatGPT가 정리한 업무 지도를 확인합니다.</p></div>';
+          root.innerHTML = state.bundle ? bundleMarkup(state.bundle)
+            : state.plan ? blueprintMarkup(state.plan)
+            : state.loadStatus === "failed" ? failureMarkup()
+            : state.loadStatus === "approval_pending" ? approvalPendingMarkup()
+            : loadingMarkup();
           document.getElementById("generate")?.addEventListener("click", generate);
           document.getElementById("ask")?.addEventListener("click", () => continueConversation("보완 질문에 답할게요. 한 번에 하나씩 쉬운 말로 질문해 주세요."));
           document.getElementById("revise")?.addEventListener("click", () => continueConversation("방금 보여준 업무 설계에서 수정할 내용을 말하겠습니다. 제 설명을 반영해 설계를 다시 만들어 주세요."));
           document.getElementById("next")?.addEventListener("click", () => continueConversation("생성된 테스트 앱을 실제 업무에 연결하려면 필요한 데이터, 권한, 배포 조건을 쉬운 말로 하나씩 안내해 주세요."));
+          document.getElementById("retry")?.addEventListener("click", startHostRecovery);
+          document.getElementById("recover")?.addEventListener("click", () => continueConversation("이전 업무 설계 화면이 결과를 불러오지 못했습니다. 같은 업무 설명으로 최신 설계 화면을 한 번만 다시 열어 주세요."));
         }
 
         async function continueConversation(prompt) {
@@ -261,20 +349,43 @@
           finally { state.busy = false; render(); }
         }
 
-        osdk.subscribe(receive);
-        const initial = osdk.aliasSnapshot();
-        if (initial) receive(initial);
-        void osdk.initialize();
-        if (!state.plan && !state.bundle && typeof setInterval === "function") {
-          let attempts = 0;
-          const poll = setInterval(() => {
-            attempts += 1;
-            const snapshot = osdk.aliasSnapshot();
-            if ((snapshot && receive(snapshot)) || attempts >= 40) clearInterval(poll);
+        function pullHostSnapshot() {
+          const snapshot = osdk.aliasSnapshot();
+          return Boolean(snapshot && receive(snapshot));
+        }
+
+        function startHostRecovery() {
+          stopLoadingPoll();
+          state.loadStatus = "loading";
+          state.loadDetail = "";
+          state.loadAttempts = 0;
+          state.message = "";
+          state.tone = "info";
+          render();
+          if (pullHostSnapshot()) return;
+          if (typeof setInterval !== "function") {
+            markLoadFailure("업무 설계 결과를 다시 확인할 수 없습니다. ChatGPT에서 설계를 다시 열어 주세요.");
+            return;
+          }
+          loadPoll = setInterval(() => {
+            state.loadAttempts += 1;
+            if (pullHostSnapshot()) return;
+            if (state.loadAttempts >= MAX_LOAD_ATTEMPTS) {
+              markLoadFailure("ChatGPT에서 저장된 업무 설계 결과를 전달받지 못했습니다. 다시 확인하거나 대화에서 최신 설계를 열어 주세요.");
+            }
           }, 250);
         }
-        render();
-        globalThis.__foundryDomainOsWidgetTest = Object.freeze({ receive, generate, getState: () => ({ ...state }) });
+
+        osdk.subscribe(receive);
+        void osdk.initialize();
+        startHostRecovery();
+        globalThis.__foundryDomainOsWidgetTest = Object.freeze({
+          receive,
+          generate,
+          startHostRecovery,
+          markLoadFailure,
+          getState: () => ({ ...state }),
+        });
       })();
     </script>
   </body>

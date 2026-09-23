@@ -74,10 +74,19 @@ function bundle() {
   };
 }
 
-function harness({ callTool, standard = false, output = plan(), sendFollowUpMessage } = {}) {
+function harness({
+  callTool = async () => ({}),
+  standard = false,
+  output = plan(),
+  includeToolOutput = true,
+  toolInput = { mode: "osdk_react", workspaceRef: "osdk-app:builder-app", arguments: {} },
+  sendFollowUpMessage,
+  fakeIntervals = false,
+} = {}) {
   const listeners = new Map();
   const elements = new Map();
   const calls = [];
+  const timers = [];
   const root = element("app");
   elements.set("app", root);
   const context = {
@@ -90,8 +99,8 @@ function harness({ callTool, standard = false, output = plan(), sendFollowUpMess
       },
     },
     openai: {
-      toolInput: { mode: "osdk_react", workspaceRef: "osdk-app:builder-app", arguments: {} },
-      toolOutput: { structuredContent: output },
+      toolInput,
+      ...(includeToolOutput ? { toolOutput: { structuredContent: output } } : {}),
       ...(standard ? {} : {
         async callTool(name, args) {
           calls.push({ name, args: structuredClone(args) });
@@ -105,9 +114,16 @@ function harness({ callTool, standard = false, output = plan(), sendFollowUpMess
       values.push(listener);
       listeners.set(name, values);
     },
-    clearInterval,
+    clearInterval: fakeIntervals
+      ? (id) => { if (timers[id]) timers[id].active = false; }
+      : clearInterval,
     clearTimeout,
-    setInterval,
+    setInterval: fakeIntervals
+      ? (fn) => {
+        timers.push({ active: true, fn });
+        return timers.length - 1;
+      }
+      : setInterval,
     setTimeout,
   };
   context.globalThis = context;
@@ -129,7 +145,7 @@ function harness({ callTool, standard = false, output = plan(), sendFollowUpMess
   const html = template.replace("/*__FOUNDRY_LITE_MCP_OSDK__*/", runtime);
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
   for (const source of scripts) vm.runInNewContext(source, context, { filename: "domain-os-widget.html" });
-  return { calls, context, elements, root };
+  return { calls, context, elements, listeners, root, timers };
 }
 
 function element(id) {
@@ -217,4 +233,68 @@ test("빈 설계는 개발 용어 대신 대화에서 답할 한 가지 업무 �
   assert.match(view.root.innerHTML, /완료를 확인하려면 어떤 증거가 필요한가요/);
   await view.elements.get("ask").listeners.click();
   assert.match(prompt, /한 번에 하나씩 쉬운 말/);
+});
+
+test("과거 대화의 도구 결과가 늦게 준비돼도 저장된 업무 설계를 복원한다", () => {
+  const view = harness({ includeToolOutput: false, fakeIntervals: true });
+
+  assert.match(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+  assert.equal(view.timers.length, 1);
+
+  view.context.openai.toolOutput = { structuredContent: plan() };
+  view.timers[0].fn();
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
+});
+
+test("호스트가 결과를 끝내 전달하지 않으면 무한 로딩 대신 실패와 복구 버튼을 보여준다", () => {
+  const view = harness({ includeToolOutput: false, fakeIntervals: true });
+
+  for (let attempt = 0; attempt < 40; attempt += 1) view.timers[0].fn();
+
+  assert.match(view.root.innerHTML, /업무 설계를 표시하지 못했습니다/);
+  assert.match(view.root.innerHTML, /다시 확인/);
+  assert.match(view.root.innerHTML, /ChatGPT에서 설계 다시 열기/);
+  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "failed");
+});
+
+test("실패 화면의 다시 확인은 뒤늦게 복원된 결과를 읽어 화면을 되살린다", async () => {
+  const view = harness({ includeToolOutput: false, fakeIntervals: true });
+  view.context.__foundryDomainOsWidgetTest.markLoadFailure("결과가 아직 없습니다.");
+  view.context.openai.toolOutput = { structuredContent: plan() };
+
+  await view.elements.get("retry").listeners.click();
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
+});
+
+test("앱 생성 승인 결과는 입력에 담긴 설계를 복원하고 승인 대기 상태를 설명한다", () => {
+  const generationPlan = plan();
+  const view = harness({
+    output: { status: "approval_required", challengeId: "challenge-1", toolId: "pilot.application.generate" },
+    toolInput: {
+      mode: "osdk_react",
+      workspaceRef: "osdk-app:builder-app",
+      arguments: { plan: generationPlan, idempotencyKey: "stable-generation" },
+    },
+  });
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.match(view.root.innerHTML, /테스트 앱 생성은 승인 대기 중입니다/);
+  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+});
+
+test("openai set_globals로 늦게 온 도구 결과도 업무 설계로 반영한다", () => {
+  const view = harness({ includeToolOutput: false, fakeIntervals: true });
+
+  dispatch(view.context, view.listeners, "openai:set_globals", {
+    detail: { globals: { toolOutput: { structuredContent: plan() } } },
+  });
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
 });

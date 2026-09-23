@@ -19,7 +19,9 @@
     <iframe id="widget" title="업무 OS 설계 검토"></iframe>
     <script>
       (() => {
-        const isIncomplete = new URLSearchParams(location.search).get("state") === "incomplete";
+        const scenario = new URLSearchParams(location.search).get("state") || "ready";
+        const isIncomplete = scenario === "incomplete";
+        const isMissing = scenario === "missing";
         const blueprint = {
           schemaVersion: "foundry-lite-domain-os-blueprint/v1",
           summary: "입주민의 시설 문제를 접수하고 담당자가 분류한 뒤 수리 완료 증거까지 남깁니다.",
@@ -65,7 +67,8 @@
         Promise.all([fetch("./index.html").then((response) => response.text()), fetch("./foundry-lite-mcp-osdk.js").then((response) => response.text())])
           .then(([template, runtime]) => {
             let generateCalls = 0;
-            const host = `<script>window.openai={toolInput:{mode:"osdk_react",workspaceRef:"osdk-app:qa-preview"},toolOutput:{structuredContent:${JSON.stringify(plan)}},async callTool(name){if(name==="pilot.application.generate"&&++window.generateCalls===1)return{structuredContent:{status:"approval_required",challengeId:"qa-challenge"},_meta:{widgetApprovalToken:"qa-token"}};if(name==="approve_builder_mutation")return{_meta:{confirmationReceipt:"qa-receipt"}};return{structuredContent:${JSON.stringify(bundle)}}},async sendFollowUpMessage(){return{}}};window.generateCalls=${generateCalls};<\/script>`;
+            const toolOutput = isMissing ? "" : `,toolOutput:{structuredContent:${JSON.stringify(plan)}}`;
+            const host = `<script>window.openai={toolInput:{mode:"osdk_react",workspaceRef:"osdk-app:qa-preview"}${toolOutput},async callTool(name){if(name==="pilot.application.generate"&&++window.generateCalls===1)return{structuredContent:{status:"approval_required",challengeId:"qa-challenge"},_meta:{widgetApprovalToken:"qa-token"}};if(name==="approve_builder_mutation")return{_meta:{confirmationReceipt:"qa-receipt"}};return{structuredContent:${JSON.stringify(bundle)}}},async sendFollowUpMessage(){return{}}};window.generateCalls=${generateCalls};<\/script>`;
             document.getElementById("widget").srcdoc = template
               .replace("<head>", `<head>${host}`)
               .replace("/*__FOUNDRY_LITE_MCP_OSDK__*/", runtime);
