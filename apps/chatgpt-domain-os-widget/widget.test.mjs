@@ -194,11 +194,12 @@ test("기록이 빠진 초안은 빈 화면이나 연결 완료 표시 없이 �
 
 test("압축된 Workshop 화면 요약도 같은 컴포넌트 이름으로 보여준다", () => {
   const compact = plan();
-  compact.workshopPreview = [{ name: "접수 담당자 화면", components: ["objectList", "searchBar", "actionForm"] }];
+  compact.workshopPreview = [{ name: "접수 담당자 화면", components: ["업무 카드 목록", "검색", "업무 폼"] }];
   const view = harness({ output: compact });
 
   assert.match(view.root.innerHTML, /접수 담당자 화면/);
   assert.match(view.root.innerHTML, /업무 카드 목록 · 검색 · 업무 폼/);
+  assert.doesNotMatch(view.root.innerHTML, /\[object Object\]/);
   assert.doesNotMatch(view.root.innerHTML, /설계의 빈칸을 확인하면/);
 });
 

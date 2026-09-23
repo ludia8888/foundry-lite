@@ -107,7 +107,9 @@ def _call_plan(
     assert plan["workshopPreview"]
     assert all(page["name"] and page["components"] for page in plan["workshopPreview"])
     assert all(
-        component["kind"] and component["name"] for page in plan["workshopPreview"] for component in page["components"]
+        isinstance(component, str) and component.strip()
+        for page in plan["workshopPreview"]
+        for component in page["components"]
     )
     assert plan["workshopPresentation"]["statusLabels"]
     assert "businessSystemDefinition" not in plan

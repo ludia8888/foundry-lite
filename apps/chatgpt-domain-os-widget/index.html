@@ -279,7 +279,7 @@
             const names = components.map((item) => {
               const kind = isObject(item) ? item.kind : item;
               const title = isObject(item) ? item.name || item.config?.title : "";
-              return title || componentNames[kind] || "화면 요소";
+              return title || componentNames[kind] || (typeof kind === "string" && kind.trim() ? kind : "화면 요소");
             });
             const visible = names.slice(0, 4).map(escapeHtml).join(" · ");
             const extra = names.length > 4 ? ` 외 ${names.length - 4}개` : "";

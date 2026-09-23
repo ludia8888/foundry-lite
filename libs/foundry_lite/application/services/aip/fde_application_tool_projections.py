@@ -144,11 +144,11 @@ def _workshop_page_preview(definition: Mapping[str, object]) -> list[dict[str, o
     ]
 
 
-def _page_components(page: Mapping[str, object]) -> list[dict[str, str]]:
+def _page_components(page: Mapping[str, object]) -> list[str]:
     sections = page.get("sections")
     if not isinstance(sections, list):
         return []
-    components: list[dict[str, str]] = []
+    components: list[str] = []
     for section in sections:
         if not isinstance(section, Mapping):
             continue
@@ -159,7 +159,9 @@ def _page_components(page: Mapping[str, object]) -> list[dict[str, str]]:
                     continue
                 config = widget.get("config")
                 title = config.get("title") if isinstance(config, Mapping) else None
-                components.append({"kind": str(widget.get("kind") or ""), "name": str(title or "화면 요소")})
+                # Older hosted ChatGPT widgets render each entry as a string. Keep
+                # this compact projection readable across cached widget versions.
+                components.append(str(title or "화면 요소"))
     return components
 
 
