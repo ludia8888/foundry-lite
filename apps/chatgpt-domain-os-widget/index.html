@@ -131,6 +131,7 @@
           loadStatus: "loading",
           loadDetail: "",
           loadAttempts: 0,
+          hasUnrecognizedResult: false,
         };
         const MAX_LOAD_ATTEMPTS = 40;
         let loadPoll = null;
@@ -208,12 +209,10 @@
             render();
             return true;
           }
-          const isExplicitResult = (Object.prototype.hasOwnProperty.call(value, "toolOutput") && value.toolOutput != null)
-            || Object.prototype.hasOwnProperty.call(value, "structuredContent")
-            || Boolean(output.operationType || output.status);
-          if (!state.plan && !state.bundle && isExplicitResult) {
-            markLoadFailure("업무 설계 결과의 형식을 확인하지 못했습니다. 대화에서 설계를 다시 열어 주세요.");
-            return true;
+          if (!state.plan && !state.bundle && Object.keys(output).length > 0) {
+            // ChatGPT can expose a provisional toolOutput before its structured result arrives.
+            // Keep listening for that result instead of freezing the card on the placeholder.
+            state.hasUnrecognizedResult = true;
           }
           render();
           return Boolean(state.plan || state.bundle);
@@ -386,6 +385,7 @@
           state.loadStatus = "loading";
           state.loadDetail = "";
           state.loadAttempts = 0;
+          state.hasUnrecognizedResult = false;
           state.message = "";
           state.tone = "info";
           render();
@@ -398,7 +398,9 @@
             state.loadAttempts += 1;
             if (pullHostSnapshot()) return;
             if (state.loadAttempts >= MAX_LOAD_ATTEMPTS) {
-              markLoadFailure("ChatGPT에서 저장된 업무 설계 결과를 전달받지 못했습니다. 다시 확인하거나 대화에서 최신 설계를 열어 주세요.");
+              markLoadFailure(state.hasUnrecognizedResult
+                ? "업무 설계 결과의 형식을 확인하지 못했습니다. 대화에서 설계를 다시 열어 주세요."
+                : "ChatGPT에서 저장된 업무 설계 결과를 전달받지 못했습니다. 다시 확인하거나 대화에서 최신 설계를 열어 주세요.");
             }
           }, 250);
         }

@@ -13,6 +13,7 @@ from foundry_lite.application.services.aip.agent_runtime_ledger import hash_json
 from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.security.tenant_context import tenant_context
 
 
 class McpSearchCall(Protocol):
@@ -129,14 +130,17 @@ def activate_tools(
     query_hash = hash_json({"mode": request.mode, "query": query.casefold()})
     activated: list[dict[str, object]] = []
     has_new_activation = False
-    with engine.begin() as conn:
-        for tool, score in matches:
-            is_new = repository.activate_mcp_tool(
-                transaction=conn,
-                record=activation_record(ctx, request, tool.tool_id, query_hash),
-            )
-            has_new_activation = has_new_activation or is_new
-            activated.append({"toolId": tool.tool_id, "description": tool.description, "score": score, "isNew": is_new})
+    with tenant_context(ctx.tenant_id):
+        with engine.begin() as conn:
+            for tool, score in matches:
+                is_new = repository.activate_mcp_tool(
+                    transaction=conn,
+                    record=activation_record(ctx, request, tool.tool_id, query_hash),
+                )
+                has_new_activation = has_new_activation or is_new
+                activated.append(
+                    {"toolId": tool.tool_id, "description": tool.description, "score": score, "isNew": is_new}
+                )
     if has_new_activation:
         session_ledger.append_event(
             ctx,

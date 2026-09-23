@@ -138,6 +138,17 @@
     if (!isObject(result)) return null;
     if (isObject(result.structuredContent)) return result.structuredContent;
     if (isObject(result.toolOutput)) return structured(result.toolOutput) || result.toolOutput;
+    if (Array.isArray(result.content)) {
+      for (const item of result.content) {
+        if (!isObject(item) || item.type !== "text" || typeof item.text !== "string") continue;
+        try {
+          const parsed = JSON.parse(item.text);
+          if (isObject(parsed)) return parsed;
+        } catch (_error) {
+          // Some hosts return plain-text diagnostics instead of mirrored JSON.
+        }
+      }
+    }
     return result;
   }
 
