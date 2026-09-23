@@ -72,6 +72,7 @@ def pilot_generation_tool_result(bundle: Mapping[str, object]) -> dict[str, obje
     """Keep generated source durable while returning a bounded ChatGPT completion view."""
 
     files = _mapping(bundle.get("reactFiles"), "reactFiles")
+    definition = bundle.get("businessSystemDefinition")
     resource = _mapping(bundle.get("resource"), "resource")
     branch = _mapping(bundle.get("ontologyBranch"), "ontologyBranch")
     branch_diff = _mapping(branch.get("diff"), "ontologyBranch.diff")
@@ -81,6 +82,7 @@ def pilot_generation_tool_result(bundle: Mapping[str, object]) -> dict[str, obje
         "status": bundle.get("status"),
         "applicationName": bundle.get("applicationName"),
         "domainOsBlueprint": bundle.get("domainOsBlueprint"),
+        "workshopPreview": _workshop_page_preview(definition) if isinstance(definition, Mapping) else [],
         "resource": _resource_summary(resource),
         "ontologyBranch": {
             "id": branch.get("id"),

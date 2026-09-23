@@ -72,7 +72,8 @@
         const bundle = {
           operationType: "pilot_application_bundle", applicationName: plan.applicationName,
           applicationPath: "/projects/qa/pilot/property-care", status: "generated_on_branch",
-          domainOsBlueprint: blueprint, generatedFiles: { count: 2, names: ["src/App.tsx", "packages/application-osdk/src/generated.ts"] },
+          domainOsBlueprint: blueprint, workshopPreview: plan.workshopPreview,
+          generatedFiles: { count: 2, names: ["src/App.tsx", "packages/application-osdk/src/generated.ts"] },
         };
         Promise.all([fetch("./index.html").then((response) => response.text()), fetch("./foundry-lite-mcp-osdk.js").then((response) => response.text())])
           .then(([template, runtime]) => {

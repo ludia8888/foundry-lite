@@ -70,6 +70,7 @@ function bundle() {
     applicationPath: "/projects/project-1/pilot/property-care-desk",
     status: "generated_on_branch",
     domainOsBlueprint: plan().domainOsBlueprint,
+    workshopPreview: [{ name: "오늘 할 일", components: [{ kind: "statusTracker", name: "현재 상태" }] }],
     generatedFiles: { count: 2, names: ["src/App.tsx", "packages/application-osdk/src/generated.ts"] },
   };
 }
@@ -256,6 +257,9 @@ test("생성 버튼은 고수준 MCP OSDK에서 challenge→app-only 확인→ex
   assert.equal(view.calls[2].args.confirmationReceipt, "receipt-1");
   assert.match(view.root.innerHTML, /Property Care Desk 준비 완료/);
   assert.match(view.root.innerHTML, /화면은 이 앱에 허용된 기능만 사용/);
+  assert.match(view.root.innerHTML, /오늘 할 일/);
+  assert.match(view.root.innerHTML, /현재 상태/);
+  assert.doesNotMatch(view.root.innerHTML, /설계의 빈칸을 확인하면/);
 });
 
 test("MCP Apps 표준 postMessage bridge가 window.openai callTool 없이 생성 흐름을 완료한다", async () => {
