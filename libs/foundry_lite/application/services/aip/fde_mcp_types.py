@@ -31,7 +31,9 @@ class FdeMcpToolCall:
 
 
 class FdeMcpContextValidator(Protocol):
-    def validate_scope(self, ctx: RequestContext, mode: str, workspace_ref: str) -> None: ...
+    def validate_scope(
+        self, ctx: RequestContext, mode: str, workspace_ref: str, tool_id: str | None = None
+    ) -> None: ...
 
 
 class FdeMcpPlatformExecutor(Protocol):

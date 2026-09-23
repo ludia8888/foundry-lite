@@ -280,7 +280,7 @@ class FdeMcpGateway:
             self.rate_limits.consume_tool(ctx, plane="builder", application_id=request.application_id)
         except RateLimited as exc:
             return tool_error_result(exc, request_id=ctx.request_id)
-        self.fde_context_service.validate_scope(ctx, request.mode, request.workspace_ref)
+        self.fde_context_service.validate_scope(ctx, request.mode, request.workspace_ref, request.tool_id)
         if is_search:
             return self._execute_tool_search(ctx, self._validated_search_request(request), catalog)
         request = self._validated_request(request, schema)

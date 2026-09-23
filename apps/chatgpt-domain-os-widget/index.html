@@ -178,9 +178,12 @@
           const rawResult = value.toolOutput || value;
           const output = osdk.structured(rawResult);
           if (!isObject(output)) return false;
-          if (rawResult?.isError === true || value.isError === true) {
+          if (rawResult?.isError === true || value.isError === true || isObject(output.error)) {
             const failure = isObject(output.error) ? output.error : {};
-            markLoadFailure(failure.message || "업무 설계 요청이 완료되지 않았습니다. 대화에서 다시 시도해 주세요.");
+            const reason = text(failure.message || "");
+            markLoadFailure(reason.includes("workspaceRef")
+              ? "업무 설계 공간을 찾지 못했습니다. ChatGPT에서 설계를 다시 열어 주세요."
+              : reason || "업무 설계 요청이 완료되지 않았습니다. 대화에서 다시 시도해 주세요.");
             return true;
           }
           if (output.operationType === "pilot_generation_plan") {
@@ -340,6 +343,10 @@
         async function generate() {
           if (!state.plan || state.busy) return;
           if (!state.mode || !state.workspaceRef) { state.message = "MCP 작업공간 연결을 확인하지 못해 앱을 만들지 않았습니다."; state.tone = "error"; render(); return; }
+          if (state.workspaceRef === "tenant:self") {
+            await continueConversation("검토한 업무 설계로 테스트 앱을 만들고 싶습니다. 먼저 이 업무용 프로젝트가 필요한지 확인하고, 필요하면 사람 승인 화면을 통해 생성한 뒤 같은 설계로 이어서 진행해 주세요. 실제 고객 데이터 연결이나 외부 배포는 아직 하지 마세요.");
+            return;
+          }
           state.busy = true; state.message = "격리된 테스트 앱을 만들고 있습니다."; state.tone = "info"; render();
           try {
             const result = await domainOs.generateTestApplication({ mode: state.mode, workspaceRef: state.workspaceRef, plan: state.plan });

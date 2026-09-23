@@ -75,7 +75,9 @@ class FdeContextService(CoreService):
     resource_catalog_service: FdeResourceCatalogReader
     source_onboarding_service: FdeSourceReader
 
-    def validate_scope(self, ctx: RequestContext, mode: str, workspace_ref: str) -> None:
+    def validate_scope(self, ctx: RequestContext, mode: str, workspace_ref: str, tool_id: str | None = None) -> None:
+        if mode == "osdk_react" and tool_id == "pilot.application.plan" and workspace_ref == "tenant:self":
+            return
         if _is_invoking_tenant_governance_alias(mode, workspace_ref):
             return
         spec = current_fde_mode(mode)
