@@ -185,10 +185,20 @@ test("기록이 빠진 초안은 빈 화면이나 연결 완료 표시 없이 �
     toolInput: { mode: "osdk_react", workspaceRef: "tenant:self", arguments: {} },
   });
 
-  assert.match(view.root.innerHTML, /업무 기록을 정리하면 사용할 화면을 함께 제안합니다/);
+  assert.match(view.root.innerHTML, /설계의 빈칸을 확인하면 사용할 화면을 함께 제안합니다/);
   assert.match(view.root.innerHTML, /대화에서 질문에 답하기/);
   assert.match(view.root.innerHTML, /읽기 전용 설계 검토/);
   assert.doesNotMatch(view.root.innerHTML, /이 설계로 테스트 앱 만들기|테스트 공간 연결됨/);
+});
+
+test("압축된 Workshop 화면 요약도 같은 컴포넌트 이름으로 보여준다", () => {
+  const compact = plan();
+  compact.workshopPreview = [{ name: "접수 담당자 화면", components: ["objectList", "searchBar", "actionForm"] }];
+  const view = harness({ output: compact });
+
+  assert.match(view.root.innerHTML, /접수 담당자 화면/);
+  assert.match(view.root.innerHTML, /업무 목록 · 검색 · 업무 폼/);
+  assert.doesNotMatch(view.root.innerHTML, /설계의 빈칸을 확인하면/);
 });
 
 test("생성 버튼은 고수준 MCP OSDK에서 challenge→app-only 확인→exact retry를 수행한다", async () => {

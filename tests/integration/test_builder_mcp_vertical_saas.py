@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -101,6 +102,12 @@ def _call_plan(
     plan = cast(dict[str, Any], body["result"]["structuredContent"])
     assert plan["domainOsBlueprint"]["readiness"]["isReady"] is True
     assert plan["mcpExecution"] == {"mode": "osdk_react", "workspaceRef": "tenant:self"}
+    assert plan["isReadOnlyPreview"] is True
+    assert plan["workshopPreview"]
+    assert all(page["name"] and page["components"] for page in plan["workshopPreview"])
+    assert "businessSystemDefinition" not in plan
+    assert "ontologyResources" not in plan
+    assert len(json.dumps(plan, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()) < 65_536
     return plan
 
 
