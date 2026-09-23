@@ -11,7 +11,7 @@ BUILDER_CONFIRMATION_TOOL = "approve_builder_mutation"
 BUILDER_CONFIRMATION_RESOURCE_URI = "ui://foundry-lite/builder-confirmation-v2-670562894313.html"
 _BUILDER_CONFIRMATION_LEGACY_URIS = frozenset({"ui://foundry-lite/builder-confirmation-v1.html"})
 BUILDER_CONFIRMATION_MIME_TYPE = "text/html;profile=mcp-app"
-DOMAIN_OS_RESOURCE_URI = "ui://foundry-lite/domain-os-studio-v1-ed934fe99f7e.html"
+DOMAIN_OS_RESOURCE_URI = "ui://foundry-lite/domain-os-studio-v1-08d8a8847418.html"
 _BUILDER_CONFIRMATION_PATH = Path(__file__).resolve().parents[3] / "apps" / "chatgpt-builder-widget" / "index.html"
 _DOMAIN_OS_ROOT = Path(__file__).resolve().parents[3] / "apps" / "chatgpt-domain-os-widget"
 _DOMAIN_OS_PATH = _DOMAIN_OS_ROOT / "index.html"

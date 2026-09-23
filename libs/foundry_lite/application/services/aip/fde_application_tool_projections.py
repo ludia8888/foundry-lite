@@ -108,6 +108,10 @@ def pilot_plan_tool_result(plan: Mapping[str, object], mode: str, workspace_ref:
 
     definition = plan.get("businessSystemDefinition")
     preview = _workshop_page_preview(definition) if isinstance(definition, Mapping) else []
+    experience = definition.get("experience") if isinstance(definition, Mapping) else None
+    workshop = experience.get("workshopApp") if isinstance(experience, Mapping) else None
+    presentation = workshop.get("presentation") if isinstance(workshop, Mapping) else None
+    status_labels = presentation.get("statusLabels") if isinstance(presentation, Mapping) else None
     keys = (
         "operationType",
         "applicationName",
@@ -121,6 +125,7 @@ def pilot_plan_tool_result(plan: Mapping[str, object], mode: str, workspace_ref:
     return {
         **{key: plan.get(key) for key in keys},
         "workshopPreview": preview,
+        "workshopPresentation": {"statusLabels": status_labels} if isinstance(status_labels, Mapping) else {},
         "isReadOnlyPreview": True,
         "mcpExecution": {"mode": mode, "workspaceRef": workspace_ref},
     }
@@ -133,24 +138,27 @@ def _workshop_page_preview(definition: Mapping[str, object]) -> list[dict[str, o
     if not isinstance(pages, list):
         return []
     return [
-        {"name": page.get("name"), "components": _page_component_kinds(page)}
-        for page in pages
-        if isinstance(page, Mapping)
+        {"name": page.get("name"), "components": _page_components(page)} for page in pages if isinstance(page, Mapping)
     ]
 
 
-def _page_component_kinds(page: Mapping[str, object]) -> list[object]:
+def _page_components(page: Mapping[str, object]) -> list[dict[str, str]]:
     sections = page.get("sections")
     if not isinstance(sections, list):
         return []
-    kinds: list[object] = []
+    components: list[dict[str, str]] = []
     for section in sections:
         if not isinstance(section, Mapping):
             continue
         widgets = section.get("widgets")
         if isinstance(widgets, list):
-            kinds.extend(widget.get("kind") for widget in widgets if isinstance(widget, Mapping))
-    return kinds
+            for widget in widgets:
+                if not isinstance(widget, Mapping):
+                    continue
+                config = widget.get("config")
+                title = config.get("title") if isinstance(config, Mapping) else None
+                components.append({"kind": str(widget.get("kind") or ""), "name": str(title or "화면 요소")})
+    return components
 
 
 def _resource_summary(resource: Mapping[str, object]) -> dict[str, object]:

@@ -56,6 +56,16 @@
         };
         const plan = {
           operationType: "pilot_generation_plan", applicationName: "시설관리 업무 OS", domainOsBlueprint: blueprint,
+          workshopPreview: [
+            { name: "오늘 할 일", components: [
+              { kind: "statusTracker", name: "현재 상태" }, { kind: "filterList", name: "빠른 필터" },
+              { kind: "objectTable", name: "처리할 업무" }, { kind: "actionForm", name: "다음 업무 처리" },
+            ] },
+            { name: "수리 요청 상세", components: [
+              { kind: "objectDetail", name: "요청 정보" }, { kind: "timeline", name: "처리 기록" },
+            ] },
+          ],
+          workshopPresentation: { statusLabels: Object.fromEntries(blueprint.workflow.states.map((state) => [state, { label: state }])) },
           consumerOsdk: { profile: "consumer_osdk_strict" },
           mcpExecution: { mode: "osdk_react", workspaceRef: "osdk-app:qa-preview" },
         };

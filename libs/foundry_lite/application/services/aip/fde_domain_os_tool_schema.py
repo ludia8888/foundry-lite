@@ -43,18 +43,36 @@ _POLICY_CONDITION_SCHEMA = {
 
 DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
     "type": "object",
+    "description": (
+        "Extract the user's stated business facts before calling the plan tool. Include every explicitly "
+        "mentioned record, person, workflow step, action, rule, and evidence item. Keep display names in the "
+        "user's language; do not guess missing facts. Empty arrays mean a genuine missing business detail."
+    ),
     "additionalProperties": False,
     "properties": {
-        "actors": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 12},
+        "actors": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "maxItems": 12,
+            "description": "Business-facing names of every person or role the user named, in the user's language.",
+        },
         "records": {
             "type": "array",
+            "description": (
+                "Every business record or case explicitly named by the user; do not leave this empty when known."
+            ),
             "maxItems": 8,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["name"],
                 "properties": {
-                    "name": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "description": "Customer-facing record name in the user's language, not an API name.",
+                    },
                     "apiName": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$"},
                     "description": {"type": "string", "maxLength": 500},
                     "fields": {
@@ -79,9 +97,19 @@ DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
                 },
             },
         },
-        "lifecycleStates": {"type": "array", "items": {"type": "string", "minLength": 1}, "maxItems": 16},
+        "lifecycleStates": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "maxItems": 16,
+            "description": (
+                "Business-facing workflow labels in the user's language. Action state references must match exactly."
+            ),
+        },
         "actions": {
             "type": "array",
+            "description": (
+                "Every work step or button explicitly requested by the user; preserve the user's business wording."
+            ),
             "maxItems": 20,
             "items": {
                 "type": "object",
@@ -91,8 +119,18 @@ DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
                     "name": {"type": "string", "minLength": 1, "maxLength": 120},
                     "apiName": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]{0,63}$"},
                     "description": {"type": "string", "maxLength": 500},
-                    "fromStates": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
-                    "toState": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "fromStates": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 8,
+                        "description": "Exact strings from lifecycleStates; do not invent a new code.",
+                    },
+                    "toState": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "description": "Exact string from lifecycleStates; do not invent a new code.",
+                    },
                     "requiredInformation": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},
@@ -152,6 +190,7 @@ DOMAIN_BRIEF_SCHEMA: dict[str, object] = {
         },
         "policies": {
             "type": "array",
+            "description": "Every stated must, must-not, approval, deadline, exception, or review rule.",
             "maxItems": 20,
             "items": {
                 "type": "object",
