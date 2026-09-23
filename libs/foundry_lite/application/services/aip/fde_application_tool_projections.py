@@ -103,6 +103,56 @@ def pilot_generation_tool_result(bundle: Mapping[str, object]) -> dict[str, obje
     }
 
 
+def pilot_plan_tool_result(plan: Mapping[str, object], mode: str, workspace_ref: str) -> dict[str, object]:
+    """Send only the review and replay input; generation recompiles resources from the brief."""
+
+    definition = plan.get("businessSystemDefinition")
+    preview = _workshop_page_preview(definition) if isinstance(definition, Mapping) else []
+    keys = (
+        "operationType",
+        "applicationName",
+        "domainDescription",
+        "domainBrief",
+        "domainOsBlueprint",
+        "slug",
+        "projectDisplayName",
+        "requiredApprovals",
+    )
+    return {
+        **{key: plan.get(key) for key in keys},
+        "workshopPreview": preview,
+        "isReadOnlyPreview": True,
+        "mcpExecution": {"mode": mode, "workspaceRef": workspace_ref},
+    }
+
+
+def _workshop_page_preview(definition: Mapping[str, object]) -> list[dict[str, object]]:
+    experience = definition.get("experience")
+    workshop = experience.get("workshopApp") if isinstance(experience, Mapping) else None
+    pages = workshop.get("pages") if isinstance(workshop, Mapping) else None
+    if not isinstance(pages, list):
+        return []
+    return [
+        {"name": page.get("name"), "components": _page_component_kinds(page)}
+        for page in pages
+        if isinstance(page, Mapping)
+    ]
+
+
+def _page_component_kinds(page: Mapping[str, object]) -> list[object]:
+    sections = page.get("sections")
+    if not isinstance(sections, list):
+        return []
+    kinds: list[object] = []
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        widgets = section.get("widgets")
+        if isinstance(widgets, list):
+            kinds.extend(widget.get("kind") for widget in widgets if isinstance(widget, Mapping))
+    return kinds
+
+
 def _resource_summary(resource: Mapping[str, object]) -> dict[str, object]:
     keys = ("rid", "resourceType", "displayName", "projectId", "sourceRef", "operationsPath")
     return {key: resource.get(key) for key in keys if resource.get(key) is not None}

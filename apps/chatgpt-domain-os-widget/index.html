@@ -250,20 +250,21 @@
           return `<li><div class="title-row"><strong>${escapeHtml(policy.name)}</strong><span class="badge ${status.tone}">${status.label}</span></div><div class="muted">${escapeHtml(policy.statement)}</div></li>`;
         }
 
-        function screensMarkup(definition) {
+        function screensMarkup(definition, preview = []) {
           const experience = isObject(definition?.experience) ? definition.experience : {};
           const workshop = isObject(experience.workshopApp) ? experience.workshopApp : {};
           const pages = list(workshop.pages);
-          if (!pages.length) return '<p class="muted">업무 기록을 정리하면 사용할 화면을 함께 제안합니다.</p>';
+          if (!pages.length && !list(preview).length) return '<p class="muted">설계의 빈칸을 확인하면 사용할 화면을 함께 제안합니다.</p>';
           const componentNames = {
             objectTable: "업무 테이블", objectList: "업무 목록", objectDetail: "업무 상세",
             objectSetTitle: "업무 제목", searchBar: "검색", metricCard: "핵심 지표",
             buttonGroup: "업무 버튼", actionForm: "업무 폼", timeline: "타임라인",
             markdown: "업무 안내", barChart: "상태 차트",
           };
-          return pages.map((page) => {
+          return (pages.length ? pages : list(preview)).map((page) => {
             const widgets = list(page.sections).flatMap((section) => list(section.widgets));
-            const components = widgets.map((item) => componentNames[item.kind] || item.config?.title || item.kind);
+            const kinds = list(page.components).length ? list(page.components) : widgets.map((item) => item.kind);
+            const components = kinds.map((kind) => componentNames[kind] || kind);
             return `<div class="screen-card"><strong>${escapeHtml(page.name)}</strong><div class="muted">${components.map(escapeHtml).join(" · ")}</div></div>`;
           }).join("");
         }
@@ -278,7 +279,7 @@
             <section class="body">
               <div class="flow" aria-label="업무 운영 지도">${counts(blueprint).map(([label, value]) => `<div class="flow-step"><span class="flow-label">${label}</span><strong class="flow-value">${value}</strong></div>`).join("")}</div>
               <div class="card"><h2>업무가 움직이는 순서</h2><div class="rail">${list(workflow.states).map((item, index) => `${index ? '<span class="arrow">→</span>' : ""}<span class="state">${escapeHtml(item)}</span>`).join("")}</div></div>
-              <div class="card"><h2>Workshop에서 함께 쓰는 화면</h2><div class="screen-grid">${screensMarkup(definition)}</div></div>
+              <div class="card"><h2>Workshop에서 함께 쓰는 화면</h2><div class="screen-grid">${screensMarkup(definition, plan.workshopPreview)}</div></div>
               <div class="grid">
                 <section class="card"><h2>계속 추적할 업무 기록</h2><ul class="list">${list(blueprint.records).map(recordMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>
                 <section class="card"><h2>사람이 실행할 업무 버튼</h2><ul class="list">${list(workflow.actions).map(actionMarkup).join("") || "<li>아직 정리되지 않았습니다.</li>"}</ul></section>

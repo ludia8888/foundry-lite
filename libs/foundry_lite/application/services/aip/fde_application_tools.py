@@ -10,6 +10,7 @@ from foundry_lite.application.services.aip.fde_application_tool_projections impo
     dataset_tool_result,
     lineage_graph,
     pilot_generation_tool_result,
+    pilot_plan_tool_result,
 )
 from foundry_lite.application.services.aip.fde_compass_tool_projections import compass_tool_result
 from foundry_lite.application.services.aip.fde_object_tools import search_around_ontology_objects
@@ -133,10 +134,9 @@ class FdeApplicationToolService(CoreService):
                 required_text(request.arguments, "query"), _bounded_limit(request.arguments.get("maxResults"))
             )
         if tool_id == "pilot.application.plan":
-            return {
-                **self.fde_pilot_service.plan(request.arguments),
-                "mcpExecution": {"mode": request.mode, "workspaceRef": request.scope_ref},
-            }
+            return pilot_plan_tool_result(
+                self.fde_pilot_service.plan(request.arguments), request.mode, request.scope_ref
+            )
         if tool_id == "pilot.application.generate":
             return pilot_generation_tool_result(
                 self.fde_pilot_service.generate(
