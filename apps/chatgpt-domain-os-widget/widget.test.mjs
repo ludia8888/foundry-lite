@@ -328,6 +328,16 @@ test("호스트가 JSON 텍스트만 전달해도 설계 결과를 복원한다"
   assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
 });
 
+test("알 수 없는 호스트 결과는 즉시 실패시키지 않고 제한된 복원 시간 뒤 안내한다", () => {
+  const view = harness({ output: { unexpected: true }, fakeIntervals: true });
+
+  assert.match(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+  for (let attempt = 0; attempt < 40; attempt += 1) view.timers[0].fn();
+
+  assert.match(view.root.innerHTML, /업무 설계 결과의 형식을 확인하지 못했습니다/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "failed");
+});
+
 test("호스트가 결과를 끝내 전달하지 않으면 무한 로딩 대신 실패와 복구 버튼을 보여준다", () => {
   const view = harness({ includeToolOutput: false, fakeIntervals: true });
 
