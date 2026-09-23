@@ -328,6 +328,22 @@ test("호스트가 JSON 텍스트만 전달해도 설계 결과를 복원한다"
   assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
 });
 
+test("도구 찾기 결과는 설계 실패가 아니라 준비 완료 단계로 표시한다", () => {
+  const view = harness({
+    output: {
+      queryHash: "sha256:search",
+      activatedTools: [{ toolId: "pilot.application.plan", isNew: true }],
+      toolsListChanged: true,
+    },
+    fakeIntervals: true,
+  });
+
+  assert.match(view.root.innerHTML, /연결 준비 완료/);
+  assert.match(view.root.innerHTML, /실제 업무 설계는 이어지는 카드에서 확인/);
+  assert.doesNotMatch(view.root.innerHTML, /불러오기 실패/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "discovery_ready");
+});
+
 test("알 수 없는 호스트 결과는 즉시 실패시키지 않고 제한된 복원 시간 뒤 안내한다", () => {
   const view = harness({ output: { unexpected: true }, fakeIntervals: true });
 
