@@ -306,6 +306,28 @@ test("과거 대화의 도구 결과가 늦게 준비돼도 저장된 업무 설
   assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
 });
 
+test("호스트의 빈 중간 응답 뒤에 도착한 설계 결과를 실패 화면 없이 복원한다", () => {
+  const view = harness({ output: {}, fakeIntervals: true });
+
+  assert.match(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+  assert.doesNotMatch(view.root.innerHTML, /불러오기 실패/);
+  view.context.openai.toolOutput = { structuredContent: plan() };
+  view.timers[0].fn();
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
+});
+
+test("호스트가 JSON 텍스트만 전달해도 설계 결과를 복원한다", () => {
+  const view = harness({ includeToolOutput: false, fakeIntervals: true });
+
+  view.context.openai.toolOutput = { content: [{ type: "text", text: JSON.stringify(plan()) }] };
+  view.timers[0].fn();
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
+});
+
 test("호스트가 결과를 끝내 전달하지 않으면 무한 로딩 대신 실패와 복구 버튼을 보여준다", () => {
   const view = harness({ includeToolOutput: false, fakeIntervals: true });
 

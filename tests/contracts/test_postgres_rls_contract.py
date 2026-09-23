@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
 
 import pytest
 from foundry_lite.application.dependencies import RuntimeProfile
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services.aip.fde_catalog import fde_tool_catalog
+from foundry_lite.application.services.aip.fde_mcp_discovery import activate_tools
 from foundry_lite.application.services.pipeline_preview_recovery import (
     PipelinePreviewRecoveryCursor,
     recoverable_pipeline_previews,
 )
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
@@ -99,6 +103,43 @@ def test_rls_tenant_context_reset_between_pooled_connections(postgres_fixture) -
     assert demo_rows == ["dataset-demo"]
     assert no_tenant_rows == []
     assert other_rows == ["dataset-other"]
+
+
+def test_builder_mcp_lazy_tool_activation_binds_authenticated_tenant_under_rls(postgres_fixture) -> None:
+    engine = postgres_fixture.engine
+    role_name = f"foundry_lite_builder_discovery_rls_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    worker_engine = create_engine(engine.url, future=True)
+    install_postgres_rls_tenant_context(worker_engine)
+    event.listen(worker_engine, "begin", _set_rls_test_role(role_name))
+    repository = SqlAlchemyOsdkApplicationRepository(worker_engine)
+    ctx = RequestContext(
+        tenant_id="tenant-demo",
+        actor_user_id="builder-discovery-user",
+        roles=("admin",),
+        request_id="builder-discovery-rls",
+    )
+    request = SimpleNamespace(application_id="rls-app", session_id="rls-session", mode="osdk_react")
+    tool = next(item for item in fde_tool_catalog("osdk_react", ()) if item.tool_id == "pilot.application.plan")
+    events: list[str] = []
+    session_ledger = SimpleNamespace(append_event=lambda _ctx, _app, _session, kind, _payload: events.append(kind))
+    try:
+        first = activate_tools(worker_engine, repository, session_ledger, ctx, request, "business plan", ((tool, 100),))
+        replay = activate_tools(
+            worker_engine, repository, session_ledger, ctx, request, "business plan", ((tool, 100),)
+        )
+        with tenant_context("tenant-demo"), worker_engine.begin() as conn:
+            own_tools = conn.execute(select(db.osdk_mcp_tool_activations.c.tool_id)).scalars().all()
+        with tenant_context("tenant-other"), worker_engine.begin() as conn:
+            other_tools = conn.execute(select(db.osdk_mcp_tool_activations.c.tool_id)).scalars().all()
+    finally:
+        worker_engine.dispose()
+
+    assert first["toolsListChanged"] is True
+    assert replay["toolsListChanged"] is False
+    assert events == ["notifications/tools/list_changed"]
+    assert own_tools == ["pilot.application.plan"]
+    assert other_tools == []
 
 
 def test_installed_rls_hook_uses_current_request_tenant(postgres_fixture) -> None:
