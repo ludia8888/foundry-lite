@@ -81,6 +81,7 @@ function harness({
   output = plan(),
   includeToolOutput = true,
   toolInput = { mode: "osdk_react", workspaceRef: "osdk-app:builder-app", arguments: {} },
+  toolResponseMetadata,
   sendFollowUpMessage,
   fakeIntervals = false,
 } = {}) {
@@ -102,6 +103,7 @@ function harness({
     openai: {
       toolInput,
       ...(includeToolOutput ? { toolOutput: { structuredContent: output } } : {}),
+      ...(toolResponseMetadata ? { toolResponseMetadata } : {}),
       ...(standard ? {} : {
         async callTool(name, args) {
           calls.push({ name, args: structuredClone(args) });
@@ -278,6 +280,22 @@ test("MCP Apps 표준 postMessage bridge가 window.openai callTool 없이 생성
   assert.match(view.root.innerHTML, /준비 완료/);
 });
 
+test("테스트 앱 생성 후 ChatGPT에 읽기 전용 결과 확인을 이어 달라고 요청한다", async () => {
+  const prompts = [];
+  const view = harness({
+    callTool: async () => ({ structuredContent: bundle() }),
+    sendFollowUpMessage: async (message) => { prompts.push(structuredClone(message)); },
+  });
+
+  await view.context.__foundryDomainOsWidgetTest.generate();
+
+  assert.deepEqual(view.calls.map((item) => item.name), ["pilot.application.generate"]);
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].prompt, /읽기 전용으로 다시 확인/);
+  assert.match(prompts[0].prompt, /외부 배포는 아직 하지 마세요/);
+  assert.match(view.root.innerHTML, /결과 확인을 이어갑니다/);
+});
+
 test("빈 설계는 개발 용어 대신 대화에서 답할 한 가지 업무 질문을 보여준다", async () => {
   let prompt = "";
   const view = harness({
@@ -381,20 +399,80 @@ test("실패 화면의 다시 확인은 뒤늦게 복원된 결과를 읽어 화
   assert.equal(view.context.__foundryDomainOsWidgetTest.getState().loadStatus, "ready");
 });
 
-test("앱 생성 승인 결과는 입력에 담긴 설계를 복원하고 승인 대기 상태를 설명한다", () => {
+test("앱 생성 승인 결과는 같은 카드에서 원래 요청을 확인하고 정확히 재개한다", async () => {
   const generationPlan = plan();
+  const view = harness({
+    output: { status: "approval_required", challengeId: "challenge-1", toolId: "pilot.application.generate" },
+    toolResponseMetadata: { widgetApprovalToken: "widget-secret" },
+    toolInput: {
+      mode: "osdk_react",
+      workspaceRef: "project:project-1",
+      arguments: { plan: generationPlan, idempotencyKey: "stable-generation" },
+    },
+    callTool: async (name) => name === "approve_builder_mutation"
+      ? { _meta: { confirmationReceipt: "receipt-secret" } }
+      : { structuredContent: bundle() },
+  });
+
+  assert.match(view.root.innerHTML, /Property Care Desk/);
+  assert.match(view.root.innerHTML, /이 카드에서 확인하고 테스트 앱 만들기/);
+  assert.match(view.root.innerHTML, /처음 요청한 내용 그대로 이어집니다/);
+  assert.doesNotMatch(view.root.innerHTML, /대화의 승인 카드/);
+  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+
+  await view.context.__foundryDomainOsWidgetTest.generate();
+
+  assert.deepEqual(view.calls.map((item) => item.name), ["approve_builder_mutation", "pilot.application.generate"]);
+  assert.deepEqual(view.calls[0].args, { challengeId: "challenge-1", widgetApprovalToken: "widget-secret" });
+  assert.equal(view.calls[1].args.workspaceRef, "project:project-1");
+  assert.equal(view.calls[1].args.arguments.idempotencyKey, "stable-generation");
+  assert.equal(view.calls[1].args.confirmationReceipt, "receipt-secret");
+  assert.match(view.root.innerHTML, /준비 완료/);
+  assert.doesNotMatch(JSON.stringify(view.context.__foundryDomainOsWidgetTest.getState()), /widget-secret|receipt-secret/);
+});
+
+test("승인 정보가 빠진 호스트 응답은 원래 생성 요청만 재조회해 이어간다", async () => {
   const view = harness({
     output: { status: "approval_required", challengeId: "challenge-1", toolId: "pilot.application.generate" },
     toolInput: {
       mode: "osdk_react",
-      workspaceRef: "osdk-app:builder-app",
-      arguments: { plan: generationPlan, idempotencyKey: "stable-generation" },
+      workspaceRef: "project:project-1",
+      arguments: { plan: plan(), idempotencyKey: "stable-generation" },
+    },
+    callTool: async (name) => {
+      if (name === "pilot.application.generate" && view.calls.length === 1) {
+        return {
+          structuredContent: { status: "approval_required", challengeId: "challenge-1", toolId: name },
+          _meta: { widgetApprovalToken: "recovered-token" },
+        };
+      }
+      return name === "approve_builder_mutation"
+        ? { _meta: { confirmationReceipt: "recovered-receipt" } }
+        : { structuredContent: bundle() };
     },
   });
 
-  assert.match(view.root.innerHTML, /Property Care Desk/);
-  assert.match(view.root.innerHTML, /테스트 앱 생성은 승인 대기 중입니다/);
-  assert.doesNotMatch(view.root.innerHTML, /업무 설계를 불러오고 있습니다/);
+  await view.context.__foundryDomainOsWidgetTest.generate();
+
+  assert.deepEqual(view.calls.map((item) => item.name), [
+    "pilot.application.generate", "approve_builder_mutation", "pilot.application.generate",
+  ]);
+  assert.equal(view.calls[0].args.arguments.idempotencyKey, "stable-generation");
+  assert.equal(view.calls[2].args.arguments.idempotencyKey, "stable-generation");
+  assert.equal(view.calls[2].args.confirmationReceipt, "recovered-receipt");
+  assert.match(view.root.innerHTML, /준비 완료/);
+});
+
+test("승인 대기 결과에 원래 입력이 없으면 새 생성 요청을 만들지 않는다", async () => {
+  const view = harness({
+    output: { status: "approval_required", challengeId: "challenge-1", toolId: "pilot.application.generate" },
+    toolInput: { mode: "osdk_react", workspaceRef: "project:project-1", arguments: {} },
+  });
+
+  assert.match(view.root.innerHTML, /원래 업무 설계 정보를 복원하지 못했습니다/);
+  assert.doesNotMatch(view.root.innerHTML, /id="generate"/);
+  await view.context.__foundryDomainOsWidgetTest.generate();
+  assert.deepEqual(view.calls, []);
 });
 
 test("openai set_globals로 늦게 온 도구 결과도 업무 설계로 반영한다", () => {

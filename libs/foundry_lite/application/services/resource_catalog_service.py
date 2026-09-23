@@ -29,6 +29,7 @@ from foundry_lite.application.services.resource_catalog_payloads import (
 )
 from foundry_lite.application.services.resource_catalog_policy import (
     can_discover,
+    require_project_role,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
@@ -80,12 +81,19 @@ class ResourceCatalogService(CoreService):
             payloads = [self._project_if_discoverable(conn, actor, row) for row in projects]
         return {"projects": [item for item in payloads if item is not None]}
 
-    def get_project(self, project_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+    def get_project(
+        self,
+        project_id: str,
+        *,
+        minimum_role: ProjectRole = "discoverer",
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
         actor = self._ctx(ctx)
         with self.engine.begin() as conn:
             project, role = self._project_with_role(conn, actor, project_id)
             if not can_discover(role):
                 raise PermissionDenied("project permission denied", details={"project_id": project_id})
+            require_project_role(role, minimum_role, project_id=project_id)
             return {"project": project_payload(project, role)}
 
     def list_project_grants(self, project_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:

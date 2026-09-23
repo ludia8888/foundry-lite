@@ -311,6 +311,18 @@
             state.completed = true;
             state.message = "처음 표시된 Builder 변경을 완료했습니다.";
             state.tone = "success";
+            if (state.challenge.toolId === "create_foundry_project"
+              && typeof globalThis.openai?.sendFollowUpMessage === "function") {
+              try {
+                await globalThis.openai.sendFollowUpMessage({
+                  prompt: "방금 승인 카드에서 프로젝트 생성이 완료되었습니다. 저장된 결과를 읽기 전용으로 다시 확인하고, 원래 요청한 업무 설계를 이 프로젝트 안에서 이어가 주세요. 새 변경은 각각 사람에게 확인받고, 실제 데이터 연결이나 외부 배포는 아직 하지 마세요.",
+                  scrollToBottom: true,
+                });
+                state.message = "프로젝트를 저장했습니다. ChatGPT에서 업무 설계를 이어갑니다.";
+              } catch (_followUpError) {
+                state.message = "프로젝트를 저장했습니다. ChatGPT 대화에서 업무 설계를 계속해 달라고 요청해 주세요.";
+              }
+            }
           } catch (error) {
             state.message = String(error && error.message ? error.message : error);
             state.tone = "error";

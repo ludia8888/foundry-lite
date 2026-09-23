@@ -432,9 +432,10 @@ class AipWorkspace:
         plan: Mapping[str, object],
         *,
         idempotency_key: str,
+        project_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> Mapping[str, object]:
-        return self._fde_pilot.generate(ctx or RequestContext(), plan, idempotency_key)
+        return self._fde_pilot.generate(ctx or RequestContext(), plan, idempotency_key, project_id=project_id)
 
     def get_pilot_application(self, rid: str, *, ctx: RequestContext | None = None) -> Mapping[str, object]:
         return self._fde_pilot.get_bundle(ctx or RequestContext(), rid)

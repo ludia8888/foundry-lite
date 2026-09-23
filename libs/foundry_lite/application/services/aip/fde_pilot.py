@@ -37,6 +37,7 @@ from foundry_lite.application.services.ontology_branch_service import OntologyBr
 from foundry_lite.application.services.osdk_application_service import OsdkApplicationService
 from foundry_lite.application.services.resource_catalog_service import ResourceCatalogService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 JsonObject = Mapping[str, object]
 
@@ -68,29 +69,22 @@ class FdePilotService(CoreService):
         ctx: RequestContext,
         plan: JsonObject,
         idempotency_key: str,
+        *,
+        project_id: str | None = None,
     ) -> dict[str, object]:
+        selected_project = self._project(ctx, plan, idempotency_key, project_id) if project_id is not None else None
         existing = self._existing_bundle(ctx, idempotency_key)
         if existing is not None:
+            if project_id is not None and _mapping(existing.get("project"), "project").get("id") != project_id:
+                raise ConflictDetected("pilot generation key belongs to another project")
             return self._replayed_application(ctx, existing, idempotency_key)
         normalized = normalized_pilot_plan(plan)
-        project = self._project(ctx, normalized, idempotency_key)
+        project = selected_project or self._project(ctx, normalized, idempotency_key, None)
         seed = self._seed(ctx, normalized, idempotency_key)
         branch = self._ontology_branch(ctx, normalized, idempotency_key)
         application = self._application(ctx, normalized, idempotency_key)
-        application_record = _mapping(application.get("application"), "application")
         bundle = _bundle(normalized, project, seed, branch, application, idempotency_key)
-        resource = self.resource_catalog_service.register_resource(
-            resource_type="pilot_application",
-            display_name=str(normalized["applicationName"]),
-            project_id=str(project["id"]),
-            folder_id=None,
-            source_surface="ai_fde_pilot",
-            source_ref=str(application_record["id"]),
-            operations_path=str(bundle["applicationPath"]),
-            metadata=bundle,
-            idempotency_key=f"{idempotency_key}:pilot-resource",
-            ctx=ctx,
-        )
+        resource = self._register_pilot_resource(ctx, normalized, project, application, bundle, idempotency_key)
         role_mapping = self._ensure_creator_role_mapping(ctx, bundle, idempotency_key)
         workshop_resource = self._ensure_workshop_resource(ctx, bundle, idempotency_key)
         return {
@@ -100,6 +94,29 @@ class FdePilotService(CoreService):
             "workshopResource": workshop_resource,
             "isReplayed": False,
         }
+
+    def _register_pilot_resource(
+        self,
+        ctx: RequestContext,
+        plan: JsonObject,
+        project: JsonObject,
+        application: JsonObject,
+        bundle: JsonObject,
+        key: str,
+    ) -> dict[str, object]:
+        application_record = _mapping(application.get("application"), "application")
+        return self.resource_catalog_service.register_resource(
+            resource_type="pilot_application",
+            display_name=str(plan["applicationName"]),
+            project_id=str(project["id"]),
+            folder_id=None,
+            source_surface="ai_fde_pilot",
+            source_ref=str(application_record["id"]),
+            operations_path=str(bundle["applicationPath"]),
+            metadata=bundle,
+            idempotency_key=f"{key}:pilot-resource",
+            ctx=ctx,
+        )
 
     def _replayed_application(self, ctx: RequestContext, bundle: JsonObject, idempotency_key: str) -> dict[str, object]:
         role_mapping = self._ensure_creator_role_mapping(ctx, bundle, idempotency_key)
@@ -247,7 +264,13 @@ class FdePilotService(CoreService):
                 return {str(name): value for name, value in metadata.items()}
         return None
 
-    def _project(self, ctx: RequestContext, plan: JsonObject, key: str) -> dict[str, object]:
+    def _project(self, ctx: RequestContext, plan: JsonObject, key: str, project_id: str | None) -> dict[str, object]:
+        if project_id is not None:
+            result = self.resource_catalog_service.get_project(project_id, minimum_role="editor", ctx=ctx)
+            project = _mapping(result.get("project"), "project")
+            if project.get("status") != "active":
+                raise ValidationFailed("pilot project must be active", details={"project_id": project_id})
+            return project
         result = self.resource_catalog_service.create_project(
             display_name=str(plan["projectDisplayName"]),
             description=str(plan["domainDescription"]),
